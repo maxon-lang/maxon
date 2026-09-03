@@ -196,7 +196,6 @@ function main() returns ExitCode
 		build gives runBuild(args)
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
 		verifyRecheck gives runVerifyRecheck(args)
-		lspSelfTest gives runLspSelfTest()
 		lspServer gives runLspServer()
 		specTest gives runSpecTest(args)
 		scaleTest gives runScaleTest(args)
@@ -467,22 +466,6 @@ function runVerifyRecheck(args MaxonArgs) returns ExitCode
 
 	return 1
 end 'runVerifyRecheck'
-
-// The `lsp-selftest` command: run the LSP-internal assertion tables. Compiler-internal code that no
-// `specs-shv2` case can reach — a spec case is a program shv2 compiles, and it can call `stdlib/` and
-// nothing else — so it is gated the way the bootstrap gates its own such code, with a selftest.
-function runLspSelfTest() returns ExitCode
-	// BOTH run, and their results are combined AFTER: an `and` here would short-circuit, so a failure in
-	// the first group would hide every result of the second and each fix would need its own run.
-	let positionsOk = runLspPositionSelfTest()
-	let declarationsOk = runLspDeclarationSelfTest()
-
-	if positionsOk and declarationsOk 'passed'
-		return 0
-	end 'passed'
-
-	return 1
-end 'runLspSelfTest'
 
 // The `spec-test [dir]` command: run every active test in `dir` (default `specs-shv2`) on a pool of
 // persistent worker subprocesses, print per-test PASS/FAIL + an `N passed, M failed` summary, and
@@ -1058,7 +1041,6 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		build gives 1
 		verifyWarmRebuild gives 1
 		verifyRecheck gives 1
-		lspSelfTest gives 1
 		lspServer gives 1
 		specTest gives 1
 		scaleTest gives 1
@@ -1085,10 +1067,6 @@ function printUsage()
 	print("                                gates the query spine without ever running the pipeline;\n")
 	print("                                this gates the pipeline over it, which is what an editor\n")
 	print("                                holding one project open for hours actually does.\n")
-	print("  lsp-selftest                  Assert the LSP position conversion: the line index, and byte offset\n")
-	print("                                <-> LSP Position where `character` counts UTF-16 CODE UNITS. Covers\n")
-	print("                                2-, 3- and 4-byte characters, CRLF and the buffer edges. Compiler-\n")
-	print("                                internal, so no specs-shv2 case can reach it.\n")
 	print("  lsp-server                    Speak the Language Server Protocol over stdio: JSON-RPC\n")
 	print("                                bodies under Content-Length framing, the initialize /\n")
 	print("                                shutdown / exit lifecycle, and full text-document\n")
@@ -1205,7 +1183,6 @@ enum MaxonCommand
 	build
 	verifyWarmRebuild
 	verifyRecheck
-	lspSelfTest
 	lspServer
 	specTest
 	scaleTest
@@ -1425,9 +1402,7 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.verifyWarmRebuild
 			end 'verifyCmd' else if arg == "verify-recheck" 'recheckCmd'
 				parsed.command = MaxonCommand.verifyRecheck
-			end 'recheckCmd' else if arg == "lsp-selftest" 'lspSelfTestCmd'
-				parsed.command = MaxonCommand.lspSelfTest
-			end 'lspSelfTestCmd' else if arg == "lsp-server" 'lspServerCmd'
+			end 'recheckCmd' else if arg == "lsp-server" 'lspServerCmd'
 				parsed.command = MaxonCommand.lspServer
 			end 'lspServerCmd' else if arg == SpecTestCommandName 'specTestCmd'
 				parsed.command = MaxonCommand.specTest

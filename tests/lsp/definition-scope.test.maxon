@@ -1,12 +1,10 @@
 // definition-scope.test.maxon — `textDocument/definition` where the ANSWER depends on more than the name
-// under the cursor: which of two scopes declares it, whether the position names anything at all, and the
-// same type name reached through a return type rather than through a literal. Six of the thirteen
-// recovered definition tests; `definition-symbols.test.maxon` holds the other seven and owns the probe,
-// the session lifetime and the release discipline all of them run through.
+// under the cursor: which of two scopes declares it, whether the position names anything at all, and a
+// call to the enclosing function. Four of the thirteen recovered definition tests;
+// `definition-typenames.test.maxon` holds the type-position pair, `definition-symbols.test.maxon` four
+// and `definition-members.test.maxon` three.
 //
-// ⭐⭐ **PORTED RED, THEN GREENED** against a server that once answered `textDocument/definition` with
-// `-32601`; `definition-symbols.test.maxon`'s header owns why, and its refusal sentence is what says so
-// when one fails.
+// The session, the release discipline and the entry points are `definition-probe.test.maxon`'s.
 //
 // ⭐ **THE TWO "RETURNS NOTHING" TESTS ARE THE ONLY ONES IN THIS PORT THAT WERE REWRITTEN.** The
 // recovered pair asserted a result whose URI was EMPTY. An empty-string uri meaning "nothing here" is a
@@ -44,28 +42,6 @@ function factorialFixture() returns String
 end 'factorial'")
 end 'factorialFixture'
 
-function createPointFixture() returns String
-	return String.from(b"type Point
-    var x int
-    var y int
-end 'Point'
-
-function createPoint() returns Point
-    return Point{x: 0, y: 0}
-end 'createPoint'")
-end 'createPointFixture'
-
-function pointReturnLiteralFixture() returns String
-	return String.from(b"type Point
-    var x int
-    var y int
-end 'Point'
-
-function test() returns Point
-    return Point{x: 0, y: 0}
-end 'test'")
-end 'pointReturnLiteralFixture'
-
 test 'definition for variable in nested scope'
 	// Go to definition on 'inner' usage (line 4, col 15)
 	// Line 3 is the INNER declaration; line 1 declares `outer` in the enclosing scope.
@@ -90,18 +66,3 @@ test 'definition for recursive function call'
 	let source = factorialFixture()
 	try expectDefinitionAt(source, line: 4, character: 16, startLine: 0, note: "a call to the enclosing function did not resolve to that function's own declaration.")
 end 'definition for recursive function call'
-
-test 'definition for struct in return type'
-	// Go to definition on 'Point' return type (line 5, col 31)
-	let source = createPointFixture()
-	try expectDefinitionAt(source, line: 5, character: 31, startLine: 0, note: "a type named in a `returns` clause did not resolve to the type's declaration.")
-end 'definition for struct in return type'
-
-test 'definition for struct literal type'
-	// Go to definition on 'Point' in struct literal (line 6, col 11)
-	// The pair with `definition for struct in return type` is the point: the SAME name is resolved from
-	// a return-type position and from a literal position, and a resolver can get one right and the other
-	// wrong.
-	let source = pointReturnLiteralFixture()
-	try expectDefinitionAt(source, line: 6, character: 11, startLine: 0, note: "a type name opening a struct literal did not resolve to the type's declaration.")
-end 'definition for struct literal type'

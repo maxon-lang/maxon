@@ -7,15 +7,15 @@
 // `loadProject` + `queryAllModule` would answer nothing for exactly the buffers an editor asks about.
 // `tokenize` succeeds on all of them, so the names, the keywords and the block labels are all there.
 //
-// ⇒ **What `LspDeclarationSelfTest` contributes is the shape of the ANSWER, not the lookup: a name
-// nobody declares THROWS rather than resolving to a position.** That test exists to pin exactly that —
-// an answer carrying `0:0` is indistinguishable from a real declaration at `0:0` — and the same rule
-// holds one layer up, where LSP's own spelling for "nothing here" is a `null` result.
+// ⇒ **A NAME NOBODY DECLARES THROWS RATHER THAN RESOLVING TO A POSITION**, because an answer carrying
+// `0:0` is indistinguishable from a real declaration at `0:0` — and the same rule holds one layer up,
+// where LSP's own spelling for "nothing here" is a `null` result. `definition on keyword returns nothing`
+// in `tests/lsp/definition-scope.test.maxon` is what says so from the client's side.
 
 // Nothing under the cursor, or nothing that declares what is. ⭐ A THROW rather than a token standing
-// for "none", for the reason `TypeNameRegistry.declarationOf` throws and `LspDeclarationSelfTest`
-// pins: a not-found token would carry a real `0:0` position that a synthesized declaration also has.
-// Every lookup below fails the same way, so there is one arm and not four spellings of absence.
+// for "none", for the reason `TypeNameRegistry.declarationOf` throws: a not-found token would carry a
+// real `0:0` position that a synthesized declaration also has. Every lookup below fails the same way, so
+// there is one arm and not four spellings of absence.
 enum DefinitionLookupError implements Error
 	nothingThere
 end 'DefinitionLookupError'

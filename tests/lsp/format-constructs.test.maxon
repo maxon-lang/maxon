@@ -1,20 +1,16 @@
 // format-constructs.test.maxon — `textDocument/formatting` on the CONSTRUCTS whose nesting the formatter
-// has to get right one at a time: top-level interfaces, a `while` body, a `match` expression's cases, a
-// `try`/`otherwise` block, and a multiline map literal both inside a function and at the top level. Six
-// of the thirteen recovered formatting tests; `format-indent.test.maxon` holds the other seven and owns
-// the session lifetime, the release discipline and the edit-list unwrapping all of them run through.
+// has to get right one at a time: top-level interfaces, a `while` body, a `match` expression's cases and
+// a `try`/`otherwise` block. Four of the thirteen recovered formatting tests; the map literals are in
+// `format-literals.test.maxon`, and `format-indent.test.maxon` owns the session lifetime, the release
+// discipline and the edit-list unwrapping all of them run through.
 //
 // ⭐⭐ **PORTED RED, THEN GREENED** against a server that once answered `textDocument/formatting` with
 // `-32601`; `format-indent.test.maxon`'s header owns why, and its refusal sentence is what says so when
 // one fails.
 //
-// ⭐⭐ **THIS FILE CONCENTRATES THE BYTE-EXACTNESS RISK.** `formatting indents top-level multiline map
-// literal correctly` asserts on byte 0 with a `startsWith` and pins a `"\n]"` at the end — so a fixture
-// representation that added a leading newline or stripped indentation would break both, and no other
-// test in the port would notice. `formatting indents try-otherwise block correctly` carries the other
-// escaping hazard, in the opposite direction: its FIXTURE must hold a literal BACKSLASH followed by `n`
-// (two bytes, inside a Maxon string the document itself contains), while its ASSERTION holds a real
-// double quote and no backslash at all.
+// ⭐⭐ **`formatting indents try-otherwise block correctly` CARRIES AN ESCAPING HAZARD.** Its FIXTURE
+// must hold a literal BACKSLASH followed by `n` (two bytes, inside a Maxon string the document itself
+// contains), while its ASSERTION holds a real double quote and no backslash at all.
 //
 // ⚠ **MEASURED, and it contradicts what the port brief predicted: `\\n` inside a `b"…"` does NOT spell
 // two bytes.** Both compilers decode it to a single newline (byte 10), because `\\` is not a recognised
@@ -70,25 +66,6 @@ end 'noFile'
 return 0
 end 'readFile'")
 end 'formatFileFixture'
-
-function mapLiteralFixture() returns String
-	return String.from(b"function getConfig()
-var config = [
-\"width\": 100,
-\"height\": 200
-]
-return config
-end 'getConfig'")
-end 'mapLiteralFixture'
-
-// The same construct as `mapLiteralFixture`, one level shallower. Nothing encloses it, so the formatter
-// must indent its entries once and leave the `let` and the closing bracket on column 0.
-function topLevelMapFixture() returns String
-	return String.from(b"let config = [
-\"width\": 100,
-\"height\": 200
-]")
-end 'topLevelMapFixture'
 
 test 'formatting formats multiple interfaces at top level'
 	// Multiple interfaces with incorrect nesting
@@ -146,27 +123,3 @@ test 'formatting indents try-otherwise block correctly'
 	try Expect.contains(text, needle: "\tend 'noFile'", message: "the handler's `end` did not sit at the `let`'s own level.")
 	try Expect.contains(text, needle: "\treturn 0", message: "the statement after the handler was not indented one tab.")
 end 'formatting indents try-otherwise block correctly'
-
-test 'formatting indents multiline map literal correctly'
-	// Multiline map literal with no indentation - formatter should add proper indentation
-	let source = mapLiteralFixture()
-	let text = try formattedDocumentText(source, insertSpaces: false)
-
-	try Expect.contains(text, needle: "\tvar config = [", message: "the declaration opening the map literal was not indented one tab.")
-	try Expect.contains(text, needle: "\t\t\"width\":", message: "a map entry was not indented two tabs.")
-	try Expect.contains(text, needle: "\t\t\"height\":", message: "the second map entry was not indented two tabs.")
-	try Expect.contains(text, needle: "\t]", message: "the literal's closing bracket did not return to the declaration's level.")
-end 'formatting indents multiline map literal correctly'
-
-test 'formatting indents top-level multiline map literal correctly'
-	// Top-level map literal with no indentation - formatter should add proper indentation
-	let source = topLevelMapFixture()
-	let text = try formattedDocumentText(source, insertSpaces: false)
-
-	// ⭐ A prefix assertion on byte 0, and the sharpest detector in the port of a fixture representation
-	// that trims or prepends: nothing may precede the `let`.
-	try Expect.startsWith(text, needle: "let config = [", message: "the formatted document does not begin with the declaration. A top-level `let` opens at column 0, so anything before it — an indent, a blank line — is invented.")
-	try Expect.contains(text, needle: "\t\"width\":", message: "a top-level map entry was not indented exactly one tab.")
-	try Expect.contains(text, needle: "\t\"height\":", message: "the second top-level map entry was not indented exactly one tab.")
-	try Expect.contains(text, needle: "\n]", message: "the closing bracket of a top-level literal did not sit at column 0 on its own line.")
-end 'formatting indents top-level multiline map literal correctly'

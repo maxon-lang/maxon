@@ -28,35 +28,27 @@
 
 // A 0-based LSP line number. Distinct from `LineNumber`, which is this compiler's 1-based one, and
 // deliberately not an alias of it: the whole point is that the two are not interchangeable.
-export typealias LspLineNumber = int(0 to i64.max)
+module typealias LspLineNumber = int(0 to i64.max)
 
 // A 0-based offset in UTF-16 CODE UNITS from the start of a line. Not bytes, not codepoints.
-export typealias LspCharacter = int(0 to i64.max)
+module typealias LspCharacter = int(0 to i64.max)
 
 // A byte offset into a source buffer. Matches `ByteOffset` in the lexer's domain; named here for the
 // LSP's, so a reader of a signature can tell which side of the conversion a value is on.
-export typealias LspByteOffset = int(0 to i64.max)
+module typealias LspByteOffset = int(0 to i64.max)
 
 // File-private: the two columns are this type's own storage and no caller outside it names the
 // alias. It becomes `export` when one does, landed with that caller.
 typealias LspByteOffsetArray = Array with LspByteOffset
 
 // One position, exactly as the protocol spells it: 0-based line, 0-based UTF-16 character.
-export type LspPosition
+module type LspPosition
 	export let line as LspLineNumber
 	export let character as LspCharacter
 
 	export static function create(line LspLineNumber, character LspCharacter) returns LspPosition
 		return Self{line: line, character: character}
 	end 'create'
-
-	export function equals(other LspPosition) returns bool
-		return line == other.line and character == other.character
-	end 'equals'
-
-	export function render() returns String
-		return "{line}:{character}"
-	end 'render'
 end 'LspPosition'
 
 // The byte offset at which each line starts, one entry per line, ascending.
@@ -64,7 +56,7 @@ end 'LspPosition'
 // Built once per document version and re-used by every request against it: a server answers many
 // positions per keystroke, and a per-request scan of the whole buffer would make every feature
 // O(file) in a place the user can feel.
-export type LspLineIndex
+module type LspLineIndex
 	var lineStarts as LspByteOffsetArray
 
 	// ⭐ **WHERE EACH LINE'S CONTENT ENDS — recorded by the SAME scan that finds the starts, because
@@ -110,8 +102,9 @@ export type LspLineIndex
 		return Self{lineStarts: starts, lineContentEnds: contentEnds}
 	end 'build'
 
-	// How many lines the buffer has. Always at least 1.
-	export function lineCount() returns LspLineNumber
+	// How many lines the buffer has. Always at least 1. File-private: `offsetOf` is its only caller, and
+	// a request names a position rather than asking how long the document is.
+	function lineCount() returns LspLineNumber
 		return lineStarts.count()
 	end 'lineCount'
 
@@ -208,7 +201,7 @@ end 'LspLineIndex'
 
 // A half-open byte range `[startByte, endByte)` in a source buffer — the same convention
 // `SourceRange` uses, so the two cannot be read as different kinds of interval.
-export type LspSpan
+module type LspSpan
 	export let startByte as LspByteOffset
 	export let endByte as LspByteOffset
 
@@ -217,7 +210,8 @@ export type LspSpan
 	end 'create'
 
 	// No span. Distinct from a zero-width one at offset 0, which is a real position in a real buffer.
-	export static function none() returns LspSpan
+	// File-private: `tokenSpanAt` is what hands it out, and a caller reads the absence through `isEmpty`.
+	static function none() returns LspSpan
 		return Self{startByte: 0, endByte: 0}
 	end 'none'
 
@@ -255,8 +249,8 @@ end 'LspSpan'
 //
 // A position that matches no token's anchor returns `none`, and the caller falls back to the
 // one-character range. That is the honest answer for a diagnostic anchored somewhere no token begins
-// (a whole-program E3001 anchors at 0:0), not a failure.
-export function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
+// (one reported with no position at all anchors at 0:0), not a failure.
+module function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
 	for token in tokens 'eachToken'
 		if token.line == line and token.column == column 'anchoredHere'
 			return LspSpan.create(token.startByte, endByte: token.endByte)

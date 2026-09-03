@@ -1,0 +1,90 @@
+// position-probe.test.maxon — the non-ASCII marks and the one document shape that carries them. It
+// declares no tests: two files ask the SAME line in opposite directions, and the line must provably be
+// the same one.
+//
+//   • `position-characters.test.maxon` sends a POSITION into it — the forward conversion, a character to
+//     a byte offset.
+//   • `diagnostics-ranges.test.maxon` reads a RANGE out of it — the reverse conversion, a byte offset to
+//     a character, which is the only direction in which counting CODEPOINTS instead of code units is
+//     visible.
+
+// U+00E9, U+4E16, U+1F600 — named so a fixture says which character it carries rather than showing a
+// glyph a terminal may not render.
+export let TwoByteChar = "é"
+export let ThreeByteChar = "世"
+export let FourByteChar = "😀"
+
+// ⭐⭐ **A BYTE OFFSET, A CODEPOINT INDEX AND A UTF-16 CODE-UNIT INDEX ARE THE SAME NUMBER FOR ASCII**, so
+// every other file in this suite passes against a server that confuses all three. These three marks are
+// what separate them:
+//
+//   • **2-byte** (`é`)   — 2 bytes, 1 codepoint, 1 unit  → separates BYTES from units
+//   • **3-byte** (`世`)  — 3 bytes, 1 codepoint, 1 unit  → same, wider
+//   • **4-byte** (`😀`) — 4 bytes, 1 codepoint, **2** units → separates CODEPOINTS from units
+typealias MarkWidth = int(0 to 8)
+
+let TwoByteWidth = 2 as MarkWidth
+let ThreeByteWidth = 3 as MarkWidth
+let FourByteWidth = 4 as MarkWidth
+let OneCodeUnit = 1 as MarkWidth
+let SupplementaryCodeUnits = 2 as MarkWidth
+
+// ⛔⛔ **THE PREMISE IS ASSERTED HERE RATHER THAN AT THE TEST, BECAUSE THE BOOTSTRAP LEAVES A CROSS-FILE
+// `export let` UNTYPED.** MEASURED 2026-09-03 against `bin/maxon`: both `SharedMark.byteLength()` and
+// `helper(SharedMark)` come out untyped, so an `Expect.equal` whose only informative operand runs through
+// one is `E3007: Ambiguous overload` against the int / String / bool candidates, while shv2 resolves it.
+// (A call with ONE candidate is unaffected — `markedDocument(FourByteChar, …)` below is exactly that —
+// and so is an `Expect.equal` whose other side is a typed field.) A PARAMETER carries a declared type, so
+// measuring the mark inside this file makes the assertion mean the same thing under both runners.
+//
+// It is not decoration either: these marks are non-ASCII in a UTF-8 source file, and a re-encoded or
+// mangled file would leave every position in this suite counted against a string it does not name while
+// still reading green.
+export function expectMarkEncodings() throws TestFailure
+	try expectMark(TwoByteChar, bytes: TwoByteWidth, codeUnits: OneCodeUnit, note: "`é` must be 2 UTF-8 bytes and 1 UTF-16 code unit.")
+
+	try expectMark(ThreeByteChar, bytes: ThreeByteWidth, codeUnits: OneCodeUnit, note: "`世` must be 3 UTF-8 bytes and 1 UTF-16 code unit.")
+
+	try expectMark(FourByteChar, bytes: FourByteWidth, codeUnits: SupplementaryCodeUnits, note: "`😀` must be 4 UTF-8 bytes and TWO UTF-16 code units. That inequality is the whole reason the supplementary case discriminates where the other two cannot.")
+end 'expectMarkEncodings'
+
+function expectMark(mark String, bytes MarkWidth, codeUnits MarkWidth, note String) throws TestFailure
+	try Expect.equal(mark.byteLength() as MarkWidth, expected: bytes, message: "{note} It is {mark.byteLength()} bytes here, so this file was re-encoded.")
+
+	try Expect.equal(mark.utf16().count(), expected: codeUnits, message: "{note} It is {mark.utf16().count()} code units here.")
+end 'expectMark'
+
+// The document both files drive: eleven lines, of which line 8 is
+//
+//     ....let tally = pick("<mark>", value: <name>)
+//     0   4   8    13  16 20 22
+//
+// so `<name>` opens at character 32 plus the mark's width in UTF-16 CODE UNITS. `name` is a parameter
+// because the two directions need different documents at exactly that one word: a DECLARED name for a
+// position to resolve to, and an UNDECLARED one for a diagnostic to be reported at.
+//
+// ⚠ Byte-string PIECES rather than one interpolated literal: a raw newline is an ordinary byte inside a
+// byte string and `E1002` inside a `"…"` one, so a multi-line document cannot be spelled with the
+// interpolation the mark and the name need. The pieces meet exactly where each of the two goes.
+export function markedDocument(mark String, name String) returns String
+	let head = String.from(b"typealias UnitProbeCount = int(0 to 100)
+
+function pick(mark String, value UnitProbeCount) returns UnitProbeCount
+    return value
+end 'pick'
+
+function main() returns ExitCode
+    let chosen = 7 as UnitProbeCount
+    let tally = pick(\"")
+	let separator = String.from(b"\", value: ")
+	let close = String.from(b")
+    return tally as ExitCode
+end 'main'")
+
+	return "{head}{mark}{separator}{name}{close}"
+end 'markedDocument'
+
+// Line 8's column arithmetic, shared because both files count against it.
+export let MarkedUseLine = 8 as LspCoordinate
+export let NameAfterOneUnit = 33 as LspCoordinate
+export let NameAfterTwoUnits = 34 as LspCoordinate

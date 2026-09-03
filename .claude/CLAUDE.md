@@ -143,7 +143,9 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 > **`spec-test` is for the LANGUAGE — compiler syntax and emitted code. A DRIVER COMMAND is not that**
 > (user ruling, 2026-09-02), and it could not be gated there anyway: a `specs-shv2` case is a Maxon
 > PROGRAM the harness compiles and runs, so it can reach `stdlib/` and nothing else —
-> `LspPositionSelfTest.maxon:3-6` states it, and **no shv2 command is gated by a spec case, not one**.
+> `tests/lsp/LspClient.maxon`'s header states it, and **no shv2 command is gated by a spec case, not
+> one**. (It replaced `LspPositionSelfTest.maxon:3-6`, which said the same thing and was deleted with
+> `lsp-selftest` on 2026-09-03 once the e2e suite covered what it pinned.)
 >
 > `maxon test` is gated by **itself**: `tests/test-command/` holds ordinary `test`
 > declarations that spawn the command at the fixture projects in `tests/test-fixtures/`

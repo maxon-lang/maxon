@@ -1,0 +1,56 @@
+// diagnostics-scope.test.maxon — WHICH claims a one-buffer compile is entitled to publish.
+//
+// ⛔⛔ **THIS SERVER HOLDS ONE FILE PLUS `stdlib/`, SO IT CANNOT HONESTLY MAKE A CLAIM ABOUT A
+// PROGRAM.** "This program declares no entry point" is true of what the server compiled and false of the
+// file the author is looking at, and a library file — most of what an editor has open — would carry
+// a red squiggle on its first line for ever. `LspDiagnostics.claimsAboutTheWholeProgram` is the predicate,
+// and `LspDocumentProject.maxon` states why the compile has one file.
+//
+// ⭐ **THE SECOND TEST IS WHAT STOPS THE PREDICATE GROWING INTO A BLANKET MUTE.** Suppressing a
+// diagnostic that is genuinely about this file HIDES A REAL ERROR, which is a worse outcome than the
+// squiggle the first test removes — so a document with no `main` AND a real problem must still publish
+// the problem.
+//
+// The session is `diagnostics-probe.test.maxon`'s.
+
+// A library file: it exports something and declares no entry point, which is what almost every file in a
+// real project looks like.
+function libraryDocument() returns String
+	return String.from(b"typealias LibraryProbeCount = int(0 to 100)
+
+export function libraryHelper(value LibraryProbeCount) returns LibraryProbeCount
+    return value
+end 'libraryHelper'")
+end 'libraryDocument'
+
+// The same library file with one genuine defect in it — a cast to the type the value already has.
+function libraryWithRealErrorDocument() returns String
+	return String.from(b"typealias LibraryProbeCount = int(0 to 100)
+
+export function libraryHelper(value LibraryProbeCount) returns LibraryProbeCount
+    return value as LibraryProbeCount
+end 'libraryHelper'")
+end 'libraryWithRealErrorDocument'
+
+let UnneededCastCode = "E3010"
+let UnneededCastLine = 3 as LspCoordinate
+let UnneededCastStart = 17 as LspCoordinate
+let UnneededCastEnd = 19 as LspCoordinate
+
+test 'a library file with no entry point publishes NOTHING'
+	let items = try publishedFor(libraryDocument(), what: "opening a library file")
+
+	try Expect.equal(items.count(), expected: 0, message: "this file has nothing wrong with it. `E3001: No 'main' function found` is a claim about a PROGRAM, and this server compiled one buffer plus `stdlib/` — so publishing it puts a red squiggle on line 1 of every library file an author opens.")
+end 'a library file with no entry point publishes NOTHING'
+
+test 'a library file with a real error still publishes that error'
+	let reported = try onlyPublishedDiagnostic(libraryWithRealErrorDocument(), what: "opening a library file that has a genuine defect")
+
+	try Expect.equal(reported.code, expected: UnneededCastCode, message: "the file has no `main` AND a real problem. Only the whole-program CLAIM is withheld; a diagnostic about this file's own text is exactly what an editor is for. A publish of nothing here would mean the predicate had become `if there is no main, say nothing`, which hides every error in every library file.")
+
+	try Expect.equal(reported.range.startLine, expected: UnneededCastLine, message: "the cast is on line 3.")
+
+	try Expect.equal(reported.range.startCharacter, expected: UnneededCastStart, message: "`as` opens at character 17.")
+
+	try Expect.equal(reported.range.endCharacter, expected: UnneededCastEnd, message: "`as` is two characters, so the underline ends at 19.")
+end 'a library file with a real error still publishes that error'

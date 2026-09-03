@@ -1,0 +1,123 @@
+// definition-probe.test.maxon — one `textDocument/definition` session, written once, for every file that
+// asks one. It declares no tests: it holds what those files share, because one fact written twice is this
+// project's signature bug.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is stated
+// once, in `LspClient.maxon`'s hazard 1.
+
+// The one document every definition test drives. Its uri never touches the filesystem: full-text sync
+// carries the content, so the server is told the text rather than asked to read it.
+let DefinitionDocumentUri = "file:///test.maxon"
+
+// What one `textDocument/definition` request answered, or why it could not be asked.
+//
+// ⭐ **ABSENCE IS A CASE, NEVER AN EMPTY URI.** The recovered harness spelled "nothing here" as a result
+// whose uri was empty; that is a sentinel inside its own domain and fails silently the day a real result
+// carries an empty uri. Here it is its own arm and reads as one.
+//
+// ⚠ The WHOLE range is carried, not the start line alone, because two kinds of caller read it: the
+// recovered tests ask only which line a jump lands on, and the position tests ask for the CHARACTER —
+// which is where a byte-for-UTF-16 confusion shows. One arm answering both is what keeps a second probe
+// from existing.
+union DefinitionProbe
+	located(range LspRange)
+	absent
+	refused(code JsonRpcErrorCode, message String)
+	broke(detail String)
+end 'DefinitionProbe'
+
+// ⚠ The recovered tests inspect ONLY the start line — never the uri's value, never the character, never
+// the end of the range. That scope is kept: an assertion the recovered spec did not make would be one
+// this port invented. `expectDefinitionRangeAt` is where a character IS pinned, by tests written for that
+// question.
+export function expectDefinitionAt(source String, line LspCoordinate, character LspCoordinate, startLine LspCoordinate, note String) throws TestFailure
+	let probe = probeDefinition(source, line: line, character: character)
+	let located = try locatedRange(probe)
+	try Expect.equal(located.startLine, expected: startLine, message: note)
+end 'expectDefinitionAt'
+
+// ⭐⭐ **THE WHOLE RANGE, FOR THE TESTS WHOSE SUBJECT IS THE COORDINATE ITSELF.** A `character` is a count
+// of UTF-16 CODE UNITS, and every wrong way to count one — bytes, codepoints, an expanded tab — lands on
+// the right LINE while naming the wrong column. Only a pinned character can tell those apart, and pinning
+// the END as well is what says the span covers the whole name rather than its first unit.
+export function expectDefinitionRangeAt(source String, line LspCoordinate, character LspCoordinate, startLine LspCoordinate, startCharacter LspCoordinate, endCharacter LspCoordinate, note String) throws TestFailure
+	let probe = probeDefinition(source, line: line, character: character)
+	let located = try locatedRange(probe)
+
+	try Expect.equal(located.startLine, expected: startLine, message: "{note} The jump landed on line {located.startLine}.")
+
+	try Expect.equal(located.startCharacter, expected: startCharacter, message: "{note} The declaration begins at character {startCharacter} counted in UTF-16 code units; the server said {located.startCharacter}.")
+
+	try Expect.equal(located.endCharacter, expected: endCharacter, message: "{note} The name ends at character {endCharacter}; the server said {located.endCharacter}. An end that is wrong while the start is right means the SPAN was measured in the wrong unit rather than the anchor.")
+end 'expectDefinitionRangeAt'
+
+// The absence rewrite: the two recovered "returns nothing" tests asserted an EMPTY URI, and this is the
+// one shape that replaces it — the call SUCCEEDS and reports that nothing is defined there.
+export function expectNoDefinitionAt(source String, line LspCoordinate, character LspCoordinate) throws TestFailure
+	let probe = probeDefinition(source, line: line, character: character)
+
+	match probe 'probe'
+		absent then return
+		located(range) then try Expect.fail("the server pointed at line {range.startLine}, where the recovered test says nothing is defined. Jumping from a keyword or a literal takes an editor somewhere arbitrary, which is worse than staying put.")
+		refused(code, message) then try Expect.fail(definitionRefusalSentence(code, message: message))
+		broke(detail) then try Expect.fail("the session broke before an answer arrived: {detail}")
+	end 'probe'
+end 'expectNoDefinitionAt'
+
+// ⚠ `LspRange.create` and `LspRange.nowhere` are the client's own, so there is no range to initialise a
+// variable with here — every arm but `located` diverges instead, and the tail says so.
+function locatedRange(probe DefinitionProbe) returns LspRange throws TestFailure
+	match probe 'probe'
+		located(found) then return found
+		absent then try Expect.fail("the server found no definition at that position. The position names a declaration an editor must be able to jump to, so an absent answer is a wrong answer here.")
+		refused(code, message) then try Expect.fail(definitionRefusalSentence(code, message: message))
+		broke(detail) then try Expect.fail("the session broke before an answer arrived: {detail}")
+	end 'probe'
+
+	panic("locatedRange: every arm but `located` throws, so this line is unreachable")
+end 'locatedRange'
+
+// Spawn, drive, release. The probe is a VALUE, so no assertion can run before the handle is freed.
+function probeDefinition(source String, line LspCoordinate, character LspCoordinate) returns DefinitionProbe
+	var client = LspClient.start()
+	let probe = collectDefinition(client, source: source, line: line, character: character)
+	client.release()
+	return probe
+end 'probeDefinition'
+
+function collectDefinition(client LspClient, source String, line LspCoordinate, character LspCoordinate) returns DefinitionProbe
+	// Assigned on every path — the body's last statement and each arm of its handler. The sentence is
+	// what a reader would be shown if a later edit added a path that reported nothing.
+	var probe = DefinitionProbe.broke("the request ended without saying how")
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(DefinitionDocumentUri, content: source)
+		let found = client.definition(DefinitionDocumentUri, line: line, character: character)
+		probe = definitionProbeOf(found)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(detail) then probe = DefinitionProbe.broke("the framed stream broke — {detail}")
+			malformedResponse(detail) then probe = DefinitionProbe.broke("a reply was not the shape LSP defines for `textDocument/definition` — {detail}")
+			serverRefused(code, message) then probe = DefinitionProbe.refused(code, message: message)
+		end 'reason'
+	end 'failed'
+
+	return probe
+end 'collectDefinition'
+
+function definitionProbeOf(found DefinitionResult) returns DefinitionProbe
+	if not found.isPresent 'nothing'
+		return DefinitionProbe.absent
+	end 'nothing'
+
+	return DefinitionProbe.located(found.range)
+end 'definitionProbeOf'
+
+// ⭐ `-32601` naming `textDocument/definition` now means the handler STOPPED being served, so the
+// sentence says which method was refused and what that means — a reader must not read it as a transport
+// fault, and must not answer it by editing the assertion.
+function definitionRefusalSentence(code JsonRpcErrorCode, message String) returns String
+	return "`textDocument/definition` was refused with JSON-RPC {code}: {message}. The definition handler IS served, so a refusal here is a REGRESSION — either `definitionServedMethods()` stopped naming the method, or the dispatcher stopped routing it."
+end 'definitionRefusalSentence'

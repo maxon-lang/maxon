@@ -1,46 +1,14 @@
-// hover-docs.test.maxon — hover over what a symbol is DOCUMENTED as, and over the composite types and
-// static calls whose renderings are the least like a bare name.
+// hover-docs.test.maxon — hover over what a symbol is DOCUMENTED as, and over the static call whose
+// rendering is the least like a bare name.
 //
-// The last eight of the twenty-four recovered hover tests. The harness is in `hover-probe.test.maxon`.
+// Four of the twenty-four recovered hover tests. `hover-types.test.maxon` holds the four that hover over
+// a composite type or over a call's result; the harness is in `hover-probe.test.maxon`.
 //
 // ⚠ **THIS FILE CONCENTRATES THE PINS ON LIVE `stdlib/` CONTENT, ON PURPOSE.** `Append element to end` is
 // `Array.maxon`'s doc comment, `cstring` is read off `String.cstr`'s declaration, and `String.fromCString`
 // is a declaration in `String.maxon`. A frozen fixture copy of the stdlib would make all three pass
 // forever while testing nothing; pinned to the real tree they go red the day one of them moves — which is
 // exactly the day an editor's hover changes, and therefore worth being told about.
-
-test 'hover shows array of struct type'
-	let document = pointsArrayDocument()
-	let rendering = try hoverRendering(document, line: 6, character: 8)
-
-	try Expect.contains(rendering, needle: "points", message: "the rendering names the variable it resolved.")
-
-	// ⭐ DIVERGENCE from the recovered `Array of Point`, ruled 2026-09-02 with `Array of int` in
-	// `hover-declarations.test.maxon` and for the reason recorded there: `with` is Maxon's own spelling.
-	try Expect.contains(rendering, needle: "Array with Point", message: "an array of a USER type names that type as its element. Element rendering that only worked for primitives would pass the `Array with int` case and fail here.")
-end 'hover shows array of struct type'
-
-test 'hover shows struct definition'
-	let document = pointLiteralDocument()
-	let rendering = try hoverRendering(document, line: 6, character: 12)
-
-	try Expect.contains(rendering, needle: "Point", message: "the TYPE NAME in a struct literal hovers as the type. `definition for struct type` asks this same fixture at this same position and expects a jump, so hover and definition agree about what is under the cursor.")
-end 'hover shows struct definition'
-
-test 'hover shows user function signature'
-	let document = multiplyDocument()
-	let rendering = try hoverRendering(document, line: 5, character: 11)
-
-	try Expect.contains(rendering, needle: "function", message: "a call hovers as the function it resolves to.")
-
-	try Expect.contains(rendering, needle: "multiply", message: "the rendering names that function.")
-
-	// ⚠ WEAK, and kept verbatim: single-character needles match almost any rendering — `"y"` matches
-	// inside the word `multiply` itself. Recorded so their passing is never mistaken for coverage.
-	try Expect.contains(rendering, needle: "x", message: "the first parameter's name is in the signature.")
-
-	try Expect.contains(rendering, needle: "y", message: "the second parameter's name is in the signature.")
-end 'hover shows user function signature'
 
 test 'hover shows doc comment for function'
 	// "add" starts at column 11
@@ -82,24 +50,6 @@ test 'hover shows array push method with doc comment'
 	try Expect.contains(rendering, needle: "Append element to end", message: "the doc comment from `stdlib/Array.maxon` reaches the hover. Doc comments that only worked inside the open document would pass every fixture-local case and fail here — and the stdlib is where an editor user reads them most.")
 end 'hover shows array push method with doc comment'
 
-test 'hover shows variable type from intrinsic function call'
-	// Line 3: "    var name = String.fromCString(filename)"
-	//          0         1         2         3
-	//          0123456789012345678901234567890123456789
-	//
-	// ⭐ RE-POINTED BY RULING, 2026-09-02: the recovered fixture bound `filename` from `__find_filename`,
-	// an intrinsic no live compiler has and which shv2 refuses to let an author name at all. `String.cstr`
-	// is a live declaration returning `cstring`, so the claim — a binding's type is its CALLEE'S declared
-	// return — is asked unchanged. Only lines 1 and 2 changed; line 3 is byte-identical to the recovered
-	// one, so the position below is too.
-	let document = calleeReturnDocument()
-	let rendering = try hoverRendering(document, line: 3, character: 34)
-
-	try Expect.contains(rendering, needle: "filename", message: "the rendering names the variable it resolved.")
-
-	try Expect.contains(rendering, needle: "cstring", message: "a variable's inferred type is the one flowing OUT of the callee that produced it. Inference that stopped at the call boundary would leave this position untyped.")
-end 'hover shows variable type from intrinsic function call'
-
 test 'hover shows static method signature'
 	// Line 2: "    var name = String.fromCString(cs)"
 	//          0         1         2
@@ -118,40 +68,6 @@ end 'hover shows static method signature'
 // indentation is the recovered source's own, and every position above is a column counted against it —
 // adding or trimming one byte silently shifts them all. `arrayDocument` is shared with
 // `hover-declarations.test.maxon` and lives in `hover-probe.test.maxon`.
-
-function pointsArrayDocument() returns String
-	return String.from(b"type Point
-    var x int
-    var y int
-end 'Point'
-
-function main() returns int
-    var points = [Point{x: 1, y: 2}, Point{x: 3, y: 4}]
-    return 0
-end 'main'")
-end 'pointsArrayDocument'
-
-function pointLiteralDocument() returns String
-	return String.from(b"type Point
-    var x int
-    var y int
-end 'Point'
-
-function test() returns int
-    var p = Point{x: 0, y: 0}
-    return 0
-end 'test'")
-end 'pointLiteralDocument'
-
-function multiplyDocument() returns String
-	return String.from(b"function multiply(x int, y int) returns int
-    return x * y
-end 'multiply'
-
-function main() returns int
-    return multiply(3, 4)
-end 'main'")
-end 'multiplyDocument'
 
 function documentedAddDocument() returns String
 	return String.from(b"/// Adds two numbers together
@@ -180,18 +96,6 @@ function main() returns int
     return c.count
 end 'main'")
 end 'documentedCounterDocument'
-
-// ⚠ `path` is a bare string literal and `filename` is a call on it, in that order, because BOTH steps are
-// the subject: the first is a type a literal gives, the second is a type only the callee's declaration
-// can give. Collapsing them into `var filename = \"test\".cstr()` would leave the test passing on the
-// literal alone.
-function calleeReturnDocument() returns String
-	return String.from(b"function test()
-    var path = \"test\"
-    var filename = path.cstr()
-    var name = String.fromCString(filename)
-end 'test'")
-end 'calleeReturnDocument'
 
 function staticMethodDocument() returns String
 	return String.from(b"function test()

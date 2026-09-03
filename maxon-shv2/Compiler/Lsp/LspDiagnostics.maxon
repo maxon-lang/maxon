@@ -1,0 +1,187 @@
+// `textDocument/publishDiagnostics` — the compiler's own diagnostics, PUSHED to the editor.
+//
+// ⛔⛔ **A SERVER-INITIATED NOTIFICATION, NOT A REQUEST, SO IT IS DELIBERATELY ABSENT FROM `LspMethod`
+// AND FROM `servedMethods()`.** Every other feature here answers something a client asked for; this one
+// is written the moment a document changes and is never addressed to a request id. LSP's push model
+// gives it no `*Provider` capability key at all, and `servedMethods()` drives BOTH the routing table
+// and the `initialize` advertisement — so an entry there would have to name a capability that does not
+// exist, which `tests/lsp/capability-agreement.test.maxon` asserts cannot happen.
+//
+// ⭐ **AN EMPTY ARRAY IS AN ANSWER, AND IT IS THE ONE THAT CLEARS THE SQUIGGLES.** A document with no
+// problems, and a document that has just been closed, both publish `[]`. A server that publishes
+// nothing in those cases leaves the last errors it reported standing in the editor for ever.
+
+let PublishDiagnosticsMethod = "textDocument/publishDiagnostics"
+
+// The members LSP defines on `PublishDiagnosticsParams` and on `Diagnostic`. The `range` and the `uri`
+// are the protocol's shared structures and are spelled in `LspMessage.maxon` with every other reader of
+// them.
+let DiagnosticsKey = "diagnostics"
+let DiagnosticSeverityKey = "severity"
+let DiagnosticCodeKey = "code"
+let DiagnosticSourceKey = "source"
+
+// ⚠ NOT `LspMessage.maxon`'s `JsonRpcErrorMessageKey`, which is the JSON-RPC ERROR object's member.
+// Two protocol members that agree on a spelling today are still two members.
+let DiagnosticMessageKey = "message"
+
+// LSP's `DiagnosticSeverity` — the protocol's own numbers, which an editor draws a colour from.
+typealias LspDiagnosticSeverity = int(1 to 4)
+
+// ⭐ **EVERY DIAGNOSTIC THIS COMPILER PRODUCES IS AN ERROR, AND THAT IS A PROPERTY OF `Diagnostic`
+// RATHER THAN A CHOICE MADE HERE.** It carries no severity field, and `projectHasErrors` fails a build
+// on a non-empty sink — so there is no warning tier for a second case to read.
+let LspErrorSeverity = 1 as LspDiagnosticSeverity
+
+// What an editor groups and filters these by. The bootstrap server publishes the same word, so an
+// editor showing both sees one source rather than two.
+let DiagnosticSourceName = "maxon"
+
+// Compile `text` as the document `uri` names and publish what the compile reported.
+//
+// ⚠ **A PROJECT THAT COULD NOT BE ASSEMBLED PUBLISHES NOTHING, AND AN EMPTY ARRAY WOULD BE A WRONG
+// ANSWER.** `[]` is a POSITIVE claim — "this document has no problems" — while a server that could not
+// locate `stdlib/` has checked nothing and knows nothing. Saying nothing leaves the editor showing what
+// it already had, which is what "not checked" looks like.
+module function publishBufferDiagnostics(uri String, text String)
+	match lspDocumentProject(lspDocumentPath(uri), content: text) 'buffer'
+		loaded(project) then publishCheckedDiagnostics(uri, text: text, project: project)
+		unavailable then return
+	end 'buffer'
+end 'publishBufferDiagnostics'
+
+// Tell the editor this document has nothing on it — the notification a closed document is owed.
+module function clearPublishedDiagnostics(uri String)
+	writeDiagnosticsNotification(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create())
+end 'clearPublishedDiagnostics'
+
+// Drive the checks over `project` and publish everything they reported about this document.
+//
+// ⛔⛔ **THE COMPILE IS CAPTURED, AND THAT IS WHAT KEEPS THE SESSION ALIVE RATHER THAN TIDINESS.** Every
+// diagnostic the pipeline reports is written to STDERR by `emitDiagnosticLine`, and a client cannot
+// drain this server's stderr — `tests/lsp/LspClient.maxon`'s header states why it cannot, and that a
+// full pipe buffer leaves both processes waiting on each other for ever. The capture is where those
+// bytes go instead; the ARRAY standing on the project is what is published.
+function publishCheckedDiagnostics(uri String, text String, project Project)
+	beginDiagnosticCapture()
+	runBufferChecks(project)
+	_ = endDiagnosticCapture()
+
+	var doc = JsonDoc.create()
+	let index = LspLineIndex.build(text)
+	let tokens = lspDocumentTokens(text)
+	let path = lspDocumentPath(uri)
+	var items = JsonNodeIdArray.create()
+
+	for diagnostic in project.diagnostics 'each'
+		if claimsAboutTheWholeProgram(diagnostic.code) or not reportsOn(diagnostic, path: path) 'notThisDocuments'
+			continue
+		end 'notThisDocuments'
+
+		items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
+	end 'each'
+
+	writeDiagnosticsNotification(uri, items: items, doc: doc)
+end 'publishCheckedDiagnostics'
+
+// ⚠ **A REFUSED COMPILE IS THE NORMAL CASE HERE, NOT AN ERROR TO REPORT.** A buffer under edit usually
+// does not compile — `LspCompletion.maxon`'s header measures that every recovered fixture is refused
+// before it has a type at all — and `compileToCodeResult` reports and throws by design. What is wanted
+// is `project.diagnostics`, which the refusing and the succeeding path both leave standing.
+//
+// It is a function of its own because `otherwise ignore` is rejected in value position (E3059), so
+// swallowing the refusal needs a handler that diverges.
+function runBufferChecks(project Project)
+	_ = try compileToCodeResult(project) otherwise 'refused'
+		return
+	end 'refused'
+end 'runBufferChecks'
+
+// ⛔⛔ **A SINGLE-BUFFER COMPILE CANNOT HONESTLY PUBLISH A WHOLE-PROGRAM CLAIM.** "This program declares
+// no entry point" is a property of a PROGRAM; this server holds one FILE plus `stdlib/` and never the
+// author's other sources, which `LspDocumentProject.maxon` states and names project discovery as the cure
+// for. A library file — most of what an editor has open — would otherwise carry a red squiggle on its
+// first line for ever, and the sentence would be TRUE of what this server compiled and FALSE of the file
+// the author is looking at.
+//
+// ⚠ **A SECOND MEMBER IS ADDED BY MEASUREMENT, NEVER BY GUESSING.** Suppressing a diagnostic that is
+// genuinely about this file HIDES A REAL ERROR, which is a worse outcome than the squiggle this removes;
+// and the leading digit cannot stand in for the question, because it names the STAGE that raised the
+// diagnostic rather than the SCOPE it claims. MEASURED over library buffers holding exported functions,
+// types, constants and enums, and over a `module` function: E3001 is the only code that reaches the
+// publish. The unused-export family (E3092/E3093/E3094) structurally cannot — `checkUnusedExports`
+// returns before it seeds anything below `MinimumUserFilesToAudit` author files, and a buffer is one.
+function claimsAboutTheWholeProgram(code ErrorCode) returns bool
+	return code == ErrorCode.noMainFunction
+end 'claimsAboutTheWholeProgram'
+
+// Does this diagnostic report on THIS document's text?
+//
+// ⭐ A diagnostic naming no file at all was reported without a position (`Diagnostic`'s header: "empty
+// when program-wide"), and the only source this compile holds beyond `stdlib/` is this buffer — so it is
+// about this buffer, once the question above has taken the whole-program claims out. One naming another
+// file is `stdlib/`'s, and painting it into the author's document would put a squiggle on a line they did
+// not write.
+function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
+	return diagnostic.filePath.isEmpty() or diagnostic.filePath.toString() == path.toString()
+end 'reportsOn'
+
+function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
+	var item = LspJsonObject.create(doc)
+	item.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens)))
+	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(LspErrorSeverity))
+	// ⭐ THE CODE, because it is the field a Maxon author can act on: `E3005` is greppable against
+	// `docs/error-codes.txt`, where the message alone is not. `rawValue` is the registry's own spelling
+	// of it, so no source file writes the number down a second time.
+	item.put(DiagnosticCodeKey, value: JsonNode.stringNode(diagnostic.code.rawValue))
+	item.put(DiagnosticSourceKey, value: JsonNode.stringNode(DiagnosticSourceName))
+	item.put(DiagnosticMessageKey, value: JsonNode.stringNode(diagnostic.message))
+	return item.finish()
+end 'diagnosticNode'
+
+// ⭐⭐ **THE SPAN A DIAGNOSTIC UNDERLINES, AND `tokenSpanAt` IS WHAT ANSWERS IT.** A `Diagnostic` carries
+// a 1-BASED line and column and nothing else, so an editor given one alone could paint a single
+// character — which is what the bootstrap server does, and why its squiggles never span a token. The
+// token anchored at that position carries the bytes, and `LspPosition.maxon`'s header owns the argument
+// for recovering them from the token stream rather than threading them through `Diagnostic`.
+//
+// Two anchors have no token, and both fall back to a ONE-BYTE span converted through the same path:
+//
+//   * **A diagnostic reported WITHOUT a position**, which `Diagnostic` marks by a `line` of 0 — 1-based
+//     lines start at 1, so 0 is unreachable for a real span. It is placed at the start of the document,
+//     because the only source this compile holds beyond `stdlib/` IS this document and there is nowhere
+//     better inside it. `E3002` (`main` returning something other than `ExitCode`) is one that reaches
+//     the publish.
+//   * **A position no token BEGINS at.** The lexer records a span only for tokens whose text it sliced,
+//     so every punctuator carries `startByte == endByte == 0` (`LspCursor.maxon` states the same fact
+//     from the other side) — `tokenSpanAt` finds one by line and column and hands back a span that is
+//     empty, which is exactly the signal to fall back.
+function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns LspSpan
+	if diagnostic.line == 0 'wholeProgram'
+		return LspSpan.create(0, endByte: 1)
+	end 'wholeProgram'
+
+	let anchored = tokenSpanAt(tokens, line: diagnostic.line, column: diagnostic.column)
+	if not anchored.isEmpty() 'onAToken'
+		return anchored
+	end 'onAToken'
+
+	// The column is 1-based BYTES (the lexer counts one per consumed byte), and 0 is the same absence
+	// one level down from a line of 0 — an anchor on the line but at no column in it, which is the
+	// line's first byte.
+	let lineStart = index.offsetOf(source, position: LspPosition.create(diagnostic.line - 1, character: 0))
+	let byteColumn = 1 if diagnostic.column == 0 else diagnostic.column
+	let anchor = (lineStart + byteColumn - 1) as LspByteOffset
+
+	return LspSpan.create(anchor, endByte: (anchor + 1) as LspByteOffset)
+end 'diagnosticSpan'
+
+// `PublishDiagnosticsParams` for `uri`, framed and written. The document travels with the items because
+// each of them is a node inside it.
+function writeDiagnosticsNotification(uri String, items JsonNodeIdArray, doc JsonDoc)
+	var params = LspJsonObject.create(doc)
+	params.put(LspUriKey, value: JsonNode.stringNode(uri))
+	params.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(items)))
+
+	writeLspNotification(doc, method: PublishDiagnosticsMethod, params: params.finish())
+end 'writeDiagnosticsNotification'

@@ -146,8 +146,18 @@ end 'readRequestId'
 
 // Answer the request `id` with `result`, a node already added to `doc`.
 module function writeLspResult(doc JsonDoc, id LspRequestId, result JsonNodeId)
-	writeLspMessage(lspResponse(doc, id: id, memberKey: JsonRpcResultKey, payload: result))
+	writeLspResponse(doc, id: id, memberKey: JsonRpcResultKey, payload: result)
 end 'writeLspResult'
+
+// ⭐ **A SERVER-INITIATED NOTIFICATION: `method` and `params`, and NO `id`.** JSON-RPC forbids a reply
+// to one, which is exactly what makes it the shape LSP pushes `publishDiagnostics` in — nothing asked
+// for it, so there is no request to address it to.
+module function writeLspNotification(doc JsonDoc, method String, params JsonNodeId)
+	var envelope = beginJsonRpcMessage(doc)
+	envelope.put(JsonRpcMethodKey, value: JsonNode.stringNode(method))
+	envelope.putNode(JsonRpcParamsKey, value: params)
+	writeJsonRpcMessage(doc, envelope: envelope)
+end 'writeLspNotification'
 
 // Refuse the request `id`. `message` is the human-readable sentence the client displays; `code` is the
 // machine-readable reason it branches on.
@@ -158,21 +168,32 @@ module function writeLspError(id LspRequestId, code LspJsonRpcErrorCode, message
 	error.put(JsonRpcErrorCodeKey, value: JsonNode.numberNode(code.rawValue))
 	error.put(JsonRpcErrorMessageKey, value: JsonNode.stringNode(message))
 
-	writeLspMessage(lspResponse(doc, id: id, memberKey: JsonRpcErrorKey, payload: error.finish()))
+	writeLspResponse(doc, id: id, memberKey: JsonRpcErrorKey, payload: error.finish())
 end 'writeLspError'
 
-// Wrap `payload` — already added to `doc` — as the `memberKey` member of a JSON-RPC response, and
-// serialize it. `memberKey` is `JsonRpcResultKey` for a success and `JsonRpcErrorKey` for a failure;
-// everything else about the envelope is identical, which is why one function writes it.
-function lspResponse(doc JsonDoc, id LspRequestId, memberKey String, payload JsonNodeId) returns String
-	var envelope = LspJsonObject.create(doc)
-	envelope.put(JsonRpcVersionKey, value: JsonNode.stringNode(JsonRpcVersion))
+// Wrap `payload` — already added to `doc` — as the `memberKey` member of a JSON-RPC response addressed
+// to `id`, and write it. `memberKey` is `JsonRpcResultKey` for a success and `JsonRpcErrorKey` for a
+// failure; everything else about the envelope is identical, which is why one function writes it.
+function writeLspResponse(doc JsonDoc, id LspRequestId, memberKey String, payload JsonNodeId)
+	var envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcIdKey, value: idNodeFor(id))
 	envelope.putNode(memberKey, value: payload)
+	writeJsonRpcMessage(doc, envelope: envelope)
+end 'writeLspResponse'
 
+// The one member EVERY JSON-RPC message carries, whichever direction it goes and whether or not it is
+// addressed to a request. What follows it is the caller's — an id and a result, or a method and params.
+function beginJsonRpcMessage(doc JsonDoc) returns LspJsonObject
+	var envelope = LspJsonObject.create(doc)
+	envelope.put(JsonRpcVersionKey, value: JsonNode.stringNode(JsonRpcVersion))
+	return envelope
+end 'beginJsonRpcMessage'
+
+// Root `envelope` in its document, serialize it, and frame it onto standard output.
+function writeJsonRpcMessage(doc JsonDoc, envelope LspJsonObject)
 	doc.root = envelope.finish()
-	return Json.stringify(doc)
-end 'lspResponse'
+	writeLspMessage(Json.stringify(doc))
+end 'writeJsonRpcMessage'
 
 function idNodeFor(id LspRequestId) returns JsonNode
 	return match id 'idShape'

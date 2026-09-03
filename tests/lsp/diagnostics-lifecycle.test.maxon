@@ -1,0 +1,30 @@
+// diagnostics-lifecycle.test.maxon — what an EDIT and a CLOSE do to what the editor is showing.
+//
+// ⭐⭐ **A SINK NOTHING CLEARS IS PERFECTLY STABLE AND ALWAYS WRONG IN ONE DIRECTION.** It re-reports
+// everything it has ever seen, so a fixed error never leaves the screen and a closed file keeps its
+// squiggles. Both halves below are about retraction rather than about detection, and nothing else in this
+// family asks for one.
+//
+// The session and the fixtures' shape are `diagnostics-probe.test.maxon`'s.
+
+test 'didChange republishes: an error an edit introduces appears, and one an edit removes goes away'
+	// Open clean, break it, fix it — taking the publish each of the three produced.
+	let script = [SessionStep.open(compilingDocument()), SessionStep.takePublish, SessionStep.change(brokenDocument(), version: BrokenEditVersion), SessionStep.takePublish, SessionStep.change(compilingDocument(), version: FixedEditVersion), SessionStep.takePublish]
+	let publishes = try observedPublishes(runSession(script), what: "editing an open document")
+
+	try Expect.equal((try publishAt(publishes, index: 0)).items.count(), expected: 0, message: "the document opened clean.")
+
+	try Expect.equal((try publishAt(publishes, index: 1)).items.count(), expected: 1, message: "an edit made the document stop compiling, and the editor is told so by a FRESH publish. Without this the feature is a one-shot check at open rather than a live one.")
+
+	// ⭐ THE HALF WITH TEETH.
+	try Expect.equal((try publishAt(publishes, index: 2)).items.count(), expected: 0, message: "the error was FIXED, so the publish must be empty again. A 1 here means diagnostics accumulated across checks instead of being re-derived — `verify-recheck`'s clearing property, seen from the editor's side.")
+end 'didChange republishes: an error an edit introduces appears, and one an edit removes goes away'
+
+test 'closing a document publishes an empty array, which is what clears the squiggles'
+	let script = [SessionStep.open(brokenDocument()), SessionStep.takePublish, SessionStep.close, SessionStep.takePublish]
+	let publishes = try observedPublishes(runSession(script), what: "closing an open document")
+
+	try Expect.equal((try publishAt(publishes, index: 0)).items.count(), expected: 1, message: "the document was opened broken, so there was something on screen to clear.")
+
+	try Expect.equal((try publishAt(publishes, index: 1)).items.count(), expected: 0, message: "a closed document publishes an EMPTY array, and that notification IS the retraction — nothing else takes a diagnostic off the screen.")
+end 'closing a document publishes an empty array, which is what clears the squiggles'

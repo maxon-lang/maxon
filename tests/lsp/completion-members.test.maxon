@@ -1,5 +1,6 @@
-// completion-members.test.maxon — the four recovered completion tests: what an editor offers after a
-// dot on an array, a string, a struct value and an enum type.
+// completion-members.test.maxon — what an editor offers after a dot on an ARRAY and on a STRING. Two of
+// the four recovered completion tests; `completion-declarations.test.maxon` holds the struct and enum
+// pair, and the session is `completion-probe.test.maxon`'s.
 //
 // ⛔ **`completion for array methods` DOES NOT PIN THE RECOVERED NAME LIST.** The Zig test pinned 21
 // names and asserted the count equalled 21; four of them cannot be offered here — `ensureCapacity`
@@ -12,128 +13,14 @@
 // keyword. It is a fact about THIS TREE — `Array`'s public surface plus what `stdlib/helpers/sort/`
 // extends it with — so a stdlib change moves it: RE-MEASURE and re-date `CompletionArrayMemberCount`,
 // never widen it back into an inequality.
-//
-// Release discipline — why every session is driven into a VALUE before anything is asserted — is
-// stated once, in `LspClient.maxon`'s hazard 1.
-
-let CompletionUri = "file:///test.maxon"
-
-let CompletionUnreportedSession = "the session ended without saying how"
 
 // How many names the server offers after `arr.` in `completionArrayFixture`. MEASURED 2026-09-02.
 let CompletionArrayMemberCount = 49
 
-union CompletionLabelsOutcome
-	offered(labels StringArray)
-	broke(detail String)
-end 'CompletionLabelsOutcome'
-
 test 'completion for array methods'
-	var client = LspClient.start()
-	var outcome = CompletionLabelsOutcome.broke(CompletionUnreportedSession)
+	// Line 2 = "    arr.push(4)" - after "arr." is column 8
+	let labels = try completionLabelsFor(completionArrayFixture(), line: 2, character: 8, after: "`arr.`")
 
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(CompletionUri, content: completionArrayFixture())
-
-		// Line 2 = "    arr.push(4)" - after "arr." is column 8
-		outcome = CompletionLabelsOutcome.offered(completionLabelsOf(client.completionWithTrigger(CompletionUri, line: 2, character: 8, triggerCharacter: ".")))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed(text) then outcome = CompletionLabelsOutcome.broke("the framed stream broke — {text}")
-			malformedResponse(text) then outcome = CompletionLabelsOutcome.broke("a reply was not the shape LSP defines — {text}")
-			serverRefused(code, message) then outcome = CompletionLabelsOutcome.broke("the server refused with {code}: {message}")
-		end 'reason'
-	end 'failed'
-
-	client.release()
-
-	match outcome 'arrayMembers'
-		offered(labels) then try assertCompletionArrayMembers(labels)
-		broke(detail) then try Expect.fail("completion after `arr.` did not complete: {detail}")
-	end 'arrayMembers'
-end 'completion for array methods'
-
-test 'completion for string methods'
-	var client = LspClient.start()
-	var outcome = CompletionLabelsOutcome.broke(CompletionUnreportedSession)
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(CompletionUri, content: completionStringFixture())
-
-		outcome = CompletionLabelsOutcome.offered(completionLabelsOf(client.completionWithTrigger(CompletionUri, line: 2, character: 13, triggerCharacter: ".")))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed(text) then outcome = CompletionLabelsOutcome.broke("the framed stream broke — {text}")
-			malformedResponse(text) then outcome = CompletionLabelsOutcome.broke("a reply was not the shape LSP defines — {text}")
-			serverRefused(code, message) then outcome = CompletionLabelsOutcome.broke("the server refused with {code}: {message}")
-		end 'reason'
-	end 'failed'
-
-	client.release()
-
-	match outcome 'stringMembers'
-		offered(labels) then try assertCompletionStringMembers(labels)
-		broke(detail) then try Expect.fail("completion after `s.` did not complete: {detail}")
-	end 'stringMembers'
-end 'completion for string methods'
-
-test 'completion for struct fields'
-	var client = LspClient.start()
-	var outcome = CompletionLabelsOutcome.broke(CompletionUnreportedSession)
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(CompletionUri, content: completionStructFixture())
-
-		outcome = CompletionLabelsOutcome.offered(completionLabelsOf(client.completionWithTrigger(CompletionUri, line: 7, character: 13, triggerCharacter: ".")))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed(text) then outcome = CompletionLabelsOutcome.broke("the framed stream broke — {text}")
-			malformedResponse(text) then outcome = CompletionLabelsOutcome.broke("a reply was not the shape LSP defines — {text}")
-			serverRefused(code, message) then outcome = CompletionLabelsOutcome.broke("the server refused with {code}: {message}")
-		end 'reason'
-	end 'failed'
-
-	client.release()
-
-	match outcome 'structFields'
-		offered(labels) then try assertCompletionStructFields(labels)
-		broke(detail) then try Expect.fail("completion after `p.` did not complete: {detail}")
-	end 'structFields'
-end 'completion for struct fields'
-
-test 'completion for enum members'
-	var client = LspClient.start()
-	var outcome = CompletionLabelsOutcome.broke(CompletionUnreportedSession)
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(CompletionUri, content: completionEnumFixture())
-
-		outcome = CompletionLabelsOutcome.offered(completionLabelsOf(client.completionWithTrigger(CompletionUri, line: 7, character: 17, triggerCharacter: ".")))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed(text) then outcome = CompletionLabelsOutcome.broke("the framed stream broke — {text}")
-			malformedResponse(text) then outcome = CompletionLabelsOutcome.broke("a reply was not the shape LSP defines — {text}")
-			serverRefused(code, message) then outcome = CompletionLabelsOutcome.broke("the server refused with {code}: {message}")
-		end 'reason'
-	end 'failed'
-
-	client.release()
-
-	match outcome 'enumMembers'
-		offered(labels) then try assertCompletionEnumMembers(labels)
-		broke(detail) then try Expect.fail("completion after `Color.` did not complete: {detail}")
-	end 'enumMembers'
-end 'completion for enum members'
-
-function assertCompletionArrayMembers(labels StringArray) throws TestFailure
 	// A SHRUNKEN list (a filter that dropped a real method) and a GROWN one (a private helper leaking
 	// through) both land here. Neither reaches an inequality, which is the whole reason the count is exact.
 	let observedCount = labels.count()
@@ -146,30 +33,16 @@ function assertCompletionArrayMembers(labels StringArray) throws TestFailure
 	// negative with teeth rather than the vacuous one the recovered list made of it: the claim is that
 	// the server filters by visibility, not that the method is gone.
 	try Expect.isFalse(completionOffersLabel(labels, label: "ensureCapacity"), message: "completion after `arr.` offered `ensureCapacity`, which `stdlib/Array.maxon` declares without `public`. A completion list that ignores visibility teaches a caller to write code that will not compile.")
-end 'assertCompletionArrayMembers'
+end 'completion for array methods'
 
-function assertCompletionStringMembers(labels StringArray) throws TestFailure
+test 'completion for string methods'
+	let labels = try completionLabelsFor(completionStringFixture(), line: 2, character: 13, after: "`s.`")
+
 	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `s.` offered nothing at all.")
 
 	// `stdlib/String.maxon:223` — `public function cstr() returns cstring`, verified 2026-09-02.
 	try Expect.isTrue(completionOffersLabel(labels, label: "cstr"), message: "completion after `s.` did not offer `cstr`, which the third line of the document actually calls.")
-end 'assertCompletionStringMembers'
-
-function assertCompletionStructFields(labels StringArray) throws TestFailure
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `p.` offered nothing at all.")
-	try assertCompletionOffersEach(labels, wanted: ["x", "y"], after: "`p.`")
-end 'assertCompletionStructFields'
-
-function assertCompletionEnumMembers(labels StringArray) throws TestFailure
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `Color.` offered nothing at all.")
-	try assertCompletionOffersEach(labels, wanted: ["red", "green", "blue"], after: "`Color.`")
-end 'assertCompletionEnumMembers'
-
-function assertCompletionOffersEach(labels StringArray, wanted StringArray, after String) throws TestFailure
-	for name in wanted 'eachWanted'
-		try Expect.isTrue(completionOffersLabel(labels, label: name), message: "completion after {after} did not offer `{name}`. Each name asserted here is declared by the type the cursor sits on, so a list missing one is a list an editor would mislead with.")
-	end 'eachWanted'
-end 'assertCompletionOffersEach'
+end 'completion for string methods'
 
 // Eight names, each verified as a `public function` in `stdlib/Array.maxon` on 2026-09-02 at the line
 // noted: push :305, pop :345, count :172, clear :390, insert :355, remove :385, capacity :179,
@@ -178,26 +51,6 @@ end 'assertCompletionOffersEach'
 function completionArrayMethodsOfferedToday() returns StringArray
 	return ["push", "pop", "count", "clear", "insert", "remove", "capacity", "isEmpty"]
 end 'completionArrayMethodsOfferedToday'
-
-function completionOffersLabel(labels StringArray, label String) returns bool
-	for offered in labels 'eachLabel'
-		if offered == label 'hit'
-			return true
-		end 'hit'
-	end 'eachLabel'
-
-	return false
-end 'completionOffersLabel'
-
-function completionLabelsOf(answered CompletionResult) returns StringArray
-	var labels = StringArray.create()
-
-	for item in answered.items 'eachItem'
-		labels.push(item.label)
-	end 'eachItem'
-
-	return labels
-end 'completionLabelsOf'
 
 // ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: it is byte-exact,
 // a raw newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
@@ -216,27 +69,3 @@ function completionStringFixture() returns String
     return s.cstr()
 end 'main'")
 end 'completionStringFixture'
-
-function completionStructFixture() returns String
-	return String.from(b"type Point
-    var x int
-    var y int
-end 'Point'
-
-function test() returns int
-    var p = Point{x: 0, y: 0}
-    return p.x
-end 'test'")
-end 'completionStructFixture'
-
-function completionEnumFixture() returns String
-	return String.from(b"enum Color
-    red
-    green
-    blue
-end 'Color'
-
-function test() returns Color
-    return Color.red
-end 'test'")
-end 'completionEnumFixture'

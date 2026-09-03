@@ -34,10 +34,16 @@
 //    stack trace) fills the buffer and both sides then wait on each other for ever. The symptom is a
 //    hang that `maxon test`'s shard deadline reports as TIMED OUT, and the cure is a drain in the
 //    server's direction, not here.
+//    ⚠ **THE SERVER NOW RUNS A WHOLE COMPILE PER `didOpen`, AND EVERY DIAGNOSTIC IT REPORTS WOULD GO TO
+//    STDERR.** `LspDiagnostics.publishCheckedDiagnostics` runs it inside a `beginDiagnosticCapture`
+//    for exactly this reason. MEASURED 2026-09-03 over a session that opened a document with an error,
+//    closed it and shut down: **0 bytes of stderr**.
 //
 // 3. **A NOTIFICATION CAN ARRIVE BEFORE THE RESPONSE.** MEASURED against the reference server: a
-//    `publishDiagnostics` notification does arrive ahead of the first reply. Correlation is therefore
-//    STRICT on the integer `id`, and any message that does not carry ours is skipped.
+//    `publishDiagnostics` notification does arrive ahead of the first reply — and since shv2 publishes
+//    diagnostics too, that is now every request sent after a `didOpen` in this suite. Correlation is
+//    therefore STRICT on the integer `id`; a message carrying somebody else's id is dropped, and one
+//    carrying no id is STASHED for `awaitPublishedDiagnostics` rather than discarded.
 //
 // ⛔ No JSON parser and no serializer live here: `stdlib/Json.maxon` is a full RFC 8259 pair, and a
 // second one would be this project's signature bug written down again.
@@ -84,6 +90,7 @@ public typealias JsonRpcErrorCode = int(i64.min to i64.max)
 public typealias SymbolKindCode = int(i64.min to i64.max)
 public typealias CompletionKindCode = int(i64.min to i64.max)
 public typealias SemanticTokenValue = int(i64.min to i64.max)
+public typealias DiagnosticSeverityCode = int(i64.min to i64.max)
 
 // A spawned server's exit status.
 public typealias ProcessExitCode = int(i64.min to i64.max)
@@ -99,6 +106,7 @@ public typealias FoldingRangeArray = Array with FoldingRange
 public typealias CodeActionItemArray = Array with CodeActionItem
 public typealias LspRangeArray = Array with LspRange
 public typealias SemanticTokenValueArray = Array with SemanticTokenValue
+public typealias PublishedDiagnosticArray = Array with PublishedDiagnostic
 
 // A span of a document, flat rather than nested. LSP nests it as `{start: {…}, end: {…}}`, but `end` is
 // a Maxon keyword and cannot name a field — and the client contract already spells folding ranges and
@@ -283,6 +291,41 @@ public type SemanticTokensResult
 	end 'of'
 end 'SemanticTokensResult'
 
+// One diagnostic the server PUSHED. It carries every member this client asserts on and no more — the
+// range an editor underlines, the severity it colours by, the `E####` code an author greps for, the
+// source it groups by, and the sentence it shows.
+public type PublishedDiagnostic
+	public var range as LspRange
+	public var severity as DiagnosticSeverityCode
+	public var code as String
+	public var source as String
+	public var message as String
+
+	static function create(range LspRange, severity DiagnosticSeverityCode, code String, source String, message String) returns PublishedDiagnostic
+		return Self{range: range, severity: severity, code: code, source: source, message: message}
+	end 'create'
+end 'PublishedDiagnostic'
+
+// One `textDocument/publishDiagnostics` notification.
+//
+// ⭐ **AN EMPTY `items` IS A PUBLISH THAT SAID "NOTHING IS WRONG", AND IT IS NOT THE SAME AS NO PUBLISH
+// AT ALL.** The second is what `awaitPublishedDiagnostics` throws on, because a server that stops
+// publishing leaves an editor showing whatever it last said.
+public type PublishedDiagnostics
+	public var uri as String
+	public var items as PublishedDiagnosticArray
+
+	static function of(uri String, items PublishedDiagnosticArray) returns PublishedDiagnostics
+		return Self{uri: uri, items: items}
+	end 'of'
+end 'PublishedDiagnostics'
+
+// Whether a stashed publish for the asked-about uri was there to take.
+union StashedPublish
+	found(published PublishedDiagnostics)
+	none
+end 'StashedPublish'
+
 // How a session can go wrong in a way that is the SERVER's answer rather than the harness's failure.
 //
 // ⛔ Nothing that merely prevents a test from running is in here — a missing binary and a failed spawn
@@ -321,6 +364,14 @@ public type LspClient
 	var server as StreamingSubprocess
 	var nextRequestId as LspRequestIdNumber
 
+	// ⭐⭐ **EVERY SERVER-INITIATED NOTIFICATION THIS CLIENT HAS SEEN AND NOT YET BEEN ASKED FOR, AS RAW
+	// FRAME BODIES IN ARRIVAL ORDER.** `awaitReply` used to DISCARD anything not addressed to its
+	// request, which was safe only while the server emitted nothing: `publishDiagnostics` arrives ahead
+	// of the next reply, so discarding it would make the one message this suite must assert on the one
+	// message no test could reach. Held raw and parsed on demand, because most of them are never asked
+	// for.
+	var notifications as StringArray
+
 	// Spawn this checkout's shv2 `lsp-server` with pipes on all three streams.
 	//
 	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
@@ -338,7 +389,7 @@ public type LspClient
 			panic("LspClient: the test could not run — `{TestedCompilerStem} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
 		end 'spawnFailed'
 
-		return Self{server: spawned, nextRequestId: FirstRequestId}
+		return Self{server: spawned, nextRequestId: FirstRequestId, notifications: StringArray.create()}
 	end 'start'
 
 	// End the session and free the OS handle. MUST be called on every path — a dropped
@@ -466,6 +517,58 @@ public type LspClient
 
 		try self.sendNotification(doc, message: message)
 	end 'closeDocument'
+
+	// ----------------------------------------------------------------------------------------
+	// Diagnostics — pushed by the server, never asked for
+	// ----------------------------------------------------------------------------------------
+
+	// The next `textDocument/publishDiagnostics` for `uri`: taken from the stash if one has already
+	// arrived alongside some earlier reply, and otherwise read off the wire.
+	//
+	// ⭐ **TAKING IS WHAT MAKES A SECOND ASK SEE THE NEXT PUBLISH RATHER THAN THIS ONE AGAIN**, which is
+	// the whole of how a `didChange` is observed to REPUBLISH: open, take, change, take, and the two
+	// answers are two different notifications rather than one read twice.
+	//
+	// ⚠ The wait is bounded by the same budget `awaitReply` uses, and for the same reason: a server that
+	// never publishes must become a named failure rather than a hang the harness reports as a timeout.
+	public function awaitPublishedDiagnostics(uri String) returns PublishedDiagnostics throws LspClientError
+		var waited = 0 as SkippedMessageTally
+
+		while waited < UnaddressedMessageBudget 'awaitPublish'
+			let stashed = try self.takeStashedPublish(uri)
+
+			match stashed 'arrived'
+				found(published) then return published
+				none then self.notifications.push(try self.readFrame())
+			end 'arrived'
+
+			waited = waited + 1
+		end 'awaitPublish'
+
+		throw LspClientError.transportFailed("no textDocument/publishDiagnostics for {uri} arrived within {UnaddressedMessageBudget} messages")
+	end 'awaitPublishedDiagnostics'
+
+	// The most recent stashed publish for `uri`, removed from the stash along with every earlier one for
+	// the same document. A stale publish left behind would be indistinguishable from a fresh one.
+	function takeStashedPublish(uri String) returns StashedPublish throws LspClientError
+		var kept = StringArray.create()
+		var taken = StashedPublish.none
+
+		for body in self.notifications 'eachStashed'
+			let doc = try Json.parse(body) otherwise 'notJson'
+				throw LspClientError.malformedResponse("a stashed notification body is not valid JSON: {body}")
+			end 'notJson'
+
+			if publishesFor(doc, uri: uri) 'ours'
+				taken = StashedPublish.found(try readPublishedDiagnostics(doc, uri: uri))
+			end 'ours' else 'somebodyElse'
+				kept.push(body.clone())
+			end 'somebodyElse'
+		end 'eachStashed'
+
+		self.notifications = kept
+		return taken
+	end 'takeStashedPublish'
 
 	// ----------------------------------------------------------------------------------------
 	// Language features
@@ -767,6 +870,12 @@ public type LspClient
 				return try replyOf(doc)
 			end 'ours'
 
+			// A message carrying no id at all is a NOTIFICATION and is kept for whoever asks; one
+			// carrying somebody else's id is a reply this client can do nothing with, and is dropped.
+			if not hasMember(doc, of: doc.root, key: JsonRpcIdKey) 'aNotification'
+				self.notifications.push(body.clone())
+			end 'aNotification'
+
 			skipped = skipped + 1
 		end 'correlate'
 
@@ -1041,6 +1150,34 @@ function readRange(doc JsonDoc, id JsonNodeId) returns LspRange throws LspClient
 	return LspRange.create(startLine, startCharacter: startCharacter, endLine: endLine, endCharacter: try coordinateMember(doc, of: finish, key: CharacterKey))
 end 'readRange'
 
+// Is this message a `textDocument/publishDiagnostics` naming `uri`? Both halves are asked, because a
+// publish for ANOTHER document is a message this client must keep rather than hand back.
+function publishesFor(doc JsonDoc, uri String) returns bool
+	let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise return false
+	if method != MethodPublishDiagnostics 'anotherNotification'
+		return false
+	end 'anotherNotification'
+
+	let params = try doc.getChild(doc.root, key: JsonRpcParamsKey) otherwise return false
+	return (try doc.getString(params, key: UriKey) otherwise "") == uri
+end 'publishesFor'
+
+function readPublishedDiagnostics(doc JsonDoc, uri String) returns PublishedDiagnostics throws LspClientError
+	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey)
+	var items = PublishedDiagnosticArray.create()
+
+	for element in try elementsOf(doc, id: try memberNode(doc, of: params, key: DiagnosticsKey)) 'eachDiagnostic'
+		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
+		let severity = try integerMember(doc, of: element, key: SeverityKey)
+		let code = try stringMember(doc, of: element, key: CodeKey)
+		let source = try stringMember(doc, of: element, key: SourceKey)
+
+		items.push(PublishedDiagnostic.create(range, severity: severity, code: code, source: source, message: try stringMember(doc, of: element, key: MessageKey)))
+	end 'eachDiagnostic'
+
+	return PublishedDiagnostics.of(uri, items: items)
+end 'readPublishedDiagnostics'
+
 function readTextEdits(doc JsonDoc, id JsonNodeId) returns TextEditArray throws LspClientError
 	var edits = TextEditArray.create()
 
@@ -1197,6 +1334,9 @@ let DocumentStart = 0 as LspCoordinate
 // for a server's own extensions, so it cannot collide with anything the specification adds.
 let MethodNeverServed = "maxon/aMethodNoServerServes"
 
+// The one message the SERVER starts. It is a notification, so it carries no id and gets no reply.
+let MethodPublishDiagnostics = "textDocument/publishDiagnostics"
+
 let CapabilitiesKey = "capabilities"
 let TextDocumentKey = "textDocument"
 let WorkspaceKey = "workspace"
@@ -1237,6 +1377,10 @@ let InsertSpacesKey = "insertSpaces"
 let NewNameKey = "newName"
 let NewTextKey = "newText"
 let DiagnosticsKey = "diagnostics"
+let SeverityKey = "severity"
+let CodeKey = "code"
+let SourceKey = "source"
+let MessageKey = "message"
 let ContentsKey = "contents"
 let ValueKey = "value"
 let ItemsKey = "items"

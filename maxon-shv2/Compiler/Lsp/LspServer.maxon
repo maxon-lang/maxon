@@ -1,12 +1,17 @@
 // `maxon-shv2 lsp-server` — the Language Server Protocol session over stdio.
 //
-// It runs the lifecycle (`initialize`, `shutdown`, `exit`), keeps the open documents in sync, and routes
-// every language method through the registry in `LspMethod.maxon`. A method whose area answers nothing
-// yet is refused with `-32601` and is not advertised.
+// It runs the lifecycle (`initialize`, `shutdown`, `exit`), keeps the open documents in sync, routes
+// every language REQUEST through the registry in `LspMethod.maxon`, and pushes `publishDiagnostics` on
+// every document event. A method whose area answers nothing yet is refused with `-32601` and is not
+// advertised.
 //
 // ⛔ **NOTHING IN THIS FILE IS PER-AREA.** The dispatch table and the capability builder below are
 // COMPLETE — every method LSP defines for this server already has its arm — so an area is brought live
 // by editing its own handler file alone. See `LspMethod.maxon`'s header for the whole seam.
+//
+// ⛔ **THAT SEAM IS FOR REQUESTS, AND `publishDiagnostics` IS NOT ONE.** It is server-initiated, has no
+// capability key to advertise and no id to answer, so it has no home in `LspMethod` at all — the two
+// sync notifications below are its only triggers. `LspDiagnostics.maxon` owns why.
 
 // The open documents: uri -> the document's full current text.
 //
@@ -180,9 +185,15 @@ type LspSession
 		end 'exit'
 	end 'handleNotification'
 
+	// ⭐ **A DOCUMENT THAT ARRIVES OR CHANGES IS CHECKED, AND WHAT THE CHECK FOUND IS PUSHED.**
+	// `publishDiagnostics` is a NOTIFICATION rather than a request, so it has no home in `LspMethod` and
+	// no capability to advertise — the two sync notifications below are its only triggers, and
+	// `LspDiagnostics.maxon` owns the whole of what it says.
 	function openDocument(doc JsonDoc) throws LspParamsError
 		let (_, textDocument, uri) = try notifiedDocument(doc)
-		self.documents.upsert(uri, value: try lspMemberText(doc, of: textDocument, key: TextKey))
+		let text = try lspMemberText(doc, of: textDocument, key: TextKey)
+		self.documents.upsert(uri, value: text)
+		publishBufferDiagnostics(uri, text: text)
 	end 'openDocument'
 
 	function changeDocument(doc JsonDoc) throws LspParamsError
@@ -196,12 +207,18 @@ type LspSession
 
 		// Under FULL sync every entry is a whole-document replacement, so the LAST one is the document.
 		let latest = try doc.arrayAt(changes, index: changeCount - 1) otherwise throw LspParamsError.malformed
-		self.documents.upsert(uri, value: try lspMemberText(doc, of: latest, key: TextKey))
+		let text = try lspMemberText(doc, of: latest, key: TextKey)
+		self.documents.upsert(uri, value: text)
+		publishBufferDiagnostics(uri, text: text)
 	end 'changeDocument'
 
+	// ⭐ **A CLOSED DOCUMENT IS PUBLISHED AS EMPTY, WHICH IS HOW AN EDITOR IS TOLD TO CLEAR IT.** Nothing
+	// else retracts a diagnostic: a server that simply stops publishing leaves the last errors it
+	// reported standing on a file the author has closed.
 	function closeDocument(doc JsonDoc) throws LspParamsError
 		let (_, _, uri) = try notifiedDocument(doc)
 		_ = self.documents.remove(uri)
+		clearPublishedDiagnostics(uri)
 	end 'closeDocument'
 
 	// A malformed message that carries an id is refused; one without an id is a notification and gets no

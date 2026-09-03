@@ -24,7 +24,6 @@ SERVER its tests spawn.
 | `harness-fixtures/` | `spec-test` → `HarnessSelfTest` | `FixturesRelativeDir` |
 | `harness-gates/` | `spec-test` → `HarnessSelfTest` | `GatesRelativeDir` |
 | `lsp/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the server, not the dir |
-| `lsp-fixtures/` | `lsp-selftest` | `DeclFixtureRelativePath` |
 | `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
 | `parallel-compile/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the compiler it spawns |
 
@@ -37,7 +36,7 @@ rows stay as written.
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
 command `fmt` is. They are not automatically true of the other seven: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
-them, and `lsp-fixtures/` carries a `.maxonignore` that rule 1 forbids here.
+them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
 ```
 tests/
@@ -61,7 +60,6 @@ tests/
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1
     <area>.test.maxon            one LSP method area per file
-  lsp-fixtures/type-declaration/ decl.maxon, whose LINE NUMBERS are the assertion
   ladders/                       hand-built scaling generators + the README indexing them
   parallel-compile/
     parallel.test.maxon          the shared half: the spawn, the staging, the counts

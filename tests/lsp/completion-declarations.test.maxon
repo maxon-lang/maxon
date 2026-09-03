@@ -1,0 +1,51 @@
+// completion-declarations.test.maxon — what an editor offers after a dot on a value of a type the AUTHOR
+// declared: a struct's fields, and an enum type's cases.
+//
+// ⭐ **THE TWO ARE NOT ONE QUESTION.** `p.` asks what an INSTANCE carries and `Color.` asks what a TYPE
+// NAME carries, and a server can resolve one receiver kind and not the other. Two of the four recovered
+// completion tests; `completion-members.test.maxon` holds the stdlib pair and the session is
+// `completion-probe.test.maxon`'s.
+//
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: it is byte-exact,
+// a raw newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
+// newline. Every column below is counted against these bytes.
+
+function completionStructFixture() returns String
+	return String.from(b"type Point
+    var x int
+    var y int
+end 'Point'
+
+function test() returns int
+    var p = Point{x: 0, y: 0}
+    return p.x
+end 'test'")
+end 'completionStructFixture'
+
+function completionEnumFixture() returns String
+	return String.from(b"enum Color
+    red
+    green
+    blue
+end 'Color'
+
+function test() returns Color
+    return Color.red
+end 'test'")
+end 'completionEnumFixture'
+
+test 'completion for struct fields'
+	let labels = try completionLabelsFor(completionStructFixture(), line: 7, character: 13, after: "`p.`")
+
+	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `p.` offered nothing at all.")
+
+	try assertCompletionOffersEach(labels, wanted: ["x", "y"], after: "`p.`")
+end 'completion for struct fields'
+
+test 'completion for enum members'
+	let labels = try completionLabelsFor(completionEnumFixture(), line: 7, character: 17, after: "`Color.`")
+
+	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `Color.` offered nothing at all.")
+
+	try assertCompletionOffersEach(labels, wanted: ["red", "green", "blue"], after: "`Color.`")
+end 'completion for enum members'

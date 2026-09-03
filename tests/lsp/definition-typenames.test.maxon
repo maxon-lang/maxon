@@ -1,0 +1,41 @@
+// definition-typenames.test.maxon — the SAME type name resolved from two different positions.
+//
+// ⭐ **THE PAIR IS THE POINT, WHICH IS WHY THESE TWO SHARE A FILE.** `Point` is reached once from a
+// `returns` clause and once from the head of a struct literal, and a resolver can get one right and the
+// other wrong. Two of the thirteen recovered definition tests.
+//
+// The session, the release discipline and the entry points are `definition-probe.test.maxon`'s.
+
+function createPointFixture() returns String
+	return String.from(b"type Point
+    var x int
+    var y int
+end 'Point'
+
+function createPoint() returns Point
+    return Point{x: 0, y: 0}
+end 'createPoint'")
+end 'createPointFixture'
+
+function pointReturnLiteralFixture() returns String
+	return String.from(b"type Point
+    var x int
+    var y int
+end 'Point'
+
+function test() returns Point
+    return Point{x: 0, y: 0}
+end 'test'")
+end 'pointReturnLiteralFixture'
+
+test 'definition for struct in return type'
+	// Go to definition on 'Point' return type (line 5, col 31)
+	let source = createPointFixture()
+	try expectDefinitionAt(source, line: 5, character: 31, startLine: 0, note: "a type named in a `returns` clause did not resolve to the type's declaration.")
+end 'definition for struct in return type'
+
+test 'definition for struct literal type'
+	// Go to definition on 'Point' in struct literal (line 6, col 11)
+	let source = pointReturnLiteralFixture()
+	try expectDefinitionAt(source, line: 6, character: 11, startLine: 0, note: "a type name opening a struct literal did not resolve to the type's declaration.")
+end 'definition for struct literal type'

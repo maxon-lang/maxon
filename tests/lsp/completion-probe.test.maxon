@@ -1,0 +1,81 @@
+// completion-probe.test.maxon — one `textDocument/completion` session, written once, for the two files
+// that ask one. It declares no tests.
+//
+// ⭐⭐ **ONE SESSION BLOCK, BECAUSE FOUR COPIES OF IT WERE FOUR CHANCES TO SWALLOW A TRANSPORT FAILURE AS
+// A WRONG ANSWER.** A block-form `try` must `match` its error binding in the handler itself (E3084), so a
+// session written per test carries its own copy of that match.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is stated
+// once, in `LspClient.maxon`'s hazard 1.
+
+let CompletionUri = "file:///test.maxon"
+
+let CompletionUnreportedSession = "the session ended without saying how"
+
+// The one trigger character this server advertises.
+let CompletionTriggerDot = "."
+
+union CompletionLabelsOutcome
+	offered(labels StringArray)
+	broke(detail String)
+end 'CompletionLabelsOutcome'
+
+// Open `source`, ask what a `.` at this position offers, release. The outcome is a VALUE, so no assertion
+// can run before the handle is freed.
+function completionLabelsAfterDot(source String, line LspCoordinate, character LspCoordinate) returns CompletionLabelsOutcome
+	var client = LspClient.start()
+	var outcome = CompletionLabelsOutcome.broke(CompletionUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(CompletionUri, content: source)
+		outcome = CompletionLabelsOutcome.offered(completionLabelsOf(client.completionWithTrigger(CompletionUri, line: line, character: character, triggerCharacter: CompletionTriggerDot)))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = CompletionLabelsOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = CompletionLabelsOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = CompletionLabelsOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+	return outcome
+end 'completionLabelsAfterDot'
+
+// The labels a position offered. `after` is the cursor's own context, so a red says which request never
+// completed rather than only that one did not.
+export function completionLabelsFor(source String, line LspCoordinate, character LspCoordinate, after String) returns StringArray throws TestFailure
+	match completionLabelsAfterDot(source, line: line, character: character) 'outcome'
+		offered(labels) then return labels
+		broke(detail) then try Expect.fail("completion after {after} did not complete: {detail}")
+	end 'outcome'
+
+	panic("completionLabelsFor: the `broke` arm always throws, so this line is unreachable")
+end 'completionLabelsFor'
+
+export function assertCompletionOffersEach(labels StringArray, wanted StringArray, after String) throws TestFailure
+	for name in wanted 'eachWanted'
+		try Expect.isTrue(completionOffersLabel(labels, label: name), message: "completion after {after} did not offer `{name}`. Each name asserted here is declared by the type the cursor sits on, so a list missing one is a list an editor would mislead with.")
+	end 'eachWanted'
+end 'assertCompletionOffersEach'
+
+export function completionOffersLabel(labels StringArray, label String) returns bool
+	for offered in labels 'eachLabel'
+		if offered == label 'hit'
+			return true
+		end 'hit'
+	end 'eachLabel'
+
+	return false
+end 'completionOffersLabel'
+
+function completionLabelsOf(answered CompletionResult) returns StringArray
+	var labels = StringArray.create()
+
+	for item in answered.items 'eachItem'
+		labels.push(item.label)
+	end 'eachItem'
+
+	return labels
+end 'completionLabelsOf'

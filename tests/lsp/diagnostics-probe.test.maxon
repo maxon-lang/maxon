@@ -1,0 +1,144 @@
+// diagnostics-probe.test.maxon — one scripted `publishDiagnostics` session, written once, for every
+// `diagnostics-*` file. It declares no tests.
+//
+// ⭐ **ONE SCRIPTED RUNNER, BECAUSE THE HANDLER MAY NOT BE FACTORED OUT OF IT.** A block-form `try` must
+// `match` its error binding in the handler itself (E3084), so a runner per test would be one copy of that
+// match per test — and one chance each for a transport failure to be swallowed as a wrong answer.
+//
+// The client, the release discipline and the SUBJECT/RUNNER split are `LspClient.maxon`'s.
+
+export typealias SymbolTally = int(0 to i64.max)
+
+export typealias PublishedDiagnosticsArray = Array with PublishedDiagnostics
+
+export let DiagnosticsUri = "file:///diagnostics-publish.maxon"
+
+// LSP's `DiagnosticSeverity.Error`, and the only severity this compiler can produce: a `Diagnostic`
+// carries no severity field, and any diagnostic at all fails the build.
+export let PublishedErrorSeverity = 1 as DiagnosticSeverityCode
+
+// What an editor groups these by. The bootstrap server publishes the same word, so an editor running both
+// sees one source rather than two.
+export let MaxonDiagnosticSource = "maxon"
+
+// The two documents three files in this family drive, side by side because they differ in exactly one
+// word: `main` returns `ExitCode` in one and a bare `int` in the other. One pair rather than a pair per
+// file, so "the same document, broken" is a fact rather than two texts that happen to agree.
+//
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, no
+// indentation stripped or added and no trailing newline. `diagnostics-ranges.test.maxon` counts a column
+// ruler against the broken one.
+export function compilingDocument() returns String
+	return String.from(b"typealias LspDiagnosticsProbe = int(0 to 100)
+
+function main() returns ExitCode
+    let probe = 0 as LspDiagnosticsProbe
+    return probe
+end 'main'")
+end 'compilingDocument'
+
+export function brokenDocument() returns String
+	return String.from(b"typealias LspDiagnosticsProbe = int(0 to 100)
+
+function main() returns int
+    let probe = 0 as LspDiagnosticsProbe
+    return probe
+end 'main'")
+end 'brokenDocument'
+
+// One step of a session, in the order a script lists them.
+export union SessionStep
+	open(content String)
+	change(content String, version DocumentVersion)
+	close
+	// Take the next publish for this document. ⚠ It BLOCKS until one arrives, which is what makes a
+	// server that publishes nothing a named failure rather than a silent pass.
+	takePublish
+	takeSymbolCount
+end 'SessionStep'
+
+export typealias SessionStepArray = Array with SessionStep
+
+// LSP requires a document's version to increase; it does not say where it starts.
+export let BrokenEditVersion = 2 as DocumentVersion
+export let FixedEditVersion = 3 as DocumentVersion
+
+let UnreportedSession = "the session ended without saying how"
+
+export union SessionOutcome
+	observed(symbolCount SymbolTally, publishes PublishedDiagnosticsArray)
+	broke(detail String)
+end 'SessionOutcome'
+
+// Run `script` against a fresh server and hand back what it observed. The client is released before the
+// outcome is returned, so an `Expect` that throws cannot skip the release.
+export function runSession(script SessionStepArray) returns SessionOutcome
+	var client = LspClient.start()
+	var outcome = SessionOutcome.broke(UnreportedSession)
+	var publishes = PublishedDiagnosticsArray.create()
+	var symbolCount = 0 as SymbolTally
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+
+		for step in script 'eachStep'
+			match step 'kind'
+				open(content) then client.openDocument(DiagnosticsUri, content: content)
+				change(content, version) then client.changeDocument(DiagnosticsUri, content: content, version: version)
+				close then client.closeDocument(DiagnosticsUri)
+				takePublish then publishes.push(client.awaitPublishedDiagnostics(DiagnosticsUri))
+				takeSymbolCount then symbolCount = client.documentSymbols(DiagnosticsUri).symbols.count()
+			end 'kind'
+		end 'eachStep'
+
+		outcome = SessionOutcome.observed(symbolCount, publishes: publishes)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = SessionOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = SessionOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = SessionOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+	return outcome
+end 'runSession'
+
+// --- Reading an outcome -----------------------------------------------------------------------
+
+export function observedPublishes(outcome SessionOutcome, what String) returns PublishedDiagnosticsArray throws TestFailure
+	match outcome 'session'
+		observed(_, publishes) then return publishes
+		broke(detail) then try Expect.fail("{what} published nothing this test could read: {detail}. An editor learns about an error ONLY from this notification — there is no request it can send to ask.")
+	end 'session'
+
+	panic("observedPublishes: the `broke` arm always throws, so this line is unreachable")
+end 'observedPublishes'
+
+export function publishAt(publishes PublishedDiagnosticsArray, index SymbolTally) returns PublishedDiagnostics throws TestFailure
+	return try publishes.get(index) otherwise 'missing'
+		try Expect.fail("the session observed {publishes.count()} publish(es), and this assertion needs the one at {index}.")
+		panic("publishAt: `Expect.fail` always throws")
+	end 'missing'
+end 'publishAt'
+
+// Open `document`, take the one publish it produces, and hand back its items.
+export function publishedFor(document String, what String) returns PublishedDiagnosticArray throws TestFailure
+	let script = [SessionStep.open(document), SessionStep.takePublish]
+	return (try publishAt(try observedPublishes(runSession(script), what: what), index: 0)).items
+end 'publishedFor'
+
+// The single diagnostic a fixture must publish. ⭐ The COUNT is asserted, not merely the presence: a
+// publish carrying a second diagnostic is one the compiler does not raise for a `maxon build` of the same
+// text, and reading element 0 alone would hide it.
+export function onlyPublishedDiagnostic(document String, what String) returns PublishedDiagnostic throws TestFailure
+	let items = try publishedFor(document, what: what)
+
+	try Expect.equal(items.count(), expected: 1, message: "{what} must publish exactly ONE diagnostic. A second one is something a `maxon build` of the same text does not report, and reading element 0 alone would hide it.")
+
+	return try items.get(0) otherwise 'noItem'
+		try Expect.fail("the count above was 1, so element 0 exists.")
+		panic("onlyPublishedDiagnostic: `Expect.fail` always throws")
+	end 'noItem'
+end 'onlyPublishedDiagnostic'

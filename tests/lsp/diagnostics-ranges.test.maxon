@@ -1,0 +1,58 @@
+// diagnostics-ranges.test.maxon — WHERE a published diagnostic points, which is the half of this
+// feature nothing but a pinned number can see.
+//
+// ⭐ **THE RANGE ASSERTIONS ARE DERIVED, NOT BASELINED.** The compiler answers 1-based lines and columns
+// and LSP is 0-based; every expected number below is that subtraction done by hand against a ruler over
+// the fixture, so a server that published the compiler's own numbers fails here rather than redefines the
+// test. That off-by-one is the likeliest defect in the whole feature, it does not crash, and nothing but a
+// pinned number can see it.
+//
+// The session is `diagnostics-probe.test.maxon`'s; the non-ASCII fixture is `position-probe.test.maxon`'s.
+
+// ⚠ **THE NUMBERS BELOW ARE A RULER COUNTED AGAINST `brokenDocument`'s THIRD LINE.** It is the shared
+// fixture's `function main() returns int`, and it is on line 2 rather than line 0 so that the line pin is
+// not satisfied by a server that publishes 0 for everything.
+//
+//     function main() returns int
+//     1234567890123456789012345678
+//              1         2
+//
+// `int` begins at column 25 and ends after column 27, so a 1-based `(line, 25)` anchor over a 3-byte
+// token is the LSP range `(line - 1, 24)` to `(line - 1, 27)`.
+let BareIntStartCharacter = 24 as LspCoordinate
+let BareIntEndCharacter = 27 as LspCoordinate
+let BareIntLine = 2 as LspCoordinate
+
+test 'a published range is zero-based and spans the offending token'
+	let reported = try onlyPublishedDiagnostic(brokenDocument(), what: "opening a document whose error is on line 3")
+
+	try Expect.equal(reported.range.startLine, expected: BareIntLine, message: "the compiler anchors this on its line 3 and LSP counts from 0, so the published line is 2. A server publishing 3 is off by one on EVERY diagnostic — it does not crash, it underlines the line below.")
+
+	try Expect.equal(reported.range.startCharacter, expected: BareIntStartCharacter, message: "column 25 (1-based) is character 24 (0-based) — the first byte of `int`.")
+
+	try Expect.equal(reported.range.endLine, expected: BareIntLine, message: "the token does not span lines, so the range ends on the line it began on.")
+
+	try Expect.equal(reported.range.endCharacter, expected: BareIntEndCharacter, message: "the range covers the whole TOKEN. A range one character wide would underline `i` alone, which is all a server holding only the anchor could paint.")
+end 'a published range is zero-based and spans the offending token'
+
+// ⭐⭐ **THE REVERSE CONVERSION, AND THE ONLY DIRECTION IN WHICH COUNTING CODEPOINTS IS VISIBLE.** A
+// position sent INTO the server is a character it turns into a byte offset; a published range is a byte
+// offset it turns back into a character. A supplementary codepoint is ONE codepoint and TWO UTF-16 code
+// units, so on this line the three counting schemes give three different answers and only one of them is
+// the protocol's. `position-characters.test.maxon` asks the same line in the other direction.
+let UndeclaredName = "nowhere"
+let UndeclaredNameCode = "E2004"
+let UndeclaredNameEnd = 41 as LspCoordinate
+
+test 'a published range counts a supplementary character as TWO code units'
+	let document = markedDocument(FourByteChar, name: UndeclaredName)
+	let reported = try onlyPublishedDiagnostic(document, what: "opening a document whose undefined name sits behind an emoji")
+
+	try Expect.equal(reported.code, expected: UndeclaredNameCode, message: "the fixture's only error is the undefined name, and the range assertions below are about WHERE that name is.")
+
+	try Expect.equal(reported.range.startLine, expected: MarkedUseLine, message: "the undefined name is on line 8 of the fixture.")
+
+	try Expect.equal(reported.range.startCharacter, expected: NameAfterTwoUnits, message: "the emoji is FOUR bytes, ONE codepoint and TWO code units, so `nowhere` opens at character 34. A server counting BYTES publishes 36 and underlines nothing; one counting CODEPOINTS publishes 33 and underlines from one character early — and 33 is the answer that every 2- and 3-byte fixture in this suite also accepts.")
+
+	try Expect.equal(reported.range.endCharacter, expected: UndeclaredNameEnd, message: "`nowhere` is seven characters, so the range ends at 41. An end measured in the wrong unit is a squiggle that stops in the wrong place even when it starts in the right one.")
+end 'a published range counts a supplementary character as TWO code units'

@@ -52,8 +52,6 @@ let CompletionMemberSeparator = "."
 // The compiler's reserved prefix. A name an author may not write is a name an editor must not offer.
 let CompletionReservedNamePrefix = "__"
 
-let CompletionFileUriScheme = "file://"
-
 module function completionServedMethods() returns LspMethodArray
 	var served = LspMethodArray.create()
 	served.push(LspMethod.completion)
@@ -392,7 +390,7 @@ end 'directlyInside'
 // `ProgramSignatures.calleeVisibilityFrom`, which is the compiler's own tier decision, so a member the
 // open document may not name is a member it is not offered.
 function addStdlibMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, uri String, subject CompletionSubject)
-	let readerPath = documentPath(uri)
+	let readerPath = lspDocumentPath(uri)
 
 	match corpusDeclarations(readerPath) 'corpus'
 		loaded(project, signatures) then addDeclaredMembers(offers, offered: offered, project: project, signatures: signatures, typeName: typeName, readerPath: readerPath, subject: subject)
@@ -471,18 +469,19 @@ union CorpusDeclarations
 end 'CorpusDeclarations'
 
 function corpusDeclarations(readerPath FilePath) returns CorpusDeclarations
-	let stdlibDir = try locateStdlibDir() otherwise return CorpusDeclarations.unavailable
-	var project = createProject(Directory.currentPath(), target: detectHostTarget(), stdlibDir: stdlibDir)
+	// See this file's header: the buffer's PATH is registered and its text is not.
+	match lspDocumentProject(readerPath, content: "") 'buffer'
+		loaded(project) then return resolvedCorpus(project)
+		unavailable then return CorpusDeclarations.unavailable
+	end 'buffer'
+end 'corpusDeclarations'
 
-	// See this file's header: the PATH is registered and the text is not.
-	fileChanged(project, path: readerPath, content: "")
-
-	try loadStdlibSources(project) otherwise return CorpusDeclarations.unavailable
+function resolvedCorpus(project Project) returns CorpusDeclarations
 	_ = try queryAllModule(project) otherwise return CorpusDeclarations.unavailable
 	let signatures = try queryProgramSignatures(project) otherwise return CorpusDeclarations.unavailable
 
 	return CorpusDeclarations.loaded(project, signatures: signatures)
-end 'corpusDeclarations'
+end 'resolvedCorpus'
 
 // The member half of a `<Type>.<member>` registration name.
 function memberNameIn(qualified String, prefix String) returns String
@@ -516,41 +515,3 @@ function subjectIsStatic(subject CompletionSubject) returns bool
 		nothingToOffer gives false
 	end 'subject'
 end 'subjectIsStatic'
-
-// ⚠ **THE PATH IS AN IDENTITY, NOT A LOCATION.** Nothing ever opens it — the document's text arrived over
-// the wire — and the one question it answers is `isVisibleFrom`'s: is the file asking the same file that
-// declared the member, and is it in the same module directory. So the scheme is stripped and a Windows
-// drive letter is un-rooted (`file:///C:/x` names `C:/x`, not `/C:/x`), and percent-escapes are left
-// exactly as the client wrote them: two uris that differ by an escape name two different documents to
-// this server either way.
-function documentPath(uri String) returns FilePath
-	var text = uri
-
-	if text.startsWith(CompletionFileUriScheme) 'fileScheme'
-		text = text.replaceFirst(CompletionFileUriScheme, with: "")
-	end 'fileScheme'
-
-	if driveRooted(text) 'windowsDriveLetter'
-		text = text.replaceFirst(CompletionRootSlash, with: "")
-	end 'windowsDriveLetter'
-
-	return try FilePath.from(text) otherwise panic("documentPath: '{uri}' does not spell a path, and every request that reaches here named a document this server has open")
-end 'documentPath'
-
-let CompletionRootSlash = "/"
-
-// `/C:/…` — a `file:` uri roots an absolute Windows path with a slash the path itself does not have.
-function driveRooted(text String) returns bool
-	let parts = text.split(CompletionDriveLetterSeparator)
-	if parts.count() < 2 'noDriveLetter'
-		return false
-	end 'noDriveLetter'
-
-	let head = try parts.get(0) otherwise panic("driveRooted: a split yielding two parts has a first one")
-	return head.startsWith(CompletionRootSlash) and head.count() == RootedDriveLetterLength
-end 'driveRooted'
-
-let CompletionDriveLetterSeparator = ":"
-
-// `/C` — the slash and the one letter in front of a `file:` uri's drive-letter colon.
-let RootedDriveLetterLength = 2

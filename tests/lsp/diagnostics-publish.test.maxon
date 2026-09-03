@@ -1,0 +1,66 @@
+// diagnostics-publish.test.maxon — `textDocument/publishDiagnostics`: what the compiler found, PUSHED,
+// and the fields an editor draws it from.
+//
+// ⭐⭐ **THIS IS THE ONE LSP FEATURE THE RECOVERED SUITE NEVER COVERED.** Its coverage was lost with a
+// 236-line `diagnostics.test.ts` and never came back, so every assertion in this family is written from
+// the protocol rather than transcribed from a recovered fixture.
+//
+// `diagnostics-ranges.test.maxon` holds what a published RANGE says, `diagnostics-lifecycle.test.maxon`
+// what an edit and a close do to it, and `diagnostics-scope.test.maxon` which claims a one-buffer compile
+// may make at all. The session is `diagnostics-probe.test.maxon`'s.
+
+// `returns int` names a bare sized type, which is not a type in this language.
+let BareIntErrorCode = "E3005"
+
+// One error, on the FIRST line, so the published line is 0 — the value a server that forgot to subtract
+// would spell 1.
+function bareIntOnLineOneDocument() returns String
+	return String.from(b"function main() returns int
+    return 0
+end 'main'")
+end 'bareIntOnLineOneDocument'
+
+test 'opening a document with a compile error publishes it with its code, severity and source'
+	let reported = try onlyPublishedDiagnostic(bareIntOnLineOneDocument(), what: "opening a document that does not compile")
+
+	try Expect.equal(reported.code, expected: BareIntErrorCode, message: "the CODE is the field a Maxon author acts on — `E3005` is greppable against `docs/error-codes.txt`, where the sentence alone is not.")
+
+	try Expect.equal(reported.severity, expected: PublishedErrorSeverity, message: "every diagnostic this compiler produces fails the build, so every published one is an Error.")
+
+	try Expect.equal(reported.source, expected: MaxonDiagnosticSource, message: "an editor showing several servers groups its list by `source`.")
+
+	try Expect.contains(reported.message, needle: "bare 'int'", message: "the published sentence is the compiler's own, not a summary written for the editor.")
+
+	try Expect.equal(reported.range.startLine, expected: 0, message: "the compiler anchors this on its line 1, and LSP counts lines from 0.")
+end 'opening a document with a compile error publishes it with its code, severity and source'
+
+test 'a document that compiles publishes an empty array rather than nothing'
+	let script = [SessionStep.open(compilingDocument()), SessionStep.takePublish]
+	let published = try publishAt(try observedPublishes(runSession(script), what: "opening a document with no problems"), index: 0)
+
+	try Expect.equal(published.uri, expected: DiagnosticsUri, message: "a publish names the document it is about; an editor keys its squiggles by that uri.")
+
+	try Expect.equal(published.items.count(), expected: 0, message: "this document compiles, so the publish must be EMPTY — and empty is an answer. Silence is not: it leaves whatever the editor last showed standing on screen.")
+end 'a document that compiles publishes an empty array rather than nothing'
+
+// ⭐⭐ **THE CLIENT PATH THAT WAS "IMPLEMENTED BUT DEAD" UNTIL THIS FEATURE LANDED.** `awaitReply`
+// correlates strictly on the request id and skips everything else, which nothing could exercise while the
+// server emitted no notifications at all. Every `didOpen` now puts a publish on the wire AHEAD of the next
+// reply, so this asks the two questions that path decides: does a REQUEST still get its own answer, and is
+// the notification it stepped over still readable afterwards?
+test 'a request answered behind a publish gets its own reply, and the publish survives'
+	// ⚠ The publish is deliberately not taken first: it is left on the wire so that the reply to
+	// `documentSymbol` arrives behind it.
+	let script = [SessionStep.open(compilingDocument()), SessionStep.takeSymbolCount, SessionStep.takePublish]
+
+	match runSession(script) 'session'
+		broke(detail) then try Expect.fail("the session did not complete: {detail}")
+		observed(symbolCount, publishes) then try expectAnsweredBehindPublish(symbolCount, publishes: publishes)
+	end 'session'
+end 'a request answered behind a publish gets its own reply, and the publish survives'
+
+function expectAnsweredBehindPublish(symbolCount SymbolTally, publishes PublishedDiagnosticsArray) throws TestFailure
+	try Expect.equal(symbolCount, expected: 1, message: "the request must be answered with its OWN reply — this document declares one top-level block. A client that mistook the notification queued in front of it for the answer would report something else entirely.")
+
+	try Expect.equal(publishes.count(), expected: 1, message: "and the notification skipped on the way to that reply is still readable afterwards, rather than discarded.")
+end 'expectAnsweredBehindPublish'

@@ -36,12 +36,19 @@
 // spawned by `maxon_subprocess_wait_collect` blocks on ReadFile"*), so this is a divergence from BOTH
 // references, and the scheduler is the reason it is available at all.
 //
-// ⭐ **HOST-ONLY, on the same terms as every other Win32 substrate entry.** `x64-windows` is real; every
-// other target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` through
-// `SemanticCheck.calleeNeedsWin32Substrate`, which matches the `__gt_subp_` PREFIX — so an entry point added
-// here later is gated by construction rather than by memory. ⚠ Before this rung that gate did NOT name the
-// subprocess band at all, and `SemanticCheck`'s own header recorded the consequence verbatim: a subprocess
-// program on arm64/linux/wasm died as a BACKEND PANIC rather than a diagnostic. Closed here.
+// ⭐ **FOUR LANES HAVE THIS BAND, AND THE TABLE IS THE ONLY PLACE THAT SAYS WHICH.**
+// `TargetFacilities.targetProvidesFacility` answers `subprocess`: x64-windows, arm64-macos, arm64-linux
+// and — since 2026-09-03 — x64-linux. A lane without it refuses at the call site with
+// `E3104 targetUnsupportedConstruct`, matched on the `__gt_subp_` PREFIX, so an entry point added here
+// later is gated by construction rather than by memory. ⚠ Before that gate existed it did not name the
+// subprocess band at all, and a subprocess program on a lane without the substrate died as a BACKEND
+// PANIC rather than a diagnostic.
+//
+// ⛔ **THIS PARAGRAPH SAID "HOST-ONLY … `x64-windows` is real" UNTIL 2026-09-03, AND IT WAS WRONG BY
+// THREE LANES.** arm64-macOS had `posix_spawnp` at MAC8 and both Linux lanes hand-assemble
+// `clone`/`pipe2`/`dup3`/`ppoll`/`execve`. ⇒ **Do not restate the roster here.** A second copy of the
+// table is a copy that goes stale silently — this one did, and it was read three times as fact before
+// anyone checked it against `TargetFacilities.maxon`.
 //
 // ⭐⭐ **EVERY LOOP IN THIS FILE CARRIES ITS STATE IN MEMORY, NOT IN BLOCK ARGUMENTS.** A hand-built runtime
 // function's values are SPAN-LESS, so a register-pressure `E5001` has no user code to blame and PANICS

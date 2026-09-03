@@ -1,7 +1,9 @@
-// hover-values.test.maxon — hover over what a symbol IS: a value, a type, a signature, a builtin.
+// hover-values.test.maxon — hover over an author's OWN names: what a binding holds, what its type is,
+// and what a call or a parameter resolves to.
 //
-// Eight of the twenty-four recovered hover tests. The harness and the release discipline are in
-// `hover-probe.test.maxon`; this file is assertions and fixtures.
+// Four of the twenty-four recovered hover tests plus one written for this port.
+// `hover-builtins.test.maxon` holds the four that hover over what the LANGUAGE provides. The harness and
+// the release discipline are in `hover-probe.test.maxon`; this file is assertions and fixtures.
 //
 // ⚠ **POSITIONS AND PINNED STRINGS ARE TRANSCRIBED, NEVER RE-DERIVED.** The hand-counted ASCII rulers
 // are reproduced because they are how a reader checks the number, and the pinned substrings ARE the
@@ -56,68 +58,6 @@ test 'hover shows correct type for function parameter'
 	try Expect.isFalse(mentionsFloat, message: "the rendering names the parameter's own type and nothing else — a hover that also mentioned `float` would be resolving the position to something other than `name`.")
 end 'hover shows correct type for function parameter'
 
-test 'hover shows intrinsic signature'
-	// Line 3: "    return min(lower, upper)" - 'min' starts at position 11
-	//          0         1         2
-	//          0123456789012345678901234567
-	//
-	// ⭐ RE-POINTED BY RULING, 2026-09-02: the recovered fixture called `__write_file_binary`, which no live
-	// compiler has and which shv2 forbids outright as a bare `__`-prefixed callable (E2051). `min` renders a
-	// real intrinsic's signature and is the roster's two-parameter arm, which `sqrt` and `trunc` below miss.
-	let document = minBuiltinDocument()
-	let rendering = try hoverRendering(document, line: 3, character: 12)
-
-	try Expect.contains(rendering, needle: "function", message: "an intrinsic hovers as a function, like any other callable.")
-
-	try Expect.contains(rendering, needle: "min", message: "the rendering names the intrinsic it resolved.")
-end 'hover shows intrinsic signature'
-
-test 'hover shows math builtin signature and help text'
-	// Line 1: "    let x = sqrt(16.0)" - 'sqrt' starts at position 12
-	//
-	// The help text is `Parser.mathBuiltinHelp`'s; these needles are what pin that registry to its wording.
-	let document = sqrtTruncDocument()
-	let rendering = try hoverRendering(document, line: 1, character: 13)
-
-	try Expect.contains(rendering, needle: "sqrt", message: "the rendering names the builtin.")
-
-	try Expect.contains(rendering, needle: "float", message: "a builtin's hover carries its signature, so the type is in it.")
-
-	try Expect.contains(rendering, needle: "square root", message: "a builtin's hover carries HELP TEXT, not only a signature — that is what makes hovering a builtin worth doing at all.")
-end 'hover shows math builtin signature and help text'
-
-test 'hover shows trunc builtin with help text'
-	// Line 1: "    return trunc(3.7)" - 'trunc' starts at position 11
-	//
-	// This entry additionally pins that the registry carries PARAMETER NAMES, which the `sqrt` case cannot.
-	let document = truncDocument()
-	let rendering = try hoverRendering(document, line: 1, character: 12)
-
-	try Expect.contains(rendering, needle: "trunc", message: "the rendering names the builtin.")
-
-	try Expect.contains(rendering, needle: "value", message: "the signature carries the parameter's NAME, so the registry holds names and not only types.")
-
-	try Expect.contains(rendering, needle: "float", message: "the parameter's type is in the signature.")
-
-	try Expect.contains(rendering, needle: "int", message: "`trunc` returns an int, and the return type is in the signature.")
-
-	try Expect.contains(rendering, needle: "Truncates", message: "the builtin's help text is in the rendering, capitalised exactly as the registry must carry it.")
-end 'hover shows trunc builtin with help text'
-
-test 'hover shows keyword info'
-	// Pairs with `definition on keyword returns nothing`, which asks the SAME token at the SAME position
-	// and asserts absence: a keyword has something to say and nowhere to jump.
-	let document = returnFortyTwoDocument()
-	let rendering = try hoverRendering(document, line: 1, character: 4)
-
-	try Expect.contains(rendering, needle: "return", message: "hovering a KEYWORD yields something — the language's own words are documented too, not only the user's symbols.")
-end 'hover shows keyword info'
-
-// ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source
-// character: byte-exact, no indentation stripped or added, no trailing newline. The four-space
-// indentation is the recovered source's own, and every position above is a column counted against it —
-// adding or trimming one byte silently shifts them all.
-
 // ⭐⭐ **NOT A RECOVERED TEST, AND THE 71 WERE STRUCTURALLY BLIND TO WHAT IT ASKS.** `inferredTypeAt` read
 // an initializer's FIRST token and returned that literal's type whatever followed it — a confident wrong
 // answer a reader cannot tell from a right one — and the whole suite stayed green with the defect
@@ -132,6 +72,10 @@ test 'hover does not read a chained expression as its head literal'
 	try Expect.contains(rendering, needle: "could not infer", message: "a literal describes the value only when it IS the whole initializer. `\"out.bin\".toByteArray().managed` opens with a string literal and is NOT a `String`; a hover that reads the head token alone answers `String` here, which is worse than answering nothing because a reader has no way to tell it from a right answer.")
 end 'hover does not read a chained expression as its head literal'
 
+// ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source
+// character: byte-exact, no indentation stripped or added, no trailing newline. The four-space
+// indentation is the recovered source's own, and every position above is a column counted against it —
+// adding or trimming one byte silently shifts them all.
 function chainedInitializerDocument() returns String
 	return String.from(b"function main() returns int
     var path = \"out.bin\".toByteArray().managed
@@ -170,30 +114,3 @@ function greetDocument() returns String
     return 0
 end 'greet'")
 end 'greetDocument'
-
-function minBuiltinDocument() returns String
-	return String.from(b"function test() returns float
-    let lower = 3.0
-    let upper = 9.0
-    return min(lower, upper)
-end 'test'")
-end 'minBuiltinDocument'
-
-function sqrtTruncDocument() returns String
-	return String.from(b"function test() returns int
-    let x = sqrt(16.0)
-    return trunc(x)
-end 'test'")
-end 'sqrtTruncDocument'
-
-function truncDocument() returns String
-	return String.from(b"function test() returns int
-    return trunc(3.7)
-end 'test'")
-end 'truncDocument'
-
-function returnFortyTwoDocument() returns String
-	return String.from(b"function test() returns int
-    return 42
-end 'test'")
-end 'returnFortyTwoDocument'

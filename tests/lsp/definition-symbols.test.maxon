@@ -1,116 +1,17 @@
-// definition-symbols.test.maxon — `textDocument/definition` on the things a symbol can BE: a function
-// call, a `var`, a `let`, a parameter, a struct type, a field, an interface. Seven of the thirteen
-// recovered definition tests; `definition-scope.test.maxon` holds the other six and drives them through
-// the two entry points this file exports.
+// definition-symbols.test.maxon — `textDocument/definition` on the things a NAME can be: a function call,
+// a `var`, a `let`, a parameter. Four of the thirteen recovered definition tests;
+// `definition-members.test.maxon` holds the three that jump to a TYPE's own declarations and
+// `definition-scope.test.maxon` the six whose answer depends on scope.
 //
-// Release discipline — why every session is driven into a VALUE before anything is asserted — is
-// stated once, in `LspClient.maxon`'s hazard 1.
+// The session, the release discipline and the two entry points all four run through are
+// `definition-probe.test.maxon`'s.
+//
+// ⭐⭐ **PORTED RED, THEN GREENED** against a server that once answered `textDocument/definition` with
+// `-32601`; the probe's refusal sentence is what says so when one fails.
 //
 // ⚠ **THE FIXTURES ARE BYTE-EXACT AND SPACE-INDENTED**, because the recovered `(line, character)` pairs
 // were hand-counted against exactly that text. A `b"…"` literal neither strips indentation nor appends a
 // trailing newline, so what stands between the quotes is what the server is told, byte for byte.
-
-// The one document every recovered test drives. Its uri never touches the filesystem: full-text sync
-// carries the content, so the server is told the text rather than asked to read it.
-let DefinitionDocumentUri = "file:///test.maxon"
-
-// What one `textDocument/definition` request answered, or why it could not be asked.
-//
-// ⭐ **ABSENCE IS A CASE, NEVER AN EMPTY URI.** The recovered harness spelled "nothing here" as a result
-// whose uri was empty; that is a sentinel inside its own domain and fails silently the day a real result
-// carries an empty uri. Here it is its own arm and reads as one.
-union DefinitionProbe
-	located(startLine LspCoordinate)
-	absent
-	refused(code JsonRpcErrorCode, message String)
-	broke(detail String)
-end 'DefinitionProbe'
-
-// ⚠ The recovered tests inspect ONLY the start line — never the uri's value, never the character, never
-// the end of the range. That scope is kept: an assertion the recovered spec did not make would be one
-// this port invented.
-export function expectDefinitionAt(source String, line LspCoordinate, character LspCoordinate, startLine LspCoordinate, note String) throws TestFailure
-	let probe = probeDefinition(source, line: line, character: character)
-	let located = try locatedStartLine(probe)
-	let expected = startLine
-	try Expect.equal(located, expected: expected, message: note)
-end 'expectDefinitionAt'
-
-// The absence rewrite: the two recovered "returns nothing" tests asserted an EMPTY URI, and this is the
-// one shape that replaces it — the call SUCCEEDS and reports that nothing is defined there.
-export function expectNoDefinitionAt(source String, line LspCoordinate, character LspCoordinate) throws TestFailure
-	let probe = probeDefinition(source, line: line, character: character)
-
-	match probe 'probe'
-		absent then return
-		located(found) then try Expect.fail("the server pointed at line {found}, where the recovered test says nothing is defined. Jumping from a keyword or a literal takes an editor somewhere arbitrary, which is worse than staying put.")
-		refused(code, message) then try Expect.fail(definitionRefusalSentence(code, message: message))
-		broke(detail) then try Expect.fail("the session broke before an answer arrived: {detail}")
-	end 'probe'
-end 'expectNoDefinitionAt'
-
-function locatedStartLine(probe DefinitionProbe) returns LspCoordinate throws TestFailure
-	var startLine = 0 as LspCoordinate
-
-	match probe 'probe'
-		located(found) then startLine = found
-		absent then try Expect.fail("the server found no definition at that position. The recovered test names a declaration an editor must be able to jump to, so an absent answer is a wrong answer here.")
-		refused(code, message) then try Expect.fail(definitionRefusalSentence(code, message: message))
-		broke(detail) then try Expect.fail("the session broke before an answer arrived: {detail}")
-	end 'probe'
-
-	return startLine
-end 'locatedStartLine'
-
-// Spawn, drive, release. The probe is a VALUE, so no assertion can run before the handle is freed.
-function probeDefinition(source String, line LspCoordinate, character LspCoordinate) returns DefinitionProbe
-	var client = LspClient.start()
-	let probe = collectDefinition(client, source: source, line: line, character: character)
-	client.release()
-	return probe
-end 'probeDefinition'
-
-function collectDefinition(client LspClient, source String, line LspCoordinate, character LspCoordinate) returns DefinitionProbe
-	// Assigned on every path — the body's last statement and each arm of its handler. The sentence is
-	// what a reader would be shown if a later edit added a path that reported nothing.
-	var probe = DefinitionProbe.broke("the request ended without saying how")
-
-	try 'session'
-		_ = client.initialize()
-		client.initialized()
-		client.openDocument(DefinitionDocumentUri, content: source)
-		let found = client.definition(DefinitionDocumentUri, line: line, character: character)
-		probe = definitionProbeOf(found)
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed(detail) then probe = DefinitionProbe.broke("the framed stream broke — {detail}")
-			malformedResponse(detail) then probe = DefinitionProbe.broke("a reply was not the shape LSP defines for `textDocument/definition` — {detail}")
-			serverRefused(code, message) then probe = DefinitionProbe.refused(code, message: message)
-		end 'reason'
-	end 'failed'
-
-	return probe
-end 'collectDefinition'
-
-function definitionProbeOf(found DefinitionResult) returns DefinitionProbe
-	if not found.isPresent 'nothing'
-		return DefinitionProbe.absent
-	end 'nothing'
-
-	return DefinitionProbe.located(found.range.startLine)
-end 'definitionProbeOf'
-
-// ⭐ `-32601` naming `textDocument/definition` now means the handler STOPPED being served, so the
-// sentence says which
-// method was refused and what that means — a reader must not read it as a transport fault, and must not
-// answer it by editing the assertion.
-function definitionRefusalSentence(code JsonRpcErrorCode, message String) returns String
-	return "`textDocument/definition` was refused with JSON-RPC {code}: {message}. The definition handler IS served, so a refusal here is a REGRESSION — either `definitionServedMethods()` stopped naming the method, or the dispatcher stopped routing it."
-end 'definitionRefusalSentence'
-
-// ============================================================================================
-// FIXTURES — byte-exact, no trailing newline, indentation exactly as the positions were counted
-// ============================================================================================
 
 function helperCallFixture() returns String
 	return String.from(b"function helper() returns int
@@ -143,49 +44,6 @@ function addParameterFixture() returns String
 end 'add'")
 end 'addParameterFixture'
 
-function pointLiteralFixture() returns String
-	return String.from(b"type Point
-    var x int
-    var y int
-end 'Point'
-
-function test() returns int
-    var p = Point{x: 0, y: 0}
-    return 0
-end 'test'")
-end 'pointLiteralFixture'
-
-function pointFieldWriteFixture() returns String
-	return String.from(b"type Point
-    var x int
-    var y int
-end 'Point'
-
-function test() returns int
-    var p = Point{x: 0, y: 0}
-    p.x = 10
-    return p.x
-end 'test'")
-end 'pointFieldWriteFixture'
-
-function printableFixture() returns String
-	return String.from(b"interface Printable
-    function print() returns int
-end 'Printable'
-
-type Message is Printable
-    var text string
-
-    function Printable.print() returns int
-        return 42
-    end 'print'
-end 'Message'")
-end 'printableFixture'
-
-// ============================================================================================
-// THE TESTS
-// ============================================================================================
-
 test 'definition returns location'
 	// Request definition on 'helper' call at line 5, character 11 (inside "helper")
 	// Should point to helper() definition at line 0
@@ -211,22 +69,3 @@ test 'definition for function parameter'
 	let source = addParameterFixture()
 	try expectDefinitionAt(source, line: 1, character: 11, startLine: 0, note: "a parameter usage did not resolve to the signature that declares it.")
 end 'definition for function parameter'
-
-test 'definition for struct type'
-	// Go to definition on 'Point' type in struct literal (line 6, col 12)
-	let source = pointLiteralFixture()
-	try expectDefinitionAt(source, line: 6, character: 12, startLine: 0, note: "a type name in a struct literal did not resolve to the type's declaration.")
-end 'definition for struct type'
-
-test 'definition for struct field'
-	// Go to definition on 'x' field access (line 7, col 6)
-	// The answer is the field DECLARATION `    var x int`, not the type's own first line.
-	let source = pointFieldWriteFixture()
-	try expectDefinitionAt(source, line: 7, character: 6, startLine: 1, note: "a field access did not resolve to the field's declaration line.")
-end 'definition for struct field'
-
-test 'definition for interface type'
-	// Go to definition on 'Printable' in conformance (line 4, col 18)
-	let source = printableFixture()
-	try expectDefinitionAt(source, line: 4, character: 18, startLine: 0, note: "an interface named in a conformance did not resolve to the interface's declaration.")
-end 'definition for interface type'
