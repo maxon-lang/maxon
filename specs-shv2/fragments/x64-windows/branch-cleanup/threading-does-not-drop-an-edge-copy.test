@@ -1,0 +1,76 @@
+// Test: threading-does-not-drop-an-edge-copy
+var seed = 4
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < seed 'loop'
+		var step = 0
+		if i mod 2 == 0 'even'
+			step = 1
+		end 'even' else 'odd'
+			step = 10
+		end 'odd'
+		total = total + step
+		i = i + 1
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 22
+---
+data {
+  __data_seed@0 = i64 4
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+  whilehdr:
+    x64.leaRegGlobal rcx, __data_seed
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegReg rax, rcx
+    x64.jcc greaterEqual, whileexit
+  loop:
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 63
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 1
+    x64.imulRegRegImm32 rcx, rcx, 2
+    x64.movRegReg rdx, rax
+    x64.subRegReg rdx, rax, rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ifelse
+  even:
+    x64.movRegImm32 rcx, 1
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegImm32 rcx, 10
+  ifcont:
+    x64.leaRegRegReg r8, r8, rcx
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at threading-does-not-drop-an-edge-copy.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
