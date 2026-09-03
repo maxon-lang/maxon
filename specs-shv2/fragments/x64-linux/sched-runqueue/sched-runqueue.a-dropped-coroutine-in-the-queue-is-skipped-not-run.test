@@ -1,0 +1,211 @@
+// Test: sched-runqueue.a-dropped-coroutine-in-the-queue-is-skipped-not-run
+var ran = 0
+
+function marker() returns Integer
+	__Builtins.parallelBoundary()
+	ran = ran + 1
+	return 1
+end 'marker'
+
+function ok(v Integer) returns Integer
+	__Builtins.parallelBoundary()
+	return v
+end 'ok'
+
+function main() returns ExitCode
+	let p1 = async ok(3)
+	_ = async marker()
+	let p2 = async ok(4)
+	let a = await p1
+	let b = await p2
+	print("ran={ran}")
+	return (a + b) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 7
+---
+data {
+  __data_ran@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __mrt_errno@264 = i64 0
+  __mrt_tls_ready@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
+}
+
+func @marker {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __parallel_boundary
+    x64.leaRegGlobal rax, __data_ran
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rcx, __data_ran
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ok {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.callDirect __parallel_boundary
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegImm32 rbx, 3
+    x64.leaRegFunc rcx, [rip + ok]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + marker]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_promise_drop
+    x64.movRegImm32 rbx, 4
+    x64.leaRegFunc rcx, [rip + ok]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "ran="
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegGlobal rax, __data_ran
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRegReg rax, r12, r13
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot rbx, slot3
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at sched-runqueue.a-dropped-coroutine-in-the-queue-is-skipped-not-run.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -33,7 +33,7 @@ or float value needs a channel a later slice builds.
 
 ## Targets — the one statement of the green-thread gate
 
-⭐ **This section is the HOME of the `<!-- targets: x64-windows, arm64-macos, arm64-linux -->` marker that every async, sleep,
+⭐ **This section is the HOME of the `<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->` marker that every async, sleep,
 clock and subprocess spec carries. Those files point HERE rather than restating it**, so the reason
 exists once and cannot drift into twelve versions of itself.
 
@@ -65,7 +65,7 @@ across this file, `async-subprocess`, `builtins-clock` and `builtins-sleep` unti
 ## Tests
 
 <!-- test: async-scheduler.basic -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A spawned green thread runs its function and `await` collects the result.
 ```maxon
 
@@ -86,7 +86,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.parallel -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Two green threads are spawned before either is awaited; both run and their results sum.
 ```maxon
 
@@ -114,7 +114,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.sequence -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A spawn/await chain threads a value through two green threads.
 ```maxon
 
@@ -137,7 +137,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.spawn-arg -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A scalar argument is spilled into the green thread's argument buffer and read back by the callee.
 ```maxon
 
@@ -158,7 +158,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.multiple-args -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Several scalar arguments (positional first, then labelled) fill the argument buffer in parameter order.
 ```maxon
 
@@ -179,7 +179,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.nested -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A green thread can itself spawn and await another green thread — the current-GT tracking nests correctly.
 ```maxon
 
@@ -206,7 +206,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.spawn-immediately-awaited -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 `await async f()` — spawn and await in one expression — parses and runs.
 ```maxon
 
@@ -226,7 +226,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.spawn-not-awaited -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A spawned green thread that is never awaited never runs and cannot leak — its struct, stack and argument
 buffer are slab/OS allocations invisible to the leak gate, so the program exits with `main`'s own code
 rather than 101.
@@ -248,7 +248,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.await-loop-bounded -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A spawn/await loop stays bounded: each spawn commits a fresh green-thread stack and each completed thread's
 stack is RELEASED (`osFreePages`/VirtualFree) as the driver reaps it, so 5000 iterations hold at most one
 resident stack at a time and exit cleanly. (P1.5-B1a′ replaced B1a's fixed-size 1 MiB free-list with
@@ -285,7 +285,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.struct-reuse -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The GT-struct free-list is exercised AND its whole-struct memzero-on-recycle is correct: five spawn/awaits run
 in sequence, each reusing the struct the previous completed thread pushed onto the free-list (P1.5-B1c #87).
 Each thread computes `2 * i` from its argument, so `2+4+6+8+10 = 30` proves every recycled struct actually RAN
@@ -317,7 +317,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.out-of-order-await -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A promise's struct must survive until ITS OWN `await`, even when the thread completes early as a side effect of
 driving a DIFFERENT await (P1.5-B1c #87). `await p2` drives the FIFO run queue and completes `p1` first; `p1` is
 now a completed-but-un-awaited handle. Two intervening `async` spawns must NOT recycle `p1`'s struct — only `p1`'s
@@ -348,7 +348,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.callee-saved-xmms-survive-a-context-switch -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Two green threads each hold TEN f64 locals across a `sleep`, interleaved so each is suspended while
 the other is actively occupying xmm6–15.
 
@@ -423,7 +423,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.a-float-argument-survives-a-stack-grow -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A recursive float-taking function runs on a green thread's 2 KB stack, so `__gt_morestack` fires
 part-way down the recursion and relocates the stack underneath it.
 
@@ -485,7 +485,7 @@ typealias Real = float(f64.min to f64.max)
 ```
 
 <!-- test: async-scheduler.every-fp-argument-register-survives-a-stack-grow -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The sibling of the test above, widened from one FP argument register to **all six**: `six` spends
 every one of the parser's six parameter slots on a float, so xmm0–5 are ALL live at the stack guard
 when `__gt_morestack` fires. A save list that covered only some of them would still pass the

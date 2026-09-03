@@ -86,13 +86,11 @@ end 'x64ThreadPointerSegment'
 // Maxon's top-level name space is flat, so the collision was resolved silently by file order and the
 // arm64 backend emitted THESE numbers. The arch belongs in the name because the number is an arch fact.
 //
-// ⚠ `exit_group` (231), NOT `exit` (60) — a DELIBERATE DIVERGENCE from v1, which emits 60, and the same
-// divergence the arm64 side makes (94 not 93). `exit` terminates the calling THREAD; `exit_group`
-// terminates the whole thread group, which is what `main` returning means and what a C `_exit` invokes.
-// The two are indistinguishable in a single-threaded process, which x64-linux still is
-// (`StdToX64Conversion.lowerOsThreadCreate` refuses off Windows), so this costs nothing HERE. ⚠ It is not
-// a bet on the future either: the arm64-linux twin ALREADY runs worker Ms through a real `clone`, and 93
-// there would leave them running — its block carries that measurement.
+// ⛔ `exit_group` (231), NOT `exit` (60), and the difference is LOAD-BEARING here rather than merely
+// principled: this lane runs worker Ms through a real `clone` (`buildX64LinuxThreadCreateChunk`), so 60 at
+// the end of `main` would end the calling thread and leave every parked M running. `exit` terminates the
+// calling THREAD and `exit_group` the whole thread group, which is what `main` returning means and what a C
+// `_exit` invokes. The arm64 side makes the same choice with its own pair (94 not 93).
 export let X64LinuxSyscallWrite = 1
 export let X64LinuxSyscallMmap = 9
 export let X64LinuxSyscallExitGroup = 231
@@ -138,19 +136,52 @@ export let X64LinuxSyscallGetPid = 39
 // answered `-ESPIPE` (`pread`), which is the control that says 16 is really `ioctl`.
 let X64LinuxSyscallIoctl = 16
 
-// ⛔ **THE GREEN-THREAD FLOOR'S OWN NUMBERS ARE NOT DECLARED HERE, BECAUSE NOTHING SPENDS THEM YET.**
-// `targetProvidesFacility` denies `greenThreads` on this lane (that row carries the measurement of why the
-// whole floor plus the child-process band is one indivisible landing), so `arch_prctl`, `clone`, `futex`,
-// `mprotect`, `clock_nanosleep` and the thread-scoped `exit` have no caller — and a syscall number nothing
-// emits is a table entry nothing can keep honest. They arrive with the bodies that issue them.
+// ⭐ **THE GREEN-THREAD FLOOR'S OWN NUMBERS.** Each is spent by a chunk below: `futex` by every wait and
+// wake, `clone` by the worker M and by the child process, `mprotect` by the M's stack guard, `arch_prctl` by
+// the per-OS-thread slot block, `clock_nanosleep` by the OS-thread park and the thread-scoped `exit` by a
+// worker M and by a child whose `execve` failed.
 //
-// ⚠ Two traps for whoever writes those bodies, both MEASURED on the guest rather than transcribed:
-// `clock_nanosleep` (230) and NOT `nanosleep` (35) — the two are the same call for a RELATIVE request
-// except that `nanosleep` is defined against `CLOCK_REALTIME`, so a settime during the sleep moves a park
-// the scheduler measured against `CLOCK_MONOTONIC`; and `clone`'s argument order here is
-// `(flags, stack, ptid, ctid, tls)` where AArch64's is `(flags, stack, ptid, tls, ctid)` — the last two are
-// SWAPPED, and a probe using the AArch64 order on x86-64 HUNG rather than failing, because the kernel took
-// the TLS page as the join word and the join word as the thread pointer.
+// ⛔⛔ **`clock_nanosleep` (230) AND NOT `nanosleep` (35).** The two are the same call for a RELATIVE
+// request except that `nanosleep` is defined against `CLOCK_REALTIME`, so a settime during the sleep moves a
+// park the scheduler measured against `CLOCK_MONOTONIC`.
+//
+// ⛔ **`exit` (60) IS THE THREAD-SCOPED ONE AND IS NEVER `exit_group` (231)** — see that constant's own
+// block. A worker M and a failed-exec child each end THEMSELVES.
+let X64LinuxSyscallArchPrctl = 158
+let X64LinuxSyscallClone = 56
+let X64LinuxSyscallFutex = 202
+let X64LinuxSyscallMprotect = 10
+let X64LinuxSyscallClockNanosleep = 230
+let X64LinuxSyscallExit = 60
+
+// ⛔⛔⛔ **`arch_prctl`'s TWO SUBFUNCTIONS, AND THE WHOLE OF WHY x86-64 NEEDS A CALL WHERE AArch64 NEEDS
+// NONE.** `TPIDR_EL0` is an ordinary system register an `msr` writes; FS base is not addressable in user
+// mode at all without `FSGSBASE`, so the only way to publish this OS thread's slot block is this syscall —
+// and the only way to READ it back is `ARCH_GET_FS`, which writes through a pointer rather than answering in
+// a register. Both are spent exclusively in `mrt_host_tls_alloc`, which runs once per OS thread at bring-up;
+// every HOT read of the block goes through the segment override instead and enters no kernel.
+let X64LinuxArchSetFs = 0x1002
+let X64LinuxArchGetFs = 0x1003
+
+// --- L5: the child-process band ---
+//
+// ⚠⚠ **MEASURED ON THIS LANE, each with a negative control that produced a DIFFERENT observable**: `pipe2`
+// round-tripped a byte and answered exit 90 as 292; `dup3(w, 7, 0)` answered 7 and 91 as 291; `execve` ran
+// `/bin/true` and `/bin/false` and answered 120 as 60 and 42 as 58; `wait4` reported a child's `exit(37)` as
+// 37 and 255 as 60; `kill` SIGKILLed the caller to 137 and answered 11 as 61; `ppoll` reported `POLLIN` on a
+// ready pipe and returned 0 on an empty one, answering 90 as 270.
+let X64LinuxSyscallPipe2 = 293
+let X64LinuxSyscallDup3 = 292
+let X64LinuxSyscallExecve = 59
+let X64LinuxSyscallWait4 = 61
+let X64LinuxSyscallKill = 62
+let X64LinuxSyscallPpoll = 271
+
+// The child's two optional pre-`execve` steps: its own SESSION for a `DETACHED_PROCESS`, and its working
+// directory for a non-NULL `lpCurrentDirectory`. Both are 157 and 49 on AArch64, which is why they carry the
+// arch prefix like every number above.
+let X64LinuxSyscallSetsid = 112
+let X64LinuxSyscallChdir = 80
 
 // --- Linux mmap parameters ---
 //
@@ -178,11 +209,10 @@ let X64LinuxSyscallIoctl = 16
 // These two are ROWS OF THE SAME x86-64 syscall table as `X64LinuxSyscall{Write,Mmap,ExitGroup}` above
 // and carry the arch prefix for the same reason — they are 134 and 139 on AArch64, so an arm64 fault
 // runtime would declare its own, and an unprefixed name here is the collision that already miscompiled
-// this backend once. `LinuxSignalFpe` is NOT prefixed alike on purpose: SIGFPE is 8 on every Linux
-// arch, so there is only one fact to name. `LinuxSigsetBytes` is the same case and lives in `LinuxRuntime`.
-export let X64LinuxSyscallRtSigaction = 13  // rt_sigaction(signum, act, oldact, sigsetsize).
-export let X64LinuxSyscallRtSigreturn = 15  // rt_sigreturn — the sa_restorer trampoline returns through it.
-export let LinuxSignalFpe = 8  // SIGFPE — the signal an integer #DE fault is delivered as.
+// this backend once. The signal NUMBER is not one of them: `LinuxSignalFpe` is arch-neutral and lives in
+// `Targets/Shared/LinuxRuntime` beside `LinuxSigsetBytes`, which is the same case.
+export let X64LinuxSyscallRtSigaction = 13
+export let X64LinuxSyscallRtSigreturn = 15
 
 // sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*)) | SA_RESTORER (0x04000000).
 // ⚠ x86-64 has NO kernel-provided signal trampoline, so SA_RESTORER + a valid `sa_restorer` are MANDATORY:
@@ -192,12 +222,6 @@ export let X64LinuxSigactionFlags = 0x04000004
 
 // STDERR_FILENO — where the panic diagnostic goes — is `Targets/Shared/StdLoweringShared.StderrFd`. It
 // is not an x64-Linux fact: arm64's two OSes name the same descriptor from their own panic runtime.
-
-// x86-64 kernel `struct sigaction` field offsets (32 bytes).
-let SigactionOffHandler = 0  // sa_sigaction (with SA_SIGINFO)
-let SigactionOffFlags = 8  // sa_flags
-let SigactionOffRestorer = 16  // sa_restorer — the rt_sigreturn trampoline (mandatory on x86-64)
-let SigactionOffMask = 24  // sa_mask (8-byte sigset)
 
 // x86-64 `ucontext_t` offsets to the general registers a backtrace needs. `uc_mcontext` sits at offset 40
 // (past uc_flags/uc_link/uc_stack) and its `gregs[]` array starts there; the greg indices are REG_RBP=10,
@@ -257,38 +281,50 @@ let X64LinuxSyscallRenameat = 264
 // this file. ⚠ **MEASURED, both ways, on the x86-64 lane**: `openat(AT_FDCWD, <a directory>, 0o200000)`
 // answered a live descriptor and `openat(…, 0o40000)` answered **-EINVAL** — an errno with no Win32 twin,
 // which would make every `Directory.list` report the catch-all `openSearchFailed` while `__mf_exists`, which
-// never opens a directory, kept passing. `LinuxOpenReadOnlyFlags` and `LinuxOpenCreateTruncateFlags` are
+// never opens a directory, kept passing. `PosixOpenReadOnly` and `LinuxOpenCreateTruncateFlags` are
 // `Targets/Shared/LinuxRuntime`'s because those three arms really are one asm-generic fact.
 let X64LinuxOpenDirectoryFlags = 0o200000
 
 // ⭐ **THE `.data` WORD THE HOST SURFACE STASHES INTO** (`LinuxErrnoLabel`). Gated on the FACILITIES that
-// touch it rather than on the target alone: a Linux program that opens no file, lists no directory and reads
-// no standard input never writes it, so it does not carry it.
+// touch it rather than on the target alone: a Linux program that opens no file, lists no directory, reads no
+// standard input and spawns nothing never writes it, so it does not carry it.
 //
-// ⭐ **ONE PROCESS-WIDE WORD IS THE WHOLE ANSWER HERE, WHERE arm64-linux NEEDS A PER-M SLOT.** That lane runs
-// worker Ms through a real `clone`, so two threads stashing into one word is a wrong `FileError`; this lane's
-// `greenThreads` row is `false` and `osThreadCreate` refuses, so there is exactly one thread to serve.
-// ⚠ **THE OBLIGATION IS RE-POINTED, NOT DISCHARGED**: the day this lane grows an OS thread the word must go
-// per-thread, and `StdToX64Conversion.lowerOsThreadCreate`'s refusal is what will announce it.
+// ⭐⭐⭐ **THE WORD IS PER-OS-THREAD BECAUSE THIS LANE HAS A REAL `clone`.** With two Ms making syscalls at
+// once, a `-errno` stashed by one and read by `mrt_host_last_error` on the other is a WRONG `FileError` — a
+// silent wrong answer, not a crash. `x64LinuxEmitErrnoAddr` is the ONE address every reader and every writer
+// goes through, and it answers this thread's own slot 0 whenever the thread has a block. This `.data` word is
+// what is left: the storage for a thread that never asked the scheduler for one.
 //
 // ⚠ **NO OUTER BIT TEST AT THE CALL SITE** (`Compiler.maxon`), exactly as its arm64 twin arranges: the
 // answer depends on the TARGET as well as on the bits, and asking that pair anywhere else would copy it.
 export function x64LinuxRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
-	if target.cpu != CpuArch.x64 or target.os != Os.linux or not x64LinuxUsesHostSurface(usage) 'notThisLane'
+	if target.cpu != CpuArch.x64 or target.os != Os.linux or not linuxTouchesErrnoWord(usage) 'notThisLane'
 		return out
 	end 'notThisLane'
 
 	pushRuntimeGlobal(out, label: LinuxErrnoLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: X64LinuxTlsReadyLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 	return out
 end 'x64LinuxRuntimeGlobals'
 
-// Who reads or writes the errno word — the union of the facilities whose bodies emit `StdOp.osLastError`
-// or stash into it, and therefore the gate on `mrt_host_last_error` itself.
-function x64LinuxUsesHostSurface(usage RuntimeUsage) returns bool
-	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesConsoleStdin
-end 'x64LinuxUsesHostSurface'
+// ⭐⭐ **THE WORD THAT SAYS WHETHER PER-OS-THREAD SLOT BLOCKS EXIST YET — an x86-64-only need, and its
+// absence on the other lane is the measure of what a readable thread pointer buys.** arm64 answers the same
+// question with one free `cbz` on `TPIDR_EL0`; here the equivalent load would go through FS with base 0,
+// which is a wild read of the null page rather than a test. `mrt_host_tls_alloc` raises it on the first call
+// of the process and nothing lowers it, which is why `sealedBeforeWorkers` is the honest class: the raise
+// happens during `__sched_init_procs`, before any second thread can exist.
+//
+// ⚠ It is laid out on the same gate the errno word is, because it is only ever read to decide WHERE that
+// word lives. A program with no scheduler carries it holding 0 for the whole run, which is the answer.
+let X64LinuxTlsReadyLabel = b"__mrt_tls_ready"
+
+// SLOT 0 of a per-OS-thread block is that thread's `errno`. It is not merely the first unissued key: the
+// scheduler's own keys start at `LinuxTlsFirstKey` so that a slot offset of 0 keeps meaning *"the scheduler
+// has not started"* to every current-P reader, and the word that offset addresses is therefore free for this.
+// Both Linux lanes reserve it the same way.
+let X64LinuxErrnoSlotOffset = 0
 
 // ==========================================================================
 // struct stat (x86-64)
@@ -338,8 +374,7 @@ end 'x64LinuxBufferDisp'
 function x64LinuxEmitStashErrno(asm X64RuntimeAsm)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
 	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
-	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rsi)
+	x64LinuxEmitStoreErrno(asm, valueReg: X64Register.rsi)
 end 'x64LinuxEmitStashErrno'
 
 // Publish a KNOWN errno rather than one a syscall just answered — the walk's clear before each step
@@ -347,9 +382,68 @@ end 'x64LinuxEmitStashErrno'
 // reason has to be invented because no call failed.
 function x64LinuxEmitPublishErrno(asm X64RuntimeAsm, value ParsedInt)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: value as MachineWord)
-	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rsi)
+	x64LinuxEmitStoreErrno(asm, valueReg: X64Register.rsi)
 end 'x64LinuxEmitPublishErrno'
+
+// ⭐⭐⭐ **WRITE *THIS OS THREAD's* errno WORD — and it is a STORE HELPER rather than an address helper,
+// which is the one place x86-64 forces a different shape from the arm64 twin.** `TPIDR_EL0` is readable as a
+// VALUE, so that lane computes an address and every caller stores through it; FS base is not addressable in
+// user mode at all, so a per-thread word here has an address only INSIDE an instruction carrying the segment
+// override. The branch is therefore around the whole access rather than around the address computation.
+//
+// ⚠ **THE PREDICATE IS PROCESS-WIDE AND THAT IS SOUND RATHER THAN APPROXIMATE.** Every OS thread that runs
+// code on this lane has a slot block: the MAIN thread gets one from `mrt_host_tls_alloc` inside
+// `__sched_init_procs`, and every thread `mrt_host_thread_create` starts — a worker M or `__sysmon` — gets
+// one through `CLONE_SETTLS` before it executes an instruction. `ioCompletionShape(linux)` is
+// `inlineCompletion`, so nothing else is started at all.
+// ⇒ once ANY thread has a block, EVERY thread has one, and the only window in which the flag reads 0 is the
+// one before `__sched_init_procs` — where this process is single-threaded and the `.data` word is exactly
+// right. The flag cannot be replaced by a load through FS: with FS base 0 that load is a wild read of the
+// null page, which is the fault the test exists to prevent.
+//
+// ⚠ It clobbers rdi and the flags. rax is untouched, which is the contract every caller in this file rests
+// on — `x64LinuxEmitStashIfFailed` takes its own `cmp` before the stash and every consumer re-compares after.
+function x64LinuxEmitStoreErrno(asm X64RuntimeAsm, valueReg X64Register)
+	let perThread = asm.newLabel()
+	let stored = asm.newLabel()
+
+	x64LinuxEmitTestTlsReady(asm, scratch: X64Register.rdi, whenReady: perThread)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: valueReg)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: stored)
+
+	asm.placeLabel(perThread)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxErrnoSlotOffset)
+	encodeMovSegBaseReg(asm.code, base: X64Register.rdi, srcReg: valueReg, segment: x64ThreadPointerSegment(Os.linux))
+
+	asm.placeLabel(stored)
+end 'x64LinuxEmitStoreErrno'
+
+// The read twin, and the one caller is `mrt_host_last_error`. `destReg` doubles as the branch's scratch,
+// which is what keeps the sequence to one register.
+function x64LinuxEmitLoadErrno(asm X64RuntimeAsm, destReg X64Register)
+	let perThread = asm.newLabel()
+	let loaded = asm.newLabel()
+
+	x64LinuxEmitTestTlsReady(asm, scratch: destReg, whenReady: perThread)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: destReg, label: LinuxErrnoLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: destReg, base: destReg, disp: 0, wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loaded)
+
+	asm.placeLabel(perThread)
+	encodeMovRegImm32(asm.code, dest: destReg, value: X64LinuxErrnoSlotOffset)
+	encodeMovRegSegBase(asm.code, dest: destReg, base: destReg, segment: x64ThreadPointerSegment(Os.linux))
+
+	asm.placeLabel(loaded)
+end 'x64LinuxEmitLoadErrno'
+
+// `scratch = __mrt_tls_ready ; if (scratch) goto whenReady` — the shared head of the two above.
+function x64LinuxEmitTestTlsReady(asm X64RuntimeAsm, scratch X64Register, whenReady BlockId)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: scratch, label: X64LinuxTlsReadyLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: scratch, base: scratch, disp: 0, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: scratch, src: scratch, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: whenReady)
+end 'x64LinuxEmitTestTlsReady'
 
 // ⭐ **THE TAIL OF EVERY SYSCALL IN THIS FILE: a negative answer is a failure, and the reason goes in the
 // word.** rax is left exactly as the kernel wrote it, so a caller that wants a count, a descriptor or a
@@ -402,7 +496,7 @@ function x64LinuxEmitFailureSentinel(asm X64RuntimeAsm, sentinel MachineWord)
 	asm.placeLabel(kept)
 end 'x64LinuxEmitFailureSentinel'
 
-// `newfstatat(dirFd, path, statBuf, AT_SYMLINK_NOFOLLOW=0)` with the PATH ALREADY IN r8 AND THE DIRECTORY
+// `newfstatat(dirFd, path, statBuf, PosixFollowSymlinks)` WITH THE PATH ALREADY IN r8 AND THE DIRECTORY
 // DESCRIPTOR IN r9 — a fixed entry contract rather than two register parameters, because the three sites
 // that describe a path all have their operands somewhere else anyway and a parameterised version would
 // carry an aliasing rule (`r8`/`r9` must not be a syscall argument register) that nothing could check.
@@ -531,9 +625,9 @@ end 'x64LinuxEmitSecondsToFileTime'
 // plausible time. (MEASURED as exactly that: `clock.wall-clock-is-a-calendar-time` failed with a calendar
 // built from the nanoseconds half.) The arm64 twin CAN index by slot because its frame grows the other way;
 // this one derives every field from the base, so the direction is stated once.
-let LinuxTimespecFirstSlot = 1 as StackSize
-let LinuxTimespecSecOffset = 0 as Imm32
-let LinuxTimespecNsecOffset = SpillSlotBytes as Imm32
+let X64LinuxTimespecFirstSlot = 1 as StackSize
+let X64LinuxTimespecSecOffset = 0 as Imm32
+let X64LinuxTimespecNsecOffset = SpillSlotBytes as Imm32
 
 // `clock_gettime(clockId, &ts)` with the `timespec` in this chunk's own frame — the call every clock chunk
 // opens with, and the reason each is a chunk at all: the caller's out-param pointer must survive a call that
@@ -552,17 +646,24 @@ end 'x64LinuxReadClockTimespec'
 // The `[rbp + disp]` address of one FIELD of the frame's `timespec`, off the struct's own base — the single
 // place the downward slot direction is accounted for.
 function x64LinuxTimespecDisp(asm X64RuntimeAsm, byteOffset Imm32 = 0) returns Imm32
-	return x64LinuxBufferDisp(asm, firstSlot: LinuxTimespecFirstSlot, slotCount: LinuxTimespecSlots) + byteOffset
+	return x64LinuxTimespecFieldDisp(asm, firstSlot: X64LinuxTimespecFirstSlot, byteOffset: byteOffset)
 end 'x64LinuxTimespecDisp'
+
+// The same address for a `timespec` a chunk placed SOMEWHERE ELSE in its frame. The three clock chunks all
+// put theirs at `X64LinuxTimespecFirstSlot` and read it through the fixed spelling above; the sleep, the timed
+// futex wait and the pipe peek each carry one beside other locals, so they name their own first slot.
+function x64LinuxTimespecFieldDisp(asm X64RuntimeAsm, firstSlot StackSize, byteOffset Imm32) returns Imm32
+	return x64LinuxBufferDisp(asm, firstSlot: firstSlot, slotCount: LinuxTimespecSlots) + byteOffset
+end 'x64LinuxTimespecFieldDisp'
 
 // `rax = sec * 1e9 + nsec` — the two halves of the frame's `timespec` combined into the ONE scalar both
 // scheduler-facing clock chunks answer with. The WALL clock does not use it: a FILETIME converts each half
 // separately, and recombining first would cost five centuries of range for an identical answer.
 function x64LinuxEmitTimespecToNanos(asm X64RuntimeAsm)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecSecOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: X64LinuxTimespecSecOffset), wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: PosixNanosPerSecond as MachineWord)
 	encodeImulRegReg(asm.code, dest: X64Register.rax, src: X64Register.rcx)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecNsecOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: X64LinuxTimespecNsecOffset), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 end 'x64LinuxEmitTimespecToNanos'
 
@@ -583,13 +684,13 @@ function buildX64LinuxWallClockChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx)
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockRealtime)
 
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecSecOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: X64LinuxTimespecSecOffset), wide: true)
 	x64LinuxEmitSecondsToFileTime(asm, reg: X64Register.rax, scratch: X64Register.rcx)
 
 	// The nanoseconds half divides down to FILETIME ticks. `div` reads RDX:RAX, so the dividend moves into
 	// rax and rdx is cleared — a stale high half faults (#DE) rather than answering wrongly.
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecNsecOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: X64LinuxTimespecNsecOffset), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: posixNanosPerFileTimeTick())
 	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
@@ -756,8 +857,7 @@ end 'buildX64LinuxCpuCountChunk'
 function buildX64LinuxLastErrorChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
 
-	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdi, disp: 0, wide: true)
+	x64LinuxEmitLoadErrno(asm, destReg: X64Register.rax)
 	x64LinuxEmitErrnoToWin32(asm)
 
 	return asm.finishFunction(HostLastErrorName)
@@ -1116,7 +1216,7 @@ function buildX64LinuxFileRenameChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: released)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: prefixDisp)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxOpenReadOnlyFlags)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixOpenReadOnly)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
@@ -1630,13 +1730,7 @@ function x64LinuxEmitAllocateSearch(asm X64RuntimeAsm, searchSlot StackSize)
 	let mapped = asm.newLabel()
 	let recorded = asm.newLabel()
 
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: MmapKernelChoosesBase)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSearchBytes as MachineWord)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: MmapProtReadWrite)
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: MmapAnonPrivateLinux)
-	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: MmapAnonFd)
-	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: MmapNoOffset)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallMmap)
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxSearchBytes as MachineWord))
 	x64LinuxEmitStashIfFailed(asm)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: mapped)
@@ -1823,17 +1917,1537 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 end 'buildX64LinuxEnvReadChunk'
 
 // ==========================================================================
+// L4 — THE GREEN-THREAD FLOOR'S HOST OBJECTS
+// ==========================================================================
+//
+// ⭐⭐⭐ **THE x86-64 TWIN OF `Arm64LinuxRuntime`'s L4/L5 BANDS, AGAINST THE SAME KERNEL AND THE SAME
+// PROTOCOL.** Every number these bodies read — the wait object's six fields, the handle tag, the futex
+// operations, the clone flags, a worker M's stack geometry, `poll`'s bits and the wait-status decode — is
+// `Targets/Shared/{Posix,Linux}Runtime`'s and is READ from there. What is genuinely x86-64's is the syscall
+// table, the register ABI, `cmpxchg`/`xadd` in place of an LL/SC pair, and the two facts below.
+//
+// ⛔⛔ **FACT ONE: `clone`'s LAST TWO ARGUMENTS ARE `(ctid, tls)` HERE AND `(tls, ctid)` ON AArch64.** Both
+// are NULL for a child process, so the disagreement cannot bite in the spawn; both are LIVE in
+// `mrt_host_thread_create`, and getting them the wrong way round makes the kernel take the TLS page as the
+// join word and the join word as the thread pointer. MEASURED: the AArch64 order on x86-64 HUNG to a
+// two-minute bound rather than failing.
+//
+// ⛔⛔ **FACT TWO: THE THREAD POINTER IS NOT READABLE** — see `linuxTlsSlotCount`'s block for the price and
+// `x64LinuxEmitStoreErrno` for the process-wide predicate that pays it.
+//
+// ⚠ **`syscall` CLOBBERS rcx AND r11**, which `svc` does not clobber at all, and the Win64-shaped incoming
+// arguments arrive in rcx/rdx/r8/r9 while the syscall ABI reads rdi/rsi/rdx/r10/r8/r9. Both are why every
+// body below stashes its arguments into frame slots before it calls anything.
+
+// Where the LENGTH of a mapping comes from. A fixed-size host object knows it when the chunk is built, while
+// `__gt_morestack`'s next stack is computed at run time and arrives in a register; the rest of the mapping
+// ABI is the same either way, so the difference is one union rather than a second copy of the marshalling.
+export union X64MapLength
+	fixed(byteSize MachineWord)
+	inRegister(reg X64Register)
+end 'X64MapLength'
+
+// `rax = mmap(NULL, length, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)` — the ONE anonymous
+// mapping shape this lane has, and every page it ever gets comes through here: the wait object, the
+// per-OS-thread slot block, a directory search, a worker M's region and a green thread's next stack. The
+// parameters are `PosixMmap`'s, the same ones `lowerOsAllocPages` marshals, so no site can hold a second
+// opinion about the mapping ABI.
+//
+// ⚠ **A REFUSED `mmap` ANSWERS A SMALL NEGATIVE, NOT NULL**, so every caller tests the SIGN of rax.
+export function encodeX64MmapAnon(code ByteArray, length X64MapLength)
+	encodeMovRegImm32(code, dest: X64Register.rdi, value: MmapKernelChoosesBase)
+	encodeX64MoveLengthToRsi(code, length: length)
+	encodeMovRegImm32(code, dest: X64Register.rdx, value: MmapProtReadWrite)
+	encodeMovRegImm32(code, dest: X64Register.r10, value: MmapAnonPrivateLinux)
+	encodeMovRegImm64(code, dest: X64Register.r8, value: MmapAnonFd)
+	encodeMovRegImm32(code, dest: X64Register.r9, value: MmapNoOffset)
+	encodeX64Syscall(code, number: X64LinuxSyscallMmap)
+end 'encodeX64MmapAnon'
+
+// `munmap(base, length)` with the base already in rdi — the only argument whose source genuinely differs
+// (a register at the morestack site, a reloaded frame slot at every object close). The answer is never
+// captured: nothing a caller could do about a refused release, and the mapping is unreachable either way.
+export function encodeX64MunmapBaseInRdi(code ByteArray, length X64MapLength)
+	encodeX64MoveLengthToRsi(code, length: length)
+	encodeX64Syscall(code, number: X64LinuxSyscallMunmap)
+end 'encodeX64MunmapBaseInRdi'
+
+function encodeX64MoveLengthToRsi(code ByteArray, length X64MapLength)
+	match length 'source'
+		fixed(byteSize) then encodeMovRegImm32(code, dest: X64Register.rsi, value: byteSize)
+		inRegister(reg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: reg, wide: true)
+	end 'source'
+end 'encodeX64MoveLengthToRsi'
+
+// `munmap(base, byteSize)` where the base is in a frame slot — the release every failure arm and every
+// object close performs, written once because four sites do it and each had to reload the base first.
+function x64LinuxEmitUnmapSlot(asm X64RuntimeAsm, baseSlot StackSize, byteSize MachineWord)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(baseSlot), wide: true)
+	encodeX64MunmapBaseInRdi(asm.code, length: X64MapLength.fixed(byteSize))
+end 'x64LinuxEmitUnmapSlot'
+
+// `futex(uaddr, op, val, timeout, uaddr2, val3)` — the one call shape all four users below marshal, with the
+// address taken from a frame slot because every caller has just clobbered the register it arrived in.
+//
+// ⚠ **THE ANSWER IS DELIBERATELY NOT TESTED.** A `FUTEX_WAIT` returns for four reasons — woken, `EAGAIN`
+// (the word had already changed), `EINTR` and `ETIMEDOUT` — and the correct response to ALL of them is to
+// re-check the predicate. Every caller here does, in a loop, which is what makes a spurious return harmless.
+function x64LinuxEmitFutex(asm X64RuntimeAsm, addrSlot StackSize, operation MachineWord, value MachineWord, timespecFirstSlot StackSize, hasTimeout bool)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(addrSlot), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: operation)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: value)
+
+	if hasTimeout 'timed'
+		encodeLeaRegRegImm32(asm.code, dest: X64Register.r10, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: timespecFirstSlot, byteOffset: X64LinuxTimespecSecOffset))
+	end 'timed' else 'untimed'
+		encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxFutexNoTimeout)
+	end 'untimed'
+
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxFutexUnusedArg)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: LinuxFutexUnusedArg)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallFutex)
+end 'x64LinuxEmitFutex'
+
+// ⭐⭐ **`lock cmpxchg [addrSlot], replacement` AGAINST `expected` — AND IT LEAVES ITS ANSWER IN THE FLAGS
+// RATHER THAN IN A REGISTER, WHICH IS THE ONE PLACE THIS LANE'S SHAPE IS BETTER THAN THE arm64 TWIN'S.**
+// That one builds a 0/1 out of an LL/SC pair because AArch64 has no flag-setting atomic; `cmpxchg` sets ZF
+// iff the store landed, so every caller here branches on it directly and no boolean is ever materialised.
+//
+// ⚠ It clobbers rax (the comparand, and on failure the word it observed), rcx and rdi. No caller below holds
+// anything in one across it.
+function x64LinuxEmitCasImm(asm X64RuntimeAsm, addrSlot StackSize, expected MachineWord, replacement MachineWord)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(addrSlot), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: expected)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: replacement)
+	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, base: X64Register.rdi, disp: 0, reg: X64Register.rcx)
+end 'x64LinuxEmitCasImm'
+
+// `dest = handle >> 48` — the kind field, for the two ops that dispatch on it.
+function x64LinuxEmitHandleKind(asm X64RuntimeAsm, dest X64Register, handle X64Register)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: dest, src: handle, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: dest, count: PosixHandleKindShift)
+end 'x64LinuxEmitHandleKind'
+
+// `reg = reg & ((1 << 48) - 1)` — the payload, as a shift pair rather than an AND with a materialised mask,
+// because that needs no scratch register and every caller is already holding its arguments in place.
+//
+// ⚠ **IT SHIFTS BY THE KIND FIELD'S WIDTH, NOT BY ITS POSITION**, and getting that backwards is not a
+// compile error — it would keep the low sixteen bits of a pointer. Derived from the pair rather than written
+// down, so the two cannot come apart.
+function x64LinuxEmitUntagHandle(asm X64RuntimeAsm, reg X64Register)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: reg, count: PosixHandleKindBits)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: reg, count: PosixHandleKindBits)
+end 'x64LinuxEmitUntagHandle'
+
+// `reg = reg | (kindObject << 48)` — what `mrt_host_wait_new` hands back, so every object handle in the
+// program carries its kind from the moment it exists.
+function x64LinuxEmitTagObject(asm X64RuntimeAsm, reg X64Register, scratch X64Register)
+	encodeMovRegImm64(asm.code, dest: scratch, value: (PosixHandleKindObject * PosixHandleKindUnit))
+	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: reg, src: scratch, wide: true)
+end 'x64LinuxEmitTagObject'
+
+// `rcx = <a NUL-terminated constant>; call mrt_panic` — a bring-up failure naming its own reason. The
+// message is a CHUNK-LOCAL string rather than an `.rdata` blob, which is what `X64RuntimeAsm`'s own string
+// pool is for; `mrt_panic` prints, backtraces and EXITS, so nothing after it is reachable.
+function x64LinuxEmitPanicConstant(asm X64RuntimeAsm, bytes ByteArray)
+	emitLeaString(asm, dest: X64Register.rcx, bytes: bytes)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PanicName)
+end 'x64LinuxEmitPanicConstant'
+
+// ==========================================================================
+// mrt_host_monotonic_clock(rcx = ticksPtr, rdx = freqPtr)
+// ==========================================================================
+
+// The MONOTONIC counter and its frequency — Windows's QueryPerformanceCounter/QueryPerformanceFrequency, and
+// the reading `__gt_now_ns` computes every deadline in this scheduler from. The frequency it reports is
+// `PosixNanosPerSecond`, for the reason stated there.
+//
+// ⚠ `CLOCK_MONOTONIC` is the id whose SEMANTICS match Darwin's `CLOCK_UPTIME_RAW`, not the one whose name
+// does — see `LinuxClockMonotonic`.
+function buildX64LinuxMonotonicClockChunk() returns FunctionCodeChunk
+	let SlotTicksPtr = 0 as StackSize
+	let SlotFreqPtr = 3 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots + 1)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFreqPtr), srcReg: X64Register.rdx)
+
+	x64LinuxReadClockTimespec(asm, clockId: LinuxClockMonotonic)
+	x64LinuxEmitTimespecToNanos(asm)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: PosixNanosPerSecond)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFreqPtr), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+
+	return asm.finishFunction(HostMonotonicClockName)
+end 'buildX64LinuxMonotonicClockChunk'
+
+// ==========================================================================
+// mrt_host_sleep_ms(rcx = milliseconds)
+// ==========================================================================
+
+// Suspend the calling OS THREAD — Windows's `Sleep(ms)`.
+//
+// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a GREEN THREAD on
+// the scheduler's timer heap and only bottoms out here when there is nothing else to run, which is why
+// `sleep` and `greenThreads` are separate rows in `targetProvidesFacility`.
+//
+// ⭐ `clock_nanosleep` on the SAME clock the deadlines are computed from — see `X64LinuxSyscallClockNanosleep`.
+//
+// ⚠ **A SIGNAL CAN CUT IT SHORT (EINTR) AND THIS DOES NOT RESTART IT** — matching Windows's `Sleep`, and
+// matching what the one consumer needs: the scheduler re-checks its deadline after every park.
+function buildX64LinuxSleepMsChunk() returns FunctionCodeChunk
+	let SlotTimespec = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(LinuxTimespecSlots)
+
+	x64LinuxEmitMillisToTimespec(asm, ms: X64Register.rcx, firstSlot: SlotTimespec)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxClockMonotonic)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSleepIsRelative)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset))
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSleepDiscardsRemainder)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockNanosleep)
+
+	return asm.finishFunction(HostSleepMsName)
+end 'buildX64LinuxSleepMsChunk'
+
+// ⭐ **MILLISECONDS INTO A `struct timespec` IN TWO CONSECUTIVE FRAME SLOTS.** `sec = ms / 1000` and
+// `nsec = (ms - sec*1000) * 1e6`, which x86-64's `div` answers in one step: the quotient lands in rax and the
+// remainder in rdx, so the multiply-and-subtract the other lane spells as an `msub` is free here.
+//
+// ⛔ **IT TAKES AN OWNED COPY OF `ms` IN ITS FIRST INSTRUCTION, AND THAT IS NOT TIDINESS.** `div` destroys
+// rax and rdx and needs its divisor in a third register, so a caller passing any of the three would have its
+// timeout overwritten before it was read — which on the other lane was MEASURED as every bounded wait on
+// both POSIX lanes sleeping for exactly 1.000 s whatever it asked for.
+//
+// ⚠ It clobbers rax, rcx, rdx and r8.
+function x64LinuxEmitMillisToTimespec(asm X64RuntimeAsm, ms X64Register, firstSlot StackSize)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: ms, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.r8, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixMillisPerSecond)
+	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecSecOffset), srcReg: X64Register.rax)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixNanosPerMilli)
+	encodeImulRegReg(asm.code, dest: X64Register.rax, src: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecNsecOffset), srcReg: X64Register.rax)
+end 'x64LinuxEmitMillisToTimespec'
+
+// ==========================================================================
+// mrt_host_wait_new(rcx = kind) -> rax = the tagged object handle
+// ==========================================================================
+
+// Allocate and initialise one wait object. See `PosixWaitOffKind` for the layout and why it is one page.
+//
+// ⚠ **EVERY ADMITTED KIND NEEDS THE SAME INITIALISATION, WHICH IS NONE BEYOND THE KIND ITSELF.** A child's
+// pid, cached status and killed flag are filled by the spawn and the reap, and a thread's join word by
+// `mrt_host_thread_create`; the page is zero-filled and 0 is the right start for every one of them.
+//
+// ⚠ **A FAILED `mmap` IS A PANIC, NOT A SILENT NULL.** Scheduler bring-up cannot continue without its wake
+// events, and the alternative is a store through a negative errno several instructions later.
+function buildX64LinuxWaitNewChunk() returns FunctionCodeChunk
+	let SlotKind = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let mapped = asm.newLabel()
+	let kindOk = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotKind), srcReg: X64Register.rcx)
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: mapped)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxWaitMapFailedMessage)
+
+	asm.placeLabel(mapped)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotKind), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: PosixWaitKindEvent as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: kindOk)
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: PosixWaitKindProcess as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: kindOk)
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: PosixWaitKindThread as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: kindOk)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxWaitKindMessage)
+
+	// The signal word needs no store: `MAP_ANONYMOUS` hands back a zero-filled page, and 0 IS
+	// `PosixWaitNotSignalled`.
+	asm.placeLabel(kindOk)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: PosixWaitOffKind as Imm32, srcReg: X64Register.rcx)
+	x64LinuxEmitTagObject(asm, reg: X64Register.rax, scratch: X64Register.rcx)
+
+	return asm.finishFunction(HostWaitNewName)
+end 'buildX64LinuxWaitNewChunk'
+
+// ==========================================================================
+// mrt_host_thread_create(rcx = entry, rdx = arg) -> rax = the tagged object handle | 0
+// ==========================================================================
+
+// ⭐⭐⭐ **`CreateThread(NULL, 0, entry, arg, 0, NULL)` ON A LANE WITH NO `pthread_create`.** Everything a
+// thread needs is built by hand: its stack, its guard page, its per-OS-thread slot block, the word its joiner
+// will sleep on, and the two-word seed that is the only channel the child has to learn what to run.
+//
+// ⛔ **`clone`'s CHILD DOES NOT RETURN LIKE A CALL.** It resumes at the instruction after the `syscall` with
+// rax = 0, on the stack this chunk chose, with NO return address and with rbp still pointing into the
+// PARENT's frame. So the child path may not touch a frame slot, may not fall out of its block, and must end
+// in a syscall rather than a `ret`. It reads its two words through its own rsp, zeroes rbp so the panic
+// backtrace ends at this thread's boundary, and finishes with `exit`.
+//
+// ⛔⛔ **`exit` (60), NEVER `exit_group` (231).** `CLONE_THREAD` is precisely what makes the wrong one lethal:
+// `exit_group` would end every thread of the process. The child path in `mrt_host_spawn` states the same trap.
+//
+// ⭐ **THE ENTRY POINT NEEDS NO THUNK, AND THAT IS AN ABI COINCIDENCE WORTH STATING.** shv2's internal ABI
+// passes an integer argument in rcx and Win64 passes a `ThreadProc`'s `lpParameter` there too, so
+// `__sched_worker_loop(p)` IS a valid start routine as compiled on all three lanes.
+//
+// ⚠ **THE JOIN WORD IS PUBLISHED BEFORE THE `clone` AND CLEARED BY THE KERNEL.** `CLONE_CHILD_CLEARTID`
+// zeroes `PosixWaitOffThread` and wakes it when the thread ends; `mrt_host_wait_one`'s THREAD arm is the
+// sleeper. Writing `LinuxThreadRunning` after the clone would race the exit of a thread that finished first.
+//
+// ⚠ **A WORKER M's STACK AND SLOT BLOCK ARE PROCESS-LIFETIME AND ARE NOT RELEASED ON A SUCCESSFUL START** —
+// an exiting thread cannot unmap the stack it is standing on, and the one joiner runs on the way out of the
+// process. Every FAILURE arm does release what it took.
+function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
+	let SlotEntry = 0 as StackSize
+	let SlotArg = 1 as StackSize
+	let SlotObj = 2 as StackSize
+	let SlotJoin = 3 as StackSize
+	let SlotRegion = 4 as StackSize
+	let SlotStack = 5 as StackSize
+	let SlotTls = 6 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(7)
+
+	let stackMapped = asm.newLabel()
+	let guarded = asm.newLabel()
+	let tlsMapped = asm.newLabel()
+	let childPath = asm.newLabel()
+	let cloneFailed = asm.newLabel()
+	let releaseStack = asm.newLabel()
+	let noThread = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEntry), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotArg), srcReg: X64Register.rdx)
+
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxWorkerRegionBytes))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: stackMapped)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: noThread)
+
+	asm.placeLabel(stackMapped)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxWorkerStackGuardBytes)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: MmapProtNone)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallMprotect)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: guarded)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxWorkerGuardFailedMessage)
+
+	// The child's initial rsp: the top of the region, less the two words it reads from there.
+	asm.placeLabel(guarded)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: (LinuxWorkerRegionBytes - LinuxWorkerStackSeedBytes) as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStack), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotEntry), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxWorkerSeedEntryOffset as Imm32, srcReg: X64Register.rcx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotArg), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxWorkerSeedArgOffset as Imm32, srcReg: X64Register.rcx)
+
+	// This M's per-OS-thread slot block, which `CLONE_SETTLS` publishes in its FS base.
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: tlsMapped)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: releaseStack)
+
+	asm.placeLabel(tlsMapped)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTls), srcReg: X64Register.rax)
+
+	// The waitable handle, and the join word inside it, published RUNNING before the thread can clear it.
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixWaitKindThread)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rax)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rax)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: PosixWaitOffThread as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotJoin), srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: LinuxThreadRunning)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rcx)
+
+	// ⛔⛔ `clone(flags, stack, ptid, ctid, tls)` — x86-64's argument order, which is NOT AArch64's (that one
+	// swaps the last two). Both are live here, and the wrong order is a HANG rather than an error.
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxCloneWorkerFlags)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStack), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxCloneNoParentTidOut)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotJoin), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotTls), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClone)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: childPath)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: cloneFailed)
+
+	// PARENT: the tagged handle is the answer, and `__sched_wake_or_spawn` stores it in the P it just claimed.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	// ⛔ THE CHILD. Frame slots are the parent's; rsp is this thread's own. It never falls out of this block.
+	asm.placeLabel(childPath)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rsp, disp: LinuxWorkerSeedEntryOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rsp, disp: LinuxWorkerSeedArgOffset as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rbp, src: X64Register.rbp, wide: true)
+	encodeCallReg(asm.code, reg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxWorkerExitStatus)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallExit)
+	asm.code.push(OpcodeInt3)
+
+	// The clone failed — `EAGAIN` on a process at its thread limit is the reachable one. Give back everything
+	// this call took, in the reverse of the order it took it, and answer the NULL handle `spawnIt` reads as
+	// "no thread started" (it releases the P it claimed for this M).
+	asm.placeLabel(cloneFailed)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostWaitCloseName)
+	x64LinuxEmitUnmapSlot(asm, baseSlot: SlotTls, byteSize: LinuxHostObjectPageBytes)
+
+	asm.placeLabel(releaseStack)
+	x64LinuxEmitUnmapSlot(asm, baseSlot: SlotRegion, byteSize: LinuxWorkerRegionBytes)
+
+	asm.placeLabel(noThread)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxNoThreadStarted)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(HostThreadCreateName)
+end 'buildX64LinuxThreadCreateChunk'
+
+// ==========================================================================
+// mrt_host_event_set(rcx = object)
+// ==========================================================================
+
+// `SetEvent` — `PosixWaitSignalled`'s publish-and-wake, spelled here as a `lock cmpxchg` and a `FUTEX_WAKE`.
+//
+// ⚠ **x86-64 IS TOTAL STORE ORDER AND `lock cmpxchg` IS A FULL BARRIER**, so the release ordering the arm64
+// twin buys with `STLXR` is free here and nothing extra is emitted.
+function buildX64LinuxEventSetChunk() returns FunctionCodeChunk
+	let SlotSignal = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx)
+
+	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: PosixWaitSignalled)
+	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWakePrivate, value: LinuxFutexWakeOne, timespecFirstSlot: SlotSignal, hasTimeout: false)
+
+	return asm.finishFunction(HostEventSetName)
+end 'buildX64LinuxEventSetChunk'
+
+// ==========================================================================
+// mrt_host_wait_one(rcx = object, rdx = timeoutMs) -> rax = WAIT_OBJECT_0 | WAIT_TIMEOUT
+// ==========================================================================
+
+// `WaitForSingleObject`, dispatching on the object's KIND.
+//
+// ⭐⭐ **THE TAKE IS THE SAME `cmpxchg` THE PUBLISH IS, RUN THE OTHER WAY, AND IT IS WHAT MAKES THE EVENT
+// AUTO-RESET.** `CAS(signal, 1 -> 0)` succeeds for exactly ONE waiter — the "one waiter released" half of
+// the contract — and clears the word, which is the "auto" half.
+//
+// ⭐ **A CHILD PROCESS TAKES ONE ARM AND IT IS A SINGLE CALL**: `mrt_host_proc_await` honours all three
+// timeouts its callers use.
+//
+// ⭐⭐ **A WORKER M TAKES ANOTHER, AND IT IS `pthread_join` SPELLED IN THE KERNEL'S OWN TERMS.** The join word
+// holds `LinuxThreadRunning` until the thread ends, at which point the kernel zeroes it and wakes it
+// (`CLONE_CHILD_CLEARTID`) — with the SHARED `FUTEX_WAIT`, because the kernel's wake is shared and a private
+// waiter is never reached by it (see `LinuxFutexWaitShared`).
+//
+// ⚠ **A JOIN IGNORES THE TIMEOUT** and the one caller passes `WaitInfinite` anyway: `__sched_stop_workers`
+// waits for ever by construction, because the worker has already been told to stop.
+//
+// ⛔ **A DESCRIPTOR IS NOT WAITABLE, AND SAYING SO LOUDLY IS THE POINT.** Dereferencing one for a kind field
+// would be a wild load; answering `WAIT_TIMEOUT` would be a caller spinning on a handle nothing can signal.
+function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
+	let SlotSignal = 0 as StackSize
+	let SlotTimeout = 1 as StackSize
+	let SlotResult = 2 as StackSize
+	let SlotTimespec = 3 as StackSize
+	let SlotObj = 5 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(3 + LinuxTimespecSlots + 1)
+
+	let isObject = asm.newLabel()
+	let isEvent = asm.newLabel()
+	let awaitChild = asm.newLabel()
+	let joinThread = asm.newLabel()
+	let joinTest = asm.newLabel()
+	let joined = asm.newLabel()
+	let testSignal = asm.newLabel()
+	let waitTimed = asm.newLabel()
+	let takeSignal = asm.newLabel()
+	let finish = asm.newLabel()
+
+	x64LinuxEmitHandleKind(asm, dest: X64Register.rax, handle: X64Register.rcx)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixHandleKindObject as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: isObject)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxWaitOnDescriptorMessage)
+
+	asm.placeLabel(isObject)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffKind as Imm32, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixWaitKindEvent as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: isEvent)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixWaitKindProcess as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: awaitChild)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixWaitKindThread as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: joinThread)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxWaitKindMessage)
+
+	// joinThread: sleep while the kernel has not yet cleared this M's join word. `SlotSignal` carries the
+	// futex ADDRESS here exactly as it does on the event arm, so the one futex shape serves both.
+	asm.placeLabel(joinThread)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffThread as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx)
+
+	asm.placeLabel(joinTest)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: joined)
+	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitShared, value: LinuxThreadRunning, timespecFirstSlot: SlotTimespec, hasTimeout: false)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: joinTest)
+
+	asm.placeLabel(joined)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitObject0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
+
+	// awaitChild: the child's own wait, in `mrt_host_proc_await` — which honours all three timeouts the
+	// callers use, where the event arm below answers only its own kind of object.
+	asm.placeLabel(awaitChild)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcAwaitName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
+
+	asm.placeLabel(isEvent)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitTimeout)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rax)
+
+	asm.placeLabel(testSignal)
+	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: takeSignal)
+	// A ZERO timeout is a POLL: the caller wants the state, not a wait. Answer the seeded `WAIT_TIMEOUT`
+	// without entering the kernel at all.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finish)
+	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: WaitInfinite)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: waitTimed)
+	// Unbounded: sleep while the word is still unsignalled, then re-test. That IS the `while (!signalled)`
+	// loop the primitive requires — a futex return is advisory, and re-testing is the only sound response.
+	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timespecFirstSlot: SlotTimespec, hasTimeout: false)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: testSignal)
+
+	// waitTimed: ONE bounded wait, then a single re-test — the caller owns the deadline, and re-arming here
+	// would silently double a timeout that expired spuriously.
+	asm.placeLabel(waitTimed)
+	x64LinuxEmitMillisToTimespec(asm, ms: X64Register.rax, firstSlot: SlotTimespec)
+	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timespecFirstSlot: SlotTimespec, hasTimeout: true)
+	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: finish)
+
+	asm.placeLabel(takeSignal)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WaitObject0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), srcReg: X64Register.rcx)
+
+	asm.placeLabel(finish)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotResult), wide: true)
+	return asm.finishFunction(HostWaitOneName)
+end 'buildX64LinuxWaitOneChunk'
+
+// ==========================================================================
+// mrt_host_wait_close(rcx = handle)
+// ==========================================================================
+
+// `CloseHandle` — the ONE op that closes everything Win32 calls a handle, dispatching on the kind the value
+// carries (`PosixHandleKindShift` for why it carries one at all).
+//
+// ⭐ **A ZERO DESCRIPTOR IS A NO-OP** — see `PosixHandleKindShift` for why that guard is load-bearing.
+//
+// ⚠ **A THREAD OBJECT RELEASES THE PAGE AND NOT THE M's STACK OR SLOT BLOCK**, which are process-lifetime.
+//
+// ⚠ **A CHILD IS REAPED FIRST.** Without a non-blocking `wait4` an exited child that nobody waited on stays
+// a zombie for the parent's whole life, which a spawn/release loop turns into one per iteration.
+function buildX64LinuxWaitCloseChunk() returns FunctionCodeChunk
+	let SlotObj = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let releaseObject = asm.newLabel()
+	let unmapObject = asm.newLabel()
+	let closed = asm.newLabel()
+
+	x64LinuxEmitHandleKind(asm, dest: X64Register.rax, handle: X64Register.rcx)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixHandleKindObject as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: releaseObject)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: closed)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: closed)
+
+	// An OBJECT is one mapped page and nothing else — there are no primitives to destroy first, which is the
+	// whole of what a futex buys over a mutex-and-condvar pair.
+	asm.placeLabel(releaseObject)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffKind as Imm32, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixWaitKindProcess as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: unmapObject)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapWithoutBlocking)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+
+	asm.placeLabel(unmapObject)
+	x64LinuxEmitUnmapSlot(asm, baseSlot: SlotObj, byteSize: LinuxHostObjectPageBytes)
+
+	asm.placeLabel(closed)
+	return asm.finishFunction(HostWaitCloseName)
+end 'buildX64LinuxWaitCloseChunk'
+
+// ==========================================================================
+// mrt_host_lock_init(rcx = region) / mrt_linux_lock_enter / mrt_linux_lock_leave
+// ==========================================================================
+
+// `InitializeCriticalSection` — a free, unowned, un-entered recursive mutex in the region the caller
+// allocated. See `LinuxLockOffFutex` for the three words, why recursion is not optional and why all three are
+// written rather than assumed zero.
+function buildX64LinuxLockInitChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	assertLinuxLockFits()
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax)
+
+	return asm.finishFunction(HostLockInitName)
+end 'buildX64LinuxLockInitChunk'
+
+// `EnterCriticalSection`, running `LinuxMutexHeldContended`'s three-compare-and-swap acquire protocol.
+//
+// ⭐ **THE UNCONTENDED PATH IS ONE `lock cmpxchg` AND NO SYSCALL, WHICH IS THE WHOLE POINT OF A FUTEX.** The
+// kernel is entered only when the word is already held.
+function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
+	let SlotRegion = 0 as StackSize
+	let SlotTid = 1 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2)
+
+	let acquire = asm.newLabel()
+	let contend = asm.newLabel()
+	let owned = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rcx)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGettid)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTid), srcReg: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: acquire)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rdx)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	// The futex word is at offset 0 of the region, so the region pointer IS its address.
+	asm.placeLabel(acquire)
+	x64LinuxEmitCasImm(asm, addrSlot: SlotRegion, expected: LinuxMutexFree, replacement: LinuxMutexHeld)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: owned)
+
+	asm.placeLabel(contend)
+	x64LinuxEmitCasImm(asm, addrSlot: SlotRegion, expected: LinuxMutexFree, replacement: LinuxMutexHeldContended)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: owned)
+	x64LinuxEmitCasImm(asm, addrSlot: SlotRegion, expected: LinuxMutexHeld, replacement: LinuxMutexHeldContended)
+	x64LinuxEmitFutex(asm, addrSlot: SlotRegion, operation: LinuxFutexWaitPrivate, value: LinuxMutexHeldContended, timespecFirstSlot: SlotRegion, hasTimeout: false)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: contend)
+
+	asm.placeLabel(owned)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTid), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rdx)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxMutexFirstEntry)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rdx)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(LinuxLockEnterName)
+end 'buildX64LinuxLockEnterChunk'
+
+// `LeaveCriticalSection` — `LinuxMutexReleaseStep`'s decrement, spelled here as a `lock xadd` of -1 so the
+// displaced word arrives in a register and the wake decision costs no second atomic.
+function buildX64LinuxLockLeaveChunk() returns FunctionCodeChunk
+	let SlotRegion = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let release = asm.newLabel()
+	let wake = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rcx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxMutexFirstEntry as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: release)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(release)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rax)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdx, value: LinuxMutexReleaseStep)
+	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeXaddRmReg, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, reg: X64Register.rdx)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: LinuxMutexHeld as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: wake)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(wake)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax)
+	x64LinuxEmitFutex(asm, addrSlot: SlotRegion, operation: LinuxFutexWakePrivate, value: LinuxFutexWakeOne, timespecFirstSlot: SlotRegion, hasTimeout: false)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(LinuxLockLeaveName)
+end 'buildX64LinuxLockLeaveChunk'
+
+// ==========================================================================
+// mrt_host_tls_alloc() -> rax = the per-OS-thread slot key
+// ==========================================================================
+
+// `TlsAlloc()` — reserve one per-OS-thread slot and answer its index. On the first call from a given OS
+// thread it also MAPS that thread's slot block and publishes its base in FS, because on this lane there is
+// no libc to have done so.
+//
+// ⛔⛔ **THE "DOES THIS THREAD HAVE A BLOCK?" TEST IS A SYSCALL HERE AND ONE `cbz` ON THE OTHER LANE, AND
+// THAT IS THE WHOLE COST OF AN UNREADABLE THREAD POINTER.** `arch_prctl(ARCH_GET_FS, &out)` writes the base
+// through a pointer rather than answering in a register, so the test needs this chunk's frame. It is
+// affordable exactly because this is bring-up: `__sched_init_procs` is the only caller and it runs once per
+// key. Every HOT read of the block goes through the segment override and enters no kernel at all.
+//
+// ⚠ **THE KEY COUNTER IS PROCESS-WIDE WHILE THE BLOCK IS PER-THREAD**, which is `pthread_key_create`'s own
+// arrangement: a key names the same offset in every thread's block. Its `sealedBeforeWorkers` class is what
+// makes the plain read-modify-write below sound.
+//
+// ⭐ **KEY 0 IS REFUSED.** With a base of 0, key 0 would publish a slot offset of 0, which every reader treats
+// as "the scheduler has not started" — a scheduler that silently never runs, with no crash to find it by.
+// The counter pre-increments so the first key is 1; this is the check that says so out loud.
+function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
+	let SlotFsBase = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let mapped = asm.newLabel()
+	let published = asm.newLabel()
+	let haveBlock = asm.newLabel()
+	let keyOk = asm.newLabel()
+
+	// ⚠ **THE SLOT IS ZEROED BEFORE THE READ BECAUSE `beginFunction` DOES NOT ZERO THE FRAME.** `arch_prctl`
+	// writes it only on success, so a refused GET would otherwise leave the test reading stack garbage — and a
+	// non-zero garbage word says "this thread already has a block" and skips the mapping. Zero routes a failed
+	// GET to the map path, which is the answer a thread with no readable FS base needs.
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase), srcReg: X64Register.rax)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxArchGetFs)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase))
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallArchPrctl)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: haveBlock)
+
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: mapped)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxTlsMapFailedMessage)
+
+	asm.placeLabel(mapped)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxArchSetFs)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallArchPrctl)
+
+	// ⛔ **A REFUSED `ARCH_SET_FS` IS A PANIC, AND IT MUST BE CAUGHT BEFORE THE FLAG GOES UP.** The flag says
+	// "every thread's slot block is reachable through FS"; raised over a base of 0 it sends every later errno
+	// stash through the null page — precisely the fault the flag exists to prevent, and a SIGSEGV a long way
+	// from its cause. This runs once per OS thread at bring-up, so the check costs nothing that matters.
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: published)
+	x64LinuxEmitPanicConstant(asm, bytes: X64LinuxTlsPublishFailedMessage)
+
+	asm.placeLabel(published)
+	// ⭐ RAISE THE PROCESS-WIDE FLAG the errno access reads (`x64LinuxEmitStoreErrno` carries why a per-thread
+	// test is unaffordable there and why a process-wide one is sound). It is raised AFTER FS is published, so
+	// no reader can be sent to a block that does not exist yet.
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: X64LinuxTlsReadyLabel)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxTlsBlocksAreLive)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax)
+
+	asm.placeLabel(haveBlock)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxTlsNextKeyLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdi, disp: 0, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: LinuxTlsFirstKey as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: linuxTlsSlotCount() as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: keyOk)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxTlsExhaustedMessage)
+
+	asm.placeLabel(keyOk)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax)
+	return asm.finishFunction(HostTlsAllocName)
+end 'buildX64LinuxTlsAllocChunk'
+
+// What `mrt_host_tls_alloc` raises the flag to. A bare 1 at the one site that writes it says nothing about
+// which of this file's several 1s it is.
+let X64LinuxTlsBlocksAreLive = 1
+
+// ==========================================================================
+// mrt_linux_tls_set(rcx = key, rdx = value)
+// ==========================================================================
+
+// `TlsSetValue(key, value)` — `pthread_setspecific` on the Darwin lane, and there ONE import call with no
+// chunk at all. It is a chunk here because it owes an assertion that lane does not: the store needs a slot
+// BLOCK, and a thread that has none would write `key * 8` bytes into the null page.
+//
+// ⛔ **A MISSING BLOCK IS A PANIC, NOT A STORE THROUGH ZERO.** Every thread that reaches this call has one —
+// the main thread from `mrt_host_tls_alloc`, a worker M from the `CLONE_SETTLS` in `mrt_host_thread_create` —
+// so this is the check that keeps that true rather than assumed. It reads the same process-wide flag the
+// errno access does, for that helper's stated reason: on x86-64 the per-thread question costs a syscall, and
+// the process-wide one is exactly as strong for the two kinds of thread this lane has.
+function buildX64LinuxTlsSetChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let haveBlock = asm.newLabel()
+
+	x64LinuxEmitTestTlsReady(asm, scratch: X64Register.rax, whenReady: haveBlock)
+	x64LinuxEmitPanicConstant(asm, bytes: X64LinuxTlsNoBlockMessage)
+
+	asm.placeLabel(haveBlock)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rcx, count: LinuxTlsKeyScaleBits)
+	encodeMovSegBaseReg(asm.code, base: X64Register.rcx, srcReg: X64Register.rdx, segment: x64ThreadPointerSegment(Os.linux))
+
+	return asm.finishFunction(LinuxTlsSetName)
+end 'buildX64LinuxTlsSetChunk'
+
+let X64LinuxTlsPublishFailedMessage = b"panic: the green-thread scheduler could not publish this OS thread's slot block (arch_prctl(ARCH_SET_FS) failed)\n"
+
+let X64LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler slot before any slot block existed -- on x64-linux the FS base is the block base and only mrt_host_tls_alloc sets it\n"
+
+// ==========================================================================
+// L5 — THE CHILD-PROCESS BAND
+// ==========================================================================
+//
+// ⭐⭐ **THE ALGORITHMS ARE `Arm64PosixRuntime`'s AND THE INSTRUCTIONS ARE NOT.** `waitpid` and `wait4` decode
+// the same status word, `poll` and `ppoll` fill the same `struct pollfd`, and the reap, the bounded await,
+// the exit-code read and the netpoll's multi-wait make no OS call of their own — so the two arm64 lanes share
+// one body each, parameterised by a `PosixHostCall`. x86-64 has only ONE POSIX lane, so there is no second
+// route to parameterise for and each body below issues its own `syscall` directly; what it shares with the
+// arm64 pair is every NUMBER, which is `Targets/Shared/PosixRuntime`'s.
+
+// ==========================================================================
+// mrt_host_tick_ms() -> rax = milliseconds since boot
+// ==========================================================================
+
+// `GetTickCount64`, in the unit `StdOp.osTickCountMs`'s consumers measure deadlines in — so a subprocess
+// timeout and a scheduler deadline cannot drift apart by being read off two different clocks.
+//
+// ⭐ **IT ASKS `mrt_host_monotonic_clock` RATHER THAN READING A CLOCK ITSELF, WHICH IS WHAT MAKES THAT
+// GUARANTEE STRUCTURAL.** The conversion is DERIVED from the frequency that chunk reports rather than
+// assuming the 1e9 every lane happens to answer today.
+function buildX64LinuxTickMsChunk() returns FunctionCodeChunk
+	let SlotTicks = 0 as StackSize
+	let SlotFreq = 1 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTicks))
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFreq))
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostMonotonicClockName)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFreq), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixMillisPerSecond)
+	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotTicks), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
+
+	return asm.finishFunction(HostTickMsName)
+end 'buildX64LinuxTickMsChunk'
+
+// ==========================================================================
+// mrt_host_pipe(rcx = readOutPtr, rdx = writeOutPtr)
+// ==========================================================================
+
+// `CreatePipe` — an ANONYMOUS pair, where Windows needs a uniquely NAMED one to get overlapped reads.
+//
+// ⭐⭐ **`O_CLOEXEC` IS WHERE THE INHERITANCE MODEL LIVES ON THIS LANE.** There is no
+// `POSIX_SPAWN_CLOEXEC_DEFAULT` to invert the default for the whole exec, so the marking happens here and the
+// child's `dup3` onto 0/1/2 is what CLEARS it for the three that must survive. Without it a child keeps a
+// copy of the parent's stdin WRITE end and never sees EOF when `subprocessCloseStdin` closes the parent's,
+// which is a HANG rather than a wrong answer.
+//
+// ⚠ **A FAILED `pipe2` LEAVES BOTH OUT-WORDS ZERO**, which is the Std tier's own "no pipe" reading. A pipe
+// cannot answer descriptor 0 in a process that still holds its standard streams.
+function buildX64LinuxPipeChunk() returns FunctionCodeChunk
+	let SlotReadOut = 0 as StackSize
+	let SlotWriteOut = 1 as StackSize
+	let SlotFds = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	let created = asm.newLabel()
+	let published = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotReadOut), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWriteOut), srcReg: X64Register.rdx)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotFds))
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxOpenCloseOnExec)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallPipe2)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: created)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixNoPipeDescriptor)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: PosixNoPipeDescriptor)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
+
+	asm.placeLabel(created)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFds))
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rcx, disp: 0, wide: false)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rcx, disp: PosixPipeWriteEndOffset as Imm32, wide: false)
+
+	asm.placeLabel(published)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotReadOut), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotWriteOut), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r9)
+
+	return asm.finishFunction(HostPipeName)
+end 'buildX64LinuxPipeChunk'
+
+// ==========================================================================
+// mrt_host_pipe_peek(rcx = handle, rdx = availOutPtr) -> rax = BOOL
+// ==========================================================================
+
+// `PeekNamedPipe` — "are there bytes to read, without committing to a read". `PosixPipeReadyBytes` carries
+// the whole argument for the count this answers and for why EOF arrives through the READ instead.
+//
+// ⛔ **THERE IS NO `poll` TO CALL WITH AN INTEGER TIMEOUT HERE EITHER.** x86-64 still has the legacy call,
+// but `ppoll` is what the arm64 lane uses and its timeout is a `struct timespec *` whose NULL means "block
+// for ever" — the exact INVERSE of `poll`'s 0. A zeroed `timespec` in two frame slots is the no-wait request,
+// and using the same call on both lanes keeps one shape rather than two.
+function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
+	let SlotAvailOut = 0 as StackSize
+	let SlotPollfd = 1 as StackSize
+	let SlotTimespec = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2 + LinuxTimespecSlots)
+
+	let notReady = asm.newLabel()
+	let broken = asm.newLabel()
+	let publish = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotAvailOut), srcReg: X64Register.rdx)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: (PosixPollEventsUnit * PosixPollIn))
+	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPollfd), srcReg: X64Register.rcx)
+
+	// `ppoll(&pollfd, 1, &timespec{0,0}, NULL, sizeof(sigset_t))` — the zeroed pair is the no-wait request.
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecNsecOffset), srcReg: X64Register.rax)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPollfd))
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixPollOneDescriptor)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset))
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixPollNoSignalMask)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxSigsetBytes)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallPpoll)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: broken)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notReady)
+
+	// Ready — unless the descriptor itself is unusable, which is `PeekNamedPipe`'s own failure and the Std
+	// tier's other route to `markDone`.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotPollfd), wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: X64Register.rcx, count: PosixPollReventsShift)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rcx, imm: PosixPollBrokenBits as Imm32)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: broken)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixPipeReadyBytes)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: publish)
+
+	asm.placeLabel(notReady)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixNoBytesReady)
+
+	asm.placeLabel(publish)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotAvailOut), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(broken)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostPipePeekName)
+end 'buildX64LinuxPipePeekChunk'
+
+// ==========================================================================
+// mrt_host_proc_reap(rcx = object, rdx = blocking) -> rax = signalled
+// ==========================================================================
+
+// The ONE place a child's status is taken — `PosixWaitOffChildStatus` carries the reap-once rule that makes
+// it one place, and the cache it is taken into.
+//
+// ⚠ **A KILLED CHILD KEEPS THE CODE THE KILL NAMED.** `mrt_host_proc_terminate` writes `childStatus` and
+// raises `childKilled` BEFORE the signal lands, so this decodes nothing for it — see `PosixSignalExitCodeBase`.
+function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
+	let SlotObj = 0 as StackSize
+	let SlotBlocking = 1 as StackSize
+	let SlotStatus = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	let alreadySignalled = asm.newLabel()
+	let stillRunning = asm.newLabel()
+	let statusChosen = asm.newLabel()
+	let bySignal = asm.newLabel()
+	let publish = asm.newLabel()
+	let blockingWait = asm.newLabel()
+	let haveOptions = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBlocking), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: alreadySignalled)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatus))
+	// `options = blocking ? 0 : WNOHANG`.
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: blockingWait)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixWaitNoHang)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: haveOptions)
+
+	asm.placeLabel(blockingWait)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxReapUntilItExits)
+
+	asm.placeLabel(haveOptions)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixReapDiscardsRusage)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallWait4)
+
+	// The wait answers the reaped pid, 0 (nothing to report yet, `WNOHANG`) or -1. Only the pid means the
+	// child has been taken, and the comparison is on the low 32 bits because `pid_t` is a C `int`.
+	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: PosixChildPidMask)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAndRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: stillRunning)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: statusChosen)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStatus), wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rax, imm: PosixWaitStatusSignalMask as Imm32)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: bySignal)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: X64Register.rax, count: PosixWaitStatusExitShift)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rax, imm: PosixWaitStatusExitMask as Imm32)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: publish)
+
+	// rax already holds the terminating signal — the mask above left it there.
+	asm.placeLabel(bySignal)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: PosixSignalExitCodeBase as Imm32)
+
+	asm.placeLabel(publish)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rax)
+
+	asm.placeLabel(statusChosen)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixWaitSignalled)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32, srcReg: X64Register.rax)
+
+	asm.placeLabel(alreadySignalled)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildSignalled)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(stillRunning)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildStillRunning)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostProcReapName)
+end 'buildX64LinuxProcReapChunk'
+
+// ==========================================================================
+// mrt_host_proc_await(rcx = object, rdx = timeoutMs) -> rax = WAIT_OBJECT_0 | WAIT_TIMEOUT
+// ==========================================================================
+
+// ⭐⭐ **`WaitForSingleObject` ON A CHILD, AND ALL THREE TIMEOUTS ITS CALLERS ACTUALLY USE.** They are three
+// different questions and answering them with one poll is a WRONG ANSWER rather than a slow one:
+//
+//   • **0 — a POLL.** `__gt_proc_check` and `__gt_subp_wait_collect`'s exit test drive their own loop.
+//   • **INFINITE — a real block**, inside the wait syscall itself. There is nothing to poll for: the kernel
+//     already has the notification.
+//   • **anything else — a bounded poll.** A deadline no POSIX wait takes, so it is a scan and a millisecond
+//     sleep, exactly as the netpoll's multi-wait below does it.
+//
+// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD**, which is the same property the blocking pipe read has and for
+// the same missing mechanism: without a `SIGCHLD` handler there is nothing for a green thread to park on.
+//
+// ⚠ **IT CONTAINS NO OS CALL AT ALL** — two calls and a compare — which is why the arm64 pair share one body.
+function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
+	let SlotObj = 0 as StackSize
+	let SlotTimeout = 1 as StackSize
+	let SlotElapsed = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	let bounded = asm.newLabel()
+	let boundedStep = asm.newLabel()
+	let signalled = asm.newLabel()
+	let notSignalled = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.rdx)
+
+	// INFINITE: one blocking reap, and the answer cannot be anything but signalled.
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: WaitInfinite)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: bounded)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapBlocking)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: signalled)
+
+	// 0 and everything else share one loop: it reaps FIRST and tests the deadline second, so a zero timeout
+	// makes exactly one non-blocking reap and then answers.
+	asm.placeLabel(bounded)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
+
+	asm.placeLabel(boundedStep)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapWithoutBlocking)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: signalled)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: notSignalled)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: PosixChildPollMs as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: boundedStep)
+
+	asm.placeLabel(signalled)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitObject0)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(notSignalled)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitTimeout)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostProcAwaitName)
+end 'buildX64LinuxProcAwaitChunk'
+
+// ==========================================================================
+// mrt_host_proc_exit_code(rcx = handle, rdx = codeOutPtr)
+// ==========================================================================
+
+// `GetExitCodeProcess`. It BLOCKS if the child has not been reaped yet, which is exactly what its Win32
+// twin's callers already guarantee is safe: every one of them has either just seen the handle signalled or is
+// `__gt_subp_wait`, whose whole contract is to wait.
+//
+// ⚠ **A REAP THAT CANNOT HAPPEN LEAVES THE CACHED STATUS UNTOUCHED**, which is 0 for a handle whose child
+// some other path already took. Answering the last known status beats inventing one.
+function buildX64LinuxProcExitCodeChunk() returns FunctionCodeChunk
+	let SlotCodeOut = 0 as StackSize
+	let SlotObj = 1 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCodeOut), srcReg: X64Register.rdx)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapBlocking)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCodeOut), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+
+	return asm.finishFunction(HostProcExitCodeName)
+end 'buildX64LinuxProcExitCodeChunk'
+
+// ==========================================================================
+// mrt_host_proc_terminate(rcx = handle, rdx = exitCode)
+// ==========================================================================
+
+// `TerminateProcess(h, exitCode)` — `kill(pid, SIGKILL)`, plus the one thing POSIX cannot carry across a
+// signal: the CODE the caller named. It is recorded in the object first, so the reap that follows reports it
+// instead of decoding `128 + SIGKILL` from the status. See `PosixSignalExitCodeBase`.
+function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rdx)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildSignalled)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, srcReg: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixSigKill)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
+
+	return asm.finishFunction(HostProcTerminateName)
+end 'buildX64LinuxProcTerminateChunk'
+
+// ==========================================================================
+// mrt_host_wait_any(rcx = handlesBase, rdx = count, r8 = timeoutMs)
+// ==========================================================================
+
+// ⭐ `WaitForMultipleObjects(handles, count, FALSE, timeoutMs)` — the NETPOLL's block on the parked children.
+// Its answer is DISCARDED by the one caller (`GtRuntime.emitProcWait` re-scans through `__gt_proc_check`
+// straight afterwards), so this reports nothing and only has to RETURN at the right moment: as soon as any
+// child has exited, or when the timeout runs out.
+//
+// ⚠ **IT POLLS, AND POLLING IS THE RIGHT ANSWER HERE RATHER THAN A COMPROMISE.** The alternative is a
+// `SIGCHLD` handler, and this backend installs none. Blocking the M is what the netpoll is FOR — it runs only
+// when nothing is runnable — so a millisecond scan costs an idle thread a syscall per millisecond.
+//
+// ⚠ **A ZERO COUNT WITH AN INFINITE TIMEOUT WOULD NEVER RETURN**, and cannot arise: `emitProcWait` is
+// reached only under `pc > 0`.
+function buildX64LinuxWaitAnyChunk() returns FunctionCodeChunk
+	let SlotBase = 0 as StackSize
+	let SlotCount = 1 as StackSize
+	let SlotTimeout = 2 as StackSize
+	let SlotElapsed = 3 as StackSize
+	let SlotIndex = 4 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(5)
+
+	let scanRound = asm.newLabel()
+	let scanStep = asm.newLabel()
+	let scanned = asm.newLabel()
+	let sleepStep = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBase), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.r8)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
+
+	asm.placeLabel(scanRound)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+
+	asm.placeLabel(scanStep)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: scanned)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rax, count: PosixHandleArrayStrideShift)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotBase), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: 0, wide: true)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapWithoutBlocking)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: done)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scanStep)
+
+	asm.placeLabel(scanned)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
+	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: WaitInfinite)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: sleepStep)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+
+	asm.placeLabel(sleepStep)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: PosixChildPollMs as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scanRound)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(HostWaitAnyName)
+end 'buildX64LinuxWaitAnyChunk'
+
+// ==========================================================================
+// mrt_host_spawn(rcx = argv, rdx = cwd, r8 = creationFlags, r9 = startupInfo,
+//                [stack 0] = processInformation, [stack 1] = lpEnvironment)
+// ==========================================================================
+
+// ⭐⭐⭐ `CreateProcessA` ON A LANE WITH NO SPAWN PRIMITIVE AT ALL. ⛔ **THERE IS NO `posix_spawn` SYSCALL ON
+// LINUX — it is a libc FUNCTION, and this image links no libc.** So the child is built by hand out of
+// `clone`, `pipe2`, `dup3` and `execve`.
+//
+// ⭐⭐⭐ **THE STATUS PIPE IS WHAT MAKES `hProcess == 0` REACHABLE.** `posix_spawnp` reports a failed exec to
+// the CALLER; a hand-built fork cannot, because by then the failure is in another process. So a
+// `pipe2(O_CLOEXEC)` is opened before the clone and the parent READS it: a successful exec closes the child's
+// end and the read sees EOF, while a failed one writes the `-errno` down it. Without this the Std tier's own
+// spawn-failure test could never fire on this lane.
+//
+// ⚠ **A SECOND SPAWN CAN INTERLEAVE WITH THIS ONE, AND `O_CLOEXEC` IS WHAT MAKES THAT HARMLESS.** Both ends
+// of the status pipe carry it, so a concurrent child's own `execve` drops its inherited copy and the reading
+// parent still sees EOF.
+//
+// ⚠ **PATH RESOLUTION IS THE Std TIER'S AND IS NOT REDONE HERE.** `execve` takes a path where `posix_spawnp`
+// searches `PATH`, and that search already happened one tier up through `__gt_subp_resolve_path`.
+//
+// ⛔⛔ **A CALLER-BUILT ENVIRONMENT BLOCK IS REFUSED, EXACTLY AS BOTH arm64 LANES REFUSE IT.**
+// `lpEnvironment` is a NUL-separated BLOCK and `execve`'s third argument is a POINTER VECTOR; the conversion
+// would have to happen in the child, between the `clone` and the `execve`, where nothing may allocate and
+// nothing may lock. A named spawn failure (`ENOTSUP` plus a zero `hProcess`) is the honest answer, and it is
+// what keeps one program answering one way on all three POSIX lanes.
+function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
+	let SlotArgv = 0 as StackSize
+	let SlotCwd = 1 as StackSize
+	let SlotFlags = 2 as StackSize
+	let SlotStartup = 3 as StackSize
+	let SlotProcInfo = 4 as StackSize
+	let SlotPid = 5 as StackSize
+	let SlotHandle = 6 as StackSize
+	let SlotStatusFds = 7 as StackSize
+	let SlotStatusRead = 8 as StackSize
+	let SlotStatusWrite = 9 as StackSize
+	let SlotStatusWord = 10 as StackSize
+	let SlotStatusCount = 11 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(12)
+
+	let piped = asm.newLabel()
+	let cloneFailed = asm.newLabel()
+	let spawnFailed = asm.newLabel()
+	let callerBuiltEnv = asm.newLabel()
+	let childPath = asm.newLabel()
+	let spawned = asm.newLabel()
+	let published = asm.newLabel()
+	let noSession = asm.newLabel()
+	let inheritCwd = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotArgv), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStartup), srcReg: X64Register.r9)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: win64IncomingArgDisp(SpawnProcInfoIncomingSlot), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), srcReg: X64Register.rax)
+
+	// ⛔ **THE REFUSAL IS TESTED FIRST, BEFORE THE PIPE**: the arm it takes owns nothing, so there is nothing
+	// to unwind on it. `lpEnvironment` is read here and nowhere else — every later use of the environment on
+	// this lane is the parent's own vector, which the guard has just proved is what was asked for.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: win64IncomingArgDisp(SpawnEnvironmentIncomingSlot), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: callerBuiltEnv)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusFds))
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxOpenCloseOnExec)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallPipe2)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: piped)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: spawnFailed)
+
+	asm.placeLabel(piped)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusFds))
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: PosixPipeWriteEndOffset as Imm32, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), srcReg: X64Register.rax)
+
+	// ⛔ `clone(flags, stack, ptid, ctid, tls)` — x86-64's order. All four pointer arguments are NULL here, so
+	// the AArch64 disagreement about the last two cannot bite; it bites in `mrt_host_thread_create`.
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxCloneExitSignalChild)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxCloneParentStack)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxCloneNoParentTidOut)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxCloneNoChildTidOut)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxCloneNoThreadPointer)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClone)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: cloneFailed)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: childPath)
+
+	// PARENT. Drop the write end so the read below can see EOF, then take the child's verdict.
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpillSlotBytes as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallRead)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	// ⛔ **ONLY A POSITIVE COUNT MEANS THE CHILD SPOKE.** 0 is the EOF a successful `execve` produces through
+	// the close-on-exec pipe; a NEGATIVE is the read's own failure (`EINTR`), and treating either as a verdict
+	// would publish `SlotStatusWord` — which the child never wrote — as the spawn's errno.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: spawned)
+
+	// The child could not exec. Reap it — it is already exiting, so this cannot block — publish the reason it
+	// sent, and answer the null handle that IS this op's failure report.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxReapUntilItExits)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixReapDiscardsRusage)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallWait4)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: spawnFailed)
+
+	// The clone itself failed: close both ends of a pipe no child will ever hold, then report as above. The
+	// reason has to be carried across the two closes, each of which writes rax.
+	asm.placeLabel(cloneFailed)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), wide: true)
+
+	// spawnFailed: rax holds the `-errno` of whichever call failed. Publish it where `mrt_host_last_error`
+	// reads it and leave a ZERO `hProcess`, which is the Std tier's own spawn-failure test.
+	asm.placeLabel(spawnFailed)
+	x64LinuxEmitStashErrno(asm)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixNoProcessHandle)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: PosixNoProcessId)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
+
+	// The caller-built-environment refusal joins the failure arm at its publishing point. Reached only from
+	// the guard at the top of this chunk, so it holds no pipe and no child to clean up.
+	asm.placeLabel(callerBuiltEnv)
+	x64LinuxEmitPublishErrno(asm, value: LinuxErrnoNotSupported)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixNoProcessHandle)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: PosixNoProcessId)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
+
+	asm.placeLabel(spawned)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixWaitKindProcess)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), srcReg: X64Register.rax)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: PosixWaitOffChildPid as Imm32, srcReg: X64Register.r9)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
+
+	// ⛔ THE CHILD. From here to the `execve` nothing but raw syscalls runs — no allocation, no lock, no call
+	// into anything the scheduler owns — which is the whole of what "async-signal-safe between fork and exec"
+	// asks for. It never falls out of this block: a successful `execve` does not return, and a failed one ends
+	// in `exit`, which is why `published` below can sit under it.
+	asm.placeLabel(childPath)
+	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdInputOffset as Imm32, childDescriptor: PosixChildStdinFd)
+	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdOutputOffset as Imm32, childDescriptor: PosixChildStdoutFd)
+	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdErrorOffset as Imm32, childDescriptor: PosixChildStderrFd)
+
+	// `DETACHED_PROCESS` ⇒ `setsid()`, which is what `POSIX_SPAWN_SETSID` asks the Darwin lane's spawnattr
+	// for: a detached child gets its own SESSION and outlives the parent's terminal.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rax, imm: DetachedProcess as Imm32)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noSession)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallSetsid)
+
+	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of a `chdir`.
+	asm.placeLabel(noSession)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: inheritCwd)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallChdir)
+
+	// `execve(argv[0], argv, envp)`. The environment is the vector the entry stub captured — this is
+	// `lpEnvironment = NULL`'s meaning, the parent's environment, and the same one `mrt_host_env_read` walks.
+	asm.placeLabel(inheritCwd)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotArgv), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rsi, disp: 0, wide: true)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdx, label: LinuxEnvpLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rdx, disp: 0, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallExecve)
+
+	// The exec failed. Send the parent the `-errno` the kernel just answered and stop.
+	//
+	// ⛔ **`exit` (60) AND NOT `exit_group` (231).** They are a whole process apart in meaning, and a child
+	// that shares nothing with its parent still shares that call's NAME with the one the entry stub uses to
+	// end the WHOLE program.
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpillSlotBytes as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallWrite)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxExecFailedExitCode)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallExit)
+	asm.code.push(OpcodeInt3)
+
+	// published: r8 = hProcess, r9 = dwProcessId. Both arms arrive with the pair already chosen, so the three
+	// stores that fill the record are written once.
+	asm.placeLabel(published)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoHProcessOffset as Imm32, srcReg: X64Register.r8)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixNoThreadHandle)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoHThreadOffset as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: ProcInfoDwProcessIdOffset as Imm32, srcReg: X64Register.r9)
+
+	return asm.finishFunction(HostSpawnName)
+end 'buildX64LinuxSpawnChunk'
+
+// The two arguments past the Win64 register file, in the order `StdOp.osProcessSpawn` names its operands.
+// Named because the WRITER (`StdToX64Conversion.lowerOsProcessSpawnLinux`) and the READER above are in
+// different files and a bare 0 and 1 at two sites is the one fact that pair must agree on.
+export let SpawnProcInfoIncomingSlot = 0 as StackSize
+export let SpawnEnvironmentIncomingSlot = 1 as StackSize
+
+// `dup3(startup->handle, childDescriptor, 0)` — one of the three the child emits, and the whole of what
+// `posix_spawn_file_actions_adddup2` does on the Darwin lane. See `LinuxDup3NoFlags` for the zero, for why
+// the equal-descriptor guard below is required, and for why the handle is untagged first.
+function emitX64LinuxChildDup3(asm X64RuntimeAsm, startupSlot StackSize, handleOffset Imm32, childDescriptor MachineWord)
+	let alreadyThere = asm.newLabel()
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(startupSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rdi, disp: handleOffset, wide: true)
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rdi)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: childDescriptor)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdi, src: X64Register.rsi, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: alreadyThere)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxDup3NoFlags)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallDup3)
+
+	asm.placeLabel(alreadyThere)
+end 'emitX64LinuxChildDup3'
+
+// ==========================================================================
 // Assembly
 // ==========================================================================
 
 // ⭐ **ONE BIT, TWO TIERS.** Every gate below is the SAME `RuntimeUsage` bit the Std-tier installer that
 // emits the calls was gated on, so a `call` into an absent chunk is unreachable rather than merely
 // unlikely — the arrangement `appendArm64LinuxRuntimeChunks` states at length.
-//
-// ⚠ **THE SUBPROCESS AND GREEN-THREAD PRODUCERS THAT WIDEN THE arm64-LINUX GATES ARE ABSENT HERE**, so the
-// unions that file carries (`usesIocp` on the open, the write and the read) collapse to the file bit
-// alone: `TargetFacilities` still answers `false` for `subprocess` and `greenThreads` on this lane, and
-// E3104 refuses such a program at its own span long before this list is built.
 export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage)
 	assertLinuxSearchGeometry()
 
@@ -1864,7 +3478,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxCpuCountChunk())
 	end 'cpuCount'
 
-	if x64LinuxUsesHostSurface(usage) 'lastError'
+	if linuxUsesHostSurface(usage) 'lastError'
 		chunks.push(buildX64LinuxLastErrorChunk())
 	end 'lastError'
 
@@ -1874,12 +3488,54 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxHandleFileTypeChunk())
 	end 'terminalDetection'
 
-	// The environment read rides the UNION of `osEnvRead`'s two producers (`posixReadsEnvironment`). On this
-	// lane `usesGt` cannot be set — `greenThreads` is `false` here — so it is the terminal detector alone that
-	// makes it, and the union is what keeps the gate true when the scheduler lands.
+	// The environment read rides the UNION of `osEnvRead`'s two producers (`posixReadsEnvironment`), because
+	// a terminal-detecting program need not have a scheduler and a green-thread one need not detect a
+	// terminal — and both emit the op.
 	if posixReadsEnvironment(usage) 'envRead'
 		chunks.push(buildX64LinuxEnvReadChunk())
 	end 'envRead'
+
+	// ⭐ **L4 — THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated
+	// on, so every body that can `call` one of these is built under exactly the same condition — one bit, two
+	// tiers, which is what makes a call into an absent chunk unreachable rather than merely unlikely. They are
+	// NOT split finer: the P's wake event, the run-queue lock, the per-thread slot, the monotonic clock, the
+	// OS-thread park and the `MAXON_MAX_PROCS` read are all reached from `__sched_init_procs` and `__gt_init`,
+	// which a green-thread program always installs together.
+	if usage.usesGt 'greenThreadFloor'
+		chunks.push(buildX64LinuxMonotonicClockChunk())
+		chunks.push(buildX64LinuxSleepMsChunk())
+		chunks.push(buildX64LinuxWaitNewChunk())
+		chunks.push(buildX64LinuxEventSetChunk())
+		chunks.push(buildX64LinuxWaitOneChunk())
+		chunks.push(buildX64LinuxWaitCloseChunk())
+		chunks.push(buildX64LinuxLockInitChunk())
+		chunks.push(buildX64LinuxLockEnterChunk())
+		chunks.push(buildX64LinuxLockLeaveChunk())
+		chunks.push(buildX64LinuxThreadCreateChunk())
+		chunks.push(buildX64LinuxTlsAllocChunk())
+		chunks.push(buildX64LinuxTlsSetChunk())
+		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
+		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, an
+		// exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that never runs
+		// a child — so a narrower gate here is a call to a symbol nothing laid out, which is a link failure
+		// rather than a diagnostic.
+		chunks.push(buildX64LinuxProcReapChunk())
+		chunks.push(buildX64LinuxProcAwaitChunk())
+		chunks.push(buildX64LinuxWaitAnyChunk())
+		chunks.push(buildX64LinuxSpawnChunk())
+		chunks.push(buildX64LinuxProcExitCodeChunk())
+	end 'greenThreadFloor'
+
+	// ⭐ **THE PIPE SURFACE AND THE DEADLINE, WHICH REALLY ARE NARROWER.** `usesIocp` is the bit
+	// `installGtRuntime` builds the pipe substrate under (`__gt_io_read` and `__gt_subp_yield_read`), and
+	// `usesStreaming` implies it — so a program that spawns a child WITHOUT reading from it pays for none of
+	// these. `osPipePeek`, `osProcessTerminate` and `osTickCountMs` have producers only inside that band.
+	if usage.usesIocp 'childPipes'
+		chunks.push(buildX64LinuxPipeChunk())
+		chunks.push(buildX64LinuxPipePeekChunk())
+		chunks.push(buildX64LinuxProcTerminateChunk())
+		chunks.push(buildX64LinuxTickMsChunk())
+	end 'childPipes'
 
 	if usesFilesystem 'filesystem'
 		chunks.push(buildX64LinuxBaseNameChunk())
@@ -1890,28 +3546,52 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxDirFindFirstChunk())
 		chunks.push(buildX64LinuxDirFindNextChunk())
 		chunks.push(buildX64LinuxDirFindCloseChunk())
-		chunks.push(buildX64LinuxAttrsFromModeChunk(x64LinuxStatLayout()))
 	end 'filesystem'
 
-	if usage.usesManagedFile 'managedFile'
+	// ⚠ **THE OPEN HAS A SECOND PRODUCER, AND IT IS NOT A `File` CALL.** `GtRuntime`'s file-backed stdio arm
+	// emits `osFileOpenRead`/`osFileOpenWrite` for a subprocess stream redirected to a path, so a program
+	// that touches no `File` still branches here.
+	if usage.usesManagedFile or usage.usesIocp 'fileOpen'
 		chunks.push(buildX64LinuxFileOpenChunk())
+	end 'fileOpen'
+
+	if usage.usesManagedFile 'managedFile'
 		chunks.push(buildX64LinuxFileSizeChunk())
 		chunks.push(buildX64LinuxPathOpChunk(HostFileDeleteName, syscallNumber: X64LinuxSyscallUnlinkat, thirdArgument: LinuxUnlinkFileFlags))
 		chunks.push(buildX64LinuxFileRenameChunk())
-		chunks.push(buildX64LinuxTransferChunk(HostWriteFileName, syscallNumber: X64LinuxSyscallWrite))
 	end 'managedFile'
 
-	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS TWO PRODUCERS.** `__mf_read` and
-	// `__con_read_stdin` emit the identical op — standard input is a descriptor like any other here — so
-	// gating it on `usesManagedFile` alone would leave a stdin-only program calling a symbol nothing
-	// emitted, and pushing it under both bits would lay the same symbol out twice.
-	if usage.usesManagedFile or usage.usesConsoleStdin 'transferIn'
+	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's stdin
+	// pipe, so the write half rides the same union its read twin does.
+	if usage.usesManagedFile or usage.usesIocp 'managedFileWrite'
+		chunks.push(buildX64LinuxTransferChunk(HostWriteFileName, syscallNumber: X64LinuxSyscallWrite))
+	end 'managedFileWrite'
+
+	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS THREE PRODUCERS.** `__mf_read`,
+	// `__con_read_stdin` and `__gt_subp_yield_read` emit the identical op — standard input and a pipe are
+	// descriptors like any other here — so gating it on `usesManagedFile` alone would leave a stdin-only
+	// program calling a symbol nothing emitted, and pushing it under each bit would lay the same symbol out
+	// more than once.
+	if usage.usesManagedFile or usage.usesConsoleStdin or usage.usesIocp 'transferIn'
 		chunks.push(buildX64LinuxTransferChunk(HostReadFileName, syscallNumber: X64LinuxSyscallRead))
 	end 'transferIn'
 
 	if usage.usesManagedDirectory 'managedDirectory'
 		chunks.push(buildX64LinuxPathOpChunk(HostDirCreateName, syscallNumber: X64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord))
 		chunks.push(buildX64LinuxDirCurrentPathChunk())
-		chunks.push(buildX64LinuxFileAttributesChunk())
 	end 'managedDirectory'
+
+	// The mode→attribute-mask decoder is called by BOTH `mrt_host_fill_find_data` (the filesystem cluster
+	// above) and `mrt_host_file_attributes` (below), so its gate is the union of theirs — which is what lifts
+	// it out of the cluster it used to sit inside.
+	if usesFilesystem or usage.usesIocp 'attrsFromMode'
+		chunks.push(buildX64LinuxAttrsFromModeChunk(x64LinuxStatLayout()))
+	end 'attrsFromMode'
+
+	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AND IT IS NOT A DIRECTORY OP.** `__gt_subp_resolve_path`
+	// walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the executable lookup needs this
+	// chunk with no `Directory` call anywhere in the program.
+	if usage.usesManagedDirectory or usage.usesIocp 'fileAttributes'
+		chunks.push(buildX64LinuxFileAttributesChunk())
+	end 'fileAttributes'
 end 'appendX64LinuxHostSurfaceChunks'

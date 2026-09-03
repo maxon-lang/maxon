@@ -161,10 +161,24 @@ let Arm64OpMrsTpidrro = 0xD53BD060
 let Arm64OpMrsTpidr = 0xD53BD040
 let Arm64OpMsrTpidr = 0xD51BD040
 
-// `LDR Xt, [Xn, Xm, LSL #0]` — the register-offset 64-bit load (size=11, opc=01, option=011 LSL, S=0).
-// MAC3's Darwin TSD read is its only producer; every other access in this compiler has an immediate
-// displacement.
-let Arm64OpLdrRegOffset = 0xF8606800
+// ⭐ **THE REGISTER-OFFSET LOAD/STORE BAND — `<op> Rt, [Xn, Xm, LSL #k]`** (size in bits 31:30, V in
+// bit 26, opc in 23:22, `option` = 011 LSL, `S` in bit 12). Six words: the 64-bit GPR pair, the 64-bit
+// SIMD pair and the byte pair, differing only in those fields.
+//
+// ⛔ **`S` IS ONE BIT, AND THAT IS THE WHOLE SHAPE OF WHAT THIS FORM CAN ADDRESS.** It selects a shift
+// of 0 or exactly log2(the access size) — there is no `LSL #1` under a 64-bit access — and the encoding
+// carries NO displacement field (the imm12 belongs to the immediate-offset form, which has no index
+// register). Both facts are the ISEL's admission rule, stated once in
+// `StdLoweringShared.indexedFormCarries` and asserted here.
+let Arm64OpLdrRegOffsetX = 0xF8606800
+let Arm64OpStrRegOffsetX = 0xF8206800
+let Arm64OpLdrRegOffsetD = 0xFC606800
+let Arm64OpStrRegOffsetD = 0xFC206800
+let Arm64OpLdrRegOffsetB = 0x38606800
+let Arm64OpStrRegOffsetB = 0x38206800
+
+// The `S` bit (12): set, the index is shifted by log2(the access size); clear, not shifted at all.
+let Arm64RegOffsetScaleBit = 0x1000
 
 // `CSEL Xd, Xn, Xm, cond` (64-bit). The condition rides bits 15..12 — `Arm64CondFieldShift`, the same field
 // the `FCSEL` and `CSINC` forms below carry it in.
@@ -354,9 +368,9 @@ export let Arm64OpLdrB = 0x39400000
 let Arm64LoadStoreImm12Shift = 10
 let Arm64LoadStoreImm12Mask = 0xFFF
 
-// An `LDRB`/`STRB` transfers one byte, so its imm12 field counts bytes — the scale that makes the byte
-// forms an ordinary case of the scaled builder (`arm64AccessScale`) rather than a hand-written second
-// range check that could come to disagree with the ISEL's predicate.
+// A field that counts BYTES rather than access units — the UNSCALED signed form's simm9 and the byte
+// fill's `STRB`. It is not `accessWidthBytes(byte)` wearing another name: neither site has an access
+// WIDTH to ask about, and the unscaled form counts bytes at every width.
 let Arm64ByteAccessScale = 1
 
 // Unscaled signed-offset forms (STUR/LDUR, simm9 at bit 12, ±256). Below the 256-byte threshold a
@@ -751,6 +765,63 @@ end 'arm64EmitAddSubImm12'
 export function arm64ImmIsEncodableAddSub(imm Imm32) returns bool
 	return arm64AddSubImmMagnitude(imm) <= Arm64AddSubImmWideMax
 end 'arm64ImmIsEncodableAddSub'
+
+// ⭐⭐ **THE CONSTANT MULTIPLIERS AArch64 SPELLS WITHOUT A MULTIPLY.** AArch64 has no `MUL` immediate
+// form at all, so a constant multiplier otherwise costs a `movz`/`movk` ladder into the IP scratch plus
+// a register `MUL` — two instructions and a scratch clobber for what x64 does in one `imul r64, r/m64,
+// imm32`. Two shapes escape that:
+//   • `x * 2^k`       — `LSL Xd, Xn, #k`, one instruction and no scratch.
+//   • `x * (2^k + 1)` — `ADD Xd, Xn, Xn, LSL #k`, the shifted-register add `arm64AddLsl` already
+//     carries, with `base` and `index` naming the same register. Its shift rides `MemoryIndexScale`'s
+//     two-bit field, so this arm reaches ×3, ×5 and ×9 and stops — a wider shift would be a claim
+//     about a field that does not hold it (see the enum).
+//
+// ⛔ **IT IS AN INSTRUCTION CHOICE, NOT AN ADMISSION RULE, AND THE DIFFERENCE IS MEASURED.** Narrowing
+// `foldConstOperands` to only the multipliers this admits looks like the matching move and is a
+// PESSIMIZATION: a `const` is deliberately never CSE'd and never hoisted (both passes' headers say so),
+// precisely BECAUSE the fold has already turned it into an immediate — so a constant the fold refuses
+// is stranded at every use site. Measured on `common-subexpression-elimination/a-repeated-expression-
+// is-computed-once`, three `x * 31` stopped collapsing to one (5 ops became 11), and on
+// `loop-invariant-code-motion/an-invariant-computation-leaves-the-loop` the hoisted multiply fell back
+// into the loop body. The fold hands every `Imm32` to every target; this decides only what to emit.
+export enum Arm64MulImmForm
+	// No one-instruction form: materialise the multiplier and use the register `MUL`.
+	registerMultiply
+	shiftLeft
+	addShifted
+end 'Arm64MulImmForm'
+
+// The smallest `2^k + 1` with a nonzero shift. Below it, `imm - 1` is 0 or 1 — neither a shift this
+// form can carry — and the subtraction itself would be the one that leaves the `Imm32` domain.
+let Arm64AddShiftedMulMin = 3 as Imm32
+
+// `scale` is the caller's `MemoryIndexScaleMatch`, written on the `addShifted` arm alone — a
+// caller-owned record for that type's own measured reason, since this is asked at every constant
+// multiply the backend lowers.
+export function arm64MulImmForm(imm Imm32, scale MemoryIndexScaleMatch) returns Arm64MulImmForm
+	if log2OfPowerOfTwo(imm) != NotAPowerOfTwo 'shiftLeft'
+		return Arm64MulImmForm.shiftLeft
+	end 'shiftLeft'
+
+	// The shifted-register add's OWN factor door decides which `k` its field holds, so this arm's
+	// reach IS `MemoryIndexScale`'s case list rather than a bound restated beside it.
+	if imm >= Arm64AddShiftedMulMin and memoryIndexScaleOfFactor(imm - 1, scale: scale) 'addShifted'
+		return Arm64MulImmForm.addShifted
+	end 'addShifted'
+
+	return Arm64MulImmForm.registerMultiply
+end 'arm64MulImmForm'
+
+// The `LSL` count the `shiftLeft` answer names — the same `log2OfPowerOfTwo` that classified the
+// multiplier, asked again where the operand is needed rather than carried on a record the other two
+// arms have no use for. The panic is the caller's obligation, not a reachable diagnostic.
+export function arm64MulImmShiftCount(imm Imm32) returns ShiftCount
+	let shift = log2OfPowerOfTwo(imm)
+	if shift == NotAPowerOfTwo 'notAShift'
+		panic("arm64MulImmShiftCount: {imm} is not a power of two — ask `arm64MulImmForm` first, and read this only for its `shiftLeft` answer")
+	end 'notAShift'
+	return shift as ShiftCount
+end 'arm64MulImmShiftCount'
 
 // The MAGNITUDE of a signed ADD/SUB immediate — the number the imm12 fields actually carry, because
 // the SIGN rides the OPCODE here rather than the field: a negative literal on the ADD side is a SUB
@@ -1150,17 +1221,6 @@ function arm64ScaledImm12(byteOffset MachineWord, scale MachineWord) returns Mac
 	return byteOffset / s
 end 'arm64ScaledImm12'
 
-// The byte-offset SCALE of a `[base + disp]` data access at this width: `LDRB`/`STRB` scale by 1, the
-// 64-bit forms by 8. The ONE place the two widths' scales are named — the ISEL's "does this offset have
-// a direct form" predicate and the encoders below both read it, so the reach they agree on is one fact.
-function arm64AccessScale(width X64AccessWidth) returns MachineWord
-	let scale = match width 'w'
-		byte gives Arm64ByteAccessScale
-		word64 gives SpillSlotBytes
-	end 'w'
-	return scale
-end 'arm64AccessScale'
-
 // Whether a `[base + disp]` data access at this width has a DIRECT scaled form — the offset is
 // non-negative, scale-aligned, and its scaled value fits the 12-bit field. That reaches 4095 bytes for a
 // byte access and 32760 for a 64-bit one, and NOTHING between there and the `Imm32` a Std
@@ -1180,7 +1240,7 @@ export function arm64DispHasScaledForm(disp Imm32, width X64AccessWidth) returns
 		return false
 	end 'negative'
 
-	return arm64ByteOffsetFitsScaledImm12(disp as MachineWord, scale: arm64AccessScale(width) as NonZeroWord)
+	return arm64ByteOffsetFitsScaledImm12(disp as MachineWord, scale: accessWidthBytes(width) as NonZeroWord)
 end 'arm64DispHasScaledForm'
 
 // A `[base + disp]` load at the op's width (the data-section access forms). A `word64` load moves
@@ -1194,7 +1254,7 @@ end 'arm64DispHasScaledForm'
 function arm64EmitDataLoad(code ByteArray, dest TargetVReg, base MachineWord, disp Imm32, width X64AccessWidth)
 	let byteOffset = arm64NonNegDisp(disp)
 	match width 'w'
-		byte then arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: arm64AccessScale(width))
+		byte then arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width))
 		word64 then arm64EmitWord64Load(code, dest: dest, base: base, byteOffset: byteOffset)
 	end 'w'
 end 'arm64EmitDataLoad'
@@ -1202,7 +1262,7 @@ end 'arm64EmitDataLoad'
 function arm64EmitDataStore(code ByteArray, base MachineWord, disp Imm32, src TargetVReg, width X64AccessWidth)
 	let byteOffset = arm64NonNegDisp(disp)
 	match width 'w'
-		byte then arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: arm64AccessScale(width))
+		byte then arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width))
 		word64 then arm64EmitWord64Store(code, base: base, byteOffset: byteOffset, src: src)
 	end 'w'
 end 'arm64EmitDataStore'
@@ -1224,6 +1284,56 @@ function arm64EmitWord64Store(code ByteArray, base MachineWord, byteOffset Machi
 		arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: arm64FpField(src), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
 	end 'fp'
 end 'arm64EmitWord64Store'
+
+// ⭐ EC16's memory half on arm64: `<op> Rt, [Xn, Xm, LSL #k]`, the whole of a `base + index*scale`
+// element access in one instruction. Class-dispatched on the transferred register exactly as
+// `arm64EmitWord64Load` is — a `word64` element is `LDR Xt` in a GPR and `LDR Dt` in a SIMD register,
+// the same 64 bits either way.
+function arm64EmitIndexedLoad(code ByteArray, dest TargetVReg, base MachineWord, index MachineWord, scale MemoryIndexScale, disp Imm32, width X64AccessWidth)
+	let scaleBit = arm64IndexedScaleBit(scale, width: width, disp: disp)
+	match width 'w'
+		byte then arm64EmitRegOffsetMem(code, opcode: Arm64OpLdrRegOffsetB, scaleBit: scaleBit, rt: arm64GprField(dest), base: base, index: index)
+		word64 then arm64EmitIndexedWord64(code, gprOpcode: Arm64OpLdrRegOffsetX, fpOpcode: Arm64OpLdrRegOffsetD, scaleBit: scaleBit, reg: dest, base: base, index: index)
+	end 'w'
+end 'arm64EmitIndexedLoad'
+
+function arm64EmitIndexedStore(code ByteArray, base MachineWord, index MachineWord, scale MemoryIndexScale, disp Imm32, src TargetVReg, width X64AccessWidth)
+	let scaleBit = arm64IndexedScaleBit(scale, width: width, disp: disp)
+	match width 'w'
+		byte then arm64EmitRegOffsetMem(code, opcode: Arm64OpStrRegOffsetB, scaleBit: scaleBit, rt: arm64GprField(src), base: base, index: index)
+		word64 then arm64EmitIndexedWord64(code, gprOpcode: Arm64OpStrRegOffsetX, fpOpcode: Arm64OpStrRegOffsetD, scaleBit: scaleBit, reg: src, base: base, index: index)
+	end 'w'
+end 'arm64EmitIndexedStore'
+
+// The 64-bit class dispatch both directions share: which opcode and which register FILE the transfer
+// register is named through. Load and store differ only in the opcode pair, so the choice is made once.
+function arm64EmitIndexedWord64(code ByteArray, gprOpcode MachineWord, fpOpcode MachineWord, scaleBit MachineWord, reg TargetVReg, base MachineWord, index MachineWord)
+	if arm64VRegIsGpr(reg) 'gpr'
+		arm64EmitRegOffsetMem(code, opcode: gprOpcode, scaleBit: scaleBit, rt: arm64GprField(reg), base: base, index: index)
+	end 'gpr' else 'fp'
+		arm64EmitRegOffsetMem(code, opcode: fpOpcode, scaleBit: scaleBit, rt: arm64FpField(reg), base: base, index: index)
+	end 'fp'
+end 'arm64EmitIndexedWord64'
+
+function arm64EmitRegOffsetMem(code ByteArray, opcode MachineWord, scaleBit MachineWord, rt MachineWord, base MachineWord, index MachineWord)
+	emitArm64Insn(code, insn: opcode or scaleBit or (index shl Arm64RmShift) or (base shl Arm64RnShift) or rt)
+end 'arm64EmitRegOffsetMem'
+
+// The `S` bit this indexed access needs, and the ASSERTION of the two obligations its ISEL owes —
+// `arm64ScaledImm12`'s pairing, one band down. Neither panic is a reachable diagnostic:
+// `StdLoweringShared.indexedFormCarries` declines the memory fold for an address this form cannot
+// hold, and the access then reads an ordinary `arm64AddLsl` result. Masking either condition away
+// would encode the WRONG ADDRESS with nothing anywhere to notice.
+function arm64IndexedScaleBit(scale MemoryIndexScale, width X64AccessWidth, disp Imm32) returns MachineWord
+	if memoryIndexScaleFactor(scale) != accessWidthBytes(width) 'noSuchShift'
+		panic("arm64 emitter: an indexed access at scale {memoryIndexScaleFactor(scale)} and width {width.name} has no register-offset form — the `S` bit selects a shift of 0 or exactly log2(the access size), and the ISEL must have declined the memory fold (StdLoweringShared.indexedFormCarries)")
+	end 'noSuchShift'
+	if disp != 0 'noDisplacementField'
+		panic("arm64 emitter: an indexed access at displacement {disp} has no register-offset form — that encoding carries no displacement field at all, and the ISEL must have declined the memory fold (StdLoweringShared.indexedFormCarries)")
+	end 'noDisplacementField'
+
+	return Arm64RegOffsetScaleBit if memoryIndexScaleShift(scale) != 0 else 0
+end 'arm64IndexedScaleBit'
 
 function arm64NonNegDisp(disp Imm32) returns MachineWord
 	if disp < 0 'neg'
@@ -1509,9 +1619,13 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64ThreadPointer(dest, source) then arm64EmitThreadPointer(code, dest: arm64GprField(dest), source: source)
 		// x64's atomics never reach the arm64 encoder, exactly as its fill ladder and jump table do not.
 		x64LockCmpxchg to x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
-		// EC16 — x64's scaled-index band. arm64 spells the same address as `arm64AddLsl` below, and has no
-		// equivalent of the indexed load/store here at all (see `TargetDialect.arm64AddLsl`).
-		leaRegBaseIndexScale to storeBaseIndexScaleReg then panic("emitArm64TargetOp: an x64 scaled-index address or access reached the arm64 encoder — arm64's scaled-index address is `arm64AddLsl`, and its loads and stores carry no index")
+		// EC16 — the scaled-index band. The ADDRESS op is per-ISA (x64 spells `+` as a `lea`, arm64 as an
+		// `add`), so `leaRegBaseIndexScale` never reaches here; the two ACCESSES are SHARED, exactly as
+		// `loadRegBaseDisp`/`storeBaseDispReg` are, with each ISA's encoder covering the addresses its own
+		// form can hold (see `TargetDialect.loadRegBaseIndexScale`).
+		leaRegBaseIndexScale then panic("emitArm64TargetOp: an x64 scaled-index ADDRESS reached the arm64 encoder — arm64 spells `base + index*scale` as `arm64AddLsl`, a shifted-register add rather than a `lea`")
+		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then arm64EmitIndexedLoad(code, dest: dest, base: arm64GprField(base), index: arm64GprField(index), scale: scale, disp: disp, width: width)
+		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then arm64EmitIndexedStore(code, base: arm64GprField(base), index: arm64GprField(index), scale: scale, disp: disp, src: src, width: width)
 		// `ADD Xd, Xn, Xm, LSL #amount` — the shifted-register form of the `add` one band up, and the same
 		// three-register emitter: the shift amount is a FIELD of the opcode word (bits 15-10), not a fourth
 		// operand, so nothing about the register encoding changes.
@@ -1995,10 +2109,12 @@ export function arm64EmitBranchLinkReg(code ByteArray, reg MachineWord)
 end 'arm64EmitBranchLinkReg'
 
 // `LDR Xt, [Xn, Xm]` — a 64-bit load at a REGISTER offset (option=LSL, S=0, so the index is unscaled bytes).
-// The one access in this compiler whose displacement is not an immediate: Darwin's TSD read indexes the
-// thread pointer by a per-thread slot offset the program computed at run time (`lowerTlsSlotLoad`).
+// Darwin's TSD read indexes the thread pointer by a per-thread slot offset the program computed at run
+// time (`lowerTlsSlotLoad`), so the index is a register and the shift is none. The ISEL's own indexed
+// accesses share the encoding through `arm64EmitRegOffsetMem`; this one is a runtime chunk's, which
+// names raw register numbers rather than `TargetVReg`s.
 export function arm64EmitLoadRegOffset(code ByteArray, dest MachineWord, base MachineWord, index MachineWord)
-	emitArm64Insn(code, insn: Arm64OpLdrRegOffset or (index shl Arm64RmShift) or (base shl Arm64RnShift) or dest)
+	emitArm64Insn(code, insn: Arm64OpLdrRegOffsetX or (index shl Arm64RmShift) or (base shl Arm64RnShift) or dest)
 end 'arm64EmitLoadRegOffset'
 
 // `CSEL Xd, Xn, Xm, cond` — Xd = cond ? Xn : Xm, branchlessly. The TSD read's pre-initialisation gate uses it

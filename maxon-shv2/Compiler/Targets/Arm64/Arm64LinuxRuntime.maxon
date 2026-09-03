@@ -189,49 +189,6 @@ let Arm64LinuxSyscallExecve = 221
 let Arm64LinuxSyscallWait4 = 260
 let Arm64LinuxSyscallChdir = 49
 
-// ⭐ **THE FUTEX OPERATIONS, IN THEIR PRIVATE FORMS.** `FUTEX_WAIT` is 0 and `FUTEX_WAKE` is 1;
-// `FUTEX_PRIVATE_FLAG` is 128 and says the word is never shared across processes, which lets the kernel key
-// its hash bucket on the mm rather than on the physical page. Every futex in this compiler is in an
-// anonymous private mapping or in the program's own `.data`, so the private form is always the right one —
-// and it is measurably cheaper, which is why glibc uses it for exactly these objects.
-let LinuxFutexWaitPrivate = 128
-let LinuxFutexWakePrivate = 129
-
-// ⛔⛔ **THE JOIN's WAIT IS THE *SHARED* `FUTEX_WAIT`, AND THAT IS NOT AN INCONSISTENCY — IT IS THE ONLY
-// SPELLING THE KERNEL's OWN WAKE CAN REACH.** A worker M is joined through the `CLONE_CHILD_CLEARTID` word
-// (`PosixWaitOffThread`), which the KERNEL zeroes and wakes when the thread ends — and it issues that wake
-// with `FLAGS_SHARED`. On an anonymous page a shared key carries `FUT_OFF_MMSHARED` where a private key does
-// not, so the two hash to DIFFERENT buckets and a private waiter is never woken.
-//
-// ⭐ **MEASURED on an aarch64 Ubuntu guest, one C program invoking these syscalls BY NUMBER, one constant
-// changed between the two runs:** with
-// `FUTEX_WAIT_PRIVATE` the joiner slept through the child's exit and the run was killed at its 20 s bound;
-// with this plain `FUTEX_WAIT` it was woken by the FIRST wait and read the cleared word. glibc's
-// `pthread_join` passes `LLL_SHARED` for exactly this reason. Every OTHER futex in this file is woken by a
-// `FUTEX_WAKE_PRIVATE` this compiler emits, so the private form stays right for all of them.
-let LinuxFutexWaitShared = 0
-
-// `FUTEX_WAKE`'s count: ONE waiter. An auto-reset event releases exactly one waiter by its Win32 contract,
-// and the mutex below hands the lock to one successor.
-let LinuxFutexWakeOne = 1
-
-// A NULL `struct timespec *` — `FUTEX_WAIT` with no timeout, i.e. wait until woken.
-let LinuxFutexNoTimeout = 0
-
-// `futex(uaddr, op, val, timeout, uaddr2, val3)`. The last two are meaningless for WAIT and WAKE and MUST
-// still be passed: a `svc` takes six registers whatever the operation reads, and leaving one holding a stale
-// value is how a future requeue-shaped operation would silently pick it up.
-let LinuxFutexUnusedArg = 0
-
-// ⭐⭐ **THE VALUE A `FUTEX_WAIT` EXPECTS, AND WHY IT IS THE UNSIGNALLED STATE RATHER THAN THE SIGNALLED ONE.**
-// `FUTEX_WAIT(uaddr, val)` sleeps only while `*uaddr == val`, and returns `-EAGAIN` immediately otherwise.
-// So the caller passes the state it is waiting to LEAVE: an event waiter passes `PosixWaitNotSignalled`, and
-// a signal that lands between its own test and this call makes the syscall return at once rather than sleep
-// through it. That is the whole lost-wakeup argument, and it is the kernel's rather than this file's.
-//
-// ⚠ The two values themselves are `Arm64PosixRuntime`'s, because the WORD is: the signal field sits at the
-// same offset on both POSIX lanes and a shared body (`mrt_host_proc_reap`) publishes into it.
-
 // ⭐⭐ **THE WAIT OBJECT ON THIS LANE — ONE `mmap`'d PAGE, AND `Arm64PosixRuntime` OWNS EVERY FIELD IN IT.**
 // Darwin's twin carries a `pthread_mutex_t` and a `pthread_cond_t` ABOVE the shared prefix, because a
 // condvar needs a mutex to be correct; a futex needs NEITHER — the compare-and-sleep is atomic inside the
@@ -256,68 +213,6 @@ let LinuxFutexUnusedArg = 0
 //
 // ⚠ **THE PAGE COMES BACK ZERO-FILLED**, which `MAP_ANONYMOUS` guarantees, so the signal word needs no
 // explicit store — unlike Darwin's, whose `malloc` does not zero and which therefore writes every field.
-// ⭐ **ONE PAGE, AND IT IS THE SAME PAGE FOR BOTH HOST OBJECTS THIS FILE MAPS** — a wait object and an OS
-// thread's slot block. Named once because `mmap`'s granularity is what decides it, not either object's
-// contents: a wait object uses two words of it and a slot block as many as the scheduler asks for.
-let LinuxHostObjectPageBytes = 4096
-
-// ⭐⭐ **THE RECURSIVE FUTEX MUTEX `osLockInit` BUILDS INTO THE CALLER'S REGION.**
-//
-// ⛔ **RECURSIVE IS NOT OPTIONAL AND IT WAS MEASURED AS A HANG ON THE OTHER LANE.** A Win32
-// `CRITICAL_SECTION` is re-entrant by its owning thread and `SchedRuntime` relies on it in so many words
-// (*"a nested `LeaveCriticalSection` releases nothing"*); the first arm64-macOS `async` build hung in
-// `__slab_refill` on a NORMAL pthread mutex taken twice down one call chain
-// (`Arm64DarwinRuntime.buildArm64DarwinLockInitChunk` records it). So the same op must mean the same thing
-// here, and a raw futex is not re-entrant — the owner and the depth beside it are what make it so.
-//
-// The three words: a futex at offset 0 (0 = free, 1 = held with no waiter, 2 = held and someone is asleep on
-// it), the owning thread's `gettid`, and how many times that owner has taken it.
-//
-// ⚠ **THE OWNER WORD IS READ WITHOUT SYNCHRONISATION AND THAT IS SOUND**, for a reason that does not
-// generalise: the only value a thread can act on is ITS OWN tid, and no other thread can write that there —
-// a non-owner reads 0 or somebody else's tid, and both send it to the acquire path.
-let LinuxLockOffFutex = 0x00 as MachineWord
-let LinuxLockOffOwner = 0x08 as MachineWord
-let LinuxLockOffDepth = 0x10 as MachineWord
-
-// The three states of the futex word above, named because a bare 2 at a `cas` site says nothing about which
-// of this file's several 2s it is.
-let LinuxMutexFree = 0
-let LinuxMutexHeld = 1
-let LinuxMutexHeldContended = 2
-
-// The depth an outermost acquire records, and the value `atomicRmw`'s DISPLACED word carries when the
-// release was the last one and nobody was asleep.
-let LinuxMutexFirstEntry = 1
-
-// `atomicRmw(add)` with this operand is the release decrement: it answers the word it DISPLACED, which is
-// what says whether a waiter has to be woken (`LinuxMutexHeldContended`) or not (`LinuxMutexHeld`).
-let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF
-
-// ⭐⭐ **THIS LANE'S PER-OS-THREAD SLOT BLOCK, AND `TPIDR_EL0` IS ITS BASE.** A static image links no libc, so
-// there is no `pthread_getspecific` to call and no TSD array to index — and by the same token NOTHING ELSE
-// READS OR WRITES THE WRITABLE THREAD POINTER, which makes it free for the scheduler to define. One page per
-// OS thread, `mmap`'d by `mrt_host_tls_alloc` the first time that thread asks for a slot.
-//
-// ⚠ **KEY 0 IS NEVER HANDED OUT, EXACTLY AS ON DARWIN, AND FOR THE SAME REASON.** The Std tier publishes
-// `key * 8 + tlsSlotArrayBase(target)` and every reader treats a ZERO offset as *"`__sched_init_procs` has
-// not run"*; the base is 0 here, so a key of 0 would make that offset 0 and every current-P read in the
-// program would answer NULL for ever — a scheduler that silently never runs. The counter below therefore
-// pre-increments, and the chunk asserts the result rather than trusting the arithmetic.
-// How many keys one block holds — DERIVED from the page and the slot width, and a FUNCTION rather than a
-// `let` for `runtimeFrameSlots`' language reason: a global initializer folds `/` as a float.
-function linuxTlsSlotCount() returns ParsedInt
-	return LinuxHostObjectPageBytes / SpillSlotBytes
-end 'linuxTlsSlotCount'
-
-// The first key handed out, and the reason the counter pre-increments — see the block above.
-//
-// ⭐ **SLOT 0 IS NOT MERELY UNISSUED, IT IS THIS THREAD's `errno`** (`arm64LinuxEmitErrnoAddr`). The two
-// reasons stack rather than compete: a key of 0 would publish a slot offset of 0, which every current-P
-// reader treats as *"the scheduler has not started"*, and the word that offset addresses is already spoken
-// for.
-let LinuxTlsFirstKey = 1
-
 // ⛔⛔ **`O_DIRECTORY` IS 0o40000 ON AArch64, NOT THE 0o200000 EVERY asm-generic TABLE SHOWS.**
 // `arch/arm64/include/uapi/asm/fcntl.h` OVERRIDES four flags before including the generic header — for
 // AArch32 compat — and shifts them all down: `O_DIRECTORY` 040000, `O_NOFOLLOW` 0100000, `O_DIRECT` 0200000,
@@ -332,12 +227,6 @@ let LinuxTlsFirstKey = 1
 // (`emitMacosOpenFlagXlateArm64`) records `O_DIRECTORY 0x10000` for this very architecture. It is wrong, and
 // it is wrong in the one file this port reads its syscall numbers from.
 let Arm64LinuxOpenDirectoryFlags = 0o40000
-
-// `ENOTSUP` (`EOPNOTSUPP`) — 95 on Linux and 45 on Darwin, so it is per-lane for `LinuxErrnoNameTooLong`'s
-// reason and cannot join the five in `Targets/Shared/PosixRuntime`. Like `Arm64DarwinRuntime`'s twin it is PUBLISHED
-// rather than read: `mrt_host_spawn` answers it for a caller-built environment block, a shape this lane has
-// no conversion for either. See that chunk's own note.
-let LinuxErrnoNotSupported = 95
 
 // ==========================================================================
 // The errno word
@@ -367,20 +256,6 @@ let LinuxErrnoNotSupported = 95
 // once `mrt_host_tls_alloc` has published a block for a thread, that thread never writes here again, and
 // `__sched_init_procs` (which allocates the scheduler's key) is the same bring-up no worker M can race.
 
-// ⭐ **THE THREE VERBS ONLY THIS LANE SPELLS AS A CHUNK, SO THEY KEEP THE LANE'S INFIX.**
-// `Targets/Shared/PosixRuntime`'s header states the rule: a name goes under the shared `mrt_host_` prefix
-// when the VERB is a shared host-surface verb served by every lane. These three are not — on macOS `osLockEnter` and
-// `osLockLeave` are a bare `pthread_mutex_lock`/`_unlock` import with no chunk at all, and `tlsSetValue` is
-// one `pthread_setspecific`. Only a raw static image needs a body, and a body one lane builds wears that
-// lane's name, exactly as `mrt_linux_glob_match` does.
-export let LinuxLockEnterName = b"mrt_linux_lock_enter"
-export let LinuxLockLeaveName = b"mrt_linux_lock_leave"
-export let LinuxTlsSetName = b"mrt_linux_tls_set"
-
-// The per-OS-thread slot counter `mrt_host_tls_alloc` hands out of. (The environment vector's word is
-// `LinuxRuntime.LinuxEnvpLabel` — both lanes capture it, so it is not this one's to declare.)
-let LinuxTlsNextKeyLabel = b"__mrt_tls_next_key"
-
 // The `.data` slot this lane lays out. Gated on the FACILITIES that stash into it rather than on the target
 // alone: a Linux program that touches no file, no directory and no standard input never writes the word, so
 // it does not carry it.
@@ -394,52 +269,13 @@ export function arm64LinuxRuntimeGlobals(usage RuntimeUsage, target Target) retu
 		return out
 	end 'notThisLane'
 
-	if not arm64LinuxTouchesErrnoWord(usage) 'noHostSurface'
+	if not linuxTouchesErrnoWord(usage) 'noHostSurface'
 		return out
 	end 'noHostSurface'
 
 	pushRuntimeGlobal(out, label: LinuxErrnoLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 	return out
 end 'arm64LinuxRuntimeGlobals'
-
-// ⭐ **THE GREEN-THREAD FLOOR'S `.data` WORD, ON THE FLOOR'S OWN BIT.** Split from the errno word above
-// rather than folded into it because the two conditions are genuinely different: a program that reads a file
-// carries the errno word and no scheduler, and a pure-`async` program carries this one and no errno word.
-//
-// ⚠ **NO `os` TEST INSIDE THE `usage` TEST — the target is asked FIRST**, exactly as its neighbour does it.
-export function arm64LinuxGreenThreadGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
-
-	if target.cpu != CpuArch.arm64 or target.os != Os.linux or not usage.usesGt 'notThisLane'
-		return out
-	end 'notThisLane'
-
-	// The per-OS-thread slot counter. `__sched_init_procs` is its only caller and runs during bring-up, which
-	// is what makes the plain read-modify-write in `mrt_host_tls_alloc` sound.
-	pushRuntimeGlobal(out, label: LinuxTlsNextKeyLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	return out
-end 'arm64LinuxGreenThreadGlobals'
-
-// ⭐ **WHO READS THE errno WORD — the union of the facilities that emit `StdOp.osLastError`, and therefore
-// the gate on `mrt_host_last_error` itself.** `usesIocp` joined it at L5: `__gt_subp_yield_read` classifies a
-// failed pipe read with it, and a spawn failure is reported through it.
-function arm64LinuxUsesHostSurface(usage RuntimeUsage) returns bool
-	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesConsoleStdin or usage.usesIocp
-end 'arm64LinuxUsesHostSurface'
-
-// ⭐⭐ **WHO TOUCHES IT AT ALL — the readers above, PLUS the bodies that only ever STASH.** It is DERIVED from
-// its own subset rather than restated, so the `.data` layout cannot come apart from the chunk list.
-//
-// ⛔ **THE STASH-ONLY PRODUCER IS THE SPAWN, AND IT RIDES `usesGt` RATHER THAN ANY HOST-SURFACE BIT.**
-// `installGtRuntime` builds `__gt_process_run` unconditionally, so `mrt_host_spawn` — whose failure arm
-// stashes an errno like every other body here — is laid out in every green-thread program, including one
-// that reads no pipe and opens no file. MEASURED: a `runProcess("exit 3")` that discards its child's output
-// sets `usesGt` and NOTHING else, and gating the word on the reader union alone answered
-// `GlobalDataTable.dataSectionOffsetOf: no .data slot is labelled '__mrt_errno'` at BACKEND time — which is
-// a panic and not a diagnostic.
-function arm64LinuxTouchesErrnoWord(usage RuntimeUsage) returns bool
-	return arm64LinuxUsesHostSurface(usage) or usage.usesGt
-end 'arm64LinuxTouchesErrnoWord'
 
 // ==========================================================================
 // struct stat (asm-generic, which AArch64 uses)
@@ -484,8 +320,8 @@ end 'arm64LinuxStatLayout'
 // (`beginFunction(1 + LinuxTimespecSlots)`), so the fragment can form the address without being told where.
 // A chunk that reserved fewer would not be subtly wrong: `Arm64RuntimeAsm.slotOffset` PANICS on a slot
 // outside the frame it opened.
-let LinuxTimespecSecSlot = 1 as StackSize
-let LinuxTimespecNsecSlot = 2 as StackSize
+let Arm64LinuxTimespecSecSlot = 1 as StackSize
+let Arm64LinuxTimespecNsecSlot = 2 as StackSize
 
 // ==========================================================================
 // Shared emit fragments
@@ -602,16 +438,16 @@ end 'arm64LinuxEmitFstatat'
 // because a FILETIME converts each half separately, and its own header says why recombining first would cost
 // five centuries of range for an identical answer.
 function arm64LinuxEmitTimespecToNanos(asm Arm64RuntimeAsm)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: LinuxTimespecSecSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: Arm64LinuxTimespecSecSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixNanosPerSecond as MachineWord)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpMul, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: LinuxTimespecNsecSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: Arm64LinuxTimespecNsecSlot)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 end 'arm64LinuxEmitTimespecToNanos'
 
 function arm64LinuxReadClockTimespec(asm Arm64RuntimeAsm, clockId MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: clockId)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: LinuxTimespecSecSlot)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: Arm64LinuxTimespecSecSlot)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClockGettime)
 end 'arm64LinuxReadClockTimespec'
 
@@ -638,10 +474,10 @@ function buildArm64LinuxWallClockChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
 	arm64LinuxReadClockTimespec(asm, clockId: LinuxClockRealtime)
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: LinuxTimespecSecSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: Arm64LinuxTimespecSecSlot)
 	arm64EmitSecondsToFileTime(asm, reg: Arm64Register.x0, scratch: Arm64Register.x1)
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: LinuxTimespecNsecSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: Arm64LinuxTimespecNsecSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: posixNanosPerFileTimeTick())
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
@@ -1015,7 +851,7 @@ function buildArm64LinuxFileRenameChunk() returns FunctionCodeChunk
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: released)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPrefix)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxOpenReadOnlyFlags)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixOpenReadOnly)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
@@ -1646,11 +1482,8 @@ end 'arm64LinuxEmitCasImm'
 // ==========================================================================
 
 // The MONOTONIC counter and its frequency — Windows's QueryPerformanceCounter/QueryPerformanceFrequency, and
-// the reading `__gt_now_ns` computes every deadline in this scheduler from.
-//
-// The frequency is a CONSTANT 1e9 because the reading is already nanoseconds, which makes `__gt_now_ns`'s
-// ticks→nanoseconds scaling the IDENTITY on this lane exactly as it is on the other one — the strongest form
-// that split can take, with no rounding of its own.
+// the reading `__gt_now_ns` computes every deadline in this scheduler from. The frequency it reports is
+// `PosixNanosPerSecond`, for the reason stated there.
 //
 // ⚠ **THE SHAPE DIFFERS FROM THE DARWIN TWIN AND THE CLOCK ID DIFFERS FROM IT TOO.** `clock_gettime` answers
 // a `timespec` where `clock_gettime_nsec_np` answers one scalar, so the two halves are recombined here; and
@@ -1713,94 +1546,6 @@ function buildArm64LinuxSleepMsChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostSleepMsName)
 end 'buildArm64LinuxSleepMsChunk'
-
-// `clock_nanosleep`'s `flags`: 0 is a RELATIVE request, `TIMER_ABSTIME` (1) an absolute deadline. The op
-// carries a duration, so this is the relative one — and naming it is what stops the 0 reading as "no flags I
-// happened to need".
-let LinuxSleepIsRelative = 0
-
-// Its `remain` out-param. NULL discards the unslept remainder, which this chunk has no channel to report and
-// whose one consumer re-checks its own deadline anyway (see the header).
-let LinuxSleepDiscardsRemainder = 0
-
-// ⭐⭐⭐ **THE WORKER M's `clone` FLAGS — `pthread_create`'s set, and every bit has a reason.** The child is
-// a THREAD of this process, not a process: it must see the same heap the scheduler put the green threads in,
-// the same descriptor table the IO ran on, and the same `getpid()` every other part of the runtime reads.
-//
-//   • `CLONE_VM` — one address space. Without it the M would run the scheduler over a copy-on-write snapshot
-//     and publish its work where nobody could see it. It is what makes this a thread at all.
-//   • `CLONE_FS` — one filesystem context, so `Directory.setCurrent` on any M is the process's cwd, which is
-//     the semantics every other lane's threads have.
-//   • `CLONE_FILES` — one descriptor table: a file a green thread opened on one M is readable on the M that
-//     resumes it after a park.
-//   • `CLONE_SIGHAND` — one signal-handler table. The kernel REQUIRES it with `CLONE_THREAD` (and requires
-//     `CLONE_VM` with it), so it is a precondition rather than a preference.
-//   • `CLONE_THREAD` — one thread group. `getpid()` then answers the same value on every M (the pipe-name
-//     uniquifier and `mrt_host_proc_*` both read it), and the entry stub's `exit_group` at the end of `main`
-//     ends the whole program rather than leaving parked Ms behind.
-//   • `CLONE_SETTLS` — `TPIDR_EL0` = the slot block this chunk maps for the new M. On this lane the thread
-//     pointer IS the per-OS-thread slot base (`mrt_host_tls_alloc`), and `__sched_worker_loop`'s very first
-//     act is `tlsSetValue(index, p)` through it — so an M cloned without this would panic in
-//     `mrt_linux_tls_set` before it adopted its P.
-//   • `CLONE_CHILD_CLEARTID` — the kernel zeroes `PosixWaitOffThread` and wakes it when the thread ends,
-//     which IS the join `__sched_stop_workers` performs. See `LinuxFutexWaitShared` for the wake's flavour.
-//
-// ⚠ **`CLONE_SYSVSEM` IS DELIBERATELY ABSENT** though glibc passes it: nothing in this runtime touches a
-// System V semaphore, and a flag with no consumer is a claim nobody can check.
-//
-// ⛔ **THE EXIT SIGNAL IS ZERO — the low byte carries none.** `CLONE_THREAD` forbids one, and a `SIGCHLD` here
-// would be the L5 child-process spelling pasted onto a thread.
-//
-// ⚠ **MEASURED, not transcribed** — a C program on the aarch64 guest issuing `svc` with x8 = 220 directly:
-// this exact word, in this exact argument order `(flags, stack, ptid, tls, ctid)`, started a thread that
-// read the `tls` page back out of `TPIDR_EL0` (and a slot the parent had written in it), saw the same
-// `getpid()` as its parent, took its argument off the stack top, and ended with `exit` leaving the process
-// alive — which `exit_group` would not have.
-let LinuxCloneVm = 0x00000100
-let LinuxCloneFs = 0x00000200
-let LinuxCloneFiles = 0x00000400
-let LinuxCloneSighand = 0x00000800
-let LinuxCloneThread = 0x00010000
-let LinuxCloneSetTls = 0x00080000
-let LinuxCloneChildClearTid = 0x00200000
-let LinuxCloneWorkerFlags = LinuxCloneVm or LinuxCloneFs or LinuxCloneFiles or LinuxCloneSighand or LinuxCloneThread or LinuxCloneSetTls or LinuxCloneChildClearTid
-
-// ⭐⭐ **A WORKER M's OWN STACK: ONE MEGABYTE, WITH A PROT_NONE PAGE UNDER IT.** The size is `CreateThread`'s
-// default reserve on the lane this op was shaped for — `osThreadCreate` is `CreateThread(NULL, 0, …)` on
-// Windows and 0 means "the image's default", which is 1 MiB — so the three lanes give an M the same order of
-// stack rather than each inventing one. It is generous by a factor of about a thousand for what actually
-// runs here: an M's stack carries `__sched_worker_loop` and the runtime chunks it calls, and NOT a green
-// thread's frames (a switch moves SP to the GT's own stack) nor the syscall shim's (that is the P's own
-// `POffSystemStackSP`, a separate 64 KB region). `MAP_ANONYMOUS` commits lazily, so the unused margin costs
-// address space and no memory.
-//
-// ⛔ **THE GUARD PAGE IS NOT DEFENSIVE.** Without it an overflow writes into whatever the kernel mapped
-// below — silently, with the corruption surfacing somewhere else entirely. `mprotect(PROT_NONE)` turns that
-// into a SIGSEGV at the instruction that did it. MEASURED on the guest: a touch of the guarded page ends the
-// toucher with signal 11.
-let LinuxWorkerStackBytes = 0x100000
-let LinuxWorkerStackGuardBytes = LinuxHostObjectPageBytes
-let LinuxWorkerRegionBytes = LinuxWorkerStackGuardBytes + LinuxWorkerStackBytes
-
-// ⭐ **THE TWO WORDS THE CHILD READS OFF ITS OWN STACK TOP: the entry point and its argument.** `clone`'s
-// child resumes with x0 = 0 and NOTHING ELSE it can rely on — no return address, and a frame pointer still
-// aimed at the parent's stack — so the pair cannot be handed over in registers or in this chunk's frame
-// slots, both of which belong to the parent. musl's `aarch64/clone.s` solves it the same way, and this is
-// that solution: the parent writes them below the stack top, the child loads them through its own SP. 16
-// bytes keeps SP 16-aligned, which AAPCS64 requires at the `blr`.
-let LinuxWorkerStackSeedBytes = 16
-
-// ⭐ **THE ONE STATE OF THE JOIN WORD AT `PosixWaitOffThread` THAT THIS COMPILER GETS TO CHOOSE.**
-// `mrt_host_thread_create` writes it before the `clone` and `mrt_host_wait_one`'s join arm passes it to
-// `FUTEX_WAIT` as the value it is waiting to LEAVE. ⚠ **THE EXITED STATE IS NOT A CONSTANT HERE BECAUSE IT IS
-// NOT THIS COMPILER'S TO NAME**: `CLONE_CHILD_CLEARTID` writes a 32-bit ZERO, always, so the join's exit test
-// is a `cbz` on the word — the instruction that already means "is zero" — rather than a compare against a
-// number we would only be re-deriving from the kernel's behaviour.
-let LinuxThreadRunning = 1
-
-// What a worker M's own `exit` reports. Nothing reads it — a thread's status is not waitable and the join
-// answers `WAIT_OBJECT_0` for every M — and 0 is what a thread that ran to the end of its loop means.
-let LinuxWorkerExitStatus = 0
 
 // ==========================================================================
 // mrt_host_wait_new(x0 = kind) -> x0 = the tagged object handle
@@ -1872,9 +1617,6 @@ function arm64LinuxEmitMapAnon(asm Arm64RuntimeAsm, byteSize MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMmap)
 end 'arm64LinuxEmitMapAnon'
 
-let LinuxWaitMapFailedMessage = b"panic: the green-thread scheduler could not map a wait object (mmap failed)\n"
-let LinuxWaitKindMessage = b"panic: a wait object of a kind arm64-linux does not mint reached mrt_host_wait_new or mrt_host_wait_one -- this lane mints wake events, child processes and worker-M threads, and nothing else is waitable\n"
-
 // ==========================================================================
 // mrt_host_thread_create(x0 = entry, x1 = arg) -> x0 = the tagged object handle | 0
 // ==========================================================================
@@ -1933,8 +1675,6 @@ function buildArm64LinuxThreadCreateChunk(globalData GlobalDataTable) returns Fu
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotEntry)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotArg)
 
-	// The M's stack, with its guard page at the BOTTOM of the region — stacks grow down, so the page the
-	// deepest frame reaches first is the lowest one.
 	arm64LinuxEmitMapAnon(asm, byteSize: LinuxWorkerRegionBytes as MachineWord)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: stackMapped)
@@ -1947,10 +1687,6 @@ function buildArm64LinuxThreadCreateChunk(globalData GlobalDataTable) returns Fu
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMprotect)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: guarded)
-	// ⛔ A PANIC RATHER THAN A SILENT UNGUARDED STACK. `mprotect` on a page this chunk itself just mapped can
-	// only fail if the kernel refuses `PROT_NONE` on an anonymous private mapping; carrying on would hand the
-	// scheduler an M whose overflow corrupts a neighbour instead of faulting, which is the failure the guard
-	// exists to convert.
 	arm64EmitPanicConstant(asm, globalData: globalData, bytes: LinuxWorkerGuardFailedMessage)
 
 	// The child's initial SP: the top of the region, less the two words it reads from there.
@@ -2034,35 +1770,14 @@ function buildArm64LinuxThreadCreateChunk(globalData GlobalDataTable) returns Fu
 	return asm.finishFunction(HostThreadCreateName)
 end 'buildArm64LinuxThreadCreateChunk'
 
-let LinuxWorkerGuardFailedMessage = b"panic: the green-thread scheduler could not protect a worker M's stack guard page (mprotect failed)\n"
-
-// Where the two seed words sit relative to the child's entry SP — the entry point first, its argument
-// second. Named because the child reads them from a DIFFERENT function than the parent writes them in, and a
-// bare 0 and 8 at two sites is the one fact this pair must agree on.
-let LinuxWorkerSeedEntryOffset = 0 as MachineWord
-let LinuxWorkerSeedArgOffset = 8 as MachineWord
-
-// `CreateThread`'s NULL — what `SchedRuntime.buildSchedWakeOrSpawn`'s `spawnIt` tests to decide it must
-// release the P it claimed. It is the handle value, not an errno: this op reports failure by handing back no
-// handle at all, exactly as the Win32 call it stands for does.
-let LinuxNoThreadStarted = 0
-
 // ==========================================================================
 // mrt_host_event_set(x0 = object)
 // ==========================================================================
 
-// `SetEvent` — mark the auto-reset event signalled and wake one waiter.
+// `SetEvent` — `PosixWaitSignalled`'s publish-and-wake, spelled here as a `cas` and a `FUTEX_WAKE`.
 //
-// ⭐⭐ **THE PUBLISH IS A `cas`, NOT A STORE, AND THE RESULT IS DELIBERATELY DISCARDED.** `STLXR` gives the
-// store RELEASE ordering, which is what a waiter's acquiring take pairs with on a weakly-ordered ISA — a
-// plain `str` would need a barrier beside it. That the compare can FAIL is the correct behaviour and not a
-// missed signal: it fails only when the word is already 1, and `SetEvent` on an already-signalled auto-reset
-// event is a documented no-op. A counting increment would release TWO waiters for two signals, which is a
-// worker M woken for work another M has already taken.
-//
-// ⚠ **THE WAKE HAPPENS WHETHER OR NOT THE PUBLISH LANDED**, which is what closes the window the Darwin twin
-// closes by holding the mutex across both: a waiter that observed 1 and is about to sleep will be told
-// `EAGAIN` by the kernel's own compare, and one that is already asleep is woken here.
+// ⚠ **THE `cas` IS ALSO WHERE THE RELEASE ORDERING COMES FROM.** `STLXR` is what a waiter's acquiring take
+// pairs with on a weakly-ordered ISA; a plain `str` would need a barrier beside it.
 function buildArm64LinuxEventSetChunk() returns FunctionCodeChunk
 	let SlotSignal = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(1)
@@ -2219,8 +1934,6 @@ function buildArm64LinuxWaitOneChunk(globalData GlobalDataTable) returns Functio
 	return asm.finishFunction(HostWaitOneName)
 end 'buildArm64LinuxWaitOneChunk'
 
-let LinuxWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reached with a DESCRIPTOR or a null handle on arm64-linux, where only a wake event or a child process is waitable\n"
-
 // ==========================================================================
 // mrt_host_wait_close(x0 = handle)
 // ==========================================================================
@@ -2228,10 +1941,7 @@ let LinuxWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reached with
 // `CloseHandle` — the ONE op that closes everything Win32 calls a handle, dispatching on the kind the value
 // carries (`Arm64PosixRuntime.PosixHandleKindShift` for why it carries one at all).
 //
-// ⭐ **A ZERO DESCRIPTOR IS A NO-OP, AND THAT IS LOAD-BEARING RATHER THAN DEFENSIVE.**
-// `SubprocessRuntime.emitSubpCloseSlotHandles` closes every slot field unconditionally; on Windows
-// `CloseHandle(0)` is a no-op by the API's own contract, while here fd 0 is STANDARD INPUT and closing it
-// would take the program's stdin away. The guard is what keeps that graph's convention true on this lane.
+// ⭐ **A ZERO DESCRIPTOR IS A NO-OP** — see `PosixHandleKindShift` for why that guard is load-bearing.
 function buildArm64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	let SlotObj = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(1)
@@ -2283,11 +1993,8 @@ end 'buildArm64LinuxWaitCloseChunk'
 // ==========================================================================
 
 // `InitializeCriticalSection` — a free, unowned, un-entered recursive mutex in the region the caller
-// allocated. See `LinuxLockOffFutex` for the three words and for why recursion is not optional.
-//
-// ⚠ **THE REGION IS NOT ZEROED BY ANYONE ELSE.** Its allocator is the slab, whose pages come from `mmap` and
-// ARE zero on first use — but a region reused after a free is not, and relying on the difference is exactly
-// the kind of "works today" this compiler's assertions exist to refuse.
+// allocated. See `LinuxLockOffFutex` for the three words, why recursion is not optional and why all three are
+// written rather than assumed zero.
 function buildArm64LinuxLockInitChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
@@ -2300,34 +2007,12 @@ function buildArm64LinuxLockInitChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostLockInitName)
 end 'buildArm64LinuxLockInitChunk'
 
-// ⭐ **THE LOCK REGION THE Std TIER ALLOCATES MUST HOLD THIS LANE'S MUTEX.** `osLockInit`'s caller
-// slab-allocates `OsLockBytes` and hands the pointer over; the three words below are written into whatever
-// it is given. The Std constant is sized for the widest lock across the targets this compiler serves and
-// says so, but a COMMENT cannot keep that true — so this is the check, at chunk-build time, on the lane that
-// would be corrupted.
-function assertLinuxLockFits()
-	let needed = (LinuxLockOffDepth as ParsedInt) + SpillSlotBytes
-	if OsLockBytes < needed 'tooSmall'
-		panic("Arm64LinuxRuntime: `OsLockBytes` is {OsLockBytes} but this lane's recursive futex mutex needs {needed} bytes — `osLockInit` would write the owner and depth words past the region the allocator gave it and corrupt whatever it placed after, with no diagnostic anywhere")
-	end 'tooSmall'
-end 'assertLinuxLockFits'
-
-// `EnterCriticalSection`. Recursive by the owning THREAD, which is what a Win32 critical section promises
-// and what `SchedRuntime`'s run-queue publish path relies on.
+// `EnterCriticalSection`, running `LinuxMutexHeldContended`'s three-compare-and-swap acquire protocol.
 //
 // ⭐ **THE UNCONTENDED PATH IS ONE `cas` AND NO SYSCALL, WHICH IS THE WHOLE POINT OF A FUTEX.** The kernel is
 // entered only when the word is already held; on this lane, where the high-water mark of active worker Ms is
 // ONE (`specs-shv2/builtins-cpu-parallel.md` pins it), the contended path is unreachable and is written for
 // correctness rather than for use.
-//
-// **THE CONTENDED LOOP, AND WHY IT IS THREE COMPARE-AND-SWAPS.** A waiter must mark the word CONTENDED
-// before it sleeps, or the releaser will take the fast path and never wake it:
-//   1. `0 -> 2` — the lock came free while we were looking; take it, conservatively marked, because we
-//      cannot know whether a third thread is already asleep on it.
-//   2. `1 -> 2` — it is held with no waiter recorded; record one. The result is ignored: a failure means it
-//      is already 2 (fine) or that it just became free (the next trip's step 1 takes it).
-//   3. `FUTEX_WAIT(word, 2)` — sleep only while it is still 2, which the KERNEL checks, so the window
-//      between step 2 and here cannot lose a wakeup.
 function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let SlotRegion = 0 as StackSize
 	let SlotTid = 1 as StackSize
@@ -2374,18 +2059,8 @@ function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 	return asm.finishFunction(LinuxLockEnterName)
 end 'buildArm64LinuxLockEnterChunk'
 
-// `LeaveCriticalSection`. A nested leave decrements the depth and releases NOTHING, which is the property
-// `SchedRuntime`'s header names in so many words.
-//
-// ⭐⭐ **THE RELEASE IS AN ATOMIC DECREMENT AND THE WORD IT DISPLACED IS THE DECISION.** If it displaced
-// `LinuxMutexHeld` there was no waiter and the decrement already left the word free — one instruction, no
-// syscall. If it displaced `LinuxMutexHeldContended` the decrement left it at 1, which is not free, so the
-// word is stored to 0 and one waiter is woken. Reading the displaced value is what makes those two cases
-// distinguishable without a second atomic.
-//
-// ⚠ **THE OWNER AND DEPTH ARE CLEARED BEFORE THE RELEASE, NOT AFTER.** The instant the futex word goes free
-// another thread may take it and write its own tid there; clearing afterwards would erase the new owner's
-// claim and let a third thread believe it holds a lock it does not.
+// `LeaveCriticalSection` — `LinuxMutexReleaseStep`'s decrement, spelled here as an atomic add so the
+// displaced word arrives in a register and the wake decision costs no second atomic.
 function buildArm64LinuxLockLeaveChunk() returns FunctionCodeChunk
 	let SlotRegion = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(1)
@@ -2471,9 +2146,6 @@ function buildArm64LinuxTlsAllocChunk(globalData GlobalDataTable) returns Functi
 	return asm.finishFunction(HostTlsAllocName)
 end 'buildArm64LinuxTlsAllocChunk'
 
-let LinuxTlsMapFailedMessage = b"panic: the green-thread scheduler could not map this OS thread's slot block (mmap failed)\n"
-let LinuxTlsExhaustedMessage = b"panic: the green-thread scheduler asked for more per-OS-thread slots than one page holds\n"
-
 // ==========================================================================
 // mrt_linux_tls_set(x0 = key, x1 = value)
 // ==========================================================================
@@ -2506,10 +2178,6 @@ function buildArm64LinuxTlsSetChunk(globalData GlobalDataTable) returns Function
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x2, byteOffset: 0)
 	return asm.finishFunction(LinuxTlsSetName)
 end 'buildArm64LinuxTlsSetChunk'
-
-// A key scales to a byte offset by the slot width — `key * 8`, spelled as a shift because that is the same
-// `index * 8` the Std tier publishes (`SchedRuntime.tlsSlotArrayBase`) and the two must agree exactly.
-let LinuxTlsKeyScaleBits = 3 as ShiftCount
 
 // ==========================================================================
 // mrt_host_handle_file_type(x0 = fd) -> x0 = the GetFileType word
@@ -2624,11 +2292,9 @@ end 'buildArm64LinuxEnvReadChunk'
 // image links no libc.** So the child is built by hand, and AArch64 dropped the legacy spelling of every
 // call it needs: no `fork`, no `pipe`, no `dup2`. It is `clone`, `pipe2` and `dup3`.
 //
-// ⭐⭐ **`clone(SIGCHLD)` WITH A NULL STACK AND NO `CLONE_VM` — WHICH IS `fork`, EXACTLY.** The child gets its
-// own copy-on-write address space, so everything it does between the clone and the exec — three `dup3`s, a
-// `chdir`, a write down the status pipe — happens where the parent's heap cannot be touched. A `CLONE_VM`
-// (vfork) child would be sharing the parent's memory with a green-thread scheduler still live in it, to save
-// a page-table copy on a path that is about to `execve`.
+// ⚠ **A `CLONE_VM` (vfork) CHILD IS REFUSED**, and `LinuxCloneExitSignalChild` carries why `SIGCHLD` alone is
+// exactly `fork`: sharing the parent's memory with a green-thread scheduler still live in it would save a
+// page-table copy on a path that is about to `execve`.
 //
 // ⭐⭐⭐ **THE STATUS PIPE IS WHAT MAKES `hProcess == 0` REACHABLE, AND WITHOUT IT THIS OP CANNOT KEEP ITS OWN
 // CONTRACT.** `posix_spawnp` reports a failed exec to the CALLER; a hand-built fork cannot, because by the
@@ -2859,15 +2525,8 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 end 'buildArm64LinuxSpawnChunk'
 
 // `dup3(startup->handle, childDescriptor, 0)` — one of the three the child above emits, and the whole of what
-// `posix_spawn_file_actions_adddup2` does on the other lane. A zero `flags` is what CLEARS close-on-exec on
-// the target, which is how the three ends the child keeps survive an `execve` that closes every other one.
-//
-// ⛔⛔ **`dup3` REFUSES `oldfd == newfd` WHERE `dup2` RETURNS IT UNCHANGED (`EINVAL`), SO THE GUARD IS
-// REQUIRED AND NOT DEFENSIVE.** That case is not exotic: a stream whose stdio kind is `inherit` reaches this
-// record as the parent's own 0, 1 or 2, so a plain `Subprocess.run` with no redirection hits it three times.
-//
-// ⚠ The handle must be UNTAGGED: a pipe end reaches the record as a tagged handle, while an inherited
-// standard stream and a redirected file reach it as bare descriptors.
+// `posix_spawn_file_actions_adddup2` does on the Darwin lane. See `LinuxDup3NoFlags` for the zero, for why
+// the equal-descriptor guard below is required, and for why the handle is untagged first.
 function emitArm64LinuxChildDup3(asm Arm64RuntimeAsm, startupSlot StackSize, handleOffset MachineWord, childDescriptor MachineWord)
 	let alreadyThere = asm.newLabel()
 
@@ -2883,39 +2542,6 @@ function emitArm64LinuxChildDup3(asm Arm64RuntimeAsm, startupSlot StackSize, han
 
 	asm.placeLabel(alreadyThere)
 end 'emitArm64LinuxChildDup3'
-
-// ⭐⭐ **`clone`'s FIVE ARGUMENTS, AND FOUR OF THEM ARE THE ABSENCE OF A THREAD.** The flag word's low byte is
-// the signal the child sends its parent when it dies, and `SIGCHLD` alone — with none of `CLONE_VM`,
-// `CLONE_FS`, `CLONE_FILES`, `CLONE_SIGHAND` or `CLONE_THREAD` — is precisely `fork`. A NULL stack means the
-// child keeps the parent's SP over a copy-on-write mapping, which is what makes returning from the `svc` in
-// two processes sound.
-//
-// ⚠ **AArch64 ORDERS THE LAST TWO `(tls, ctid)` WHERE x86-64 ORDERS THEM `(ctid, tls)`.** Both are NULL here,
-// so the disagreement cannot bite — but a future thread `clone` on this lane must read the arch's own header
-// and not x86-64's.
-let LinuxCloneExitSignalChild = 17
-let LinuxCloneParentStack = 0
-let LinuxCloneNoParentTidOut = 0
-let LinuxCloneNoThreadPointer = 0
-let LinuxCloneNoChildTidOut = 0
-
-// `wait4`'s options word. The reap of a child whose exec failed is the one place this file waits without
-// `WNOHANG`, and it cannot hang — the child has already written the pipe and called `exit`. The `rusage`
-// argument beside it is `Arm64PosixRuntime.PosixReapDiscardsRusage`.
-let LinuxReapUntilItExits = 0
-
-// `dup3`'s flag word. 0 leaves the new descriptor WITHOUT close-on-exec, which is the point: these three are
-// the only descriptors that must survive the exec.
-let LinuxDup3NoFlags = 0
-
-// `O_CLOEXEC`. Every pipe this lane opens carries it, because there is no `POSIX_SPAWN_CLOEXEC_DEFAULT` here
-// to invert the inheritance default for the whole exec — see `Arm64PosixRuntime.buildArm64PosixPipeChunk`.
-let LinuxOpenCloseOnExec = 0o2000000
-
-// What a child that could not `execve` exits with — the shell's own "command found but could not be run",
-// and what `execvp` failing inside `system()` reports. The parent does not read it: the status pipe carries
-// the real reason, and this is what a program that never asked would see.
-let LinuxExecFailedExitCode = 127
 
 // ==========================================================================
 // Assembly
@@ -3026,8 +2652,8 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 
 	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM AS OF L5** — `__gt_subp_yield_read` classifies
 	// a failed read with it and every spawn failure publishes through it — and that widening lives inside
-	// `arm64LinuxUsesHostSurface`, beside the `.data` word the same bodies stash into.
-	if arm64LinuxUsesHostSurface(usage) 'lastError'
+	// `linuxUsesHostSurface`, beside the `.data` word the same bodies stash into.
+	if linuxUsesHostSurface(usage) 'lastError'
 		chunks.push(buildArm64LinuxLastErrorChunk())
 	end 'lastError'
 
@@ -3063,10 +2689,11 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxTransferChunk(HostWriteFileName, syscallNumber: Arm64LinuxSyscallWrite))
 	end 'managedFileWrite'
 
-	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS TWO PRODUCERS.** `__mf_read` and
-	// `__con_read_stdin` emit the identical op — standard input is a descriptor like any other on this
-	// platform — so gating it on `usesManagedFile` alone would leave a stdin-only program branching to a
-	// symbol nothing emitted, and pushing it under both bits would lay the same symbol out twice.
+	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS THREE PRODUCERS.** `__mf_read`,
+	// `__con_read_stdin` and `__gt_subp_yield_read` emit the identical op — standard input and a pipe are
+	// descriptors like any other here — so gating it on `usesManagedFile` alone would leave a stdin-only
+	// program branching to a symbol nothing emitted, and pushing it under each bit would lay the same symbol
+	// out more than once.
 	if usage.usesManagedFile or usage.usesConsoleStdin or usage.usesIocp 'transferIn'
 		chunks.push(buildArm64LinuxTransferChunk(HostReadFileName, syscallNumber: Arm64LinuxSyscallRead))
 	end 'transferIn'

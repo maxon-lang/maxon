@@ -1,0 +1,454 @@
+// Test: async-promise-drop.branch-store-into-a-container-on-both-arms
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let MaxSpins = 200
+
+function value(n Integer) returns Integer
+	Runtime.yield()
+	return n
+end 'value'
+
+function arm(slots IntPromiseArray, slot Integer, n Integer)
+	let p = async value(n)
+	if slot == slots.count() 'firstUse'
+		slots.push(p)
+	end 'firstUse' else 'reuse'
+		try slots.set(slot, value: p) otherwise panic("the slot exists — this arm is only taken when it does")
+	end 'reuse'
+end 'arm'
+
+function completesUnderTheDrive(slots IntPromiseArray) returns bool
+	var spins = 0
+	while spins < MaxSpins 'drive'
+		Runtime.yield()
+		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
+		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
+			return true
+		end 'complete'
+		spins = spins + 1
+	end 'drive'
+	return false
+end 'completesUnderTheDrive'
+
+function main() returns ExitCode
+	var slots = IntPromiseArray.create()
+
+	arm(slots, slot: 0, n: 11)
+	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
+		return 1 as ExitCode
+	end 'pushedThreadCancelled'
+	let first = try slots.get(0) otherwise panic("slot 0 was just armed")
+	var sum = await first
+
+	arm(slots, slot: 0, n: 31)
+	if not completesUnderTheDrive(slots) 'setThreadCancelled'
+		return 2 as ExitCode
+	end 'setThreadCancelled'
+	let second = try slots.get(0) otherwise panic("slot 0 was just re-armed")
+	sum = sum + (await second)
+
+	return sum as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @value {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.callDirect Runtime.yield
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @arm {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.leaRegFunc rcx, [rip + value]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 200], r13
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_ready
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc notEqual, ifelse
+  firstUse:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+    x64.jmp ifcont
+  ifelse:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:18: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_store
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __managed_set
+    x64.jmp __im_cont
+  __im_store:
+    x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r14
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, ifcont
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:18: the slot exists \xe2\x80\x94 this arm is only taken when it does\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @completesUnderTheDrive {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+  whilehdr:
+    x64.cmpRegImm32 r12, 200
+    x64.jcc greaterEqual, whileexit
+  drive:
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#12
+  __im_empty:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#13
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.jmp __im_cont
+  critsplit#13:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#12:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:26: slot 0 was armed before the drive\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.callDirect __gt_is_complete
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  complete:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 11
+    x64.movRegReg rcx, rbx
+    x64.callDirect arm
+    x64.movRegReg rcx, rbx
+    x64.callDirect completesUnderTheDrive
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#2
+  pushedThreadCancelled:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#13
+  __im_load#14:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#20
+  __im_empty#15:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, critsplit#21
+  __im_slow#13:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg r13, r8
+    x64.jmp __im_cont#12
+  critsplit#21:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#12
+  critsplit#20:
+    x64.movRegReg r10, rax
+  __im_cont#12:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:42: slot 0 was just armed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 31
+    x64.movRegReg rcx, rbx
+    x64.callDirect arm
+    x64.movRegReg rcx, rbx
+    x64.callDirect completesUnderTheDrive
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#6
+  setThreadCancelled:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r13, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#17
+  __im_load#18:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#22
+  __im_empty#19:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, critsplit#23
+  __im_slow#17:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_get
+    x64.movRegReg r14, r8
+    x64.jmp __im_cont#16
+  critsplit#23:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#16
+  critsplit#22:
+    x64.movRegReg r10, rax
+  __im_cont#16:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:49: slot 0 was just re-armed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_await
+    x64.leaRegRegReg r12, r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:52: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

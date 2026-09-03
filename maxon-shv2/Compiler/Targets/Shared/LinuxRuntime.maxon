@@ -36,7 +36,9 @@ export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
 //
 // `O_WRONLY|O_CREAT|O_TRUNC` IS `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`, which is the same trio `creat`
 // abbreviates on the Darwin lane — so the two opens agree on semantics while spelling them differently.
-export let LinuxOpenReadOnlyFlags = 0x0
+//
+// ⚠ **THE READ-ONLY FLAG WORD IS NOT HERE.** `O_RDONLY` is 0 on Darwin as well, so it is `PosixRuntime`'s
+// `PosixOpenReadOnly` and not Linux's to state a second time.
 export let LinuxOpenCreateTruncateFlags = 0x241
 
 // `unlinkat`'s flag word: 0 means "remove a FILE". (`AT_REMOVEDIR` is what would make it an `rmdir`, and
@@ -56,6 +58,30 @@ export let LinuxErrnoNameTooLong = 36
 // any image; what sits behind it is the lane's own choice — a process-wide word where there is one thread,
 // a per-OS-thread scheduler slot where a real `clone` can make more.
 export let LinuxErrnoLabel = b"__mrt_errno"
+
+// ⭐ **WHO READS THE errno WORD — the union of the facilities that emit `StdOp.osLastError`, and therefore
+// the gate on `mrt_host_last_error` itself.** `usesIocp` is among them: `__gt_subp_yield_read` classifies a
+// failed pipe read with it, and a spawn failure is reported through it.
+export function linuxUsesHostSurface(usage RuntimeUsage) returns bool
+	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesConsoleStdin or usage.usesIocp
+end 'linuxUsesHostSurface'
+
+// ⭐⭐ **WHO TOUCHES IT AT ALL — the readers above, PLUS the bodies that only ever STASH.** DERIVED from its
+// own subset rather than restated, so the `.data` layout cannot come apart from the chunk list.
+//
+// ⛔ **THE STASH-ONLY PRODUCER IS THE SPAWN, AND IT RIDES `usesGt`.** `installGtRuntime` builds
+// `__gt_process_run` unconditionally, so `mrt_host_spawn` — whose failure arm stashes an errno — is laid out
+// in every green-thread program, including one that reads no pipe and opens no file. MEASURED: a
+// `runProcess("exit 3")` that discards its child's output sets `usesGt` and NOTHING else, and gating the word
+// on the reader union alone answered `GlobalDataTable.dataSectionOffsetOf: no .data slot is labelled
+// '__mrt_errno'` at BACKEND time — a panic and not a diagnostic.
+//
+// ⚠ **BOTH LINUX LANES ASK THESE TWO, AND NEITHER OWNS THEM.** The question is about `RuntimeUsage` and
+// names no instruction set; a second copy beside one assembler is a facility added to one lane's gate and
+// not the other's, which is that lane's `.data` word missing under a chunk that stashes into it.
+export function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
+	return linuxUsesHostSurface(usage) or usage.usesGt
+end 'linuxTouchesErrnoWord'
 
 // ⭐⭐ **THE `.data` WORD HOLDING THE ENVIRONMENT VECTOR, AND ONLY A LIBC-LESS LANE NEEDS ONE.** Windows asks
 // `GetEnvironmentVariableA` and macOS asks `getenv`; a static Linux image has neither, so the kernel's
@@ -80,6 +106,10 @@ export let LinuxEntryEnvpSkippedWords = 2 as Imm32
 // `sizeof(sigset_t)` — 64 signals, one bit each, on every Linux architecture. `rt_sigaction` takes it as
 // its fourth argument and `ppoll` as its last, and the kernel checks it even when the mask is NULL.
 export let LinuxSigsetBytes = 8
+
+// SIGFPE — the signal an integer divide fault is delivered as, and 8 on every Linux architecture. Here rather
+// than in a backend for `LinuxSigsetBytes`'s reason: there is one fact, so there is one name for it.
+export let LinuxSignalFpe = 8
 
 // `struct timespec` — `tv_sec` then `tv_nsec`, two 64-bit words, which is two of either assembler's 8-byte
 // frame slots. Each clock chunk holds its out-param pointer in slot 0 and reserves these above it. HOW the
@@ -256,3 +286,365 @@ end 'assertLinuxSearchGeometry'
 // an allocation, and a bound that is a few bytes generous cannot be wrong in the direction that matters.
 let LinuxDirentMaxNameBytes = 255
 let LinuxSearchMinimumEntriesBytes = (LinuxDirentNameOffset as ParsedInt) + LinuxDirentMaxNameBytes + (SpillSlotBytes as ParsedInt)
+
+// ==========================================================================
+// THE GREEN-THREAD FLOOR'S LINUX FACTS — arch-neutral, read by both Linux lanes
+// ==========================================================================
+//
+// ⭐⭐ **A `futex` OPERATION, A CLONE FLAG, A MUTEX STATE AND A WORKER M'S STACK GEOMETRY ARE KERNEL FACTS
+// WITH NO ARCHITECTURE IN THEM.** What differs between AArch64 and x86-64 is the SYSCALL NUMBER and the
+// register ABI, both of which stay with each backend; every number below is the same on both, and a second
+// copy of `LinuxCloneWorkerFlags` or `LinuxLockOffDepth` is two lanes agreeing by hand about a layout the
+// kernel decides.
+
+// ⭐ **THE FUTEX OPERATIONS, IN THEIR PRIVATE FORMS.** `FUTEX_WAIT` is 0 and `FUTEX_WAKE` is 1;
+// `FUTEX_PRIVATE_FLAG` is 128 and says the word is never shared across processes, which lets the kernel key
+// its hash bucket on the mm rather than on the physical page. Every futex in this compiler is in an
+// anonymous private mapping or in the program's own `.data`, so the private form is always the right one —
+// and it is measurably cheaper, which is why glibc uses it for exactly these objects.
+export let LinuxFutexWaitPrivate = 128
+export let LinuxFutexWakePrivate = 129
+
+// ⛔⛔ **THE JOIN's WAIT IS THE *SHARED* `FUTEX_WAIT`, AND THAT IS NOT AN INCONSISTENCY — IT IS THE ONLY
+// SPELLING THE KERNEL's OWN WAKE CAN REACH.** A worker M is joined through the `CLONE_CHILD_CLEARTID` word
+// (`PosixWaitOffThread`), which the KERNEL zeroes and wakes when the thread ends — and it issues that wake
+// with `FLAGS_SHARED`. On an anonymous page a shared key carries `FUT_OFF_MMSHARED` where a private key does
+// not, so the two hash to DIFFERENT buckets and a private waiter is never woken.
+//
+// ⭐ **MEASURED on an aarch64 Ubuntu guest, one C program invoking these syscalls BY NUMBER, one constant
+// changed between the two runs:** with
+// `FUTEX_WAIT_PRIVATE` the joiner slept through the child's exit and the run was killed at its 20 s bound;
+// with this plain `FUTEX_WAIT` it was woken by the FIRST wait and read the cleared word. glibc's
+// `pthread_join` passes `LLL_SHARED` for exactly this reason. Every OTHER futex in this file is woken by a
+// `FUTEX_WAKE_PRIVATE` this compiler emits, so the private form stays right for all of them.
+export let LinuxFutexWaitShared = 0
+
+// `FUTEX_WAKE`'s count: ONE waiter. An auto-reset event releases exactly one waiter by its Win32 contract,
+// and the mutex below hands the lock to one successor.
+export let LinuxFutexWakeOne = 1
+
+// A NULL `struct timespec *` — `FUTEX_WAIT` with no timeout, i.e. wait until woken.
+export let LinuxFutexNoTimeout = 0
+
+// `futex(uaddr, op, val, timeout, uaddr2, val3)`. The last two are meaningless for WAIT and WAKE and MUST
+// still be passed: a syscall takes its six argument registers whatever the operation reads, and leaving one
+// holding a stale value is how a future requeue-shaped operation would silently pick it up.
+export let LinuxFutexUnusedArg = 0
+
+// ⭐⭐ **THE VALUE A `FUTEX_WAIT` EXPECTS, AND WHY IT IS THE UNSIGNALLED STATE RATHER THAN THE SIGNALLED ONE.**
+// `FUTEX_WAIT(uaddr, val)` sleeps only while `*uaddr == val`, and returns `-EAGAIN` immediately otherwise.
+// So the caller passes the state it is waiting to LEAVE: an event waiter passes `PosixWaitNotSignalled`, and
+// a signal that lands between its own test and this call makes the syscall return at once rather than sleep
+// through it. That is the whole lost-wakeup argument, and it is the kernel's rather than this file's.
+//
+// ⚠ The two values themselves are `Targets/Shared/PosixRuntime`'s, because the WORD is: the signal field
+// sits at the same offset on every POSIX lane and a shared body (`mrt_host_proc_reap`) publishes into it.
+
+// ⭐ **ONE PAGE, AND IT IS THE SAME PAGE FOR BOTH HOST OBJECTS THIS FILE MAPS** — a wait object and an OS
+// thread's slot block. Named once because `mmap`'s granularity is what decides it, not either object's
+// contents: a wait object uses two words of it and a slot block as many as the scheduler asks for.
+export let LinuxHostObjectPageBytes = 4096
+
+// ⭐⭐ **THE RECURSIVE FUTEX MUTEX `osLockInit` BUILDS INTO THE CALLER'S REGION.**
+//
+// ⛔ **RECURSIVE IS NOT OPTIONAL AND IT WAS MEASURED AS A HANG ON THE OTHER LANE.** A Win32
+// `CRITICAL_SECTION` is re-entrant by its owning thread and `SchedRuntime` relies on it in so many words
+// (*"a nested `LeaveCriticalSection` releases nothing"*); the first arm64-macOS `async` build hung in
+// `__slab_refill` on a NORMAL pthread mutex taken twice down one call chain
+// (`Arm64DarwinRuntime.buildArm64DarwinLockInitChunk` records it). So the same op must mean the same thing
+// here, and a raw futex is not re-entrant — the owner and the depth beside it are what make it so.
+//
+// The three words: a futex at offset 0 (0 = free, 1 = held with no waiter, 2 = held and someone is asleep on
+// it), the owning thread's `gettid`, and how many times that owner has taken it.
+//
+// ⚠ **THE OWNER WORD IS READ WITHOUT SYNCHRONISATION AND THAT IS SOUND**, for a reason that does not
+// generalise: the only value a thread can act on is ITS OWN tid, and no other thread can write that there —
+// a non-owner reads 0 or somebody else's tid, and both send it to the acquire path.
+//
+// ⚠ **THE REGION IS NOT ZEROED BY ANYONE ELSE, SO `osLockInit` WRITES ALL THREE WORDS.** Its allocator is the
+// slab, whose pages come from `mmap` and ARE zero on first use — but a region reused after a free is not, and
+// relying on the difference is exactly the kind of "works today" this compiler's assertions exist to refuse.
+//
+// ⚠ **A NESTED LEAVE DECREMENTS THE DEPTH AND RELEASES NOTHING**, which is the property `SchedRuntime`'s
+// header names in so many words: only the outermost leave touches the futex word.
+export let LinuxLockOffFutex = 0x00 as MachineWord
+export let LinuxLockOffOwner = 0x08 as MachineWord
+export let LinuxLockOffDepth = 0x10 as MachineWord
+
+// The three states of the futex word above, named because a bare 2 at a `cas` site says nothing about which
+// of this file's several 2s it is.
+//
+// ⭐⭐ **REACHING CONTENDED IS A THREE-COMPARE-AND-SWAP PROTOCOL, AND EVERY LANE's `lock_enter` RUNS IT.** A
+// waiter must mark the word CONTENDED before it sleeps, or the releaser takes the fast path and never wakes
+// it:
+//   1. `0 -> 2` — the lock came free while we were looking; take it, conservatively marked, because we
+//      cannot know whether a third thread is already asleep on it.
+//   2. `1 -> 2` — it is held with no waiter recorded; record one. The verdict is ignored: a failure means it
+//      is already 2 (fine) or that it just became free (the next trip's step 1 takes it).
+//   3. `FUTEX_WAIT(word, 2)` — sleep only while it is still 2, which the KERNEL checks, so the window
+//      between step 2 and here cannot lose a wakeup.
+export let LinuxMutexFree = 0
+export let LinuxMutexHeld = 1
+export let LinuxMutexHeldContended = 2
+
+// The depth an outermost acquire records, and the value `atomicRmw`'s DISPLACED word carries when the
+// release was the last one and nobody was asleep.
+export let LinuxMutexFirstEntry = 1
+
+// `atomicRmw(add)` with this operand is the release decrement: it answers the word it DISPLACED, which is
+// what says whether a waiter has to be woken (`LinuxMutexHeldContended`) or not (`LinuxMutexHeld`). Reading
+// the displaced value is what makes those two cases distinguishable without a second atomic.
+//
+// ⚠ **THE OWNER AND DEPTH ARE CLEARED BEFORE THIS DECREMENT, NEVER AFTER.** The instant the futex word goes
+// free another thread may take it and write its own tid there; clearing afterwards would erase the new
+// owner's claim and let a third thread believe it holds a lock it does not.
+export let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF
+
+// ⭐⭐ **THE PER-OS-THREAD SLOT BLOCK, WHOSE BASE IS THE ARCH's OWN THREAD POINTER** — `TPIDR_EL0` on AArch64,
+// the FS base on x86-64. A static image links no libc, so there is no `pthread_getspecific` to call and no
+// TSD array to index — and by the same token NOTHING ELSE READS OR WRITES THE WRITABLE THREAD POINTER, which
+// makes it free for the scheduler to define. One page per OS thread, `mmap`'d by `mrt_host_tls_alloc` the
+// first time that thread asks for a slot.
+//
+// ⚠ **THE TWO ARCHES READ IT AT VERY DIFFERENT PRICE.** `TPIDR_EL0` is an ordinary register; the FS base
+// needs `arch_prctl(ARCH_GET_FS)`, a SYSCALL — which is why the x64 lane answers *"does this thread have a
+// block?"* from a process-wide `.data` flag instead (`X64LinuxRuntime.x64LinuxEmitStoreErrno` carries why
+// that is sound and not an approximation).
+//
+// ⚠ **KEY 0 IS NEVER HANDED OUT, EXACTLY AS ON DARWIN, AND FOR THE SAME REASON.** The Std tier publishes
+// `key * 8 + tlsSlotArrayBase(target)` and every reader treats a ZERO offset as *"`__sched_init_procs` has
+// not run"*; the base is 0 here, so a key of 0 would make that offset 0 and every current-P read in the
+// program would answer NULL for ever — a scheduler that silently never runs. The counter below therefore
+// pre-increments, and the chunk asserts the result rather than trusting the arithmetic.
+
+// How many keys one block holds — DERIVED from the page and the slot width, and a FUNCTION rather than a
+// `let` for `runtimeFrameSlots`' language reason: a global initializer folds `/` as a float.
+export function linuxTlsSlotCount() returns ParsedInt
+	return LinuxHostObjectPageBytes / SpillSlotBytes
+end 'linuxTlsSlotCount'
+
+// The first key handed out, and the reason the counter pre-increments — see the block above.
+//
+// ⭐ **SLOT 0 IS NOT MERELY UNISSUED, IT IS THIS THREAD's `errno`** — `arm64LinuxEmitErrnoAddr` on one lane,
+// `x64LinuxEmitStoreErrno`/`x64LinuxEmitLoadErrno` on the other. The two
+// reasons stack rather than compete: a key of 0 would publish a slot offset of 0, which every current-P
+// reader treats as *"the scheduler has not started"*, and the word that offset addresses is already spoken
+// for.
+export let LinuxTlsFirstKey = 1
+
+// `ENOTSUP` (`EOPNOTSUPP`) — 95 on Linux and 45 on Darwin, so it is per-lane for `LinuxErrnoNameTooLong`'s
+// reason and cannot join the five in `Targets/Shared/PosixRuntime`. Like `Arm64DarwinRuntime`'s twin it is PUBLISHED
+// rather than read: `mrt_host_spawn` answers it for a caller-built environment block, a shape this lane has
+// no conversion for either. See that chunk's own note.
+export let LinuxErrnoNotSupported = 95
+
+// ⭐ **THE THREE VERBS ONLY THIS LANE SPELLS AS A CHUNK, SO THEY KEEP THE LANE'S INFIX.**
+// `Targets/Shared/PosixRuntime`'s header states the rule: a name goes under the shared `mrt_host_` prefix
+// when the VERB is a shared host-surface verb served by every lane. These three are not — on macOS `osLockEnter` and
+// `osLockLeave` are a bare `pthread_mutex_lock`/`_unlock` import with no chunk at all, and `tlsSetValue` is
+// one `pthread_setspecific`. Only a raw static image needs a body, and a body one lane builds wears that
+// lane's name, exactly as `mrt_linux_glob_match` does.
+export let LinuxLockEnterName = b"mrt_linux_lock_enter"
+export let LinuxLockLeaveName = b"mrt_linux_lock_leave"
+export let LinuxTlsSetName = b"mrt_linux_tls_set"
+
+// The per-OS-thread slot counter `mrt_host_tls_alloc` hands out of. (The environment vector's word is
+// `LinuxRuntime.LinuxEnvpLabel` — both lanes capture it, so it is not this one's to declare.)
+export let LinuxTlsNextKeyLabel = b"__mrt_tls_next_key"
+
+// ⭐ **THE GREEN-THREAD FLOOR'S `.data` WORD, ON THE FLOOR'S OWN BIT AND ON BOTH LINUX LANES.** Split from
+// the errno word rather than folded into it because the two conditions are genuinely different: a program
+// that reads a file carries the errno word and no scheduler, and a pure-`async` program carries this one and
+// no errno word.
+//
+// ⚠ **NO CPU TEST**: the counter, the page it indexes and the pre-increment that keeps key 0 unissued are the
+// same fact on both Linux lanes, and only the instruction that reads the thread pointer differs.
+export function linuxGreenThreadGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if target.os != Os.linux or not usage.usesGt 'notThisLane'
+		return out
+	end 'notThisLane'
+
+	// The per-OS-thread slot counter. `__sched_init_procs` is its only caller and runs during bring-up, which
+	// is what makes the plain read-modify-write in `mrt_host_tls_alloc` sound.
+	pushRuntimeGlobal(out, label: LinuxTlsNextKeyLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	return out
+end 'linuxGreenThreadGlobals'
+
+// `clock_nanosleep`'s `flags`: 0 is a RELATIVE request, `TIMER_ABSTIME` (1) an absolute deadline. The op
+// carries a duration, so this is the relative one — and naming it is what stops the 0 reading as "no flags I
+// happened to need".
+export let LinuxSleepIsRelative = 0
+
+// Its `remain` out-param. NULL discards the unslept remainder, which this chunk has no channel to report and
+// whose one consumer re-checks its own deadline anyway (see the header).
+export let LinuxSleepDiscardsRemainder = 0
+
+// ⭐⭐⭐ **THE WORKER M's `clone` FLAGS — `pthread_create`'s set, and every bit has a reason.** The child is
+// a THREAD of this process, not a process: it must see the same heap the scheduler put the green threads in,
+// the same descriptor table the IO ran on, and the same `getpid()` every other part of the runtime reads.
+//
+//   • `CLONE_VM` — one address space. Without it the M would run the scheduler over a copy-on-write snapshot
+//     and publish its work where nobody could see it. It is what makes this a thread at all.
+//   • `CLONE_FS` — one filesystem context, so `Directory.setCurrent` on any M is the process's cwd, which is
+//     the semantics every other lane's threads have.
+//   • `CLONE_FILES` — one descriptor table: a file a green thread opened on one M is readable on the M that
+//     resumes it after a park.
+//   • `CLONE_SIGHAND` — one signal-handler table. The kernel REQUIRES it with `CLONE_THREAD` (and requires
+//     `CLONE_VM` with it), so it is a precondition rather than a preference.
+//   • `CLONE_THREAD` — one thread group. `getpid()` then answers the same value on every M (the pipe-name
+//     uniquifier and `mrt_host_proc_*` both read it), and the entry stub's `exit_group` at the end of `main`
+//     ends the whole program rather than leaving parked Ms behind.
+//   • `CLONE_SETTLS` — the new M's thread pointer (`TPIDR_EL0` on AArch64, the FS base on x86-64) = the slot
+//     block this chunk maps for it. On both lanes the thread pointer IS the per-OS-thread slot base
+//     (`mrt_host_tls_alloc`), and `__sched_worker_loop`'s very first
+//     act is `tlsSetValue(index, p)` through it — so an M cloned without this would panic in
+//     `mrt_linux_tls_set` before it adopted its P.
+//   • `CLONE_CHILD_CLEARTID` — the kernel zeroes `PosixWaitOffThread` and wakes it when the thread ends,
+//     which IS the join `__sched_stop_workers` performs. See `LinuxFutexWaitShared` for the wake's flavour.
+//
+// ⚠ **`CLONE_SYSVSEM` IS DELIBERATELY ABSENT** though glibc passes it: nothing in this runtime touches a
+// System V semaphore, and a flag with no consumer is a claim nobody can check.
+//
+// ⛔ **THE EXIT SIGNAL IS ZERO — the low byte carries none.** `CLONE_THREAD` forbids one, and a `SIGCHLD` here
+// would be the L5 child-process spelling pasted onto a thread.
+//
+// ⚠ **MEASURED, not transcribed** — a C program on the aarch64 guest issuing `svc` with x8 = 220 directly:
+// this exact word, in this exact argument order `(flags, stack, ptid, tls, ctid)`, started a thread that
+// read the `tls` page back out of `TPIDR_EL0` (and a slot the parent had written in it), saw the same
+// `getpid()` as its parent, took its argument off the stack top, and ended with `exit` leaving the process
+// alive — which `exit_group` would not have.
+let LinuxCloneVm = 0x00000100
+let LinuxCloneFs = 0x00000200
+let LinuxCloneFiles = 0x00000400
+let LinuxCloneSighand = 0x00000800
+let LinuxCloneThread = 0x00010000
+let LinuxCloneSetTls = 0x00080000
+let LinuxCloneChildClearTid = 0x00200000
+export let LinuxCloneWorkerFlags = LinuxCloneVm or LinuxCloneFs or LinuxCloneFiles or LinuxCloneSighand or LinuxCloneThread or LinuxCloneSetTls or LinuxCloneChildClearTid
+
+// ⭐⭐ **A WORKER M's OWN STACK: ONE MEGABYTE, WITH A PROT_NONE PAGE UNDER IT — AT THE BOTTOM OF THE REGION**,
+// because stacks grow down and the page the deepest frame reaches first is the lowest one. The size is `CreateThread`'s
+// default reserve on the lane this op was shaped for — `osThreadCreate` is `CreateThread(NULL, 0, …)` on
+// Windows and 0 means "the image's default", which is 1 MiB — so the three lanes give an M the same order of
+// stack rather than each inventing one. It is generous by a factor of about a thousand for what actually
+// runs here: an M's stack carries `__sched_worker_loop` and the runtime chunks it calls, and NOT a green
+// thread's frames (a switch moves SP to the GT's own stack) nor the syscall shim's (that is the P's own
+// `POffSystemStackSP`, a separate 64 KB region). `MAP_ANONYMOUS` commits lazily, so the unused margin costs
+// address space and no memory.
+//
+// ⛔ **THE GUARD PAGE IS NOT DEFENSIVE.** Without it an overflow writes into whatever the kernel mapped
+// below — silently, with the corruption surfacing somewhere else entirely. `mprotect(PROT_NONE)` turns that
+// into a SIGSEGV at the instruction that did it. MEASURED on the guest: a touch of the guarded page ends the
+// toucher with signal 11.
+let LinuxWorkerStackBytes = 0x100000
+export let LinuxWorkerStackGuardBytes = LinuxHostObjectPageBytes
+export let LinuxWorkerRegionBytes = LinuxWorkerStackGuardBytes + LinuxWorkerStackBytes
+
+// ⭐ **THE TWO WORDS THE CHILD READS OFF ITS OWN STACK TOP: the entry point and its argument.** `clone`'s
+// child resumes with x0 = 0 and NOTHING ELSE it can rely on — no return address, and a frame pointer still
+// aimed at the parent's stack — so the pair cannot be handed over in registers or in this chunk's frame
+// slots, both of which belong to the parent. musl's `aarch64/clone.s` solves it the same way, and this is
+// that solution: the parent writes them below the stack top, the child loads them through its own SP. 16
+// bytes keeps SP 16-aligned, which AAPCS64 requires at the `blr`.
+export let LinuxWorkerStackSeedBytes = 16
+
+// ⭐ **THE ONE STATE OF THE JOIN WORD AT `PosixWaitOffThread` THAT THIS COMPILER GETS TO CHOOSE.**
+// `mrt_host_thread_create` writes it before the `clone` and `mrt_host_wait_one`'s join arm passes it to
+// `FUTEX_WAIT` as the value it is waiting to LEAVE. ⚠ **THE EXITED STATE IS NOT A CONSTANT HERE BECAUSE IT IS
+// NOT THIS COMPILER'S TO NAME**: `CLONE_CHILD_CLEARTID` writes a 32-bit ZERO, always, so the join's exit test
+// is each arch's own zero test on the word — the instruction that already means "is zero" — rather than a
+// compare against a number we would only be re-deriving from the kernel's behaviour.
+export let LinuxThreadRunning = 1
+
+// What a worker M's own `exit` reports. Nothing reads it — a thread's status is not waitable and the join
+// answers `WAIT_OBJECT_0` for every M — and 0 is what a thread that ran to the end of its loop means.
+export let LinuxWorkerExitStatus = 0
+
+export let LinuxWaitMapFailedMessage = b"panic: the green-thread scheduler could not map a wait object (mmap failed)\n"
+export let LinuxWaitKindMessage = b"panic: a wait object of a kind this backend does not mint reached mrt_host_wait_new or mrt_host_wait_one -- a Linux lane mints wake events, child processes and worker-M threads, and nothing else is waitable\n"
+
+// ⛔ **A FAILED GUARD IS A PANIC, NOT A SILENT UNGUARDED STACK.** `mprotect` on a page the chunk itself just
+// mapped can only fail if the kernel refuses `PROT_NONE` on an anonymous private mapping; carrying on would
+// hand the scheduler an M whose overflow corrupts a neighbour instead of faulting.
+export let LinuxWorkerGuardFailedMessage = b"panic: the green-thread scheduler could not protect a worker M's stack guard page (mprotect failed)\n"
+
+// Where the two seed words sit relative to the child's entry SP — the entry point first, its argument
+// second. Named because the child reads them from a DIFFERENT function than the parent writes them in, and a
+// bare 0 and 8 at two sites is the one fact this pair must agree on.
+export let LinuxWorkerSeedEntryOffset = 0 as MachineWord
+export let LinuxWorkerSeedArgOffset = 8 as MachineWord
+
+// `CreateThread`'s NULL — what `SchedRuntime.buildSchedWakeOrSpawn`'s `spawnIt` tests to decide it must
+// release the P it claimed. It is the handle value, not an errno: this op reports failure by handing back no
+// handle at all, exactly as the Win32 call it stands for does.
+export let LinuxNoThreadStarted = 0
+
+export let LinuxWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reached with a DESCRIPTOR or a null handle, where only a wake event, a worker M or a child process is waitable\n"
+
+// ⭐ **THE LOCK REGION THE Std TIER ALLOCATES MUST HOLD THIS LANE'S MUTEX.** `osLockInit`'s caller
+// slab-allocates `OsLockBytes` and hands the pointer over; the three words below are written into whatever
+// it is given. The Std constant is sized for the widest lock across the targets this compiler serves and
+// says so, but a COMMENT cannot keep that true — so this is the check, at chunk-build time, on the lane that
+// would be corrupted.
+export function assertLinuxLockFits()
+	let needed = (LinuxLockOffDepth as ParsedInt) + SpillSlotBytes
+	if OsLockBytes < needed 'tooSmall'
+		panic("LinuxRuntime: `OsLockBytes` is {OsLockBytes} but this lane's recursive futex mutex needs {needed} bytes — `osLockInit` would write the owner and depth words past the region the allocator gave it and corrupt whatever it placed after, with no diagnostic anywhere")
+	end 'tooSmall'
+end 'assertLinuxLockFits'
+
+export let LinuxTlsMapFailedMessage = b"panic: the green-thread scheduler could not map this OS thread's slot block (mmap failed)\n"
+export let LinuxTlsExhaustedMessage = b"panic: the green-thread scheduler asked for more per-OS-thread slots than one page holds\n"
+
+// A key scales to a byte offset by the slot width — `key * 8`, spelled as a shift because that is the same
+// `index * 8` the Std tier publishes (`SchedRuntime.tlsSlotArrayBase`) and the two must agree exactly.
+export let LinuxTlsKeyScaleBits = 3 as ShiftCount
+
+// ⭐⭐ **`clone`'s FIVE ARGUMENTS, AND FOUR OF THEM ARE THE ABSENCE OF A THREAD.** The flag word's low byte is
+// the signal the child sends its parent when it dies, and `SIGCHLD` alone — with none of `CLONE_VM`,
+// `CLONE_FS`, `CLONE_FILES`, `CLONE_SIGHAND` or `CLONE_THREAD` — is precisely `fork`. A NULL stack means the
+// child keeps the parent's SP over a copy-on-write mapping, which is what makes returning from the syscall in
+// two processes sound.
+//
+// ⭐⭐ **THE COPY-ON-WRITE ADDRESS SPACE IS WHAT MAKES THE CHILD's PATH TO `execve` SAFE.** Everything it does
+// between the clone and the exec — three `dup3`s, a `chdir`, a write down the status pipe — happens where the
+// parent's heap cannot be touched, and its frame-slot reads address its OWN copy of the parent's frame while
+// the parent is blocked on the status read until the exec settles it.
+//
+// ⛔⛔ **THE TWO ARCHES ORDER `clone`'s LAST TWO ARGUMENTS DIFFERENTLY — AArch64 `(tls, ctid)`, x86-64
+// `(ctid, tls)` — WHICH IS WHY THE ARGUMENT SHUFFLE STAYS WITH EACH BACKEND AND ONLY THESE VALUES ARE SHARED.**
+// All five are NULL for a child process, so the disagreement cannot bite here; it bites in
+// `mrt_host_thread_create`, where both are live, and it fails as a HANG rather than an error.
+export let LinuxCloneExitSignalChild = 17
+export let LinuxCloneParentStack = 0
+export let LinuxCloneNoParentTidOut = 0
+export let LinuxCloneNoThreadPointer = 0
+export let LinuxCloneNoChildTidOut = 0
+
+// `wait4`'s options word. The reap of a child whose exec failed is the one place this file waits without
+// `WNOHANG`, and it cannot hang — the child has already written the pipe and called `exit`. The `rusage`
+// argument beside it is `Targets/Shared/PosixRuntime`'s `PosixReapDiscardsRusage`.
+export let LinuxReapUntilItExits = 0
+
+// `dup3`'s flag word. 0 leaves the new descriptor WITHOUT close-on-exec, which is the point: these three are
+// the only descriptors that must survive the exec.
+//
+// ⛔⛔ **`dup3` REFUSES `oldfd == newfd` WHERE `dup2` RETURNS IT UNCHANGED (`EINVAL`), SO EVERY LANE's CHILD
+// GUARDS THE CALL AND THE GUARD IS NOT DEFENSIVE.** That case is not exotic: a stream whose stdio kind is
+// `inherit` reaches the startup record as the parent's own 0, 1 or 2, so a plain `Subprocess.run` with no
+// redirection hits it three times.
+//
+// ⚠ **THE OLD DESCRIPTOR MUST BE UNTAGGED FIRST**: a pipe end reaches the record as a `PosixHandleKindShift`
+// handle, while an inherited standard stream and a redirected file reach it as bare descriptors.
+export let LinuxDup3NoFlags = 0
+
+// `O_CLOEXEC`. Every pipe this lane opens carries it, because there is no `POSIX_SPAWN_CLOEXEC_DEFAULT` here
+// to invert the inheritance default for the whole exec — see `Arm64PosixRuntime.buildArm64PosixPipeChunk`.
+export let LinuxOpenCloseOnExec = 0o2000000
+
+// What a child that could not `execve` exits with — the shell's own "command found but could not be run",
+// and what `execvp` failing inside `system()` reports. The parent does not read it: the status pipe carries
+// the real reason, and this is what a program that never asked would see.
+export let LinuxExecFailedExitCode = 127

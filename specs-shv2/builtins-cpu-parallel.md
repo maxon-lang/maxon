@@ -368,7 +368,7 @@ error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: i
 ```
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A program that never spawns anything runs on one M — its own — whatever processor count the scheduler
 resolved, so the high-water mark of concurrently-active worker Ms is 1, exactly as the bootstrap answers 1
 for the same program (MEASURED: `workers=1`). The `>= 1` half is the contract's floor; the `== 1` half is
@@ -500,6 +500,16 @@ instead of calling `recordGtUsage`, so `usesHeap` stayed off and the scheduler l
 **every** lane. It hid because the obvious probe prints its answer, and `print` turns `usesHeap` on by
 itself; only a program that discards the value shows it. That is why the program below **returns** the
 counter rather than printing it.
+⚠ **THE NATIVE TWIN THIS CASE ONCE HAD IS RETIRED, AND IT WAS PINNING SOMETHING THIS CASE DOES NOT.**
+`…refused-on-a-native-target` existed because both cases reach `E3104` through the same arm of
+`TargetFacilities.calleeHostFacility` but replaced panics in DIFFERENT backend code — wasm died in
+`SchedRuntime.tlsSlotArrayBase`, x64-Linux in `StdToX64Conversion.lowerTlsSetValue`, the same x64 backend
+that serves the lane where these builtins work. Now that x64-Linux provides the facility,
+`lowerTlsSetValue` has a real arm and no native lane refuses these counters, so the twin has nothing left
+to witness. ⚠ **What it covered is therefore NOT covered here**: this case proves the facility arm fires,
+not that the x64 backend stopped panicking — the suite's 7079 passing x64-linux cases are what prove that
+now. `async-sleep.md`'s surviving wasm case states the convention this follows.
+
 ```maxon
 function main() returns ExitCode
 	let steals = __Builtins.schedStealCount()
@@ -513,28 +523,4 @@ end 'main'
 error E3104: <fragment>:3:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_steal_count', which has no wasm32-wasi implementation
 error E3104: <fragment>:4:27: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_retake_count', which has no wasm32-wasi implementation
 error E3104: <fragment>:5:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__slab_remote_free_count', which has no wasm32-wasi implementation
-```
-
-<!-- test: builtins-cpu-parallel.error.the-per-processor-counters-are-refused-on-a-native-target -->
-<!-- targets: x64-linux -->
-⚠ **THE SECOND LANE, BECAUSE THE FIRST ONE'S GREEN DOES NOT COVER IT.** The wasm case above and this one
-reach `E3104` through the same arm of `TargetFacilities.calleeHostFacility`, but they reach the PANIC they
-replaced through different code: wasm died in `SchedRuntime.tlsSlotArrayBase` and x64-linux in
-`StdToX64Conversion.lowerTlsSetValue` — the same x64 backend that serves the lane where these builtins
-WORK. A gate that pins only the first proves the facility arm fires somewhere, not that this backend stopped
-panicking. `services.md` carries the same pair for the same reason (`error.a-service-is-rejected-on-wasm`
-beside `error.a-service-is-rejected-on-a-native-target`).
-```maxon
-function main() returns ExitCode
-	let steals = __Builtins.schedStealCount()
-	let retakes = __Builtins.schedRetakeCount()
-	let remote = __Builtins.slabRemoteFreeCount()
-
-	return (steals + retakes + remote) as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3104: <fragment>:3:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_steal_count', which has no x64-linux implementation
-error E3104: <fragment>:4:27: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_retake_count', which has no x64-linux implementation
-error E3104: <fragment>:5:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__slab_remote_free_count', which has no x64-linux implementation
 ```

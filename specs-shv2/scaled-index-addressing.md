@@ -61,13 +61,25 @@ An `Array with` a one-byte element has stride 1, so `index * 1` is folded to `in
 keeps its scale-1 `leaRegRegReg` plus a `movzx`. `a-byte-strided-element-keeps-its-scale-1-address` is
 the pin: a fold that "helpfully" rewrote it would be changing code that was already optimal.
 
-### arm64 takes the address half and not the memory half
+### arm64 takes both halves, and its memory half is NARROWER
 
 `ADD Xd, Xn, Xm, LSL #k` is exactly `lea [base + index*2^k]`, and arm64 gains MORE from it than x64
 does — AArch64 has no multiply-immediate at all, so the scaling was a `movz` into the IP scratch plus a
-register `MUL`, three instructions where this is one. Its `LDR Xt, [Xn, Xm, LSL #3]` is **not** the
-equivalent of the indexed load: the `S` bit selects a shift of 0 or exactly log2(access size), and the
-register-offset form carries no displacement field at all. See `TargetDialect.arm64AddLsl`.
+register `MUL`, three instructions where this is one.
+
+Its `LDR Xt, [Xn, Xm, LSL #k]` then carries the whole address, but on **strictly narrower terms** than
+x64's SIB byte, and both narrowings are the encoding's rather than a conservatism:
+
+- **The scale must BE the access size.** The `S` bit is one bit — shift 0, or exactly log2(the access
+  size). There is no `LSL #1` under a 64-bit access, so a `word64` element at stride 4 has no form.
+- **The displacement must be zero.** The register-offset encoding has no displacement field at all; the
+  12-bit one belongs to the immediate-offset form, which has no index register.
+
+Every element access the language spells is a `word64` at stride 8 and offset 0, which satisfies both —
+so the arm64 fragments show `loadRegBaseIndexScale`/`storeBaseIndexScaleReg` exactly where the x64 ones
+do. A chain outside those terms keeps its own `arm64AddLsl` and the access reads the result.
+`StdLoweringShared.indexedFormCarries` states each ISA's reach once; `TargetDialect.arm64AddLsl` and
+`TargetDialect.loadRegBaseIndexScale` carry the encodings.
 
 ## Tests
 

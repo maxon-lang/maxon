@@ -465,11 +465,17 @@ type StdToArm64Lowering
 	var calleeParamClasses as CalleeParamClassMap
 
 	// EC16 — the `base + index*scale` chains this function's element accesses spell (`ScaledIndexFolds`,
-	// in the shared lowering). arm64 answers `foldsIntoMemoryOps: FALSE`: `LDR Xt, [Xn, Xm, LSL #3]`
-	// exists, but its `S` bit selects a shift of 0 or exactly log2(access size) and the register-offset
-	// form carries no displacement at all — see `TargetDialect.arm64AddLsl`. So the address fold lands
-	// here and the memory fold does not.
+	// in the shared lowering). arm64 answers `accessWidthScaleAtZeroOffset`: `LDR Xt, [Xn, Xm, LSL #3]`
+	// carries the whole address, but its `S` bit selects a shift of 0 or exactly log2(the access size)
+	// and the register-offset encoding has no displacement field — so the memory fold lands here for the
+	// `word64` element at stride 8 that every array of a declared type spells, and nowhere else. The
+	// narrowing is the ENCODING's; `StdLoweringShared.indexedFormCarries` states it once.
 	var scaledIndexFolds as ScaledIndexFolds
+
+	// The scratch `MemoryIndexScaleMatch` `arm64MulImmForm` writes its `addShifted` answer through — a
+	// field rather than a local for `ScaledIndexFolds.operands`' measured reason: a fresh heap object per
+	// constant multiply of every function the backend lowers.
+	var mulScale as MemoryIndexScaleMatch
 
 	// Which compares this function keeps in NZCV and which must write their boolean to a register — the
 	// TARGET-INDEPENDENT analysis both native isels read (`CompareFusionCensus`, in the shared lowering).
@@ -482,7 +488,7 @@ type StdToArm64Lowering
 	let usesGt as bool
 
 	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), compareFusion: CompareFusionCensus.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt}
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
@@ -522,7 +528,7 @@ type StdToArm64Lowering
 	// or the phi edge that decides what it has to produce.
 	function prepareFunctionTables(funcIdx FuncIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
-		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, foldsIntoMemoryOps: false)
+		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.accessWidthScaleAtZeroOffset)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
 	end 'prepareFunctionTables'
 
@@ -715,34 +721,13 @@ type StdToArm64Lowering
 	// Lower a regular (non-terminator) Std op into the block named by `dstRef`. Every op lowers into the
 	// SAME block — nothing splits the walk (div/mod is a bare `sdiv`/`msub`, not a guarded block).
 	//
-	// ⭐⭐⭐ **THE SYSCALL BRACKET IS EMITTED HERE, AT THE ONE DISPATCH DOOR, AND THAT IS THE WHOLE REASON IT
-	// IS CORRECT.** A `blocking` op (`StdDialect.stdOpSyscallClassOf`) holds this OS thread in the kernel, so
-	// the machine announces itself before the call and reads the verdict after it — otherwise the processor
-	// it is holding is idle for the duration and nothing else can run on it.
-	//
-	// ⛔⛔ **IT MUST NOT BE WRAPPED AROUND THE BUILDERS INSTEAD, AND IT MUST NOT SIT IN THE IMPORT SHIM.**
-	// Every blocking op on these lanes takes a DIFFERENT road — a hand-assembled chunk reached by `bl`
-	// (`lowerHostChunkValue`), an isel-inline libSystem import (`emitArm64GtGatedImportCall`), or a raw `svc`
-	// emitted inline — and `__con_read_stdin`, the read this bracket exists for, takes the first of the
-	// three. A bracket in the shim would cover only the second; a bracket at each builder site is one a new
-	// builder site can forget. The dispatcher cannot.
-	//
-	// ⚠ **THE EXIT CALL IS SAFE AFTER EVERY LOWERING BECAUSE EACH ONE HAS ALREADY CAPTURED ITS RESULT INTO A
-	// VIRTUAL REGISTER**, and `arm64BranchLink` declares the whole caller-saved set as implicit defs
-	// (`TargetDialect`), so the allocator keeps that value live across it.
-	//
-	// ⛔⛔ **A BRACKETED OP MUST ALREADY DECLARE `clobbersFlags`, AND THE CHECK IS HERE BECAUSE NOTHING ELSE
-	// COUPLES THE TWO ROSTERS.** The two `bl`s wrap the op in code the fusion census cannot see — the census
-	// reads `StdOpMeta.clobbersFlags` off the op and stops there — so a `blocking` op declaring `false` would
-	// let a `b.cond` read NZCV the bracket's own call had already destroyed. Every op in the `blocking` set
-	// declares `true` today; the pairing is checked rather than commented, so an op added to one roster and
-	// not the other is a compiler failure at its first use instead of a wrong branch.
+	// The syscall bracket, at the one dispatch door that covers every road a blocking op takes here — a
+	// hand-assembled chunk reached by `bl` (`lowerHostChunkValue`), an isel-inline libSystem import
+	// (`emitArm64GtGatedImportCall`) and a raw `svc` alike; `__con_read_stdin`, the read this exists for,
+	// takes the first. WHICH ops take it is `opTakesSyscallBracket`, in the shared lowering; only the `bl`
+	// that spells the two announcements is this ISA's.
 	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType, paramFloatMask ArgFloatMask)
-		let bracketed = self.usesGt and stdOpSyscallClassOf(op) == SyscallClass.blocking
-
-		if bracketed and not op.rawValue.clobbersFlags 'theBracketWouldBeInvisible'
-			panic("lowerBodyOp: `{op.name}` is `SyscallClass.blocking` (StdDialect.stdOpSyscallClassOf) but declares `clobbersFlags: false` — the syscall bracket wraps it in two `bl`s, which write NZCV where the fusion census believes nothing does")
-		end 'theBracketWouldBeInvisible'
+		let bracketed = opTakesSyscallBracket(op, target: self.target, usesGt: self.usesGt)
 
 		if bracketed 'announceTheCall'
 			self.emit(dstRef, op: TargetOp.arm64BranchLink(SchedEnterSyscallName))
@@ -908,7 +893,7 @@ type StdToArm64Lowering
 			// this lane rather than deferred. Two shapes: the three that are a bare libSystem call with nothing
 			// to outlive it lower INLINE, and the rest branch to a chunk in `Arm64DarwinRuntime`, for that
 			// file's structural reason (an out-param must survive a call that answers in a register).
-			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.open, darwinArgument: PosixOpenReadOnly, linuxFlags: LinuxOpenReadOnlyFlags, linuxMode: PosixOpenReadOnly as MachineWord, dstRef: dstRef)
+			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.open, darwinArgument: PosixOpenReadOnly, linuxFlags: PosixOpenReadOnly, linuxMode: PosixNoFileMode as MachineWord, dstRef: dstRef)
 			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstRef: dstRef)
 			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: HostReadFileName, dstRef: dstRef)
 			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.creat, darwinArgument: PosixCreateFileMode, linuxFlags: LinuxOpenCreateTruncateFlags, linuxMode: PosixCreateFileMode as MachineWord, dstRef: dstRef)
@@ -1165,12 +1150,11 @@ type StdToArm64Lowering
 			return
 		end 'float'
 
-		// EC16 — this `+` is the second half of a `base + index*scale` element address, so it becomes ONE
-		// `ADD Xd, Xn, Xm, LSL #k` and the multiply that fed it emits nothing. That is a bigger saving here
-		// than on x64: AArch64 has no multiply-immediate, so `lowerMulImm` was materialising the stride into
-		// the IP scratch and following with a register `MUL` — three instructions where this is one.
+		// EC16 — this `+` is the second half of a `base + index*scale` element address: NOTHING when its
+		// one memory reader carries the whole address, else the single `ADD Xd, Xn, Xm, LSL #k` that
+		// replaces the scaling multiply.
 		if self.scaledIndexFolds.isIndexedAddress(resultId) 'scaledIndexAddress'
-			self.emit(dstRef, op: TargetOp.arm64AddLsl(TargetVReg.virtual(resultId), base: TargetVReg.virtual(self.scaledIndexFolds.baseOf(resultId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(resultId)), scale: self.scaledIndexFolds.scaleOf(resultId)))
+			self.lowerScaledIndexAddress(resultId, dstRef: dstRef)
 			return
 		end 'scaledIndexAddress'
 
@@ -1194,6 +1178,19 @@ type StdToArm64Lowering
 			mulHighSigned then self.emit(dstRef, op: TargetOp.arm64Smulh(dest, lhs: lhsReg, rhs: rhsReg))
 		end 'op'
 	end 'lowerBinOp'
+
+	// EC16 — emit a matched `base + index*scale` address: NOTHING when the one memory op reading it
+	// carries the address itself, else the single shifted-register `add` that replaces the separate
+	// scaling instruction and the `add` it fed. It is pressure-neutral even in that case — `index` was
+	// live to the scaling op and its RESULT live from there to the `add`; now `index` is live to the
+	// `add` and there is no intermediate at all.
+	function lowerScaledIndexAddress(resultId ValueId, dstRef BlockRef)
+		if self.scaledIndexFolds.fusesIntoMemoryOp(resultId) 'carriedByTheAccess'
+			return
+		end 'carriedByTheAccess'
+
+		self.emit(dstRef, op: TargetOp.arm64AddLsl(TargetVReg.virtual(resultId), base: TargetVReg.virtual(self.scaledIndexFolds.baseOf(resultId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(resultId)), scale: self.scaledIndexFolds.scaleOf(resultId)))
+	end 'lowerScaledIndexAddress'
 
 	// Lower a FLOAT binary op to its scalar-double NEON instruction. All four are genuine 3-address ops
 	// (arm64 FP has a real 3-operand form), so plain defs, no copy. Order matters for `fsub`/`fdiv`.
@@ -1365,11 +1362,18 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64Sub(dest, lhs: src, rhs: scratch) if isSub else TargetOp.arm64Add(dest, lhs: src, rhs: scratch))
 	end 'lowerAddSubImm'
 
-	// `dest = src * imm` — arm64 has no `mul` immediate form at all, so the multiplier is always
-	// materialised and a register `mul` follows.
+	// `dest = src * imm`. AArch64 has no `mul` immediate form, so the fallback is a `movz`/`movk` ladder
+	// into the IP scratch plus a register `MUL` — TWO instructions and a scratch clobber for what x64
+	// does in one `imul r64, r/m64, imm32`. `arm64MulImmForm` names the two shapes that escape it, and
+	// carries the reason the ADMISSION rule upstream is deliberately not narrowed to match.
 	function lowerMulImm(dest TargetVReg, src TargetVReg, imm Imm32, dstRef BlockRef)
-		let scratch = self.materialiseIntoScratch(imm, dstRef: dstRef)
-		self.emit(dstRef, op: TargetOp.arm64Mul(dest, lhs: src, rhs: scratch))
+		match arm64MulImmForm(imm, scale: self.mulScale) 'form'
+			shiftLeft then self.emit(dstRef, op: TargetOp.arm64LslImm(dest, src: src, imm: arm64MulImmShiftCount(imm)))
+			// `src * (2^k + 1)` is `src + (src << k)` — both operands of the shifted-register add name
+			// the SAME register, which is what makes one address op a multiply.
+			addShifted then self.emit(dstRef, op: TargetOp.arm64AddLsl(dest, base: src, index: src, scale: self.mulScale.value))
+			registerMultiply then self.emit(dstRef, op: TargetOp.arm64Mul(dest, lhs: src, rhs: self.materialiseIntoScratch(imm, dstRef: dstRef)))
+		end 'form'
 	end 'lowerMulImm'
 
 	// `dest = src <op> imm` for a logical op (`and`/`or`/`xor`). AArch64 `#bimm` forms encode ONLY
@@ -1427,12 +1431,26 @@ type StdToArm64Lowering
 
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
 		let width = accessWidthFor(valueType)
+		// EC16 — the address is a `base + index*scale` chain nothing else reads, and it is one the
+		// register-offset form can hold, so the access carries the whole address and the `add` that
+		// computed it emitted nothing.
+		if self.scaledIndexFolds.fusesIntoMemoryOp(addrId) 'indexed'
+			self.emit(dstRef, op: TargetOp.loadRegBaseIndexScale(TargetVReg.virtual(resultId), base: TargetVReg.virtual(self.scaledIndexFolds.baseOf(addrId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(addrId)), scale: self.scaledIndexFolds.scaleOf(addrId), disp: memoryDisplacement(offset), width: width))
+			return
+		end 'indexed'
+
 		let mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: mem.base, disp: mem.disp, width: width))
 	end 'lowerLoadIndirect'
 
 	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef BlockRef)
 		let width = accessWidthFor(valueType)
+		// EC16 — the store mirror of the indexed load above.
+		if self.scaledIndexFolds.fusesIntoMemoryOp(addrId) 'indexed'
+			self.emit(dstRef, op: TargetOp.storeBaseIndexScaleReg(TargetVReg.virtual(self.scaledIndexFolds.baseOf(addrId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(addrId)), scale: self.scaledIndexFolds.scaleOf(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: width))
+			return
+		end 'indexed'
+
 		let mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.storeBaseDispReg(mem.base, disp: mem.disp, src: TargetVReg.virtual(valueId), width: width))
 	end 'lowerStoreIndirect'

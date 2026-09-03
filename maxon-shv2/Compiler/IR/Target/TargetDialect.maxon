@@ -1726,6 +1726,15 @@ export union TargetOp
 	// shape as that op plus one more use: `dest` is INDEPENDENT of both address registers (a load's
 	// destination need not be either), so no seed copy is ever emitted.
 	//
+	// ⭐ **SHARED BY BOTH ISAs, exactly as `loadRegBaseDisp`/`storeBaseDispReg` are, and with the same
+	// division of labour: the OP means `[base + index*scale + disp]`, and each encoder covers the
+	// addresses its own form can hold while the ISEL guarantees it is handed no other.** x64's SIB byte
+	// holds all of them; AArch64's register-offset form holds only `scale == the access size` at
+	// displacement 0, so `StdLoweringShared.indexedFormCarries` declines the fold for the rest and the
+	// access reads an ordinary `arm64AddLsl` result instead. The ADDRESS op stays per-ISA
+	// (`leaRegBaseIndexScale` / `arm64AddLsl`) because a `lea` and an `add` are different instructions;
+	// a load is a load.
+	//
 	// ⚠ **THE DISPLACEMENT IS CORRECT BY CONSTRUCTION AND CURRENTLY DEAD, AND THAT IS WORTH SAYING
 	// PLAINLY** — an earlier draft of this comment claimed it "subsumes the `+ field` of a struct field
 	// read off an indexed element", and that was MEASURED FALSE: every `loadRegBaseIndexScale` and
@@ -1734,6 +1743,7 @@ export union TargetOp
 	// off the loaded pointer and never a displacement on this operand. The field costs nothing (it
 	// shares `chooseDispMod`/`emitTrailingDisp` with the heavily-exercised unindexed path) and it is
 	// what a future lowering with a non-zero element offset would use — but nothing produces one today.
+	// arm64 REFUSES a non-zero one outright, because its encoding has no field to put it in.
 	loadRegBaseIndexScale(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale, disp Imm32, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// `mov [base + index*scale + disp], src` — the store mirror. THREE uses and no def.
 	storeBaseIndexScaleReg(base TargetVReg, index TargetVReg, scale MemoryIndexScale, disp Imm32, src TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
@@ -1741,18 +1751,17 @@ export union TargetOp
 	// with the shifted-register field filled in. Three independent operands, no flags (`ADD`, not `ADDS`).
 	//
 	// ⭐ **arm64 GAINS MORE FROM THIS THAN x64 DOES, because AArch64 has no multiply-immediate at all**:
-	// `StdToArm64Conversion.lowerMulImm` materialises the multiplier into the IP scratch and follows with
-	// a register `MUL`, so the scaling that costs x64 one `imul` costs arm64 TWO instructions plus a
-	// scratch register. This op replaces all three (movz, mul, add) with one.
+	// the scaling x64 spells with one `imul` costs arm64 a separate instruction of its own
+	// (`arm64MulImmForm`), and this op absorbs it into the `add` that reads it.
 	//
-	// ⚠ **arm64's INDEXED LOAD/STORE IS DELIBERATELY ABSENT, and it is not an oversight.** `LDR Xt, [Xn,
-	// Xm, LSL #3]` exists, but it is NOT the equivalent of `loadRegBaseIndexScale`: its `S` bit selects
-	// shift 0 or exactly log2(access size) — there is no `LSL #1`/`#2` for a 64-bit access — and the
-	// register-offset form carries NO displacement field at all. So the fold that is one rule on x64 is
-	// three conditions on arm64, over three more encodings (LDR Xt / LDR Dt / LDRB Wt and their stores),
-	// on a lane this project cannot run. `StdToArm64Conversion` therefore asks for the address fold and
-	// declines the memory fold; the remaining `add` is one instruction, which is where arm64 already
-	// stood before the multiply existed.
+	// ⭐ **IT IS ALSO HOW A CONSTANT MULTIPLY BY `2^k + 1` IS SPELLED** (`arm64MulImmForm`): with `base`
+	// and `index` naming the SAME register it computes `x + (x << k)`, so ×3, ×5 and ×9 are one
+	// instruction rather than a materialised multiplier and a register `MUL`.
+	//
+	// ⚠ **IT SURVIVES THE MEMORY FOLD RATHER THAN BEING REPLACED BY IT.** AArch64's register-offset
+	// load/store carries the address only where the scale IS the access size and the displacement is
+	// zero (`StdLoweringShared.indexedFormCarries`); every other matched chain — and every matched chain
+	// with no memory reader at all — still emits this one instruction.
 	arm64AddLsl(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// ⭐⭐ **`imul r/m64` — the ONE-OPERAND group-3 signed multiply (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src,
 	// and this op is the half of it a division-by-constant needs, the HIGH one in RDX (EC18).**
@@ -1850,6 +1859,26 @@ export enum X64AccessWidth
 	byte
 	word64
 end 'X64AccessWidth'
+
+// The BYTES one access of a given width transfers — the size both ISAs' addressing rules are talking
+// about, and THE one place it is named.
+//
+// Three readers that must never disagree: arm64's encoder scales its imm12 displacement field by it
+// (`arm64EmitDataLoad`, `arm64DispHasScaledForm`), arm64's register-offset form admits an index scale
+// only when the scale IS this size (`indexedFormCarries`), and a future narrow-width access grows a
+// case here rather than a third table. Written as named constants because a bare `1` and `8` beside an
+// enum case say nothing about which fact they are.
+typealias AccessWidthBytes = int(1 to 8)
+
+let SingleByteAccessBytes = 1 as AccessWidthBytes
+let Word64AccessBytes = 8 as AccessWidthBytes
+
+export function accessWidthBytes(width X64AccessWidth) returns AccessWidthBytes
+	return match width 'w'
+		byte gives SingleByteAccessBytes
+		word64 gives Word64AccessBytes
+	end 'w'
+end 'accessWidthBytes'
 
 // ⭐ **THE INDEX SCALE OF A `[base + index*scale]` ADDRESS — the four multipliers a hardware
 // addressing mode carries for free, and the ONE place they are named (EC16).**

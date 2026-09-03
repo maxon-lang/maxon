@@ -1,0 +1,100 @@
+// Test: async-promise-drop.spawn-drop-loop-bounded
+
+function trivial() returns Integer
+	Runtime.yield()
+	return 0
+end 'trivial'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 1000 'loop'
+		_ = async trivial()
+		i = i + 1
+	end 'loop'
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @trivial {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+  whilehdr:
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc greaterEqual, whileexit
+  loop:
+    x64.leaRegFunc rcx, [rip + trivial]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_promise_drop
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

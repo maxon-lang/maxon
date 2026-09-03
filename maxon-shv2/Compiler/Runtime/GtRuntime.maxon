@@ -2084,7 +2084,7 @@ end 'ioRuntimeGlobals'
 // ⚠ **THIS IS NOT `usesIocp`, AND CONFLATING THE TWO IS WHAT THE SPLIT FIXES.** `usesIocp` asks *"does this
 // module read a pipe?"* and still gates the reader itself (`__gt_io_read`, `__gt_subp_yield_read`); this asks
 // *"does a read on this target complete somewhere else?"*, and only the second one is about the target.
-enum IoCompletionShape
+export enum IoCompletionShape
 	// Windows: a completion port, a wake event and a drain thread.
 	completionPort
 	// POSIX and WASI: a read completes in its caller.
@@ -2093,7 +2093,7 @@ end 'IoCompletionShape'
 
 // ⚠ Keyed on the OS, like every other shape question in this compiler: whether a read can be in flight is a
 // property of the platform's IO model, not of its instruction set.
-function ioCompletionShape(target Target) returns IoCompletionShape
+export function ioCompletionShape(target Target) returns IoCompletionShape
 	return match target.os 'os'
 		windows gives IoCompletionShape.completionPort
 		linux to wasi gives IoCompletionShape.inlineCompletion

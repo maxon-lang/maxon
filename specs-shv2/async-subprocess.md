@@ -112,7 +112,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-exit-code -->
-<!-- targets: arm64-macos, arm64-linux -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
 `exit-code`'s subject on the POSIX lane, and the case that proves `__Builtins.runProcess` runs a child here
 at all: a spawned green thread runs a child that exits 3, parks on it, resumes once it exits, and returns
 the exit code, which becomes the program's exit code. The spawn succeeds, so the `otherwise` fallback is
@@ -202,7 +202,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-multi-concurrent -->
-<!-- targets: arm64-macos, arm64-linux -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE CONCURRENCY CASE — SEVERAL CHILDREN THROUGH THE NETPOLL AT ONCE.** Three children are spawned
 BEFORE any await, so all three park on their processes SIMULTANEOUSLY and `__gt_proc_check`'s
 parallel-array swap-remove runs with a multi-entry store — the path `posix-exit-code` and
@@ -278,7 +278,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-interleave-with-sleep -->
-<!-- targets: arm64-macos, arm64-linux -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE CASE THAT PROVES THE PROCESS WAIT YIELDS ON THIS LANE.** A slow child (a one-second `sleep`) and a
 short 50 ms sleeper run concurrently. The sleeper's timer fires WHILE the child is still running, so the
 sleeper resumes FIRST — the wait is bounded by the earliest timer rather than blocking the single M on the

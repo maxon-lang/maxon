@@ -1,0 +1,61 @@
+// Test: cycle-behind-a-second-await-is-still-refused
+type A
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping(b B.handle, c C.handle) returns Integer
+		let x = try await b.pong() otherwise 0
+		let y = try await c.tick() otherwise 0
+		return x + y
+	end 'ping'
+
+	export function ack() returns Integer
+		return 1
+	end 'ack'
+end 'A'
+
+type B
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function pong() returns Integer
+		return try await spawnA().ack() otherwise 0
+	end 'pong'
+end 'B'
+
+type C
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick() returns Integer
+		return 2
+	end 'tick'
+end 'C'
+
+function spawnA() returns A.handle
+	return spawn A.create()
+end 'spawnA'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let b = spawn B.create()
+	let c = spawn C.create()
+	a.ping(b, c: c)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3139: <fragment>:10:15: service call cycle — these messages can deadlock waiting on each other:
+    `A.ping` (<fragment>:10:15) awaits a reply from `B`
+    `B.pong` (<fragment>:28:14) awaits a reply from `A`
+    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph

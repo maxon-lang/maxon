@@ -1,0 +1,192 @@
+// Test: clock.nanos-resolves-sub-millisecond
+function main() returns ExitCode
+		var smallest = 0
+		var prev = Clock.nowNanos()
+		var i = 0
+		while i < 200000 'sample'
+				let now = Clock.nowNanos()
+				let delta = now - prev
+				if delta > 0 'advanced'
+						if smallest == 0 or delta < smallest 'newMin'
+								smallest = delta
+						end 'newMin'
+						prev = now
+				end 'advanced'
+				i = i + 1
+		end 'sample'
+		var ok = 0
+		if smallest > 0 and smallest < 1000000 'subMillisecond'
+				ok = 1
+		end 'subMillisecond'
+		print("subMs={ok}\n")
+		return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegImm32 rbx, 0
+    x64.callDirect Clock.nowNanos
+    x64.movRegImm32 r12, 0
+    x64.movRegReg r13, r12
+    x64.movRegReg r12, r8
+  whilehdr:
+    x64.cmpRegImm32 r13, 200000
+    x64.jcc greaterEqual, whileexit
+  sample:
+    x64.callDirect Clock.nowNanos
+    x64.movRegReg rax, r8
+    x64.subRegReg rax, r8, r12
+    x64.cmpRegImm32 rax, 0
+    x64.jcc lessEqual, critsplit#14
+  advanced:
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 1
+    x64.jcc equal, scmerge#6
+  orrhs:
+    x64.cmpRegReg rax, rbx
+    x64.setccReg less, rcx
+  scmerge#6:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont#9
+  critsplit#17:
+    x64.movRegReg rax, rbx
+    x64.jmp ifcont#9
+  critsplit#14:
+    x64.movRegReg rax, rbx
+    x64.movRegReg r8, r12
+  ifcont#9:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rbx, rax
+    x64.movRegReg r12, r8
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 r12, 0
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 rax, 0
+    x64.jcc lessEqual, scmerge#11
+  andrhs:
+    x64.cmpRegImm32 rbx, 1000000
+    x64.setccReg less, rax
+  scmerge#11:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#18
+  subMillisecond:
+    x64.movRegImm32 rbx, 1
+    x64.jmp ifcont#13
+  critsplit#18:
+    x64.movRegReg rbx, r12
+  ifcont#13:
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "subMs="
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot3, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot r12, slot2
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

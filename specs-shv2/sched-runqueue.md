@@ -128,7 +128,7 @@ widen when that band does.
 ## Tests
 
 <!-- test: sched-runqueue.a-coroutine-spawned-by-a-coroutine-joins-its-owners-queue -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE TRANSITIVITY THE WHOLE PIN RESTS ON.** A coroutine's owner is its SPAWNER'S owner, not its spawner
 — so `inner`, spawned by the coroutine `outer`, belongs to the same green thread `main` does, and lands
 in the SAME queue as `sibling`, which `main` spawned. It is the case that states the transitivity
@@ -195,7 +195,7 @@ ra=1 rb=1 posA=1 posB=2 posC=3
 ```
 
 <!-- test: sched-runqueue.spawn-order-is-fifo-within-one-green-thread -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **FIFO WITHIN ONE GREEN THREAD.** A coroutine queue is a queue and not a stack: three coroutines spawned
 in order run in that order, whatever order their promises are awaited in. The awaits here run BACKWARDS
 on purpose — `p3` first — so a queue that handed back the newest entry would be visible as `a3=1`.
@@ -244,7 +244,7 @@ s=3 a1=1 a2=2 a3=3
 ```
 
 <!-- test: sched-runqueue.a-yield-hands-the-processor-to-a-never-run-sibling -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE HANDOFF ARM, THE TEST THAT SELECTS IT, AND THE END THE YIELDER IS DRAINED TO.** A yield hands the
 processor over only if somebody is queued, and "queued" means *in my owner's coroutine queue* — one load
 and one compare. `yielder` yields a thousand times while `sibling` has never run, and this one case pins
@@ -294,7 +294,7 @@ seen=1 done=1
 ```
 
 <!-- test: sched-runqueue.a-dropped-coroutine-in-the-queue-is-skipped-not-run -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE POPPER'S HALF OF THE DROPPED-THREAD PROTOCOL.** `marker`'s promise is dropped while two live
 coroutines sit around it in the queue — one ahead of it, one behind — so the drop's own front-of-queue
 sweep cannot reach it and `__gt_coro_next` is what has to refuse it. `await p2` drives past `marker`; it
@@ -334,7 +334,7 @@ ran=0
 ```
 
 <!-- test: sched-runqueue.a-spawn-drop-loop-stays-bounded -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE SWEEP'S HALF.** Five thousand coroutines are spawned and dropped without anything ever driving the
 scheduler, so nothing would pop them and the mark alone would leave five thousand structs alive. Each
 drop instead sweeps the tombstones off the FRONT of the dropped coroutine's own owner's queue, where the
@@ -375,7 +375,7 @@ ran=0 live=bounded
 ```
 
 <!-- test: sched-runqueue.a-drop-that-arrives-after-completion-reclaims -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE RUNNER-FIRST ARRIVAL ORDER.** `p` is never awaited, but `await q` drives the scheduler past it, so
 `p` runs to completion and the driver's hand-off adds the RUNNER ticket while the promise is still live —
 the struct survives, because it still holds a result an un-awaited promise owns. The loop body's scope exit
@@ -427,7 +427,7 @@ total=4 finished=4 liveGrew=0
 ```
 
 <!-- test: sched-runqueue.a-drop-of-a-parked-thread-is-both-halves -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE ONE ARM WHERE ONE CALL IS BOTH PARTIES.** `s` parks on a 200 ms timer and `await f` returns long
 before it fires, so the loop body's scope exit drops a thread that is registered in the timer store and
 that no runner will ever come back for. The drop takes it out of the store under `__sched_lock` — and,
@@ -483,7 +483,7 @@ total=4 stillParked=4 liveGrew=0
 ```
 
 <!-- test: sched-runqueue.no-coroutine-is-ever-stolen -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE STEAL COUNTER, AND WHAT IT NOW READS BY CONSTRUCTION.** `__Builtins.schedStealCount()` walks
 `__sched_procs` and sums every processor's steal counter, so it is the only way a Maxon program can
 observe that work stealing happened at all. A coroutine is published only to its owner's queue, so
@@ -518,7 +518,7 @@ r=5 steals=0
 ```
 
 <!-- test: sched-runqueue.ring-overflow-runs-every-spawned-service -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 **THE OVERFLOW, AND THE PROOF THAT NOTHING IS LOST IN IT.** Three hundred `spawn`s run back to back with
 nothing between them that yields, so all 300 green threads are published before the first one runs. The ring
@@ -616,7 +616,7 @@ ran=300
 ```
 
 <!-- test: sched-runqueue.the-ring-index-wraps-past-its-capacity -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 **THE WRAP.** `runqhead`/`runqtail` are monotonic counters, not indices. One service takes six thousand
 messages one at a time, each drained before the next is sent, so the service is woken and re-published
@@ -699,7 +699,7 @@ sum=6000
 ```
 
 <!-- test: sched-runqueue.the-global-queue-is-consulted-within-sixty-one-schedules -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 **THE FAIRNESS CHECK, AND THE ONE SHAPE THAT CAN SEE IT.** The overflow above moves the OLDEST half of
 the ring to the global queue, so service #1 — the first ever spawned — ends up at the global head while
@@ -823,7 +823,7 @@ runCount=300 oldest=early
 ```
 
 <!-- test: sched-runqueue.a-yield-goes-behind-the-global-queue -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 **THE BACK OF THE QUEUE, AND THE ONLY SHAPE AT ONE PROCESSOR THAT CAN SEE IT.** A drained yielder goes to
 the GLOBAL queue's tail; the scheduler consults its RING first, so anything pushed to the ring AFTER the
@@ -965,7 +965,7 @@ sPos=1 yPos=2
 ```
 
 <!-- test: sched-runqueue.nothing-is-stolen-on-one-processor -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 **THE STEAL COUNTER, AND THE ONE ANSWER A SPEC CAN PIN — the SERVICE twin of
 `no-coroutine-is-ever-stolen` above, and the reason the two are different cases.** That one reads 0

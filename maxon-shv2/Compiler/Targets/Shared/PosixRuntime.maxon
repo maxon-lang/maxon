@@ -203,6 +203,10 @@ export let ErrorGenericFailure = 31
 //
 // ⚠ `Arm64DarwinRuntime`'s `DarwinMonotonicTicksPerSecond` is the same digits and a DIFFERENT fact — the
 // frequency that chunk REPORTS through an out-param — which is why the two are not one name.
+//
+// ⭐ **IT IS ALSO THE FREQUENCY `mrt_host_monotonic_clock` REPORTS ON EVERY POSIX LANE, AS A CONSTANT**,
+// because the reading beside it is already nanoseconds — which makes `__gt_now_ns`'s ticks→nanoseconds
+// scaling the IDENTITY there, the strongest form that split can take and one with no rounding of its own.
 export let PosixNanosPerSecond = 1000000000
 
 // ⭐⭐ **NANOSECONDS PER FILETIME TICK — the one FILETIME fact the Std tier does not already export, and it
@@ -269,3 +273,244 @@ export type PosixStatLayout
 		return Self{bytes: bytes, modeOffset: modeOffset, sizeOffset: sizeOffset, creationTimeOffset: creationTimeOffset, accessTimeOffset: accessTimeOffset, modifyTimeOffset: modifyTimeOffset}
 	end 'create'
 end 'PosixStatLayout'
+
+// ==========================================================================
+// The POSIX HOST-OBJECT PROTOCOL — the numbers every POSIX lane's bodies agree on
+// ==========================================================================
+//
+// ⭐⭐ **NEITHER ARCH NOR OS HAS A SAY IN ANY OF THESE, WHICH IS WHY THEY LIVE HERE AND NOT WITH AN
+// ASSEMBLER.** A wait object's field offsets, a handle's kind tag, the bits `poll` answers with and the way
+// POSIX packs an exit status into a wait word are read by the arm64 chunks and by the x86-64 ones alike;
+// each backend writes its own INSTRUCTIONS around them and none of them gets to choose a different number.
+// Two copies of `PosixWaitOffChildPid` is a handle whose pid one lane writes and the other reads four bytes
+// away from — a wrong answer with no compile error between the two files.
+
+// ⭐ **THE WAIT OBJECT'S KIND, AS THE ISEL SPELLS IT.** `osEventCreate` lowers to `mrt_host_wait_new(kind)`
+// on BOTH lanes and must name the same number on each, so the value is a shared protocol rather than either
+// lane's private constant. The other kinds are not here because no isel lowering names one: a thread object
+// is minted inside `mrt_host_thread_create` and a child process inside `mrt_host_spawn`, each of which knows
+// its own kind (`Arm64DarwinRuntime`'s layout header enumerates all three).
+export let PosixWaitKindEvent = 1
+
+// ⭐⭐⭐ **`StdOp.osCloseHandle` CLOSES FOUR DIFFERENT THINGS AND POSIX HAS NO TYPE IN COMMON FOR THEM.** On
+// Windows a wake event, a worker thread, a pipe end, an opened file and a child process are all one opaque
+// `HANDLE`, and one `CloseHandle` serves every one of them. On either POSIX lane the first two and the last
+// are heap objects the backend mints, the middle two are DESCRIPTORS, and "close" means `free`/`munmap` for
+// one and `close` for the other. A value that is only a number cannot say which — and the numbers OVERLAP,
+// because a small descriptor and an allocated pointer are both just integers.
+//
+// ⇒ **A handle on every POSIX lane carries its kind in bits 48 and up**, which a user virtual address never
+// occupies on any of the three: arm64-macOS is 47-bit, arm64-Linux is 48-bit (so bit 47 is the highest one
+// used), and on Linux/x86-64 a user VA is `< 2^47` under 4-level paging while under LA57 the kernel hands out
+// an address at or above `2^47` only to an explicit high `mmap` hint, which nothing in this compiler passes.
+// `mrt_host_wait_close` reads those bits and dispatches; everything that consumes a DESCRIPTOR masks them
+// off, which costs two instructions and is a no-op for the untagged descriptors `osFileOpenRead` and
+// `osStdHandle` already answer.
+//
+// ⚠ **KIND 0 IS THE DESCRIPTOR KIND ON PURPOSE**, so a raw fd from any other family is already a valid
+// handle and needs no tagging at its source — and so that the Std tier's `0 means no handle` sentinel
+// (which `emitSubpCloseSlotHandles` relies on, and which is `CloseHandle(NULL)`'s Win32 no-op) keeps
+// meaning exactly that.
+//
+// ⛔ **⇒ EVERY LANE's `mrt_host_wait_close` MUST GUARD A ZERO DESCRIPTOR, AND THE GUARD IS LOAD-BEARING
+// RATHER THAN DEFENSIVE.** `SubprocessRuntime.emitSubpCloseSlotHandles` closes every slot field
+// unconditionally; on Windows `CloseHandle(0)` is a no-op by the API's own contract, while here fd 0 is
+// STANDARD INPUT and closing it would take the program's stdin away.
+export let PosixHandleKindShift = 48 as ShiftCount
+let PosixHandleKindDescriptor = 0
+export let PosixHandleKindObject = 1
+
+// How WIDE the kind field is — the bits above the 48-bit payload, which on every POSIX lane is every bit a
+// user virtual address cannot reach (see above for each lane's reason).
+export let PosixHandleKindBits = (MachineWordBits - PosixHandleKindShift) as ShiftCount
+
+// `1 << PosixHandleKindShift` as a value rather than a shift, so a kind can be turned into a tag by a
+// multiply the `movz #imm, lsl #48` ladder encodes in one instruction.
+export let PosixHandleKindUnit = 0x0001000000000000
+
+// The byte count an unset variable answers — `GetEnvironmentVariableA`'s own 0, and the value both lanes seed
+// `writtenSlot` with before their lookup so the not-found arm needs no branch of its own.
+export let PosixEnvUnset = 0
+
+export let PosixMillisPerSecond = 1000
+
+// The other direction of the same fact, and the unit each lane's millisecond-to-`timespec` split
+// (`arm64PosixMillisToTimespec`, `x64LinuxEmitMillisToTimespec`) turns a remainder into. ⚠ `mrt_host_tick_ms` does NOT use it: that chunk derives its divisor from the FREQUENCY
+// `mrt_host_monotonic_clock` reports, so a lane that ever answered raw counter ticks would still be right.
+export let PosixNanosPerMilli = 1000000
+
+// What a POSIX call that reports only success or failure answers on success.
+export let PosixCallSucceeded = 0
+
+// ⭐ **A CHILD PROCESS IS A WAIT OBJECT KIND, AND BOTH LANES NOW MINT ONE**, so it joins `PosixWaitKindEvent`
+// here rather than staying either lane's private constant: `mrt_host_spawn` writes it and `mrt_host_wait_one`
+// and `mrt_host_wait_close` both dispatch on it, in bodies this file owns.
+export let PosixWaitKindProcess = 3
+
+// ⭐⭐ **AND SO IS A WORKER M's OS THREAD.** Every POSIX lane's `mrt_host_thread_create` mints one and every
+// lane's `mrt_host_wait_one` and `mrt_host_wait_close` dispatch on it, so it is a shared protocol number like
+// the two above rather than any one lane's private constant. ⚠ The three kinds are 1, 2 and 3 and none is 0,
+// so an object whose kind field was never written cannot be mistaken for any of them.
+export let PosixWaitKindThread = 2
+
+// ==========================================================================
+// The WAIT OBJECT's shared prefix
+// ==========================================================================
+
+// ⭐⭐ **SIX FIELDS AT SIX FIXED OFFSETS, IDENTICAL ON BOTH LANES — which is what lets the reap, the await,
+// the exit-code read and the multi-wait be ONE body each.** What the two lanes disagree about is what sits
+// ABOVE these: Darwin follows them with a `pthread_mutex_t` and a `pthread_cond_t` (an event there is a
+// condition variable); Linux follows them with nothing at all (a futex needs no mutex, and the object is one
+// `mmap`'d page).
+//
+// ⭐⭐ **0x10 IS THE OS THREAD's OWN IDENTITY, AND EVERY LANE PUTS SOMETHING DIFFERENT THERE.** A `pthread_t`
+// that `pthread_join` takes on Darwin, the `CLONE_CHILD_CLEARTID` word the kernel zeroes and wakes on Linux —
+// but the ROLE is identical (it is what `mrt_host_wait_one`'s THREAD arm joins through), so the offset is one
+// fact written once rather than lanes agreeing by hand. ⚠ Only a THREAD object gives it a MEANING; on the
+// other two kinds it is a zero, written explicitly on the lane whose allocator does not zero (`malloc`) and
+// inherited from the page on the lane whose does (`mmap`).
+//
+// ⭐⭐⭐ **`PosixWaitOffChildStatus` EXISTS BECAUSE A POSIX WAIT CONSUMES THE STATUS AND WIN32's TWO CALLS DO
+// NOT.** `WaitForSingleObject(hProcess)` and `GetExitCodeProcess(hProcess)` are both repeatable and
+// independent; POSIX fuses them into one call that can be answered exactly ONCE — MEASURED on both lanes, a
+// second wait on the same pid answers -1/`ECHILD`. Every Std graph in the subprocess family polls the handle
+// and reads the code separately, and several do both more than once. ⇒ `mrt_host_proc_reap` is the ONE place
+// a status is taken, it CACHES it in this field, and every later ask is served from there. That is the whole
+// reason a child-process handle on a POSIX lane is an object rather than the bare pid it could otherwise be.
+export let PosixWaitOffKind = 0x00 as MachineWord
+export let PosixWaitOffSignal = 0x08 as MachineWord
+export let PosixWaitOffThread = 0x10 as MachineWord
+export let PosixWaitOffChildPid = 0x18 as MachineWord
+export let PosixWaitOffChildStatus = 0x20 as MachineWord
+export let PosixWaitOffChildKilled = 0x28 as MachineWord
+
+// The two states of the signal word above. They are HERE rather than once per lane because the field is
+// shared and `mrt_host_proc_reap` — a shared body — publishes into it; each lane's own event protocol reads
+// the same two values through its own primitive (a condvar predicate on Darwin, a `FUTEX_WAIT` comparand on
+// Linux).
+//
+// ⭐⭐ **TWO STATES AND NOT A COUNT, BECAUSE `SetEvent` IS AN AUTO-RESET EVENT'S CONTRACT.** `mrt_host_event_set`
+// publishes with a COMPARE-AND-SWAP whose verdict is discarded, which is correct rather than a missed signal:
+// it can fail only when the word is already signalled, and `SetEvent` on an already-signalled auto-reset
+// event is a documented no-op. A counting increment would release TWO waiters for two signals — a worker M
+// woken for work another M has already taken.
+//
+// ⚠ **THE WAKE HAPPENS WHETHER OR NOT THE PUBLISH LANDED.** A waiter that observed the signalled state and is
+// about to sleep is refused by its own primitive's compare; one already asleep is woken by the wake.
+export let PosixWaitNotSignalled = 0
+export let PosixWaitSignalled = 1
+
+// ==========================================================================
+// The POSIX facts the child-process band reads — MEASURED on BOTH lanes
+// ==========================================================================
+
+// `struct pollfd` is `{int fd; short events; short revents;}` — EIGHT bytes, MEASURED on Darwin and on an
+// aarch64 Linux guest, which is why the whole descriptor is written and read as ONE 64-bit word rather than
+// through three stores of three widths. Little-endian: `fd` is the low half, `events` the third halfword,
+// `revents` the fourth.
+export let PosixPollIn = 1
+export let PosixPollEventsUnit = 0x0000000100000000
+export let PosixPollReventsShift = 48 as ShiftCount
+export let PosixPollOneDescriptor = 1
+
+// `poll`'s revents bits, MEASURED on both. Only the two that mean *"this descriptor is unusable"* are tested
+// — `POLLHUP` (0x10) is deliberately NOT among them, because a pipe whose writer has closed reports it
+// ALONGSIDE `POLLIN` while bytes are still buffered (MEASURED: `revents = 0x11` on both lanes), and treating
+// it as broken would discard them.
+let PosixPollErr = 8
+let PosixPollNval = 32
+export let PosixPollBrokenBits = PosixPollErr or PosixPollNval
+
+// ⭐⭐ **WHAT `mrt_host_pipe_peek` REPORTS AS "AVAILABLE", AND WHY IT IS NOT THE TRUE COUNT.**
+// `PeekNamedPipe` answers a byte count; the honest POSIX twin would be `ioctl(fd, FIONREAD, &n)`, and NO
+// POSIX lane issues it — a syscall and an out-param slot per drain pass, for a number the one consumer
+// discards before it uses it.
+//
+// It costs nothing, because of what that ONE consumer does with the answer. `emitSubpDrainStream` uses it only
+// to (a) decide whether to read at all and (b) size one pass, which it immediately clamps to
+// `SubpReadChunkBytes`; the bytes actually moved come from the READ. So reporting "a pipe-buffer's worth"
+// makes the pass exactly one clamped chunk and the read reports the truth — while a peek that answered `1`
+// would drip one byte per pass and turn an N-byte capture into N round trips.
+//
+// ⚠ **AND IT IS WHY EOF ARRIVES THROUGH THE READ RATHER THAN THROUGH THE PEEK.** `emitSubpDrainStream` has
+// two edges into `markDone`: a FAILED peek (Win32's broken-pipe reading) and a read of 0 bytes. A pipe whose
+// writer has closed polls READABLE on both lanes — MEASURED `0x11` with bytes buffered and `0x10` once
+// drained — so this answers "readable", the read answers 0, and the second edge fires.
+//
+// ⚠ The number is also the pipe's real capacity on both (MEASURED: 65536 on aarch64 Linux, and the threshold
+// at which a wait-before-drain deadlocks on either).
+export let PosixPipeReadyBytes = 65536
+
+// The two ways to ask `mrt_host_proc_reap` for a status, and the "do not block" option it hands the wait.
+export let PosixReapWithoutBlocking = 0
+export let PosixReapBlocking = 1
+export let PosixWaitNoHang = 1
+
+// Decoding a wait status, which POSIX defines by macro rather than by field: the low seven bits are the
+// terminating SIGNAL and are zero for a normal exit, in which case bits 8..15 are the exit code. MEASURED
+// identical on both lanes (`0x700` for exit 7, `0x9` for SIGKILL).
+export let PosixWaitStatusSignalMask = 0x7F
+export let PosixWaitStatusExitShift = 8 as ShiftCount
+export let PosixWaitStatusExitMask = 0xFF
+
+// ⚠ **A SIGNAL-KILLED CHILD REPORTS `128 + signal`, WHICH IS THE SHELL'S CONVENTION AND NOT WIN32's.** There
+// is no exit code for a process the kernel killed, and every POSIX shell answers this. The one place the two
+// lanes WOULD have disagreed with Windows is the deadline kill, and they do not:
+// `TerminateProcess(h, code)` names the code the handle must then report, and `mrt_host_proc_terminate`
+// records it (`childKilled`) so the reap below hands back that code rather than `128 + SIGKILL`.
+export let PosixSignalExitCodeBase = 128
+export let PosixSigKill = 9
+
+// The two answers the reap gives, named because a bare 0/1 at four call sites says nothing about which
+// direction it reads.
+export let PosixChildSignalled = 1
+export let PosixChildStillRunning = 0
+
+// A C `int`'s worth of bits — `pid_t`'s width, which is what a wait's answer must be compared at.
+export let PosixChildPidMask = 0xFFFFFFFF
+
+// How long the two bounded child waits sleep between scans — the netpoll's multi-wait and a
+// `waitWithTimeout` deadline. Both run where the M is meant to be idle, so a millisecond is a poll rate
+// rather than a spin, and one number keeps the two from drifting into different responsiveness.
+export let PosixChildPollMs = 1
+
+// `GtProcHandlesBaseLabel`'s array is one 64-bit handle per entry, so an index scales by 8 — as a SHIFT,
+// which is what an indexed load off a base wants.
+export let PosixHandleArrayStrideShift = 3 as ShiftCount
+
+// The child's three standard descriptors, named because a bare 0/1/2 in an argument position says nothing.
+export let PosixChildStdinFd = 0
+export let PosixChildStdoutFd = 1
+export let PosixChildStderrFd = 2
+
+// `PROCESS_INFORMATION.hThread` on either POSIX lane. Neither hands back a thread handle for a spawned
+// process, and the Std graph closes this field unconditionally — which `mrt_host_wait_close` reads as
+// "no handle".
+export let PosixNoThreadHandle = 0
+
+// What `CreatePipe`'s two out-params are set to when the pipe could not be created. The Std tier's `0 means
+// no handle` sentinel is what makes a failed pipe safe to close unconditionally, exactly as
+// `PosixNoThreadHandle` does for a spawn.
+export let PosixNoPipeDescriptor = 0
+
+// What `PeekNamedPipe` reports available when the descriptor is readable-but-empty. Not a failure: the peek
+// still answers TRUE, and `PosixPipeReadyBytes` carries what the count means.
+export let PosixNoBytesReady = 0
+
+// `PROCESS_INFORMATION.hProcess` and `.dwProcessId` when the spawn failed. A zero `hProcess` IS the Std
+// tier's own spawn-failure test, so this is the report and not merely the absence of one.
+export let PosixNoProcessHandle = 0
+export let PosixNoProcessId = 0
+
+// `int fds[2]` — the WRITE end is the second `int`, four bytes past the first.
+export let PosixPipeWriteEndOffset = 4
+
+// `poll`'s "answer now" timeout, as the `int` milliseconds it takes.
+export let PosixPollNoWaitMillis = 0
+
+// `ppoll`'s `sigmask` argument. NULL leaves the calling thread's signal mask alone, which is what `poll` does
+// and all this surface wants — this backend installs no signal handlers at all.
+export let PosixPollNoSignalMask = 0
+
+// `wait4`'s `struct rusage *` out-param, which NULL discards — and the register `waitpid` never reads.
+export let PosixReapDiscardsRusage = 0

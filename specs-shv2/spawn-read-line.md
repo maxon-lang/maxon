@@ -73,7 +73,7 @@ end 'main'
 ```
 
 <!-- test: spawn-read-line.posix-top-level -->
-<!-- targets: arm64-macos, arm64-linux -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
 `top-level`'s subject on the POSIX lane. GT0 reads a child's stdout through the one-shot probe and returns
 the byte count; `echo hello` writes `hello\n` = SIX bytes, an LF where `cmd /c echo` writes CRLF.
 
@@ -114,7 +114,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: spawn-read-line.posix-spawned-reader -->
-<!-- targets: arm64-macos, arm64-linux -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
 The read runs inside a SPAWNED green thread (`stackBase != 0`) rather than on GT0, so the reader's stack is
 a scheduler-allocated one and its result travels back through the promise rather than through a plain
 return. `main` awaits it and returns the byte count.

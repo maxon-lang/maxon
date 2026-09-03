@@ -78,6 +78,72 @@ function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Registe
 	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch)
 end 'emitLoadTibFromGt'
 
+// ⭐⭐⭐ **DOES THIS OS PROBE A PER-THREAD STACK-BOUNDS PAIR ON A KERNEL CALL?** Windows does: `NT_TIB`'s
+// `StackBase`/`StackLimit` are read by the kernel on entry and a call made with RSP outside them FAULTS, which
+// is the whole reason this file moves a pair of words on every context switch, every syscall shim and every
+// stack grow. Linux does not — the kernel reads the pointer it is given and nothing else — so on that lane
+// every one of those three sites emits NOTHING here, and the GT struct's two bounds fields are never read.
+//
+// ⚠ **IT IS THE OS's QUESTION AND NOT THE ROUTE'S, WHICH IS WHY IT IS NOT `x64OsCallKind`.** That one asks how
+// this backend reaches the kernel (an import or a `syscall`); this one asks what the kernel demands of the
+// stack once it is there, and the two are independent facts that happen to split the same two OSes today.
+function x64OsProbesStackBounds(os Os) returns bool
+	return match os 'os'
+		windows gives true
+		linux gives false
+		macos panic("x64OsProbesStackBounds: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, which probes no bounds pair either")
+		wasi panic("x64OsProbesStackBounds: wasm32-wasi is not an x64 target — a WASI component has no OS-thread stack for a kernel to probe")
+	end 'os'
+end 'x64OsProbesStackBounds'
+
+// ⭐ **`__gt_morestack`'s PAGE SOURCE (step 5) — `rax = <new_size bytes>`, with `new_size` in r14.** The two
+// OSes agree on nothing here but the answer: Windows commits and reserves in one call, Linux maps anonymous
+// private pages the first touch faults in. Both leave the base in rax, which is what lets step 5 read one
+// register whichever lane it is on.
+function emitGtMorestackAllocate(code ByteArray, iatRelocs RelocationArray, os Os)
+	match x64OsCallKind(os) 'route'
+		importCall then emitGtMorestackVirtualAlloc(code, iatRelocs: iatRelocs)
+		syscall then emitGtMorestackMmap(code)
+	end 'route'
+end 'emitGtMorestackAllocate'
+
+// `VirtualAlloc(NULL, new_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)`.
+function emitGtMorestackVirtualAlloc(code ByteArray, iatRelocs RelocationArray)
+	encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)  // lpAddress = NULL
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: GtMoreNewSizeReg, wide: true)  // dwSize = new_size
+	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualAllocCommitAndReserve)
+	encodeMovRegImm32(code, dest: X64Register.r9, value: VirtualAllocPageReadWrite)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc))
+end 'emitGtMorestackVirtualAlloc'
+
+function emitGtMorestackMmap(code ByteArray)
+	encodeX64MmapAnon(code, length: X64MapLength.inRegister(GtMoreNewSizeReg))
+end 'emitGtMorestackMmap'
+
+// ⭐ **`__gt_morestack`'s RELEASE (step 10) — give back the old stack, whose base is in r12 and whose length is
+// in r13.** ⚠ **WINDOWS FORBIDS THE LENGTH AND POSIX REQUIRES IT**, which is `lowerOsFreePages`' split exactly:
+// `MEM_RELEASE` names a whole reservation by its base alone, while `munmap` names a range. Neither answer is
+// captured — a failed release leaves this routine nothing to do, and every pointer into the old stack has
+// already been rewritten.
+function emitGtMorestackRelease(code ByteArray, iatRelocs RelocationArray, os Os)
+	match x64OsCallKind(os) 'route'
+		importCall then emitGtMorestackVirtualFree(code, iatRelocs: iatRelocs)
+		syscall then emitGtMorestackMunmap(code)
+	end 'route'
+end 'emitGtMorestackRelease'
+
+function emitGtMorestackVirtualFree(code ByteArray, iatRelocs RelocationArray)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreOldBaseReg, wide: true)  // lpAddress = old_base
+	encodeMovRegImm32(code, dest: X64Register.rdx, value: VirtualFreeSizeMustBeZero)  // dwSize = 0
+	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualFreeMemRelease)  // dwFreeType = MEM_RELEASE
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualFree))
+end 'emitGtMorestackVirtualFree'
+
+function emitGtMorestackMunmap(code ByteArray)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: GtMoreOldBaseReg, wide: true)
+	encodeX64MunmapBaseInRdi(code, length: X64MapLength.inRegister(GtMoreOldSizeReg))
+end 'emitGtMorestackMunmap'
+
 // Repoint the NT_TIB at the single SYSTEM stack `[topReg - GtSystemStackSize, topReg)` — `gs:[0x08] = top`,
 // `gs:[0x10] = top - size`. The two sites that switch a kernel call onto the system stack — the syscall shim
 // (before an `iatCall`) and `__gt_morestack` (step 3, for its own VirtualAlloc/VirtualFree) — compute those
@@ -173,7 +239,9 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	// would probe a TIB that does not contain its RSP and fault. This is also what SEEDS GT0's bounds: GT0 never
 	// runs the shim (its `stackBase == 0`), so the first switch AWAY from GT0 is the only place its real
 	// main-thread TIB bounds are captured. Uses rax as scratch — caller-saved and not read across a switch.
-	emitSaveTibIntoGt(code, gtReg: GtSwitchFromReg, scratch: GtSwitchTibScratchReg)
+	if x64OsProbesStackBounds(target.os) 'saveTheBounds'
+		emitSaveTibIntoGt(code, gtReg: GtSwitchFromReg, scratch: GtSwitchTibScratchReg)
+	end 'saveTheBounds'
 
 	// rsp = to->sp ; rbp = to->fp — now on the destination stack.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rsp, base: GtSwitchToReg, disp: GtOffSp as Imm32, wide: true)
@@ -181,7 +249,9 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	// LOAD the resumed GT's saved TIB bounds into the NT_TIB, matching the stack we just switched to (`__gt_spawn`
 	// seeds a fresh GT's bounds; the save above keeps every GT's fresh). The pair keeps `gs:[0x08]`/`gs:[0x10]`
 	// consistent with RSP across every switch.
-	emitLoadTibFromGt(code, gtReg: GtSwitchToReg, scratch: GtSwitchTibScratchReg)
+	if x64OsProbesStackBounds(target.os) 'loadTheBounds'
+		emitLoadTibFromGt(code, gtReg: GtSwitchToReg, scratch: GtSwitchTibScratchReg)
+	end 'loadTheBounds'
 
 	// Restore the callee-saved XMMs from the new stack FIRST — they sit BELOW the pushed GPR words, so rsp
 	// addresses them before the `add rsp` that releases their area. Restore order is free (each register has
@@ -1136,7 +1206,12 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	// Step 3: repoint the TIB at the system stack for THIS routine's own VirtualAlloc/VirtualFree (r10 =
 	// systemStackTop still). r10 is CONSUMED here — it is dead until the walk (step 8) clobbers it and step 12
 	// reloads it, so the shared helper may destroy it rather than spend a scratch register preserving it.
-	emitRepointTibToSystemStack(code, topReg: ShimGtRspReg)  // gs:[0x08] = top ; gs:[0x10] = top - size
+	//
+	// ⚠ **THE LINUX ARM HAS NO STEP 3 AT ALL, WHICH IS WHY r10 SURVIVES INTO STEP 5 THERE**: the kernel probes
+	// no bounds pair, so `mmap` may be issued with rsp wherever this chunk put it.
+	if x64OsProbesStackBounds(target.os) 'repointForTheKernelCalls'
+		emitRepointTibToSystemStack(code, topReg: ShimGtRspReg)  // gs:[0x08] = top ; gs:[0x10] = top - size
+	end 'repointForTheKernelCalls'
 
 	// Step 4: r12 = old_base ; r13 = old_size ; r14 = new_size = old_size * 2.
 	encodeLoadRegBaseDisp(code, destReg: GtMoreOldBaseReg, base: GtMoreGtReg, disp: GtOffStackBase as Imm32, wide: true)
@@ -1144,12 +1219,8 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewSizeReg, src: GtMoreOldSizeReg, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreNewSizeReg, src: GtMoreNewSizeReg, wide: true)  // r14 += r14
 
-	// Step 5: new_base = VirtualAlloc(NULL, new_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE) ; r15 = new_base.
-	encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)  // lpAddress = NULL
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: GtMoreNewSizeReg, wide: true)  // dwSize = new_size
-	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualAllocCommitAndReserve)
-	encodeMovRegImm32(code, dest: X64Register.r9, value: VirtualAllocPageReadWrite)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc))
+	// Step 5: new_base = <this OS's page source>(new_size) ; r15 = new_base.
+	emitGtMorestackAllocate(code, iatRelocs: iatRelocs, os: target.os)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewBaseReg, src: X64Register.rax, wide: true)  // r15 = new_base
 
 	// Step 6: memcpy old → TOP of new. rdi = new_base + new_size - old_size (dst top), rsi = old_base, rcx = old_size.
@@ -1200,28 +1271,30 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: gtStackGuardMargin(target) as Imm32)  // rcx = new_base + margin
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackGuard as Imm32, srcReg: X64Register.rcx)
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: GtMoreNewSizeReg, wide: true)  // rcx = new_top
-	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffTibStackBase as Imm32, srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffTibStackLimit as Imm32, srcReg: GtMoreNewBaseReg)
+	if x64OsProbesStackBounds(target.os) 'republishTheBounds'
+		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
+		encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: GtMoreNewSizeReg, wide: true)  // rcx = new_top
+		encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffTibStackBase as Imm32, srcReg: X64Register.rcx)
+		encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffTibStackLimit as Imm32, srcReg: GtMoreNewBaseReg)
+	end 'republishTheBounds'
 
-	// Step 10: VirtualFree(old_base, 0, MEM_RELEASE). Stash the offset in rbp across the call (rbp's live value is
-	// already saved at its stack slot, so the register is free scratch), restore it to rax afterwards. The TIB
-	// still describes the system stack (set in step 3) and rsp is still on it, so this kernel call is consistent.
+	// Step 10: give the old stack back through this OS's release. Stash the offset in rbp across the call
+	// (rbp's live value is already saved at its stack slot, so the register is free scratch), restore it to rax
+	// afterwards. Where the kernel probes a bounds pair, the TIB still describes the system stack (step 3) and
+	// rsp is still on it, so the call is consistent.
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: GtMoreOffsetReg, wide: true)  // rbp = offset (stash)
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreOldBaseReg, wide: true)  // lpAddress = old_base
-	encodeMovRegImm32(code, dest: X64Register.rdx, value: VirtualFreeSizeMustBeZero)  // dwSize = 0
-	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualFreeMemRelease)  // dwFreeType = MEM_RELEASE
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualFree))
+	emitGtMorestackRelease(code, iatRelocs: iatRelocs, os: target.os)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreOffsetReg, src: X64Register.rbp, wide: true)  // rax = offset (restore)
 
 	// Step 11: set the TIB to the NEW GT-stack bounds (reuse the slice-1 helper, reading the struct fields step 9
 	// wrote) BEFORE we pop rbx=gt. rcx is free scratch. After this, gs:[] describes the stack we return onto.
-	emitLoadTibFromGt(code, gtReg: GtMoreGtReg, scratch: X64Register.rcx)
+	if x64OsProbesStackBounds(target.os) 'restoreTheBounds'
+		emitLoadTibFromGt(code, gtReg: GtMoreGtReg, scratch: X64Register.rcx)
+	end 'restoreTheBounds'
 
 	// Step 12: tear down + return onto the RELOCATED GT stack. new GT rsp = entry rsp (ferried) + offset.
 	// The FP argument registers come back FIRST, while their slots are still inside the reserved frame — and
-	// after the last kernel call (step 10's VirtualFree), which is the call that destroyed them. `movsd` touches
+	// after the last kernel call (step 10's release), which is the call that can destroy them. `movsd` touches
 	// no GPR, so the offset in rax and the GT in rbx are untouched by this loop.
 	for k in 0 upto argFpRegisters.count() 'restoreXmm'
 		let reg = try argFpRegisters.get(k) otherwise panic("buildGtMorestackChunk: restore index derived from count is in range")
@@ -1539,7 +1612,12 @@ export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp
 	chunks.push(buildGtTrampolineChunk())
 	chunks.push(buildGtMorestackChunk(target))
 
-	if usesIocp 'io'
+	// ⛔⛔ **THE COMPLETION-DRAIN THREAD IS THE ONE CHUNK HERE THAT IS NOT MERELY OS-PARAMETRIC BUT OS-ONLY,
+	// AND ITS GATE IS `ioCompletionShape` RATHER THAN THE OS.** `usesIocp` asks *"does this module read a
+	// pipe?"*, which is true on every lane; whether a read COMPLETES SOMEWHERE ELSE is the target's question,
+	// and only Windows answers `completionPort`. This is the same pairing `installGtRuntime` makes before it
+	// builds the port's Std-tier half, so the thread and the port it drains ride one fact.
+	if usesIocp and ioCompletionShape(target) == IoCompletionShape.completionPort 'io'
 		chunks.push(buildIoCompletionLoopChunk())
 	end 'io'
 end 'appendX64GtRuntimeChunks'

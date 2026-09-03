@@ -88,6 +88,10 @@ let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Regist
 // nothing had loaded and its BOOL verdict was still true.
 let hostChunkArgRegisters = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9]
 
+// ⭐ The message `osCancelIo` aborts with on the syscall route — see `lowerRuntimeAbort` for why a RUNTIME
+// abort is the honest answer where a compile-time panic would refuse a program that only contains the arm.
+let X64LinuxNoCancelIoMessage = b"panic: CancelIoEx was reached on x64-linux, where every pipe read completes in its caller: nothing sets a green thread's `ioParked`, so `__gt_promise_drop`'s IO-cancel arm is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
+
 // The physical register a host-surface chunk takes argument slot `index` in. Past the file is a
 // compiler-invariant break: no chunk in either runtime file takes a fifth argument, and one that did would
 // need an outgoing stack slot the callers here do not reserve.
@@ -430,7 +434,9 @@ let SavedRbpAndReturnAddressBytes = 16 as Imm32
 // The `[rbp + disp]` displacement of an INCOMING stack-argument slot — the exact mirror of the caller's
 // `[rsp + win64OutgoingArgDisp(slot)]`, shifted by the two words pushed between the two moments. ONE
 // derivation from the outgoing rule, so the two ends of a stack argument cannot come to disagree about
-// where it is; a hand-written `+48` here would be that disagreement waiting to happen.
+// where it is; a hand-written `+48` here would be that disagreement waiting to happen. Both ends read it:
+// `lowerParam` for an shv2 function's own arguments, and `buildX64LinuxSpawnChunk` for the two
+// `mrt_host_spawn` passes on the stack.
 //
 // ⭐⭐ **IT IS FRAME-SIZE- AND PUSH-COUNT-INDEPENDENT, AND THAT IS WHY `lowerParam` MAY COMPUTE IT.** The
 // isel runs long before the allocator decides how many callee-saved registers this function pushes or how
@@ -445,7 +451,7 @@ let SavedRbpAndReturnAddressBytes = 16 as Imm32
 // `FrameScanState.needsFrame`, the bootstrap's `hasStackParams` — because without a prologue `[rbp + 16]`
 // reads through the CALLER's frame pointer. shv2 frames EVERY function unconditionally, so there is no such
 // leaf and no guard to forget.
-function win64IncomingArgDisp(slot MachineWord) returns Imm32
+export function win64IncomingArgDisp(slot MachineWord) returns Imm32
 	return SavedRbpAndReturnAddressBytes + win64OutgoingArgDisp(slot)
 end 'win64IncomingArgDisp'
 
@@ -763,8 +769,8 @@ end 'x64AtomicAdd'
 // carries no types, so a `TargetModule` alone does not say which file any of its values lives in,
 // and the allocator cannot recover it (see `ValueClassColumn`). Handing them back together is what
 // makes it impossible to have one without the other.
-export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames)
+export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns (TargetModule, ValueClassColumns)
+	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usesGt)
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
 	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
@@ -826,8 +832,12 @@ type StdToX64Lowering
 	// result from its own carried f64 type — so it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
 
-	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToX64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockIdMap.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
+	// Does this module carry the green-thread scheduler? The syscall bracket rides it exactly as the arm64
+	// isel's does — a program with no scheduler has no machine to announce anything to.
+	let usesGt as bool
+
+	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns StdToX64Lowering
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockIdMap.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt}
 	end 'create'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
@@ -1048,7 +1058,7 @@ type StdToX64Lowering
 	function prepareFunctionTables(funcIdx FuncIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
-		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, foldsIntoMemoryOps: true)
+		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.anyScaleAndDisplacement)
 	end 'prepareFunctionTables'
 
 	// The function's block count as the STD module knows it — a scoped read, so the caller holds
@@ -1097,7 +1107,16 @@ type StdToX64Lowering
 	// Lower a regular (non-terminator) Std op. `ret` reaching here is the rare
 	// mid-block form (LowerMaxonToStd emits it as a body op for a partially-
 	// terminated block); it lowers the same as the terminator form, just appended.
+	// The syscall bracket, at the one dispatch door that covers a hand-assembled chunk reached by `call`, an
+	// inline import and a raw `syscall` alike. WHICH ops take it is `opTakesSyscallBracket`, in the shared
+	// lowering; only the `callDirect` that spells the two announcements is this ISA's.
 	function lowerBodyOp(op StdOp, dstBlock IrBlock, returnType StdReturnType, paramFloatMask ArgFloatMask)
+		let bracketed = opTakesSyscallBracket(op, target: self.target, usesGt: self.usesGt)
+
+		if bracketed 'announceTheCall'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(SchedEnterSyscallName))
+		end 'announceTheCall'
+
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
@@ -1194,9 +1213,9 @@ type StdToX64Lowering
 			osIocpCreate(resultId) then self.lowerOsIocpCreate(resultId, dstBlock: dstBlock)
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstBlock: dstBlock)
 			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstBlock: dstBlock)
-			osLockInit(lockPtrId) then self.lowerOsWin64Call1(IatSlot.InitializeCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
-			osLockEnter(lockPtrId) then self.lowerOsWin64Call1(IatSlot.EnterCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
-			osLockLeave(lockPtrId) then self.lowerOsWin64Call1(IatSlot.LeaveCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
+			osLockInit(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.InitializeCriticalSection, chunk: HostLockInitName, dstBlock: dstBlock)
+			osLockEnter(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.EnterCriticalSection, chunk: LinuxLockEnterName, dstBlock: dstBlock)
+			osLockLeave(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.LeaveCriticalSection, chunk: LinuxLockLeaveName, dstBlock: dstBlock)
 			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, ovlId) then self.lowerOsReadOverlapped(resultId, handleId: handleId, bufId: bufId, capId: capId, bytesOutPtrId: bytesOutPtrId, ovlId: ovlId, dstBlock: dstBlock)
 			osLastError(resultId) then self.lowerOsLastError(resultId, dstBlock: dstBlock)
 			osProcessSpawnInherit(cmdlinePtrId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: true, dstBlock: dstBlock)
@@ -1267,6 +1286,10 @@ type StdToX64Lowering
 			osSetEvent(handleId) then self.lowerOsSetEvent(handleId, dstBlock: dstBlock)
 			osEnterBackgroundPriority(resultId) then self.lowerOsEnterBackgroundPriority(resultId, dstBlock: dstBlock)
 		end 'lower'
+
+		if bracketed 'readTheVerdict'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(SchedExitSyscallName))
+		end 'readTheVerdict'
 	end 'lowerBodyOp'
 
 	// Lower a block terminator. M4 adds the two branch terminators; `ret` stays. A
@@ -2315,7 +2338,9 @@ type StdToX64Lowering
 	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsReadClockWin64(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsReadClock: the QueryPerformanceCounter/Frequency clock is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+			// `clock_gettime(CLOCK_MONOTONIC)` answers a `timespec`, and the caller's TWO out-param pointers
+			// must survive a call that writes somewhere else — so it is a chunk rather than an inline pair.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostMonotonicClockName, args: twoArgs(ticksPtrId, second: freqPtrId))
 		end 'route'
 	end 'lowerOsReadClock'
 
@@ -2350,7 +2375,9 @@ type StdToX64Lowering
 	function lowerOsSleepMs(msId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsSleepMsWin64(msId, dstBlock: dstBlock)
-			syscall then panic("lowerOsSleepMs: Windows `Sleep` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+			// `clock_nanosleep` takes a `struct timespec *`, and the millisecond→`timespec` split needs two
+			// frame words to form one — which a chunk has and an isel lowering does not.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostSleepMsName, args: argsOf(msId))
 		end 'route'
 	end 'lowerOsSleepMs'
 
@@ -2370,7 +2397,7 @@ type StdToX64Lowering
 	function lowerOsProcessSpawn(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId, inheritHandles bool, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsProcessSpawnWin64(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: inheritHandles, dstBlock: dstBlock)
-			syscall then panic("lowerOsProcessSpawn: CreateProcessA is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+			syscall then self.lowerOsProcessSpawnLinux(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsProcessSpawn'
 
@@ -2422,20 +2449,39 @@ type StdToX64Lowering
 
 	// `SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)` — three register arguments,
 	// two of them the same immediate (the MASK and the VALUE, which is what "turn this flag on" spells).
+	// ⚠ **NOTHING IS EMITTED ON THE SYSCALL ROUTE, AND THAT IS THE INHERITANCE MODEL RATHER THAN A GAP.** A
+	// POSIX descriptor is inheritable BY DEFAULT; what this lane has to mark is the opposite — `pipe2`'s
+	// `O_CLOEXEC` on every pipe it opens, cleared for exactly the three the child's `dup3` keeps. So the
+	// Win32 op has no work to do here, and both arm64 POSIX lanes drop it the same way.
 	function lowerOsHandleSetInherit(handleId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osHandleSetInherit")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsHandleSetInheritWin64(handleId, dstBlock: dstBlock)
+			syscall then break 'route'
+		end 'route'
+	end 'lowerOsHandleSetInherit'
+
+	function lowerOsHandleSetInheritWin64(handleId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: HandleFlagInherit))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: HandleFlagInherit))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetHandleInformation)))
-	end 'lowerOsHandleSetInherit'
+	end 'lowerOsHandleSetInheritWin64'
 
 	// `PeekNamedPipe(handle, NULL, 0, NULL, availPtr, NULL)` — SIX arguments: four in rcx/rdx/r8/r9 and two
 	// on the stack past the shadow space. Only the handle and the `lpTotalBytesAvail` out-pointer carry a
 	// value; the read buffer, its size, the bytes-read out-word and the message-remaining out-word are all
 	// NULL/0 because this call asks HOW MUCH is there and never consumes it.
 	function lowerOsPipePeek(resultId ValueId, handleId ValueId, availPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osPipePeek")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsPipePeekWin64(resultId, handleId: handleId, availPtrId: availPtrId, dstBlock: dstBlock)
+			// `ppoll` on one descriptor with a zeroed `timespec`. `PosixPipeReadyBytes` carries why the count
+			// it publishes is a pipe-buffer's worth rather than the true one, and why EOF arrives through the
+			// READ instead.
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: twoArgs(handleId, second: availPtrId), chunk: HostPipePeekName, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsPipePeek'
+
+	function lowerOsPipePeekWin64(resultId ValueId, handleId ValueId, availPtrId ValueId, dstBlock IrBlock)
 		// The two stack args (5, 6) FIRST, while every register is still free — `lowerOsProcessSpawnWin64`'s
 		// discipline, and for its reason.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(PeekPipeAvailSlot), src: TargetVReg.virtual(availPtrId), width: X64AccessWidth.word64))
@@ -2446,7 +2492,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.PeekNamedPipe)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsPipePeek'
+	end 'lowerOsPipePeekWin64'
 
 	// `GetEnvironmentVariableA(name, buf, len)` — three arguments in the same order on both routes, the
 	// character count in RAX. It is a CHUNK on Linux because a static image links no libc: there is no
@@ -2467,17 +2513,51 @@ type StdToX64Lowering
 	// ⚠ **UNLIKE `GetCommandLineA`'s, THE POINTER IS OWNED** — it is a converted SNAPSHOT rather than a view
 	// of the PEB — so every caller pairs it with `osEnvBlockFree`. `SubprocessRuntime.buildSubpEnvEntry` is
 	// the one caller and frees it on both of its exits.
+	// ⭐⭐ `osEnvBlock(result)` ⇒ this process's environment, in whichever of the two shapes the target's
+	// producer is indexing (`SubprocessRuntime.environmentSnapshotShape`): a NUL-separated BLOCK Windows hands
+	// back a COPY of, or the POINTER VECTOR every POSIX lane already holds.
+	//
+	// ⛔ **A STATIC LINUX IMAGE HAS NO `environ` AND NO libc TO HOLD ONE.** The kernel hands `envp` to the
+	// entry stub on the stack and nowhere else, so the stub parks its base in `__mrt_envp`
+	// (`BackendDispatch.appendLinuxEnvpCapture`) and ONE load past that word is the vector. The same word
+	// feeds `execve` in `mrt_host_spawn` and the walk in `mrt_host_env_read`, which is the reading this
+	// lowering has to agree with.
 	function lowerOsEnvBlock(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osEnvBlock")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsEnvBlockWin64(resultId, dstBlock: dstBlock)
+			syscall then self.lowerOsEnvBlockLinux(resultId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsEnvBlock'
+
+	function lowerOsEnvBlockWin64(resultId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetEnvironmentStringsA)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsEnvBlock'
+	end 'lowerOsEnvBlockWin64'
+
+	// ⚠ **THE ADDRESS AND THE VALUE GO THROUGH A PHYSICAL SCRATCH RATHER THAN THE RESULT'S OWN VIRTUAL**, and
+	// that is the SSA invariant rather than a register preference: a value the allocator colours may be
+	// DEFINED once, so a `lea` into it followed by a load into it is two defs of one value and
+	// `RegisterAllocator.allocateDef` panics. rax is the same caller-saved scratch every call-shaped lowering
+	// in this file answers through.
+	function lowerOsEnvBlockLinux(resultId ValueId, dstBlock IrBlock)
+		let scratch = x64PhysReg(X64Register.rax)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegGlobal(scratch, label: LinuxEnvpLabel))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(scratch, base: scratch, disp: 0, width: X64AccessWidth.word64))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsEnvBlockLinux'
 
 	// `FreeEnvironmentStringsA(block)` — one register argument; the BOOL is discarded, exactly as
 	// `lowerOsProcessTerminate` discards its own.
+	//
+	// ⛔ **THERE IS NOTHING TO FREE ON A POSIX LANE, AND THE PANIC SAYS SO RATHER THAN EMITTING A NO-OP.**
+	// `environmentSnapshotShape` answers `pointerVector` there, whose producer indexes the LIVE table and emits
+	// no release at all — so reaching here is a producer emitting one anyway, which is a compiler bug and not
+	// a user-facing rejection. A silent stub would be that same claim written where nothing can check it.
 	function lowerOsEnvBlockFree(blockPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osEnvBlockFree")
-		self.lowerOsWin64Call1(IatSlot.FreeEnvironmentStringsA, arg0: blockPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.FreeEnvironmentStringsA, arg0: blockPtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsEnvBlockFree: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and x64-linux has none — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` there, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release")
+		end 'route'
 	end 'lowerOsEnvBlockFree'
 
 	// `GetFileType(handle)` — one argument, the file-type DWORD in RAX. The RAW word is what the result
@@ -2499,8 +2579,12 @@ type StdToX64Lowering
 	// `TerminateProcess(handle, exitCode)` — two register arguments; the BOOL is discarded (a child that has
 	// already exited answers FALSE, which is the same outcome as success for the deadline this serves).
 	function lowerOsProcessTerminate(handleId ValueId, exitCodeId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osProcessTerminate")
-		self.lowerOsWin64Call2(IatSlot.TerminateProcess, arg0: handleId, arg1: exitCodeId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call2(IatSlot.TerminateProcess, arg0: handleId, arg1: exitCodeId, dstBlock: dstBlock)
+			// `kill(pid, SIGKILL)` plus the one thing POSIX cannot carry across a signal: the CODE the caller
+			// named, which the chunk records so the reap reports it instead of `128 + SIGKILL`.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostProcTerminateName, args: twoArgs(handleId, second: exitCodeId))
+		end 'route'
 	end 'lowerOsProcessTerminate'
 
 	// Lower `osProcessExitCode(handle, codePtr)` to `GetExitCodeProcess(handle, codePtr)` — args rcx/rdx; the
@@ -2509,7 +2593,7 @@ type StdToX64Lowering
 	function lowerOsProcessExitCode(handleId ValueId, codePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.GetExitCodeProcess, arg0: handleId, arg1: codePtrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsProcessExitCode: GetExitCodeProcess is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostProcExitCodeName, args: twoArgs(handleId, second: codePtrId))
 		end 'route'
 	end 'lowerOsProcessExitCode'
 
@@ -2520,7 +2604,9 @@ type StdToX64Lowering
 	function lowerOsWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWaitHandlesWin64(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
-			syscall then panic("lowerOsWaitHandles: WaitForMultipleObjects is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+			// POSIX has no multi-object wait, so the chunk POLLS the handle array — and there is no `bWaitAll`
+			// to marshal, because the netpoll only ever asks for ANY.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWaitAnyName, args: threeArgs(handleArrayPtrId, second: countId, third: timeoutMsId))
 		end 'route'
 	end 'lowerOsWaitHandles'
 
@@ -2536,7 +2622,9 @@ type StdToX64Lowering
 	function lowerOsCloseHandle(handleId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
-			syscall then panic("lowerOsCloseHandle: CloseHandle is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+			// POSIX has no one type in common for the four things Win32 calls a handle, so the chunk dispatches
+			// on the kind the value carries (`PosixHandleKindShift`).
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWaitCloseName, args: argsOf(handleId))
 		end 'route'
 	end 'lowerOsCloseHandle'
 
@@ -2811,7 +2899,9 @@ type StdToX64Lowering
 	function lowerOsWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWaitHandleWin64(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
-			syscall then panic("lowerOsWaitHandle: WaitForSingleObject is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+			// The one wait that dispatches on the object's KIND — a futex sleep for an event, a join for a
+			// worker M, a reap loop for a child.
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: twoArgs(handleId, second: timeoutMsId), chunk: HostWaitOneName, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsWaitHandle'
 
@@ -2895,13 +2985,63 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerLinuxHostChunkValue'
 
+	// ⭐ **THE THREE LOCK OPS, WHICH DIFFER ONLY IN THEIR DESTINATION.** The region the Std tier allocated IS
+	// the lock (offset 0), so there is no field address to compute at any of the three sites, and one emitter
+	// serves them because the operand marshalling is identical.
+	//
+	// ⚠ **WINDOWS REACHES AN IMPORT AND LINUX A CHUNK, WHICH IS WHY THIS TRIO KEEPS A ROUTE SPLIT.** There the
+	// region is a `CRITICAL_SECTION` the OS owns; here it is three words and a `futex` protocol with a loop in
+	// it, and a loop needs a body. Both are RECURSIVE by the owning thread, which is
+	// `InitializeCriticalSection`'s contract and was measured as a hang on another lane when it was not.
+	function lowerOsLockOp(lockPtrId ValueId, importSlot IatSlot, chunk ByteArray, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(importSlot, arg0: lockPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: chunk, args: argsOf(lockPtrId))
+		end 'route'
+	end 'lowerOsLockOp'
+
+	// `osEventCreate(result)` on the syscall route ⇒ `mrt_host_wait_new(kind: event)`. The KIND is an
+	// immediate rather than an operand — the op names no kind because Windows's `CreateEventA` has no such
+	// parameter — so this is the one member of the band whose argument is materialised here.
+	function lowerOsEventCreateLinux(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(hostChunkArgRegisterAt(0)), value: PosixWaitKindEvent))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(HostWaitNewName))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsEventCreateLinux'
+
+	// ⭐⭐ **THE ONE HOST-SURFACE CHUNK ON THIS LANE WITH MORE THAN FOUR ARGUMENTS**, so two of them travel on
+	// the stack exactly as a >4-argument Win32 import's do — same rule, same displacements
+	// (`win64OutgoingArgDisp`), and the chunk reads them back through `win64IncomingArgDisp`.
+	//
+	// ⚠ **THE TWO STACK ARGUMENTS GO FIRST, WHILE EVERY REGISTER IS STILL FREE** — `lowerOsProcessSpawnWin64`'s
+	// discipline, and for its reason: each reads a virtual and writes to the frame, clobbering no other
+	// operand's register.
+	//
+	// ⚠ **`inheritHandles` HAS NO POSIX TWIN AND IS NOT PASSED.** It exists so a Windows child inherits the
+	// pipe end its `STARTUPINFO` names; here a descriptor is inheritable by default and the child's `dup3`
+	// is what settles which three survive the exec, so both spawn ops lower identically.
+	function lowerOsProcessSpawnLinux(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(SpawnProcInfoIncomingSlot), src: TargetVReg.virtual(procInfoPtrId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(SpawnEnvironmentIncomingSlot), src: TargetVReg.virtual(envPtrId), width: X64AccessWidth.word64))
+		self.emitLinuxHostChunkCall(dstBlock, chunk: HostSpawnName, args: fourArgs(cmdlinePtrId, second: cwdPtrId, third: creationFlagsId, fourth: startupPtrId))
+	end 'lowerOsProcessSpawnLinux'
+
+	// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable — `osCancelIo`'s
+	// shape on every POSIX lane. A compile-time panic would refuse every program that merely CONTAINS the arm.
+	function lowerRuntimeAbort(dstBlock IrBlock, message ByteArray)
+		self.lowerPanic(registerStringBlob(self.globalData, bytes: message).toByteArray(), dstBlock: dstBlock)
+	end 'lowerRuntimeAbort'
+
 	// Lower `osPipeCreate` to the five-call overlapped-read-pipe sequence (ported from v1's
 	// `__subp_create_overlapped_pipe`, read path). The two handles land in `[readPtr]`/`[writePtr]`; each later call
 	// RELOADS the read end from `[readPtr]` rather than pinning a register across an intervening `iatCall`.
 	function lowerOsPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsPipeCreateWin64(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsPipeCreate: the overlapped named pipe is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			// ⚠ **THE NAME, THE `SECURITY_ATTRIBUTES` AND THE COMPLETION PORT ARE ALL DROPPED.** Windows needs a
+			// uniquely NAMED pipe to get overlapped reads and a port for the packet to land on; a POSIX pipe is
+			// anonymous, inheritance is the spawn's business, and a read here completes in its caller.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostPipeName, args: twoArgs(readPtrId, second: writePtrId))
 		end 'route'
 	end 'lowerOsPipeCreate'
 
@@ -2967,7 +3107,7 @@ type StdToX64Lowering
 	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, shareMode: FileShareRead, disposition: OpenExisting, dstBlock: dstBlock)
-			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: LinuxOpenReadOnlyFlags, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
+			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: PosixOpenReadOnly, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFileOpenRead'
 
@@ -3460,8 +3600,13 @@ type StdToX64Lowering
 	// — and every ring entry carries `now - start` as a millisecond delta. Two different clocks either end
 	// would make that subtraction meaningless, and nothing would report it.
 	function lowerOsTickCountMs(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osTickCountMs")
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetTickCount64)))
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetTickCount64)))
+			// The chunk asks `mrt_host_monotonic_clock` rather than reading a clock of its own, so a subprocess
+			// deadline and a scheduler deadline cannot drift apart by being measured off two different clocks.
+			syscall then self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(HostTickMsName))
+		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsTickCountMs'
 
@@ -3500,7 +3645,7 @@ type StdToX64Lowering
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsIocpCreateWin64(resultId, dstBlock: dstBlock)
-			syscall then panic("lowerOsIocpCreate: CreateIoCompletionPort is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			syscall then panic("lowerOsIocpCreate: `osIocpCreate` reached the x64-linux isel — a completion port is emitted ONLY by `GtRuntime.buildIoInit`, which is built under `IoCompletionShape.completionPort`, and every POSIX lane answers `inlineCompletion` (a read completes in its caller, so there is nothing to poll and nothing to wake). Reaching here means the IO-completion shape fork was bypassed")
 		end 'route'
 	end 'lowerOsIocpCreate'
 
@@ -3517,7 +3662,9 @@ type StdToX64Lowering
 	function lowerOsEventCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsEventCreateWin64(resultId, dstBlock: dstBlock)
-			syscall then panic("lowerOsEventCreate: CreateEventA is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			// `mrt_host_wait_new(kind: event)` — an auto-reset event is one futex word on this lane, and the
+			// chunk is what mints the object and tags its handle.
+			syscall then self.lowerOsEventCreateLinux(resultId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsEventCreate'
 
@@ -3536,7 +3683,7 @@ type StdToX64Lowering
 	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsThreadCreateWin64(resultId, entryPtrId: entryPtrId, argId: argId, dstBlock: dstBlock)
-			syscall then panic("lowerOsThreadCreate: CreateThread is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: twoArgs(entryPtrId, second: argId), chunk: HostThreadCreateName, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsThreadCreate'
 
@@ -3557,7 +3704,7 @@ type StdToX64Lowering
 	function lowerTlsAlloc(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerTlsAllocWin64(resultId, dstBlock: dstBlock)
-			syscall then panic("lowerTlsAlloc: TlsAlloc is x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostTlsAllocName, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerTlsAlloc'
 
@@ -3570,7 +3717,10 @@ type StdToX64Lowering
 	function lowerTlsSetValue(indexId ValueId, valueId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.TlsSetValue, arg0: indexId, arg1: valueId, dstBlock: dstBlock)
-			syscall then panic("lowerTlsSetValue: TlsSetValue is x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
+			// ⚠ A CHUNK rather than an inline `mov fs:[key*8], value`, because the store owes an assertion the
+			// Win32 import does not: it needs a slot BLOCK, and a thread that has none would write into the
+			// null page (`buildX64LinuxTlsSetChunk`).
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: LinuxTlsSetName, args: twoArgs(indexId, second: valueId))
 		end 'route'
 	end 'lowerTlsSetValue'
 
@@ -3596,7 +3746,7 @@ type StdToX64Lowering
 	function lowerOsSetEvent(handleId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call1(IatSlot.SetEvent, arg0: handleId, dstBlock: dstBlock)
-			syscall then panic("lowerOsSetEvent: SetEvent is x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostEventSetName, args: argsOf(handleId))
 		end 'route'
 	end 'lowerOsSetEvent'
 
@@ -3605,7 +3755,11 @@ type StdToX64Lowering
 	function lowerOsReadOverlapped(resultId ValueId, handleId ValueId, bufId ValueId, capId ValueId, bytesOutPtrId ValueId, ovlId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsReadOverlappedWin64(resultId, handleId: handleId, bufId: bufId, capId: capId, bytesOutPtrId: bytesOutPtrId, ovlId: ovlId, dstBlock: dstBlock)
-			syscall then panic("lowerOsReadOverlapped: ReadFile (overlapped) is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			// ⚠ **THE `OVERLAPPED` OPERAND IS DROPPED, AND THAT IS THE SHAPE DIFFERENCE RATHER THAN AN
+			// OMISSION.** It exists so a completion packet has somewhere to land; a read on this lane completes
+			// in its caller (`IoCompletionShape.inlineCompletion`), so the same body serves it as serves
+			// `osReadFile` and nothing is left in flight to describe.
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), chunk: HostReadFileName, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsReadOverlapped'
 
@@ -3640,7 +3794,10 @@ type StdToX64Lowering
 	function lowerOsCancelIo(handleId ValueId, ovlId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.CancelIoEx, arg0: handleId, arg1: ovlId, dstBlock: dstBlock)
-			syscall then panic("lowerOsCancelIo: CancelIoEx is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable: nothing on
+			// this lane sets a green thread's `ioParked`, so `__gt_promise_drop`'s IO-cancel arm cannot fire.
+			// A compile-time panic here would refuse every program that merely CONTAINS the arm.
+			syscall then self.lowerRuntimeAbort(dstBlock, message: X64LinuxNoCancelIoMessage)
 		end 'route'
 	end 'lowerOsCancelIo'
 
@@ -3672,7 +3829,10 @@ type StdToX64Lowering
 	function lowerOsPipeCreateOutbound(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsPipeCreateOutboundWin64(namePtrId, saPtrId: saPtrId, childReadPtrId: childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsPipeCreateOutbound: the streaming stdin pipe is x64-windows only — the subprocess substrate is x64-windows-gated at this rung")
+			// ⚠ **THE NAME AND THE `SECURITY_ATTRIBUTES` ARE DROPPED.** The first uniquifies a Windows NAMED
+			// pipe so two overlapped reads cannot collide; the second makes the ends inheritable. A POSIX pipe
+			// is anonymous and inheritance is the spawn's business, so the same `pipe2` serves both directions.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostPipeName, args: twoArgs(childReadPtrId, second: parentWritePtrId))
 		end 'route'
 	end 'lowerOsPipeCreateOutbound'
 

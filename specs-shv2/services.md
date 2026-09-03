@@ -139,7 +139,7 @@ substrate reached by `sleep` has always answered E3104.
 ## Tests
 
 <!-- test: companions-resolve-as-types -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A `spawn` makes the type a service, and both synthesized companions are then nameable TYPES — in a
 signature written by a function that spawns nothing.
 
@@ -198,7 +198,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: companions-come-from-a-spawn-in-another-file -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ Whether a type is a service is a WHOLE-PROGRAM property. The file that declares `Calc` and names
 `Calc.handle` writes no `spawn` at all; the file that spawns declares nothing. The companions exist
 because the two are compiled together — the `Unknown type` a per-file decision would report is what this
@@ -240,7 +240,7 @@ end 'main'
 ```
 
 <!-- test: a-spawn-inside-a-method-body-is-found -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ The walk that decides which types are services reads EVERY token of every file, and this is the case
 that says why it cannot ride the declaration sweep: that sweep consumes a `type` declaration whole and
 resumes past its `end`, so a `spawn` in a METHOD BODY would be invisible to an arm written inside it. The
@@ -558,7 +558,7 @@ error E2015: <fragment>:15:10: Unsupported: `spawn Box.create(…)` — `type Bo
 ```
 
 <!-- test: a-private-method-is-not-a-message -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Only `export`/`public` INSTANCE methods are messages. `record` is file-private and `version` is a static,
 so neither is subject to the transferability rule — a `Promise` parameter on either is perfectly legal on
 a type that is spawned, which is what this case pins. Compare
@@ -598,7 +598,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-factory-may-be-spelled-with-a-keyword -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ A keyword may be a DECLARED NAME (D8), and `stdlib/FilePath.maxon:34` proves the shape is live corpus:
 `public static function from (path String) returns FilePath`. So `spawn Reader.from(3)` must be recognized
 as a spawn — both halves of `<Type>.<factory>` go through the same name reader every other declaration
@@ -696,7 +696,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: spawn-send-and-the-service-runs -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ The first case in this file that starts a real green thread. `spawn` hands back a `Counter.handle`; a call
 on that handle is a MESSAGE, enqueued and returned from at once; the service's own green thread runs the
 handler. Dropping the handle at the end of `main` closes the mailbox, the loop's `recv` answers 0 and the
@@ -740,7 +740,7 @@ n=2
 ```
 
 <!-- test: messages-are-serialized-in-fifo-order -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Handlers run one at a time, in send order — so three digits pushed in order read back as one number.
 ```maxon
 type Log
@@ -777,7 +777,7 @@ acc=123
 ```
 
 <!-- test: two-instances-are-independent -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Two spawns of one type are two services with two states.
 
 ⚠ **THE ORDER OF THE TWO PRINTS IS FORCED BY CAUSALITY AND NOT BY LUCK.** `b` prints its own count and then
@@ -828,7 +828,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: the-same-type-is-used-directly-and-spawned -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ The location-transparency property, and the test a dedicated `service` declaration would have made
 impossible: one type, one method, reached both ways in one program. The direct calls run before the `spawn`
 exists, so the two lines are ordered by the program rather than by the scheduler.
@@ -896,7 +896,7 @@ error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a m
 ```
 
 <!-- test: shutdown-drains-what-is-queued -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 `shutdown()` is a graceful drain, not a kill: the poison pill goes in BEHIND everything already queued, so
 every message sent before it still runs.
 
@@ -939,7 +939,7 @@ acc=3
 ```
 
 <!-- test: a-send-after-shutdown-is-dropped-cleanly -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **THE CASE THAT REACHES THE ABANDON PATH, AND IT REACHES IT BY EITHER OF TWO ROADS.** The second `keep`
 is sent after the poison pill, so the loop never runs its handler — and which road drops its `String` is a
 race this case deliberately does not resolve: if the send wins, the envelope is queued behind the pill and
@@ -979,7 +979,7 @@ kept a1
 ```
 
 <!-- test: dropping-the-last-handle-shuts-the-service-down -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 ⚠ **THE `procs: 1` PIN IS THIS CASE'S OWN STATED PREMISE, WRITTEN DOWN WHERE THE RUNNER CAN READ IT.** The
 paragraph below has always said *"nothing runs on a service's green thread until the main thread stops
@@ -1042,7 +1042,7 @@ beep 1
 ```
 
 <!-- test: a-cloned-handle-keeps-the-service-alive -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A handle is an ordinary box, so `.clone()` reaches it — and on a handle the clone is a second HANDLE to the
 SAME service, not a second service. Dropping one leaves the mailbox open; the last one to go closes it.
 ```maxon
@@ -1080,7 +1080,7 @@ n=2
 ```
 
 <!-- test: a-handle-moved-into-another-service -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A handle is a transferable message payload: `Worker` is handed the `Logger`'s handle, sends to it, and then
 DROPS it — the un-consumed payload drop the loop owes for every message it runs. That drop is the `Logger`'s
 last handle, so the logger shuts down without `main` ever naming it again.
@@ -1125,7 +1125,7 @@ log: from the worker
 ```
 
 <!-- test: handles-in-an-array -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Handles are ordinary boxes and live in containers — which means the array's element drop is the handle drop,
 and two services shut down when the array does.
 ```maxon
@@ -1156,7 +1156,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-handle-payload-beside-a-consumed-string-payload -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **TWO SERVICES, TWO PAYLOAD KINDS, AND THE CROSSING BETWEEN TWO NAME TABLES.** `Logger.say` takes a
 `String` and CALLS A METHOD on it; `Worker.run` takes a `Logger.handle`. Neither is remarkable alone — the
 cases above pin each — and together they are the first program in this file whose signature-index and project
@@ -1220,7 +1220,7 @@ bytes=15
 ```
 
 <!-- test: a-string-argument-moves-into-the-service -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A managed argument is MOVED: the sending frame hands over the reference it holds and the service becomes the
 box's one owner. Nothing is increfed at the send and nothing is dropped by the sender, which is what keeps
 the plain refcount correct across a green thread.
@@ -1259,7 +1259,7 @@ kept a literal (3)
 ```
 
 <!-- test: a-throwing-message-is-sent-fire-and-forget -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **A `throws` CLAUSE IS WHAT MAKES A MESSAGE REPLY-BEARING, AND SV1 SENDS IT ANYWAY.** The reply slot is
 filled with 0, the handler runs, and its error has nowhere to go — which is the fire-and-forget half of the
 design, not a gap in it. What must NOT happen is the thing that did: the second `keep` throws before it
@@ -1307,7 +1307,7 @@ kept a1
 ```
 
 <!-- test: unioncases-tags-the-request-variants -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The synthesized request union is an ordinary union, so its `.unionCases` companion exists — and `__shutdown`
 holds variant 0, so the first message an author declares is variant 1.
 ```maxon
@@ -1334,7 +1334,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: an-idle-service-that-is-never-sent-to-still-exits-zero -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Process exit must not hang on a service parked in `recv`, which is its steady state. Here the mailbox is
 closed by the handle's own drop — at the end of the `spawn` STATEMENT, since nothing binds it — well before
 `main` returns, so the loop's `recv` answers 0 the first time it is asked and the exit drain has one
@@ -1367,7 +1367,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: fire-and-forget-cycle-is-legal -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ The case that pins "only blocking edges count" — without it a later tightening would silently ban correct
 programs. `A` names `B`'s handle in a message and `B` names `A`'s, which is a cycle in the type graph and no
 cycle at all in the blocking one, because neither send waits.
@@ -1413,7 +1413,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-fire-and-forget-send-is-not-a-blocking-edge -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **THE CASE THAT CAN ACTUALLY SEE "only blocking edges count", AND `fire-and-forget-cycle-is-legal` ABOVE
 CANNOT.** That one has no `await` anywhere, so `checkServiceCallCycles` short-circuits on an empty seed set
 before it ever consults the rule — it pins the SV1 property (a type-graph ring compiles and runs) and is
@@ -1476,7 +1476,7 @@ acked 7
 ```
 
 <!-- test: an-export-reached-only-by-message-is-not-unused -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 An export method reachable only as a MESSAGE must count as used, or the unused-export check would refuse
 every service whose handle is the only caller. It is credited by the send op naming `Calc.bump` — the same
 `maxonOpCalleeKind` road an ordinary call is credited by, which is why this needs no arm of its own.
@@ -1620,6 +1620,13 @@ backend, which is what this family did before the gate existed.
 ⚠ **THE TWO OPS NEED TWO ARMS, AND ONE WOULD HAVE PASSED A HALF-BUILT GATE.** A `spawn` and a send mint
 different entries, and a program can contain either without the other — `an-idle-service-that-is-never-sent-to-still-exits-zero`
 is exactly a spawn with no send.
+⚠ **THE NATIVE TWIN THIS CASE ONCE HAD IS RETIRED.** `error.a-service-is-rejected-on-a-native-target`
+pinned the same two refusals on a native lane with no green-thread floor — arm64-macOS until MAC3 supplied
+the scheduler primitive, then x64-Linux (arm64-Linux was considered and rejected as answering identically).
+x64-Linux's floor left no native lane refusing, and the twin's program and both expected diagnostics were
+byte-identical to this one's but for the target name, so it was deleted rather than duplicated here.
+`async-sleep.md`'s surviving wasm case states the convention this follows.
+
 ```maxon
 type Plot
 	var n as Integer
@@ -1645,60 +1652,8 @@ error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 
 error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a message send lowers to the runtime entry '__mbox_send', which has no wasm32-wasi implementation
 ```
 
-<!-- test: error.a-service-is-rejected-on-a-native-target -->
-<!-- targets: x64-linux -->
-The same gate on a second NON-wasm lane, which is what makes this a TARGET rule rather than a wasm one.
-
-⚠⚠ **THIS CASE NAMED `arm64-macos` UNTIL THE arm64-macOS GREEN-THREAD FLOOR LANDED, AND ITS OWN PROSE IS
-WHY IT MOVED HERE RATHER THAN BEING DELETED.** It recorded the measured reason for the refusal as
-*"`lowerTlsAlloc: TlsAlloc is x64-windows only` before the gate, E3104 after"* — a SCHEDULER primitive, not
-a service one. That primitive is exactly what MAC3 supplied, so a service now compiles and runs on
-arm64-macOS and this case went red saying *"expected a compile error but compilation succeeded"*. The
-subject — a service refused at its own span on a native lane with no green-thread floor — is unchanged and
-still true here; the same prose already recorded that `x64-linux` was MEASURED to answer identically, which
-is what makes this the honest re-point rather than a lane picked to keep a case green.
-
-⚠ **THE LANE IS `x64-linux` NOW, AND THE ARGUMENT THAT ONCE PICKED arm64-linux OVER IT WAS MEASURING THE
-WRONG THING.** Both refuse identically — the same two `E3104`s with only the target name differing — so
-the refusal never picked between them. What used to pick was reachability: *"`x64-linux` needs WSL and so
-is unreachable from a macOS host, while `arm64-linux` runs here through OrbStack."* **That is a fact about
-RUNNING a binary, and this case runs none** — a `maxoncstderr` case is compiled and its diagnostics are
-compared. MEASURED at this re-point: `--target=x64-linux` emits both of these E3104s on a macOS host with
-no WSL anywhere. The lane held to be the one that "cannot go red" could go red the whole time.
-
-⇒ **AND THE NAME NO LONGER CARRIES A TARGET AT ALL.** Ending it `-on-arm64` made the target a THIRD copy
-beside the marker and the diagnostic text, and forced a rename on each of the two re-points. The marker
-and the text are the pair the runner checks against each other; the name was the copy nothing verified —
-the project's own signature bug, one fact written down twice with the copies free to disagree, sitting in
-a test name. Its siblings `async-sleep.rejected-on-a-native-target` and
-`subprocess-builtins.streaming-rejected-on-a-native-target` moved the same way in this same change.
-```maxon
-type Plot
-	var n as Integer
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function at(x Integer)
-		self.n = self.n + x
-	end 'at'
-end 'Plot'
-
-function main() returns ExitCode
-	let h = spawn Plot.create()
-	h.at(1)
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 'spawn' lowers to the runtime entry '__svc_spawn', which has no x64-linux implementation
-error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a message send lowers to the runtime entry '__mbox_send', which has no x64-linux implementation
-```
-
 <!-- test: a-scalar-only-record-crosses-whole -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ The simplest shape that crosses, and the control for the `deepmove.*` cases below: a record whose every
 slot is a machine word holds no reference to anything, so the walk has nothing to visit and moving it moves
 the whole of it. Built at the send, so this frame gives up the only reference there was.
@@ -1742,7 +1697,7 @@ at 3,4 (2)
 ```
 
 <!-- test: deepmove.a-record-with-managed-fields-crosses -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A record with managed fields crosses at the `spawn`, as the factory's argument, and its three fields are
 the three answers the walk gives. The literal `String` is an immortal `.rdata` record: nothing ever steps
 its count, so it has none to check and passes. The interpolated `String` is a heap record the walk visits
@@ -1799,7 +1754,7 @@ literal heap 7 2
 ```
 
 <!-- test: deepmove.a-reply-carries-a-container-back -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The reply road runs the same walk in the other direction, and a container whose whole graph is fresh
 crosses: the handler mints the array in its own frame and every element is a scalar, so the walk finds
 nothing to refuse and the awaiter takes the container whole.
@@ -1838,7 +1793,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: deepmove.a-reply-carries-a-record-with-a-string-back -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A record HOLDING a `String` comes back the way a bare `String` does: the record and the heap string inside
 it are both minted by the handler, so the walk finds nothing to refuse and the record moves with its field.
 ```maxon
@@ -1878,7 +1833,7 @@ note 4
 ```
 
 <!-- test: deepmove.abort.a-reply-holding-a-shared-record-aborts -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The refusal on the reply road. The reply's root is a `CellArray` the handler mints in its own frame, so the
 static E3137 rule admits it; what the walk finds inside is the `Cell` the service's state still owns —
 `push` increfs the borrowed element, so that one record has two owners, the state and the reply. Handing it
@@ -1925,7 +1880,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: deepmove.a-container-crosses-with-its-elements -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A container crosses WHOLE. `push` increfs what it is handed, so an element's count says nothing the type can
 promise about the frame that filled the array — which is why soleness is proved at the SEND, by a walk over
 the value's graph, rather than declared from the type. Each `Cell` here has the array as its only owner, the
@@ -1978,7 +1933,7 @@ sum 2
 ```
 
 <!-- test: deepmove.abort.a-container-holding-a-shared-record-aborts-at-the-send -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The refusal the walk exists to make. `cell` is owned by `main`'s binding and by `cs` at once — `push`
 increfs — and `main` reads it back after the send, so handing the array across would leave one box with a
 plain refcount on two green threads. The root `cs` is this frame's alone, so no static arm can see the
@@ -2023,7 +1978,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: deepmove.a-cloned-array-detaches-its-shared-buffer-at-the-send -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A shared BUFFER is not a shared record. `a.clone()` yields a second array RECORD viewing `a`'s buffer until
 one of them writes — and a move is a write, so the walk detaches `b`'s buffer at the send, copying the
 elements out, exactly as `b.push(…)` would have. Only a shared RECORD is refused; a shared buffer is what
@@ -2077,7 +2032,7 @@ crossed 3
 ```
 
 <!-- test: deepmove.a-chain-crosses-with-its-elements -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The SECOND element-bearing record crosses too, and it is a different walk: a chain owns its record, a node
 per element and each node's element, so `__list_sole` proves all three where the buffer's walk proves the
 record and its slots. Every `String` here is minted at the append, so each node and each element has one
@@ -2118,7 +2073,7 @@ svc b 2
 ```
 
 <!-- test: deepmove.abort.a-chain-holding-a-shared-record-aborts -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The chain's refusal, and the element half of the walk is what finds it: `append` increfs the `Cell` it is
 handed, `main` reads it back afterwards, and the chain's own record and nodes are all sole — so only a walk
 that descends into the NODE's element sees the second owner. Exit **96** on the sender's own green thread.
@@ -2160,7 +2115,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: deepmove.a-map-crosses-with-its-keys-and-values -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A `Map` is a declared record over two element-bearing containers, so it crosses through the ordinary field
 cascade and its keys and values are proved by the containers' own element walks. Nothing here is a special
 case for `Map`, which is the point: a record that holds containers is a record.
@@ -2199,7 +2154,7 @@ got x 2
 ```
 
 <!-- test: deepmove.abort.a-map-holding-a-shared-value-aborts -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The same refusal two containers down: `upsert` increfs the `Cell` into the value column, `main` reads it
 back, and the walk finds that one record at two owners. Exit **96**.
 ```maxon
@@ -2240,7 +2195,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: deepmove.a-union-payload-crosses-and-a-shared-one-aborts -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A boxed union crosses under its TAG: the walk proves the box, reads the discriminant and descends only into
 the LIVE case's managed payloads, so a variant that owns nothing costs one refcount test. The payload here is
 the service's own to keep.
@@ -2280,7 +2235,7 @@ labelled heap 2
 ```
 
 <!-- test: deepmove.abort.a-union-payload-with-a-second-owner-aborts -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The tag-guarded half of that walk, refusing: `Shape.held(cell)` increfs into the payload slot and `main`
 reads `cell` back, so the live case's payload has two owners. Exit **96**.
 ```maxon
@@ -2326,7 +2281,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: deepmove.a-deep-graph-crosses-and-is-released-on-the-service -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE GRAPH IS BUILT ON `main` AND RELEASED ON THE SERVICE, AND A GREEN THREAD'S STACK STARTS AT 2 KB.**
 The handler reads one scalar and returns, so the only frames that release the chain are the per-type
 cascade's own — `__destruct_S63` calling `__destruct_S62`, once per level. A cascade recurses to the depth
@@ -3082,7 +3037,7 @@ error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — 
 ```
 
 <!-- test: send-and-await-a-reply -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A value-returning message is awaitable RPC.
 ```maxon
 type Calc
@@ -3114,7 +3069,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-message-throws-and-the-error-merges-with-serviceerror -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The merge is always two-way — transport plus one handler.
 ```maxon
 enum MathError implements Error
@@ -3153,7 +3108,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-call-after-shutdown-answers-stopped -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A stopped service resolves its pending replies rather than hanging their awaiters.
 ```maxon
 type Calc
@@ -3253,7 +3208,7 @@ note: <fragment>:15:10: the `spawn` that makes `Store` a service
 ```
 
 <!-- test: error.two-services-that-await-each-other-are-refused -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
 ```maxon
 type A
@@ -3303,7 +3258,7 @@ error E3139: <fragment>:10:14: service call cycle — these messages can deadloc
 ```
 
 <!-- test: a-reply-error-type-with-one-member-is-nameable -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **A MESSAGE THAT THROWS NOTHING HAS A ONE-MEMBER REPLY ERROR TYPE, AND ONE MEMBER IS A NAME.** The reply of
 `total()` can fail only in transport, so its error type is `ServiceError` itself — an ordinary declared enum a
 `throws` clause can spell, which is what lets a bare `try` PROPAGATE it out of an intermediate function. Only a
@@ -3379,7 +3334,7 @@ error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing 
 ```
 
 <!-- test: a-declared-throws-clause-names-a-replys-errors -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE SPELLING THE PREVIOUS CASE'S MISMATCH IMPLIES** (`SERVICES_DESIGN.md:583`). The fused pair is a
 nominal enum registered under `<Service>.<method>.errors`, so a `throws` clause can name it — and once it
 can, a bare `try` inside `fetch` re-publishes the flag VERBATIM to `fetch`'s own caller instead of being
@@ -3468,7 +3423,7 @@ error E3085: <fragment>:26:4: case 'stopped' is shared by multiple union members
 ```
 
 <!-- test: shutdown-resolves-pending-replies -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE LIVENESS OBLIGATION, ON BOTH OF ITS ROADS.** A message that dies unprocessed must not hang its awaiter.
 The FIRST send is queued behind the poison pill and is abandoned by the loop's own drain; the SECOND arrives
 after the mailbox is already closed and is abandoned by the send. Both answer `ServiceError.stopped`, and the
@@ -3509,7 +3464,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-string-moves-in-and-a-fresh-string-comes-back -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The reply carries a MANAGED value across green threads. It is sound for the reason the send's move is: the
 handler's result is freshly minted in the handler's own frame, so the service gives up its only reference and
 the awaiter takes it — one owner throughout, which is what a plain refcount requires.
@@ -3541,7 +3496,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: reply-discarded-is-dropped-clean -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ A reply-bearing message sent in STATEMENT position mints a cell nobody binds, so the promise is dropped at
 statement end while the cell is still PENDING. The dropper may not free it — the replier is about to write into
 it — so it adds the consumer ticket only, and the reply's own completion supplies the runner's half. The managed
@@ -3572,7 +3527,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: pending-reply-dropped-then-answered -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The dropped cell of the first send is still pending when the SECOND send's await drives the service, so the
 replier writes into a cell its awaiter has already renounced. That is the ordering the teardown rendezvous
 exists for, and freeing the cell at the drop is a clobbered green thread rather than a leak.
@@ -3606,7 +3561,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: completed-reply-dropped-is-reclaimed -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The other order: `p`'s first cell COMPLETES while the middle await drives the service (its message is ahead in
 FIFO order), and only THEN is it dropped — by the RE-ARM on the next line. The drop finds the runner ticket
 already there and reclaims; an arm that took a completed cell as merely queued would strand the struct
@@ -3639,7 +3594,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: rpc-from-inside-a-service -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **THE FIRST CROSS-GREEN-THREAD WAKE IN THE LANGUAGE.** `Outer`'s message awaits a reply from `Inner`, so a
 green thread — not the main one — is the awaiter, and the drive that completes its cell runs `Inner` from
 `Outer`'s own stack. The graph `Outer → Inner` is acyclic, which is what makes this legal.
@@ -3684,7 +3639,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.double-await-of-a-reply -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Per-await linearity composes for free, because it keys on the promise's own identity rather than on what
 produced it — a reply cell is a `Promise` like any other. Which is also why the refusal is the parser's
 E3142 and not the linearity pass's E3100: the second `await` READS a name whose thread the first one
@@ -3782,7 +3737,7 @@ error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that th
 ```
 
 <!-- test: cycle-through-a-free-function-is-refused -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 An edge is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so the
 edge `A → B` exists even though `A`'s own body names no `B` message.
 
@@ -3836,7 +3791,7 @@ error E3139: <fragment>:3:13: service call cycle — these messages can deadlock
 ```
 
 <!-- test: cycle-same-type-self-edge-is-refused -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⚠ **A SELF-EDGE IS A CYCLE, AND THIS IS THE ONE USERS WILL HIT.** Two instances of the same service could not
 actually deadlock, but edges are by TYPE — which is what makes them statically knowable at all — so the
 analysis cannot tell the instances apart and must be conservative. The message says the workaround.
@@ -3871,7 +3826,7 @@ error E3139: <fragment>:10:14: service call cycle — these messages can deadloc
 ```
 
 <!-- test: cycle-behind-a-second-await-is-still-refused -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⛔⛔ **ONE MESSAGE OWES AN EDGE PER SERVICE IT AWAITS, NOT ONE EDGE.** `A.ping` awaits `B` and then `C`; the
 `A → B` half is what closes the ring `A.ping → B.pong → A.ack`, and the `A → C` half is innocent. This case
 is `error.two-services-that-await-each-other-are-refused` with **one extra, unrelated `await` appended**, and
@@ -3943,7 +3898,7 @@ error E3139: <fragment>:10:15: service call cycle — these messages can deadloc
 ```
 
 <!-- test: a-blocking-cycle-through-an-indirect-call-aborts -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 4 -->
 ⛔⛔ **THE HALF OF THE DEADLOCK RULE THAT IS A RUNTIME PROPERTY, BECAUSE E3139 CANNOT REACH IT.**
 `ServiceCallCycleCheck` walks a graph of NAMED callees, so every case above it can be refused at compile
@@ -4035,7 +3990,7 @@ end 'main'
 ```
 
 <!-- test: deep-acyclic-chain-runs -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Three services in a chain, each awaiting the next. An acyclic graph has a topological order, so the service
 lowest in it awaits nobody and always makes progress — which is the induction the whole rule rests on, run.
 
@@ -4095,7 +4050,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: awaitany-returns-the-completed-index -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **ONE WAITING PRIMITIVE COVERS SERVICE REPLIES, FILE IO AND SUBPROCESS DRAINS, AND THIS IS THE HALF THAT
 MAKES IT TRUE (SV3).** A reply is an ordinary `Promise`, so it goes into an `Array with Promise with …` and
 `__Builtins.awaitAny` selects over it exactly as it does over `async` spawns — no separate "channel select"
@@ -4141,7 +4096,7 @@ end 'main'
 ```
 
 <!-- test: a-throwing-reply-stores-in-a-promise-naming-its-errors -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE FUSED ERROR TYPE HAS A NAME, SO THE ONE REPLY THAT COULD NOT BE STORED NOW CAN BE.** A message that
 throws has a reply error type of `{ServiceError, <what the message throws>}`, and that pair is synthesized as
 a nominal enum under `<Service>.<method>.errors` — an ordinary declared type a `Promise with (T, E)` can put
@@ -4231,7 +4186,7 @@ error E3098: <fragment>:28:5: 'ReplyPromise' names the error type 'ServiceError'
 ```
 
 <!-- test: a-stored-reply-decodes-serviceerror-through-the-storage-road -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **THE CASE THAT SAYS THE TWO ROADS DECODE THE SAME WORD.** A reply awaited DIRECTLY is described by its
 message (`TryTarget.serviceReply`); one awaited out of an array is described by its STORAGE TYPE
 (`TryTarget.promise`) — two different roads through `caughtErrorFormFor`, reading one error word that the
@@ -4376,7 +4331,7 @@ error E3138: <fragment>:14:8: 'buf' arrived as a parameter and cannot be proven 
 ```
 
 <!-- test: error.use-after-await-of-a-reply -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **A REPLY IS A PROMISE, SO IT IS MOVE-ONLY TOO — AND IT WAS THE ONE ROAD `W230` DID NOT REACH.** A
 spawn's promise is minted at the interned `Promise with (T[, E])`; a reply cell was minted
 `ValueTypeTag.integer`, so it stayed the bare machine word W230 exists to abolish. Two consequences,
@@ -4478,7 +4433,7 @@ error E2004: <fragment>:17:17: Cannot operate on struct and int
 ```
 
 <!-- test: error.a-reply-in-an-integer-parameter -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 An `Integer` parameter does not take a reply. The cure is to `await` it and pass the RESULT — which is also
 the only spelling that keeps the cell's one owner intact. A reply always carries an error member, so it
 renders as a two-argument `Promise` instance.
@@ -4551,7 +4506,7 @@ error E2015: <fragment>:17:15: Unsupported: `clone` on `Promise`, which is a GEN
 ```
 
 <!-- test: a-reply-inner-is-the-one-unwrap -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The sanctioned reply → `int` conversion, and the twin of `promise-typing.inner-is-the-one-unwrap`. `.inner`
 peeks at the cell word without consuming the reply, so the `await` that follows still reclaims it and the
 program still balances to zero.
@@ -4585,7 +4540,7 @@ names a thread true
 ```
 
 <!-- test: a-service-shut-down-with-async-work-in-flight -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 4 -->
 ⭐⭐ **W226's SHAPE, COMMITTED — AND IT IS THE PROOF THAT THE LEAK IT PREDICTED IS NOT THERE.** No case in
 this file had a handler use `async` at all, and the `SV1` review that opened `W226` could not measure whether

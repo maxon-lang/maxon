@@ -1593,12 +1593,23 @@ end 'targetBracketsBlockingSyscalls'
 // would be two functions nothing reaches. The arm64 lanes emit them as calls at the isel's one dispatch door,
 // which is the only site that covers a hand-assembled chunk, an inline import and a raw `svc` alike.
 //
-// ⚠ **KEYED ON THE CPU BECAUSE THE IMPORT SHIM IS.** An IAT and the shim wrapped around it are an x64-windows
-// mechanism; a lane without one has nowhere else to put the bracket, which is why every arm64 lane that
-// brackets at all brackets this way.
+// ⚠ **KEYED ON THE ONE LANE THAT HAS SOMEWHERE ELSE TO PUT IT, WHICH IS THE IMPORT SHIM.** An IAT and the
+// shim wrapped around it are an x64-windows mechanism; every other bracketing lane has nowhere else, so it
+// brackets at the dispatch door. ⛔ **THE QUESTION IS WHICH LANE HAS SOMEWHERE ELSE TO PUT THE BRACKET, NEVER
+// WHICH CPU IT RUNS ON.** A CPU test is the same set by accident and is silently wrong for a second x64 OS:
+// that lane would install a `__sysmon` nothing ever announced a syscall to — a monitor that walks
+// `__sched_allm` a hundred times a second and structurally cannot find anything, with a retake counter stuck
+// at 0 and no error anywhere.
 export function targetCallsTheSyscallBracket(target Target) returns bool
-	return targetBracketsBlockingSyscalls(target) and target.cpu == CpuArch.arm64
+	return targetBracketsBlockingSyscalls(target) and not targetBracketsInsideTheImportShim(target)
 end 'targetCallsTheSyscallBracket'
+
+// The lane whose bracket is emitted INLINE, inside `X64GtRuntime.emitGtShimmedIatCall`, rather than as a pair
+// of calls at the isel's dispatch door. There is exactly one, and it is named by the mechanism it has rather
+// than by its CPU so that a second x64 OS cannot inherit the answer by sharing an instruction set.
+function targetBracketsInsideTheImportShim(target Target) returns bool
+	return target.cpu == CpuArch.x64 and target.os == Os.windows
+end 'targetBracketsInsideTheImportShim'
 
 // ⭐ **HOW LONG A MACHINE WHOSE PROCESSOR WAS TAKEN WAITS BETWEEN ASKING `__sched_pidle` FOR ANOTHER.** One
 // millisecond, which is `OtherWorkerPollMs`'s value and `OtherWorkerPollMs`'s reason — it is the finest
@@ -2144,10 +2155,11 @@ end 'tlsSlotArrayBase'
 // or writes `TPIDR_EL0`, so `mrt_host_tls_alloc` claims it (`Arm64LinuxRuntime`). WASI is different in kind
 // and not in schedule: a component has no OS-thread concept for a slot to be per.
 //
-// ⚠ **x64-linux IS NOT SERVED BY THIS AND STILL PANICS**, one arm up — it reaches this function through the
-// same `linux` case and gets `LinuxThreadPointerBase`, which is honest only where a backend actually
-// publishes the pointer. `targetProvidesFacility` denies `greenThreads` there, and `StdToX64Conversion`'s
-// `lowerTlsAlloc` still refuses outright, so no such program reaches a layout at all.
+// ⭐ **BOTH LINUX LANES ARE SERVED BY THE ONE `linux` ARM, AND EACH PUBLISHES THE POINTER ITSELF.** The base
+// is 0 on both because each backend CHOSE its thread pointer to be its slot block's base; what differs is
+// only the instruction that writes it — an `msr TPIDR_EL0` on AArch64, an `arch_prctl(ARCH_SET_FS)` on
+// x86-64, where the register is not addressable in user mode at all. Neither difference is visible here,
+// which is the point of keying this on the OS.
 function noTlsSlotArray(os Os) returns ParsedInt
 	panic("tlsSlotArrayBase: {os.name} has no per-OS-thread slot this scheduler could publish a P in — a WASI component has no OS-thread concept at all. `targetProvidesFacility` denies `greenThreads` there, so a source-written `async` is refused at its own span; reaching here means a COMPILER-INSERTED `__sched_init_procs` got past that name-keyed gate")
 end 'noTlsSlotArray'
@@ -2159,8 +2171,8 @@ let DarwinTsdArrayBase = 0 as ParsedInt
 // masked thread pointer IS the TSD array's base; here it is 0 because the backend CHOSE the thread pointer to
 // be its slot block's base, having found the register unclaimed. Both make offset 0 ambiguous in the way
 // Windows's 0x1480 is not — it would also be key 0's slot — and both answer it the same way, by refusing to
-// hand out key 0 at run time (`Arm64LinuxRuntime.buildArm64LinuxTlsAllocChunk`) rather than by trusting the
-// arithmetic.
+// hand out key 0 at run time rather than by trusting the arithmetic
+// (`Arm64LinuxRuntime.buildArm64LinuxTlsAllocChunk`, `X64LinuxRuntime.buildX64LinuxTlsAllocChunk`).
 let LinuxThreadPointerBase = 0 as ParsedInt
 
 // ⭐ **THE PARK TIMEOUT, IN MILLISECONDS — v1's adaptive pair, and it is a MISSED-WAKEUP SAFETY NET rather

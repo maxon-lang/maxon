@@ -71,8 +71,7 @@ func @build {
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
-    arm64.movImm x16, 4096
-    arm64.mul x0, x19, x16
+    arm64.lsl x0, x19, 12
     arm64.add x1, x0, 280000
     arm64.movRegReg x0, x20
     arm64.bl Array.reserve
@@ -158,8 +157,7 @@ func @main {
     arm64.b.hs __im_slow#22
   __im_load#23:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.arm64AddLsl x0, x0, x21, lsl #3
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x22, [x0 + x21*8 + 0]
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
@@ -208,8 +206,7 @@ func @main {
     arm64.b.hs __im_slow#26
   __im_load#31:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-    arm64.arm64AddLsl x0, x0, x23, lsl #3
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x23*8 + 0]
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1

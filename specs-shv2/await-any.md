@@ -145,7 +145,7 @@ marker. `over-service-replies` keeps the narrow marker for a reason of its OWN: 
 ## Tests
 
 <!-- test: await-any.returns-the-first-completed-index -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE DISCRIMINATING CASE — the index returned is the one that FINISHED, not the one that is first in
 the array.** Slot 0 and slot 2 park on timers; slot 1 only yields, so it is the one that reaches
 `completed`. A scan that looked at slot 0 alone, or that returned the first slot it could read rather than
@@ -190,7 +190,7 @@ end 'main'
 ```
 
 <!-- test: await-any.no-park-when-one-is-already-complete -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE EXIT TEST IS AT THE TOP OF THE LOOP, AND THIS IS WHAT SAYS SO.** The promise is driven to
 completion by `Runtime.yield()` before `awaitAny` is called, and it is the only one in the program — so at
 the moment of the call nothing is runnable, no timer is pending and no child is parked. A drive loop that
@@ -237,7 +237,7 @@ end 'main'
 ```
 
 <!-- test: await-any.leaves-the-others-awaitable -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE CENTRAL CASE.** `awaitAny` names one index and RETIRES NOTHING: every promise in the array,
 winner included, is still awaitable afterwards, and a program that awaits them all is leak-free. This is
 the shape the motivating consumer has — a pool selects, serves the ready drain, and eventually awaits
@@ -278,7 +278,7 @@ end 'main'
 ```
 
 <!-- test: await-any.over-a-mixed-array-of-sleeps -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE NETPOLL CASE — nothing is runnable at all, so the shared body BLOCKS on the earliest timer.**
 Three sleepers and no other work: the drive loop finds no coroutine, nothing on the ring, nothing to
 steal, no parked child — and sleeps on the nearest deadline rather than spinning. The index that comes
@@ -318,7 +318,7 @@ end 'main'
 ```
 
 <!-- test: await-any.over-service-replies -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **THE COMPOSITION THAT MAKES THE PRIMITIVE WORTH HAVING.** A handler reply is an ordinary `Promise`, so
 ONE waiting primitive covers service replies, file IO and subprocess drains — there is no separate "channel
 select" anywhere in the design. Two services are sent to; the first handler sleeps and the second answers at
@@ -384,7 +384,7 @@ end 'main'
 ```
 
 <!-- test: await-any.selects-from-inside-an-async-body -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **A SELECT INSIDE A COROUTINE — the NESTED driver, which is where a drive loop's own identity goes
 wrong.** `selfGt` is the running driver and `owner` is the green thread whose coroutines it may run, and
 both are read once in `entry`; for a top-level `awaitAny` they are GT0, and here the driver is itself an
@@ -426,7 +426,7 @@ end 'main'
 ```
 
 <!-- test: await-any.a-slot-nobody-filled-is-skipped -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE NULL-SLOT GUARD, AND IT IS REACHABLE RATHER THAN DEFENSIVE.** `Array.resize` refuses a MANAGED
 element type at compile time (E3106) — but a `Promise with …` is not managed (its value IS the green-thread
 pointer, `PromiseType.maxon`'s first fact), so `resize` is legal here and publishes length over slots nobody
@@ -459,7 +459,7 @@ end 'main'
 ```
 
 <!-- test: await-any.an-empty-array-is-a-scheduler-deadlock -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE ONE SHAPE IN WHICH `awaitAny` IS A PROGRAM'S FIRST SCHEDULER CALL**, because an array with a
 promise in it has already spawned one. Two things are pinned at once: the drive loop's lazy `__gt_init`
 runs (without it this program reads `currentP` through a TLS slot nobody allocated and **segfaults**), and
@@ -481,7 +481,7 @@ end 'main'
 ```
 
 <!-- test: await-any.the-losers-are-dropped-when-the-array-dies -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐ The composition: select, serve the winner, and let the array die with the losers still in it. Exit 0
 is what a container that drops its promise elements gives. This case was `disabled-test` until the
 container owned its elements: the missing element walk on an `Array with Promise` (`W217`) reported

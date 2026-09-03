@@ -101,7 +101,7 @@ let MaxMagicRefinements = 64
 
 // `log2OfPowerOfTwo`'s answer for a value that is not a power of two. Not a sentinel standing in for a
 // real shift: every real answer is in `0 .. 63`, so a negative one cannot be mistaken for one.
-let NotAPowerOfTwo = -1
+export let NotAPowerOfTwo = -1
 
 // The modulus `divideTwoToThe63` divides by. ⭐ **THE RANGE IS THE PRECONDITION, DECLARED RATHER THAN
 // CHECKED BY HAND**: `2^63 / m` needs `m` non-zero, and a `ParsedInt` parameter would make that divide
@@ -349,12 +349,15 @@ function divideTwoToThe63(m PositiveModulus, quotient ParsedInt, remainder Parse
 	remainder = r0 + 1
 end 'divideTwoToThe63'
 
-// `log2(v)` when `v` is a power of two, else `NotAPowerOfTwo`.
+// `log2(v)` when `v` is a power of two, else `NotAPowerOfTwo`. EXPORTED: this pass reduces a DIVISION
+// by a power of two to a shift, and `arm64MulImmForm` reduces a MULTIPLY by one to the same shift —
+// one question, asked of two opcodes, and a second copy of the loop is the drift this file's own
+// single-statement rules exist to avoid.
 //
 // ⚠ `v` must be POSITIVE, and the caller has already taken a magnitude: `v and (v - 1)` answers `0`
 // for `i64.min` too — which IS a power of two mathematically, and is refused one level up because its
 // magnitude is not representable.
-function log2OfPowerOfTwo(v ParsedInt) returns ParsedInt
+export function log2OfPowerOfTwo(v ParsedInt) returns ParsedInt
 	if v < 1 or (v and (v - 1)) != 0 'notAPowerOfTwo'
 		return NotAPowerOfTwo
 	end 'notAPowerOfTwo'

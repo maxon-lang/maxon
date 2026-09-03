@@ -205,6 +205,10 @@ let OpcodeJmpRel32 = 0xE9  // jmp rel32 (unconditional near jump)
 let OpcodePushBase = 0x50  // push r64 (50+r) — 64-bit operand size by default in long mode
 let OpcodePopBase = 0x58  // pop r64  (58+r) — the mirror of push
 
+// `int3` (CC) — the one-byte trap. EXPORTED: it follows a syscall that cannot return (a worker M's `exit`, a
+// failed-exec child's), so the decoder traps rather than walking into whatever bytes come next.
+export let OpcodeInt3 = 0xCC
+
 // The second byte of `syscall` (0F 05) — a two-byte opcode (the `0F` escape then this), with no
 // ModR/M, no REX and no operands. The number goes in eax (loaded by the shared `encodeMovRegImm32`).
 let OpcodeSyscallSecondByte = 0x05
@@ -215,7 +219,10 @@ let OpcodeSyscallSecondByte = 0x05
 // that follows indivisible against every other core. Only a small set of instructions accept it, and all
 // three atomics below are in it.
 let LockPrefix = 0xF0
-let OpcodeCmpxchgRmReg = 0xB1  // cmpxchg r/m64, r64 (0F B1 /r) — reg field = the SOURCE stored on a match
+// EXPORTED: the x64-Linux green-thread floor's hand-assembled chunks publish and take a futex word with it —
+// an auto-reset event's `0 -> 1` and `1 -> 0`, and the recursive mutex's three acquire steps — and a chunk has
+// no `StdOp.atomicCas` to lower through.
+export let OpcodeCmpxchgRmReg = 0xB1  // cmpxchg r/m64, r64 (0F B1 /r) — reg field = the SOURCE stored on a match
 
 // EXPORTED: the syscall bracket's exit (`X64GtRuntime.emitGtExitSyscall`) is the one hand-assembled caller
 // that wants `xadd`'s two answers at once — it clears the in-call bit and reads what the bit was, which is
@@ -1915,6 +1922,17 @@ export function encodeMovRegSegBase(code ByteArray, dest X64Register, base X64Re
 	code.push(segmentPrefixByte(segment))
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: dest, base: base, disp: 0, wide: true)
 end 'encodeMovRegSegBase'
+
+// `mov seg:[baseReg], srcReg` (64-bit) — the STORE twin of `encodeMovRegSegBase`, and the only way to WRITE a
+// per-OS-thread slot on x86-64: FS base is not addressable in user mode, so a slot has an address only inside
+// an instruction that carries the override. `mrt_linux_tls_set` and this lane's errno stash are its callers.
+//
+// It delegates its ModR/M for `encodeMovRegSegBase`'s reason — the `[rbp]`/`[r13]` RIP-relative trap — and
+// emits the segment prefix before the REX byte, which REX's "last prefix" rule requires.
+export function encodeMovSegBaseReg(code ByteArray, base X64Register, srcReg X64Register, segment X64ThreadPointerSegment)
+	code.push(segmentPrefixByte(segment))
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: 0, wide: true)
+end 'encodeMovSegBaseReg'
 
 // A raw Linux x86-64 supervisor call: `mov eax, number` then `syscall` (0F 05). The x86-64 Linux ABI
 // puts the number in eax/rax and arguments in rdi/rsi/rdx/r10/r8/r9 (which the isel pre-moved, exactly

@@ -78,7 +78,7 @@ to build any of it on. `sched-processor.md` carries the identical restriction fo
 ## Tests
 
 <!-- test: slab-sharding.a-green-thread-program-allocates-through-its-processor-row -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE P-OWNED ROW, HAMMERED.** A green thread's allocations run with `main` adopted as P[0], so every
 span they touch is cut, stamped, cached, drained, evicted and returned against a real owner. This builds
 and drops thousands of short-lived Strings inside green threads and then verifies a population built the
@@ -150,7 +150,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-slot-allocated-before-the-scheduler-is-freed-after-it -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE RAW ROW, AND THE ONE ARM OF THE LOCK A SINGLE-THREADED PROGRAM REACHES.** Everything allocated
 before the first `async` is allocated with NO processor: the P read answers "none", the spans
 land on the dedicated raw row and are stamped as owned by nobody. Once the scheduler exists those same
@@ -236,7 +236,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-parked-span-is-taken-back-and-re-owned -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE PARKED SENTINEL, ROUND-TRIPPED.** A span whose last slot comes back is unlinked from its owner's
 mcache row, parked on mcentral and stamped with an owner that is neither a processor nor "no
 processor". The next refill takes it back and re-stamps it. This case empties a class's spans wholesale
@@ -323,7 +323,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-parked-span-still-reaches-the-scavenger -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE OWNER STAMP AND THE SCAVENGER, TOGETHER.** The scavenger destroys spans off the mcentral lists,
 and since S5 every one of those carries the parked sentinel in the field the mcache eviction is derived
 from. This is the two-pass grace case run through a GREEN THREAD, so the spans it empties were owned by
@@ -382,7 +382,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.the-traffic-counters-are-exact-across-green-threads -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 **THE COUNTERS, READ THROUGH THE SHARDED ALLOCATOR.** Every traffic column an emitted program keeps is
 stepped inside `__mm_alloc`/`__mm_free`, which since EC8 reach their slot through a `__slab_alloc` that
 carries the class lookup, the processor read, the shard row, the state region and the pop in ONE body
@@ -485,7 +485,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-local-free-is-never-counted-as-a-remote-one -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 ⭐ **`__Builtins.slabRemoteFreeCount()` EXISTS BECAUSE THE CROSS-P FREE HAD PRODUCERS AND NO OBSERVER.** A
 box `main` allocates and a `spawn`ed service drops is released by whichever machine ran that receiver —

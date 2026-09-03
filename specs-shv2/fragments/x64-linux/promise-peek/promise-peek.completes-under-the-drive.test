@@ -1,0 +1,233 @@
+// Test: promise-peek.completes-under-the-drive
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let maxSpins = 100
+	var arr = IntPromiseArray.create()
+	arr.push(async makeValue())
+	let p = try arr.get(0) otherwise panic("the promise was just pushed")
+	let before = __Builtins.gtIsComplete(p.inner)
+	var spins = 0
+	var after = 0
+	while spins < maxSpins and after == 0 'drive'
+		Runtime.yield()
+		after = __Builtins.gtIsComplete(p.inner)
+		spins = spins + 1
+	end 'drive'
+	var score = 0
+	if before == 0 'notCompleteOnArrival'
+		score = score + 1
+	end 'notCompleteOnArrival'
+	if after == 1 'completeAfterTheDrive'
+		score = score + 2
+	end 'completeAfterTheDrive'
+	if await p == 42 'stillAwaitable'
+		score = score + 4
+	end 'stillAwaitable'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @makeValue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rcx, [rip + makeValue]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#25
+  __im_empty:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, critsplit#26
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg r13, r8
+    x64.jmp __im_cont
+  critsplit#26:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#25:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at promise-peek.completes-under-the-drive.test:15: the promise was just pushed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_is_complete
+    x64.movRegReg r14, r8
+    x64.movRegImm32 r15, 0
+    x64.movRegImm32 rax, 0
+  whilehdr:
+    x64.cmpRegImm32 r15, 100
+    x64.movRegImm32 rcx, 0
+    x64.jcc greaterEqual, scmerge
+  andrhs:
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, whileexit
+  drive:
+    x64.callDirect Runtime.yield
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_is_complete
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.movRegReg rax, r8
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, ifcont#9
+  notCompleteOnArrival:
+    x64.movRegImm32 rcx, 1
+  ifcont#9:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, critsplit#23
+  completeAfterTheDrive:
+    x64.leaRegRegImm32 r14, rcx, 2
+    x64.jmp ifcont#11
+  critsplit#23:
+    x64.movRegReg r14, rcx
+  ifcont#11:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.cmpRegImm32 r8, 42
+    x64.jcc notEqual, critsplit#24
+  stillAwaitable:
+    x64.leaRegRegImm32 r12, r14, 4
+    x64.jmp ifcont#13
+  critsplit#24:
+    x64.movRegReg r12, r14
+  ifcont#13:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at promise-peek.completes-under-the-drive.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

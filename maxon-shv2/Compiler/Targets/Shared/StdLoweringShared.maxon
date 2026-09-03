@@ -770,6 +770,24 @@ end 'calleeResultClass'
 // EC16 — SCALED-INDEX ADDRESSING: which `base + index*scale` chains an addressing mode can carry
 // ==================================================================================================
 
+// ⭐ **WHAT THE TARGET'S OWN LOAD/STORE CAN CARRY IN ITS ADDRESS OPERAND — the per-ISA half of the
+// fold below, and the only half that is per-ISA.** The two native ISAs answer differently and neither
+// answers with a bare yes; `indexedFormCarries` applies each answer to one access.
+export enum IndexedMemoryForm
+	// The address stands alone: every matched chain emits its own address op and the access reads it.
+	none
+	// x64's SIB byte: `[base + index*scale + disp]` at any of the four scales and any displacement, so
+	// every matched chain folds.
+	anyScaleAndDisplacement
+	// ⭐ **AArch64's REGISTER-OFFSET form, `LDR Xt, [Xn, Xm, LSL #k]` — a STRICTLY narrower door, and
+	// the narrowing is the ISA's rather than a conservatism.** Its `S` bit selects a shift of 0 or
+	// exactly log2(the access size) — there is no `LSL #1` under a 64-bit access — and the
+	// register-offset encoding carries NO displacement field at all. So the chain folds only where the
+	// multiplier IS the access width and the access is at offset 0, which is exactly the `word64`
+	// element at stride 8 that `emitSlotAddr` spells for every array of a declared type.
+	accessWidthScaleAtZeroOffset
+end 'IndexedMemoryForm'
+
 // ⭐⭐ **THE ONE ANSWER TO "IS THIS ADDRESS A SCALED INDEX, AND IS IT THIS OP'S ALONE?", read by BOTH
 // native ISELs (docs/emitted-code-roadmap.md, EC16).**
 //
@@ -780,9 +798,9 @@ end 'calleeResultClass'
 // `mov rax, [rbx + r13*8]` does in one.
 //
 // It lives HERE, beside `buildValueClassColumns`, for that function's reason: the MATCH is a fact
-// about the Std graph and names no ISA. The one thing that IS per-ISA is `foldsIntoMemoryOps` —
-// whether the target's load/store carries the index itself, which x64's does and arm64's does not on
-// the terms this fold needs (see `TargetDialect.arm64AddLsl`).
+// about the Std graph and names no ISA. The one thing that IS per-ISA is `IndexedMemoryForm` — what
+// the target's own load/store can carry in its address operand, which the two native ISAs answer
+// differently and neither answers with a bare yes.
 //
 // ⚠ **THREE CONDITIONS, AND EACH IS LOAD-BEARING:**
 //   1. **SINGLE READER.** If the multiply (or the add) has a second reader it must be materialised
@@ -866,7 +884,7 @@ export type ScaledIndexFolds
 	// would simply stop folding, and the goldens would be MINTED showing the unfolded three-instruction
 	// chain with nothing red anywhere. The use walk itself is `collectFunctionValueUses`, which is
 	// StdDialect's and shared with `FoldConstOperands` — so this type owns one descent and borrows one.
-	export function computeForFunction(module StdModule, func IrFunction, foldsIntoMemoryOps bool)
+	export function computeForFunction(module StdModule, func IrFunction, memoryForm IndexedMemoryForm)
 		self.reset()
 		collectFunctionValueUses(module, func: func, referenced: self.valueUses)
 
@@ -874,7 +892,7 @@ export type ScaledIndexFolds
 			let block = try module.blocks.get(blockRef) otherwise panic("computeScaledIndexFolds: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("computeScaledIndexFolds: opIdx {opIdx} not in module.ops")
-				self.recordOp(op, blockRef: blockRef, foldsIntoMemoryOps: foldsIntoMemoryOps)
+				self.recordOp(op, blockRef: blockRef, memoryForm: memoryForm)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'computeForFunction'
@@ -996,7 +1014,7 @@ export type ScaledIndexFolds
 		self.arithDefs.clear()
 	end 'reset'
 
-	function recordOp(op StdOp, blockRef BlockRef, foldsIntoMemoryOps bool)
+	function recordOp(op StdOp, blockRef BlockRef, memoryForm IndexedMemoryForm)
 		classifyArithOperands(op, operands: self.operands)
 
 		// EC19 — recorded BEFORE the early returns below, so the column covers every arithmetic result
@@ -1020,11 +1038,11 @@ export type ScaledIndexFolds
 			return
 		end 'addressDef'
 
-		if not foldsIntoMemoryOps 'addressFormOnly'
+		if memoryForm == IndexedMemoryForm.none 'addressFormOnly'
 			return
 		end 'addressFormOnly'
 
-		self.recordMemoryFold(op, blockRef: blockRef)
+		self.recordMemoryFold(op, blockRef: blockRef, memoryForm: memoryForm)
 	end 'recordOp'
 
 	// Whether the LAST classified op is an integer `binOpImm(mul, index, k)` whose multiplier an
@@ -1093,11 +1111,11 @@ export type ScaledIndexFolds
 	// The two ops whose ADDRESS operand an indexed form can absorb. Every other `StdOp` breaks: the
 	// ranges are written as ranges rather than a bare `default` so that an op APPENDED to the union
 	// fails to compile here until somebody decides whether it addresses memory.
-	function recordMemoryFold(op StdOp, blockRef BlockRef)
+	function recordMemoryFold(op StdOp, blockRef BlockRef, memoryForm IndexedMemoryForm)
 		match op 'mem'
 			const to globalAddr then break 'mem'
-			loadIndirect(_, addrId, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
-			storeIndirect(addrId, _, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
+			loadIndirect(_, addrId, offset, valueType) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef, offset: offset, valueType: valueType, memoryForm: memoryForm)
+			storeIndirect(addrId, offset, _, valueType) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef, offset: offset, valueType: valueType, memoryForm: memoryForm)
 			osAllocPages to osEnterBackgroundPriority then break 'mem'
 			osFileOpenWriteExecutable then break 'mem'
 			osEnvBlock to osEnvBlockFree then break 'mem'
@@ -1111,7 +1129,7 @@ export type ScaledIndexFolds
 
 	// ⚠ A STORE WHOSE STORED VALUE **IS** ITS ADDRESS is refused by `containsRepeat` for
 	// `tryIndexedAddress`' reason: the op reads the id twice, so it is multiply-used.
-	function fuseAddressIntoMemoryOp(addrId ValueId, blockRef BlockRef)
+	function fuseAddressIntoMemoryOp(addrId ValueId, blockRef BlockRef, offset ByteOffset, valueType StdType, memoryForm IndexedMemoryForm)
 		if not self.indexedAddrDefs.contains(addrId) 'notIndexed'
 			return
 		end 'notIndexed'
@@ -1121,6 +1139,9 @@ export type ScaledIndexFolds
 		if self.valueUses.containsRepeat(addrId) 'sharedAddress'
 			return
 		end 'sharedAddress'
+		if not indexedFormCarries(memoryForm, scale: self.scaleOf(addrId), offset: offset, valueType: valueType) 'noSuchAddressingForm'
+			return
+		end 'noSuchAddressingForm'
 
 		self.fusedAddrDefs.insert(addrId)
 	end 'fuseAddressIntoMemoryOp'
@@ -1141,6 +1162,66 @@ export type ScaledIndexFolds
 		return try self.defBlockColumn.get(valueId) otherwise panic("ScaledIndexFolds.blockOf: defBlockColumn.get OOB at {valueId} — every recorded id sized the column to itself")
 	end 'blockOf'
 end 'ScaledIndexFolds'
+
+// ⭐ **WHETHER THE TARGET'S OWN INDEXED LOAD/STORE CAN CARRY THIS ADDRESS — the ONE statement of each
+// ISA's addressing reach, asked where the fold is decided so no ISEL has to re-derive it.**
+//
+// `none` never carries; x64's SIB carries every matched chain; AArch64's register-offset form carries
+// only the narrow case its encoding actually has. The arm64 conditions are the encoding's, not a
+// conservatism, and both are load-bearing:
+//   • **THE SCALE MUST BE THE ACCESS SIZE.** The `S` bit is one bit: shift 0, or exactly log2(the
+//     access size). A `word64` element at stride 4 has no form, and emitting one would read the
+//     wrong address.
+//   • **THE DISPLACEMENT MUST BE ZERO.** The register-offset encoding has no displacement field at
+//     all — the 12-bit imm12 belongs to the immediate-offset form, which has no index register.
+// A `byte` access at scale 1 satisfies both, and is unreachable rather than excluded: `x * 1` is the
+// multiply `foldConstOperands`' identity move deletes, so a byte-strided element never mints a scale
+// candidate in the first place.
+function indexedFormCarries(memoryForm IndexedMemoryForm, scale MemoryIndexScale, offset ByteOffset, valueType StdType) returns bool
+	return match memoryForm 'form'
+		none gives false
+		anyScaleAndDisplacement gives true
+		accessWidthScaleAtZeroOffset gives memoryIndexScaleFactor(scale) == accessWidthBytes(accessWidthFor(valueType)) and memoryDisplacement(offset) == 0
+	end 'form'
+end 'indexedFormCarries'
+
+// ==========================================================================
+// The SYSCALL BRACKET — which ops the isel wraps in `__sched_enter_syscall` /
+// `__sched_exit_syscall`
+// ==========================================================================
+
+// ⭐⭐ **WHETHER THIS OP TAKES THE BRACKET, ASKED ONCE FOR BOTH NATIVE ISELS.** A `blocking` op
+// (`StdDialect.stdOpSyscallClassOf`) holds its OS thread in the kernel, so the machine announces itself
+// before the call and reads the verdict after it — otherwise the processor it is holding is idle for the
+// duration and nothing else can run on it. WHICH ops, and on which lanes, is a fact about the Std graph and
+// the target; only the INSTRUCTION that makes the two calls is per-ISA, so only that stays in the isels.
+//
+// ⛔⛔ **x64-WINDOWS DOES NOT COME THROUGH HERE, AND THAT IS `targetCallsTheSyscallBracket`'s WHOLE JOB.**
+// There the bracket sits INLINE inside `X64GtRuntime.emitGtShimmedIatCall`, in a pre-call window where the
+// argument registers are already laid out for the kernel and a `call` would destroy the frame it is about to
+// read — so a pair of calls at the dispatch door would be a second bracket around the same import. Every
+// other bracketing lane has nowhere else to put it: a hand-assembled chunk reached by a call, an inline
+// import and a raw `svc`/`syscall` are covered by the dispatcher and by nothing narrower.
+//
+// ⛔⛔ **A BRACKETED OP MUST ALREADY DECLARE `clobbersFlags`, AND THE CHECK IS HERE BECAUSE NOTHING ELSE
+// COUPLES THE TWO ROSTERS.** The two calls wrap the op in code the fusion census cannot see — the census
+// reads `StdOpMeta.clobbersFlags` off the op and stops there — so a `blocking` op declaring `false` would let
+// a conditional branch read flags the bracket's own call had already destroyed. Every op in the `blocking`
+// set declares `true` today; the pairing is CHECKED rather than commented, so an op added to one roster and
+// not the other is a compiler failure at its first use instead of a wrong branch.
+//
+// ⚠ **THE EXIT CALL IS SAFE AFTER EVERY LOWERING BECAUSE EACH ONE HAS ALREADY CAPTURED ITS RESULT INTO A
+// VIRTUAL REGISTER**, and both call ops declare the whole caller-saved set as implicit defs
+// (`TargetDialect`), so the allocator keeps that value live across it.
+export function opTakesSyscallBracket(op StdOp, target Target, usesGt bool) returns bool
+	let bracketed = usesGt and targetCallsTheSyscallBracket(target) and stdOpSyscallClassOf(op) == SyscallClass.blocking
+
+	if bracketed and not op.rawValue.clobbersFlags 'theBracketWouldBeInvisible'
+		panic("opTakesSyscallBracket: `{op.name}` is `SyscallClass.blocking` (StdDialect.stdOpSyscallClassOf) but declares `clobbersFlags: false` — the syscall bracket wraps it in two calls, which write flags where the compare-fusion census believes nothing does")
+	end 'theBracketWouldBeInvisible'
+
+	return bracketed
+end 'opTakesSyscallBracket'
 
 // ==========================================================================
 // Compare/branch fusion — which compares keep their boolean in the CONDITION

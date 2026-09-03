@@ -1,0 +1,64 @@
+// Test: builtins-clock.thread-cpu-ticks-monotonic
+function main() returns ExitCode
+	let first = __Builtins.threadCpuTicks()
+	let second = __Builtins.threadCpuTicks()
+	let third = __Builtins.threadCpuTicks()
+	var score = 0
+	if second >= first 'firstPair'
+		score = score + 1
+	end 'firstPair'
+	if third >= second 'secondPair'
+		score = score + 2
+	end 'secondPair'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __thread_cpu_ticks
+    x64.movRegReg rbx, r8
+    x64.callDirect __thread_cpu_ticks
+    x64.movRegReg r12, r8
+    x64.callDirect __thread_cpu_ticks
+    x64.movRegImm32 rax, 0
+    x64.cmpRegReg r12, rbx
+    x64.jcc less, ifcont#2
+  firstPair:
+    x64.movRegImm32 rax, 1
+  ifcont#2:
+    x64.cmpRegReg r8, r12
+    x64.jcc less, critsplit
+  secondPair:
+    x64.leaRegRegImm32 r8, rax, 2
+    x64.jmp ifcont#4
+  critsplit:
+    x64.movRegReg r8, rax
+  ifcont#4:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at builtins-clock.thread-cpu-ticks-monotonic.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

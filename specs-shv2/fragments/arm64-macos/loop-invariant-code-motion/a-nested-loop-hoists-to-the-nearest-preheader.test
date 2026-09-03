@@ -43,8 +43,7 @@ func @grid {
     arm64.prologue 16
     arm64.movImm x3, 0
     arm64.movImm x4, 0
-    arm64.movImm x16, 5
-    arm64.mul x2, x2, x16
+    arm64.arm64AddLsl x2, x2, x2, lsl #2
   forhdr#1:
     arm64.cmp x4, x1
     arm64.b.ge forexit
@@ -56,8 +55,7 @@ func @grid {
     arm64.cmp x5, x6
     arm64.b.ge forstep#3
   inner:
-    arm64.arm64AddLsl x8, x7, x5, lsl #3
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x8, [x7 + x5*8 + 0]
   __im_cont:
     arm64.add x3, x3, x8
     arm64.add x3, x3, x2

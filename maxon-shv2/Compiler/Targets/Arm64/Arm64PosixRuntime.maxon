@@ -1,11 +1,11 @@
 // Arm64PosixRuntime — what the TWO arm64 POSIX host surfaces SHARE that is written in INSTRUCTIONS: the
-// emit fragments both lanes place, the chunks whose body is the same on both once the one thing that
-// genuinely differs — the layout of `struct stat` — is a parameter, and the protocol constants only an
-// arm64 lane reads.
+// emit fragments both lanes place, and the chunks whose body is the same on both once the one thing that
+// genuinely differs — the layout of `struct stat` — is a parameter.
 //
 // ⭐⭐ **THE FACTS THOSE BODIES READ ARE NOT HERE.** The symbol names, the POSIX constants and
-// `PosixStatLayout` are `Targets/Shared/PosixRuntime.maxon`, because x64-Linux's host surface reads them
-// too; the arch-neutral Linux ones are `Targets/Shared/LinuxRuntime.maxon`. What stays is what an AArch64
+// `PosixStatLayout` are `Targets/Shared/PosixRuntime.maxon`, and so is every number of the host-object
+// protocol — the wait object's fields, the handle tag, `poll`'s bits, the wait-status decode — because
+// x64-Linux's host surface reads all of them too; the arch-neutral Linux ones are `Targets/Shared/LinuxRuntime.maxon`. What stays is what an AArch64
 // assembler is needed to express — `FindFirstFileA`'s glob split, the `dwFileAttributes` mask a `st_mode`
 // becomes, the FILETIME a whole second becomes and the 320-byte record all three fill are one shape per
 // backend, and writing that shape twice for the two arm64 OSes is this project's signature bug in the one
@@ -15,37 +15,9 @@
 // `mrt_linux_glob_match` exists only because a raw static image has no `fnmatch` — neither has a counterpart
 // on the other lane, so neither may wear the shared `mrt_host_` prefix.
 
-// ⭐ **THE WAIT OBJECT'S KIND, AS THE ISEL SPELLS IT.** `osEventCreate` lowers to `mrt_host_wait_new(kind)`
-// on BOTH lanes and must name the same number on each, so the value is a shared protocol rather than either
-// lane's private constant. The other kinds are not here because no isel lowering names one: a thread object
-// is minted inside `mrt_host_thread_create` and a child process inside `mrt_host_spawn`, each of which knows
-// its own kind (`Arm64DarwinRuntime`'s layout header enumerates all three).
-export let PosixWaitKindEvent = 1
-
 // ==========================================================================
 // The HANDLE TAG — POSIX's answer to `HANDLE`, and both lanes give it
 // ==========================================================================
-
-// ⭐⭐⭐ **`StdOp.osCloseHandle` CLOSES FOUR DIFFERENT THINGS AND POSIX HAS NO TYPE IN COMMON FOR THEM.** On
-// Windows a wake event, a worker thread, a pipe end, an opened file and a child process are all one opaque
-// `HANDLE`, and one `CloseHandle` serves every one of them. On either POSIX lane the first two and the last
-// are heap objects the backend mints, the middle two are DESCRIPTORS, and "close" means `free`/`munmap` for
-// one and `close` for the other. A value that is only a number cannot say which — and the numbers OVERLAP,
-// because a small descriptor and an allocated pointer are both just integers.
-//
-// ⇒ **A handle on either lane carries its kind in bits 48 and up**, which a user virtual address never
-// occupies on arm64-macOS (47-bit) or on arm64-Linux (48-bit, so bit 47 is the highest one used).
-// `mrt_host_wait_close` reads those bits and dispatches; everything that consumes a DESCRIPTOR masks them
-// off, which costs two instructions and is a no-op for the untagged descriptors `osFileOpenRead` and
-// `osStdHandle` already answer.
-//
-// ⚠ **KIND 0 IS THE DESCRIPTOR KIND ON PURPOSE**, so a raw fd from any other family is already a valid
-// handle and needs no tagging at its source — and so that the Std tier's `0 means no handle` sentinel
-// (which `emitSubpCloseSlotHandles` relies on, and which is `CloseHandle(NULL)`'s Win32 no-op) keeps
-// meaning exactly that.
-let PosixHandleKindShift = 48 as ShiftCount
-let PosixHandleKindDescriptor = 0
-export let PosixHandleKindObject = 1
 
 // `dest = handle >> 48` — the kind field, for the two ops that dispatch on it.
 export function arm64PosixHandleKind(asm Arm64RuntimeAsm, dest Arm64Register, handle Arm64Register)
@@ -64,20 +36,12 @@ export function arm64PosixUntagHandle(asm Arm64RuntimeAsm, reg Arm64Register)
 	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: PosixHandleKindBits)
 end 'arm64PosixUntagHandle'
 
-// How WIDE the kind field is — the bits above the 48-bit payload, which on either arm64 POSIX lane is every
-// bit a user virtual address cannot reach.
-let PosixHandleKindBits = (MachineWordBits - PosixHandleKindShift) as ShiftCount
-
 // `reg = reg | (kindObject << 48)` — what `mrt_host_wait_new` hands back, so every object handle in the
 // program carries its kind from the moment it exists.
 export function arm64PosixTagObject(asm Arm64RuntimeAsm, reg Arm64Register, scratch Arm64Register)
 	arm64EmitMovRuntimeImm(asm, dest: scratch, value: PosixHandleKindObject * PosixHandleKindUnit)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: reg, lhs: reg, rhs: scratch)
 end 'arm64PosixTagObject'
-
-// `1 << PosixHandleKindShift` as a value rather than a shift, so a kind can be turned into a tag by a
-// multiply the `movz #imm, lsl #48` ladder encodes in one instruction.
-let PosixHandleKindUnit = 0x0001000000000000
 
 // ==========================================================================
 // `GetEnvironmentVariableA`'s ANSWER, once, for both lanes
@@ -120,10 +84,6 @@ export function arm64PosixEmitEnvValueCopy(asm Arm64RuntimeAsm, valueSlot StackS
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: 1)
 	arm64EmitBranchTo(asm, label: copyLoop)
 end 'arm64PosixEmitEnvValueCopy'
-
-// The byte count an unset variable answers — `GetEnvironmentVariableA`'s own 0, and the value both lanes seed
-// `writtenSlot` with before their lookup so the not-found arm needs no branch of its own.
-export let PosixEnvUnset = 0
 
 // ==========================================================================
 // A relative timeout, in the shape every POSIX call that takes one wants
@@ -168,13 +128,6 @@ export function arm64PosixMillisToTimespec(asm Arm64RuntimeAsm, ms Arm64Register
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: secSlot)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: nsecSlot)
 end 'arm64PosixMillisToTimespec'
-
-let PosixMillisPerSecond = 1000
-
-// The other direction of the same fact, and the unit `arm64PosixMillisToTimespec` turns a millisecond
-// remainder into. ⚠ `mrt_host_tick_ms` does NOT use it: that chunk derives its divisor from the FREQUENCY
-// `mrt_host_monotonic_clock` reports, so a lane that ever answered raw counter ticks would still be right.
-let PosixNanosPerMilli = 1000000
 
 // ⭐⭐ **ZERO `slotCount` CONSECUTIVE FRAME SLOTS, STARTING AT `firstSlot`.** Three chunks across the two
 // lanes need a kernel-facing buffer to start empty, and each had been writing the same six-instruction loop
@@ -224,9 +177,6 @@ export function arm64EmitWin32BoolFromZeroStatus(asm Arm64RuntimeAsm)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixCallSucceeded as Imm32)
 	arm64EmitCset(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), cond: Arm64CondCode.eq)
 end 'arm64EmitWin32BoolFromZeroStatus'
-
-// What a POSIX call that reports only success or failure answers on success.
-let PosixCallSucceeded = 0
 
 // ⭐ **AN errno IN x0 BECOMING THE Win32 CODE THE Std TIER CLASSIFIES — the whole body of
 // `mrt_host_last_error` except for where the errno came FROM.** Each lane fetches it its own way and then
@@ -503,51 +453,6 @@ end 'arm64PosixFillFindDataTime'
 // `clone(SIGCHLD)` and a hand-built child. There is nothing in common to lift; each lane writes
 // `mrt_host_spawn` itself, under this file's shared name.
 
-// ⭐ **A CHILD PROCESS IS A WAIT OBJECT KIND, AND BOTH LANES NOW MINT ONE**, so it joins `PosixWaitKindEvent`
-// here rather than staying either lane's private constant: `mrt_host_spawn` writes it and `mrt_host_wait_one`
-// and `mrt_host_wait_close` both dispatch on it, in bodies this file owns.
-export let PosixWaitKindProcess = 3
-
-// ⭐⭐ **AND SO IS A WORKER M's OS THREAD, AS OF THE arm64-LINUX `clone`.** This constant was
-// `Arm64DarwinRuntime.DarwinWaitKindThread` for exactly as long as *"only that lane can create one"* was
-// true — `osThreadCreate` was a runtime abort on the Linux lane, so the kind could never reach its
-// `mrt_host_wait_new`. `mrt_host_thread_create` is a real `clone` there now, both lanes mint the kind and
-// both dispatch on it, so it is a shared protocol number like the two above rather than either lane's
-// private constant. ⚠ The three kinds are 1, 2 and 3 and none is 0, so an object whose kind field was never
-// written cannot be mistaken for any of them.
-export let PosixWaitKindThread = 2
-
-// ==========================================================================
-// The WAIT OBJECT's shared prefix
-// ==========================================================================
-
-// ⭐⭐ **SIX FIELDS AT SIX FIXED OFFSETS, IDENTICAL ON BOTH LANES — which is what lets the reap, the await,
-// the exit-code read and the multi-wait be ONE body each.** What the two lanes disagree about is what sits
-// ABOVE these: Darwin follows them with a `pthread_mutex_t` and a `pthread_cond_t` (an event there is a
-// condition variable); Linux follows them with nothing at all (a futex needs no mutex, and the object is one
-// `mmap`'d page).
-//
-// ⭐⭐ **0x10 WAS A HOLE ON THE LINUX LANE AND IS NOW THE SIXTH SHARED FIELD: THE OS THREAD's OWN IDENTITY.**
-// It held Darwin's `pthread_t` and this header said it was Darwin's alone *"because only that lane can hold
-// one"*; the arm64-linux `clone` falsified that. What sits there differs — a `pthread_t` that `pthread_join`
-// takes on one lane, the `CLONE_CHILD_CLEARTID` word the kernel zeroes and wakes on the other — but the ROLE
-// is identical (it is what `mrt_host_wait_one`'s THREAD arm joins through), so the offset is one fact
-// written once rather than two lanes agreeing by hand. ⚠ Only a THREAD object gives it a MEANING; on the
-// other two kinds it is a zero, written explicitly on the lane whose allocator does not zero (`malloc`) and
-// inherited from the page on the lane whose does (`mmap`).
-export let PosixWaitOffKind = 0x00 as MachineWord
-export let PosixWaitOffSignal = 0x08 as MachineWord
-export let PosixWaitOffThread = 0x10 as MachineWord
-export let PosixWaitOffChildPid = 0x18 as MachineWord
-export let PosixWaitOffChildStatus = 0x20 as MachineWord
-export let PosixWaitOffChildKilled = 0x28 as MachineWord
-
-// The two states of the signal word above. They are HERE rather than once per lane because the field is
-// shared and `mrt_host_proc_reap` — a shared body — publishes into it; each lane's own event protocol reads
-// the same two values through its own primitive (a condvar predicate there, a `FUTEX_WAIT` comparand here).
-export let PosixWaitNotSignalled = 0
-export let PosixWaitSignalled = 1
-
 // ==========================================================================
 // `PosixHostCall` — the ONE thing a shared body takes from its lane
 // ==========================================================================
@@ -594,94 +499,6 @@ end 'arm64PosixEmitHostCallStatus'
 export function arm64PosixNarrowIntStatus(asm Arm64RuntimeAsm, reg Arm64Register)
 	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: Arm64NarrowResultShift as ShiftCount)
 end 'arm64PosixNarrowIntStatus'
-
-// ==========================================================================
-// The POSIX facts the child-process band reads — MEASURED on BOTH lanes
-// ==========================================================================
-
-// `struct pollfd` is `{int fd; short events; short revents;}` — EIGHT bytes, MEASURED on Darwin and on an
-// aarch64 Linux guest, which is why the whole descriptor is written and read as ONE 64-bit word rather than
-// through three stores of three widths. Little-endian: `fd` is the low half, `events` the third halfword,
-// `revents` the fourth.
-let PosixPollIn = 1
-let PosixPollEventsUnit = 0x0000000100000000
-let PosixPollReventsShift = 48 as ShiftCount
-let PosixPollOneDescriptor = 1
-
-// `poll`'s revents bits, MEASURED on both. Only the two that mean *"this descriptor is unusable"* are tested
-// — `POLLHUP` (0x10) is deliberately NOT among them, because a pipe whose writer has closed reports it
-// ALONGSIDE `POLLIN` while bytes are still buffered (MEASURED: `revents = 0x11` on both lanes), and treating
-// it as broken would discard them.
-let PosixPollErr = 8
-let PosixPollNval = 32
-let PosixPollBrokenBits = PosixPollErr or PosixPollNval
-
-// ⭐⭐ **WHAT `mrt_host_pipe_peek` REPORTS AS "AVAILABLE", AND WHY IT IS NOT THE TRUE COUNT.**
-// `PeekNamedPipe` answers a byte count; the honest POSIX twin would be `ioctl(fd, FIONREAD, &n)`, whose third
-// argument is a VARARG that AAPCS64 passes on the STACK — a frame these chunks do not have
-// (`Arm64RuntimeAsm`: *"none of them passes an argument on the stack"*).
-//
-// It costs nothing, because of what the ONE consumer does with the answer. `emitSubpDrainStream` uses it only
-// to (a) decide whether to read at all and (b) size one pass, which it immediately clamps to
-// `SubpReadChunkBytes`; the bytes actually moved come from the READ. So reporting "a pipe-buffer's worth"
-// makes the pass exactly one clamped chunk and the read reports the truth — while a peek that answered `1`
-// would drip one byte per pass and turn an N-byte capture into N round trips.
-//
-// ⚠ **AND IT IS WHY EOF ARRIVES THROUGH THE READ RATHER THAN THROUGH THE PEEK.** `emitSubpDrainStream` has
-// two edges into `markDone`: a FAILED peek (Win32's broken-pipe reading) and a read of 0 bytes. A pipe whose
-// writer has closed polls READABLE on both lanes — MEASURED `0x11` with bytes buffered and `0x10` once
-// drained — so this answers "readable", the read answers 0, and the second edge fires.
-//
-// ⚠ The number is also the pipe's real capacity on both (MEASURED: 65536 on aarch64 Linux, and the threshold
-// at which a wait-before-drain deadlocks on either).
-let PosixPipeReadyBytes = 65536
-
-// The two ways to ask `mrt_host_proc_reap` for a status, and the "do not block" option it hands the wait.
-export let PosixReapWithoutBlocking = 0
-let PosixReapBlocking = 1
-let PosixWaitNoHang = 1
-
-// Decoding a wait status, which POSIX defines by macro rather than by field: the low seven bits are the
-// terminating SIGNAL and are zero for a normal exit, in which case bits 8..15 are the exit code. MEASURED
-// identical on both lanes (`0x700` for exit 7, `0x9` for SIGKILL).
-let PosixWaitStatusSignalMask = 0x7F
-let PosixWaitStatusExitShift = 8 as ShiftCount
-let PosixWaitStatusExitMask = 0xFF
-
-// ⚠ **A SIGNAL-KILLED CHILD REPORTS `128 + signal`, WHICH IS THE SHELL'S CONVENTION AND NOT WIN32's.** There
-// is no exit code for a process the kernel killed, and every POSIX shell answers this. The one place the two
-// lanes WOULD have disagreed with Windows is the deadline kill, and they do not:
-// `TerminateProcess(h, code)` names the code the handle must then report, and `mrt_host_proc_terminate`
-// records it (`childKilled`) so the reap below hands back that code rather than `128 + SIGKILL`.
-let PosixSignalExitCodeBase = 128
-let PosixSigKill = 9
-
-// The two answers the reap gives, named because a bare 0/1 at four call sites says nothing about which
-// direction it reads.
-let PosixChildSignalled = 1
-let PosixChildStillRunning = 0
-
-// A C `int`'s worth of bits — `pid_t`'s width, which is what a wait's answer must be compared at.
-let PosixChildPidMask = 0xFFFFFFFF
-
-// How long the two bounded child waits sleep between scans — the netpoll's multi-wait and a
-// `waitWithTimeout` deadline. Both run where the M is meant to be idle, so a millisecond is a poll rate
-// rather than a spin, and one number keeps the two from drifting into different responsiveness.
-let PosixChildPollMs = 1
-
-// `GtProcHandlesBaseLabel`'s array is one 64-bit handle per entry, so an index scales by 8 — as a SHIFT,
-// which is what an indexed load off a base wants.
-let PosixHandleArrayStrideShift = 3 as ShiftCount
-
-// The child's three standard descriptors, named because a bare 0/1/2 in an argument position says nothing.
-export let PosixChildStdinFd = 0
-export let PosixChildStdoutFd = 1
-export let PosixChildStderrFd = 2
-
-// `PROCESS_INFORMATION.hThread` on either POSIX lane. Neither hands back a thread handle for a spawned
-// process, and the Std graph closes this field unconditionally — which `mrt_host_wait_close` reads as
-// "no handle".
-export let PosixNoThreadHandle = 0
 
 // ==========================================================================
 // mrt_host_tick_ms() -> x0 = milliseconds since boot
@@ -752,8 +569,8 @@ export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) 
 	arm64PosixEmitHostCallStatus(asm, call: call)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: created)
 
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixNoPipeDescriptor)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoPipeDescriptor)
 	arm64EmitBranchTo(asm, label: published)
 
 	asm.placeLabel(created)
@@ -769,9 +586,6 @@ export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) 
 
 	return asm.finishFunction(HostPipeName)
 end 'buildArm64PosixPipeChunk'
-
-// `int fds[2]` — the WRITE end is the second `int`, four bytes past the first.
-export let PosixPipeWriteEndOffset = 4
 
 // ==========================================================================
 // mrt_host_pipe_peek(x0 = handle, x1 = availOutPtr) -> x0 = BOOL
@@ -815,7 +629,7 @@ export function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns Functio
 	arm64EmitBranchTo(asm, label: publish)
 
 	asm.placeLabel(notReady)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixNoBytesReady)
 
 	asm.placeLabel(publish)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotAvailOut)
@@ -880,26 +694,12 @@ function arm64PosixEmitPpoll(asm Arm64RuntimeAsm, number MachineWord, sigsetByte
 	arm64EmitSyscall(asm.code, number: number)
 end 'arm64PosixEmitPpoll'
 
-// `poll`'s "answer now" timeout, as the `int` milliseconds it takes.
-let PosixPollNoWaitMillis = 0
-
-// `ppoll`'s `sigmask` argument. NULL leaves the calling thread's signal mask alone, which is what `poll` does
-// and all this surface wants — this backend installs no signal handlers at all.
-let PosixPollNoSignalMask = 0
-
 // ==========================================================================
 // mrt_host_proc_reap(x0 = object, x1 = blocking) -> x0 = signalled
 // ==========================================================================
 
-// ⭐⭐⭐ **THE ONE PLACE A CHILD's STATUS IS TAKEN, BECAUSE A POSIX WAIT CONSUMES IT AND WIN32's TWO CALLS DO
-// NOT.** `WaitForSingleObject(hProcess)` and `GetExitCodeProcess(hProcess)` are both repeatable and
-// independent; POSIX fuses them into one call that can be answered exactly ONCE — MEASURED on both lanes, a
-// second wait on the same pid answers -1/`ECHILD`. Every Std graph in the subprocess family polls the handle
-// and reads the code separately, and several do both more than once.
-//
-// ⇒ the status is CACHED in the handle's own object the first time it is taken, and every later ask is served
-// from there. That is the whole reason a child process handle on either lane is an object rather than the
-// bare pid it could otherwise have been.
+// The ONE place a child's status is taken — `PosixWaitOffChildStatus` carries the reap-once rule that makes
+// it one place, and the cache it is taken into.
 //
 // ⚠ **A KILLED CHILD KEEPS THE CODE THE KILL NAMED.** `mrt_host_proc_terminate` writes `childStatus` and
 // raises `childKilled` BEFORE the signal lands, so this decodes nothing for it — see `PosixSignalExitCodeBase`
@@ -979,9 +779,6 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	asm.placeLabel(answered)
 	return asm.finishFunction(HostProcReapName)
 end 'buildArm64PosixProcReapChunk'
-
-// `wait4`'s `struct rusage *` out-param, which NULL discards — and the register `waitpid` never reads.
-export let PosixReapDiscardsRusage = 0
 
 // ==========================================================================
 // mrt_host_proc_await(x0 = object, x1 = timeoutMs) -> x0 = WAIT_OBJECT_0 | WAIT_TIMEOUT

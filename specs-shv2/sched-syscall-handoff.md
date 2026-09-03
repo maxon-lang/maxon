@@ -116,7 +116,7 @@ A POSIX twin of that program would run everywhere the other four do.
 ## Tests
 
 <!-- test: more-blocking-file-reads-than-processors-still-finish -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 2 -->
 **EIGHT CONCURRENT FILE ROUND-TRIPS ON TWO PROCESSORS.** Every send is posted before any reply is awaited,
 so all eight reads are outstanding at once and there are four times as many of them as there are Ms to
@@ -320,7 +320,7 @@ aggregate=8 last=1
 ```
 
 <!-- test: a-blocking-kernel-call-does-not-starve-an-unrelated-green-thread -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 <!-- stdin: delayed -->
 ⭐⭐ **THIS IS THE CASE THE FILE'S OPENING CLAIM WAS ALWAYS ABOUT, AND IT ASSERTS AN ORDER RATHER THAN A
@@ -413,7 +413,7 @@ done sibling=1 read=5
 ```
 
 <!-- test: a-spare-processor-already-carries-the-sibling -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 4 -->
 <!-- stdin: delayed -->
 ⚠ **THIS CASE WAS ALREADY GREEN BEFORE THE CHANGE THAT GREENS THE ONE ABOVE, AND IT IS HERE TO SAY WHY
@@ -486,7 +486,7 @@ done sibling=1 read=5
 ```
 
 <!-- test: sysmon-retakes-a-processor-from-a-blocking-call -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 <!-- stdin: delayed -->
 ⭐ **THIS CASE PINS THE MECHANISM, BECAUSE THE CASE ABOVE CAN BE GREENED BY THE WRONG CURE.** Routing

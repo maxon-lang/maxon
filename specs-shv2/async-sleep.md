@@ -84,7 +84,7 @@ ARMING order, and that case answered `1432` where the rule says `4321`.
 ## Tests
 
 <!-- test: async-sleep.basic -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 The main thread (GT0) sleeps, then returns a value: GT0 parks on the timer, the netpoll waits, and GT0
 resumes with its state intact.
 ```maxon
@@ -98,7 +98,7 @@ end 'main'
 ```
 
 <!-- test: async-sleep.resume-state -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 A spawned green thread's frame survives the mid-body yield: a value live across the `sleep` (the parameter
 `base`) is intact after the context switch back into the thread, so `base + 2` is correct.
 ```maxon
@@ -120,7 +120,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-sleep.interleave -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Two async threads sleep for different durations; the shorter-sleep one resumes and observes FIRST. Each
 records its completion order into a global (`order = order * 10 + tag`), so `21` proves the fast thread
 (tag 2) completed before the slow thread (tag 1) — deadline order, not spawn order.
@@ -153,7 +153,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-sleep.coalesced-pass-fires-in-deadline-order -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 <!-- procs: 1 -->
 **FOUR DEADLINES DUE IN ONE PASS, ARMED IN EXACTLY THE WRONG ORDER.** The four sleepers are spawned
 longest-first, so their arming order (400, 300, 200, 100) is the reverse of their deadline order, and a
@@ -214,7 +214,7 @@ order=4321
 ```
 
 <!-- test: async-sleep.zero -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 `sleep(0)` parks on a deadline of "now" and resumes promptly (the netpoll fires it on the first poll).
 ```maxon
 function main() returns ExitCode
@@ -227,7 +227,7 @@ end 'main'
 ```
 
 <!-- test: async-sleep.spawn-loop -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 Robustness: fifty spawned threads each sleep then complete, awaited in turn. Each parks (yielded, NOT
 completed — its stack must NOT be recycled while parked) then resumes and completes (stack recycled onto the
 free-list). The sum proves all fifty ran to completion with no crash, no use-after-free, and no leak.
@@ -255,7 +255,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-sleep.taken-as-a-value -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 `sleep` is a DECLARATION, so it has an address: bound to a `let` and called indirectly, it parks the green
 thread exactly as the direct call does. A call-site-only builtin name has no value at all — this program was
 *"error E2004: Undefined variable 'sleep'"* while one claimed the name, though the reference compiler has
@@ -277,7 +277,7 @@ end 'main'
 ```
 
 <!-- test: async-sleep.float-arg-rejected -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 `sleep` requires an integer millisecond count; a float is refused at compile time — by the ORDINARY
 argument rule against `milliseconds Milliseconds`, which is why the rejection names the parameter and offers
 the conversion, and is the same sentence every other narrowing site speaks. The bare-name builtin refused it
@@ -306,6 +306,20 @@ panic at StdToWasm.maxon:1108: emitBodyOp: `osReadClock` is x64-windows only
 The refusal is raised INSIDE `stdlib/Sleep.maxon`'s body and attributed to the crossing call, so it is
 positioned at the line the user wrote and names the stdlib function they called
 (`stdlib-loading.md`) — never at a path inside `stdlib/`.
+⚠ **THE NATIVE TWIN THIS CASE ONCE HAD IS RETIRED, AND THE RULE IT PINNED NOW LIVES HERE ALONE.**
+`async-sleep.rejected-on-a-native-target` moved down the native lanes as each grew a timed park —
+arm64-macOS until that lane grew a scheduler, then arm64-Linux until L4 gave it a futex-based one, then
+x64-Linux — to show that a NATIVE target refuses `sleep` at the user's own span, which a wasm-only case
+cannot show. x64-Linux's green-thread floor left no native lane refusing, and the twin's program and
+expected diagnostic were byte-identical to this one's but for the target name, so re-pointing it here
+would have written one fact down twice. It was deleted rather than duplicated.
+
+⇒ **THE CONVENTION, STATED ONCE FOR THE THREE CASES THAT SHARE IT** (`services.md` and
+`builtins-cpu-parallel.md` carry the other two): a target-refusal case needs a lane that actually refuses.
+When the last native lane gains a facility, its native witness has nowhere to go — **do not re-point it at
+`wasm32-wasi` beside an existing wasm sibling, and do not re-add one unless a native lane loses the
+facility.** wasm's refusal is permanent, so the wasm case carries the rule by itself.
+
 ```maxon
 function main() returns ExitCode
 	sleep(1)
@@ -314,42 +328,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
-```
-
-<!-- test: async-sleep.rejected-on-a-native-target -->
-<!-- targets: x64-linux -->
-The attribution is a property of the crossing, not of one backend: the same program compiled for a NATIVE
-target with no timed park is refused at the same user span, naming the same stdlib function and the same
-missing runtime entry — which is what makes the point that the wasm case cannot, wasm being the one backend
-whose whole OS surface is different.
-
-⚠ **THIS CASE HAS BEEN RE-POINTED TWICE, AND EACH TIME BECAUSE THE LANE IT NAMED GREW THE THING IT PINS.**
-It named arm64-macOS until that lane grew a scheduler, then arm64-Linux until L4 gave that lane a
-futex-based one; `sleep` now COMPILES AND RUNS on both. The refusal was RE-POINTED rather than deleted
-both times, because the rule — a NATIVE target refuses this at the user's own span — is still true and
-still needs a non-wasm witness. `x64-linux` is that witness now: a raw static image with no libc has no
-`nanosleep` to call and no per-thread slot to publish a processor in, which is the same *"there is no such
-primitive here"* the case was written to describe.
-
-⇒ **THE NAME NO LONGER SAYS WHICH TARGET, AND THAT IS THE FIX RATHER THAN AN OMISSION.** It ended
-`-on-arm64`, so the target was written down THREE times — the name, the `targets:` marker, and the
-`maxoncstderr` text — and a rename was forced on every re-point. The marker and the diagnostic text are
-the two copies the runner actually CHECKS AGAINST EACH OTHER, so they cannot silently disagree; a target
-in the NAME is the third copy, the one nothing verifies. Whoever gives x64-linux a timed park re-points
-the marker and the text, and the name stays true.
-
-⚠ **It is not runnable from a macOS host and does not need to be: a `maxoncstderr` case is COMPILED and
-never executed.** MEASURED at this re-point — `--target=x64-linux` emits the identical E3104 on this host
-with no WSL. The prose that used to sit here rejected x64-linux for needing WSL, which was a fact about
-RUNNING a binary applied to a case that runs none.
-```maxon
-function main() returns ExitCode
-	sleep(1)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: 'sleep' lowers to the runtime entry '__gt_sleep', which has no x64-linux implementation
 ```
 
 <!-- test: async-sleep.taken-as-a-value-rejected-on-wasm -->

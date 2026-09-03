@@ -1,0 +1,40 @@
+// Test: error.a-dispatch-the-compiler-cannot-follow-widens-the-rule
+var ledger = 0
+
+typealias Step = function(Integer) returns Integer
+
+function bookKeeping(by Integer) returns Integer
+	ledger = ledger + by
+	return ledger
+end 'bookKeeping'
+
+// The indirection. It calls the function it was HANDED, so no walk keyed on a callee's NAME can say which
+// body runs here — `services.md`'s `callIndirect`, doing the same job for the deadlock rule.
+function callIndirect(f Step, n Integer) returns Integer
+	return f(n)
+end 'callIndirect'
+
+type Counter
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function add(by Integer) returns Integer
+		return callIndirect(function(n Integer) gives n * 2, n: by)
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.add(5) otherwise 0
+	let l = callIndirect(bookKeeping, n: 1)
+	print("n={n} l={l}\n")
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3143: <fragment>:7:2: `bookKeeping` writes the module-level `ledger`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `ledger = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
+note: <fragment>:30:10: the `spawn` that makes `Counter` a service
