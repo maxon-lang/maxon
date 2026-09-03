@@ -131,6 +131,17 @@ let X64LinuxSyscallReadlinkat = 267
 // inline (`StdToX64Conversion.lowerOsGetPidLinux`). Exported for that isel; 39 here and 172 on AArch64.
 export let X64LinuxSyscallGetPid = 39
 
+// ⛔⛔ **THE TWO PRIORITY CALLS ARE SWAPPED BETWEEN THE ARCHES — SAME NUMBERS, OPPOSITE VERBS.** x86-64
+// numbers them from its own table (`getpriority` 140, `setpriority` 141) while AArch64 takes
+// `asm-generic/unistd.h`'s order and has them the other way round, so a lane that reused the twin's
+// constant would SET when it meant to READ and answer a value nothing wrote.
+//
+// ⚠ VERIFIED by invoking both on an x86-64 guest: `syscall(140, 0, 0)` answered 20 in a fresh process,
+// `syscall(141, 0, 0, 7)` answered 0, and the next `syscall(140, 0, 0)` answered 13 — the read moved by
+// exactly the nice value the write asked for, biased by `LinuxGetPriorityBias`.
+export let X64LinuxSyscallGetPriority = 140
+export let X64LinuxSyscallSetPriority = 141
+
 // ⚠ **16 HERE AND 29 ON AArch64.** VERIFIED by invoking it: 16 with `TCGETS` answered 0 on a pty and
 // `-ENOTTY` on a pipe, a regular file and `/dev/null`, while syscall 17 with the identical arguments
 // answered `-ESPIPE` (`pread`), which is the control that says 16 is really `ioctl`.
@@ -3242,11 +3253,10 @@ end 'buildX64LinuxWaitAnyChunk'
 // ⚠ **PATH RESOLUTION IS THE Std TIER'S AND IS NOT REDONE HERE.** `execve` takes a path where `posix_spawnp`
 // searches `PATH`, and that search already happened one tier up through `__gt_subp_resolve_path`.
 //
-// ⛔⛔ **A CALLER-BUILT ENVIRONMENT BLOCK IS REFUSED, EXACTLY AS BOTH arm64 LANES REFUSE IT.**
-// `lpEnvironment` is a NUL-separated BLOCK and `execve`'s third argument is a POINTER VECTOR; the conversion
-// would have to happen in the child, between the `clone` and the `execve`, where nothing may allocate and
-// nothing may lock. A named spawn failure (`ENOTSUP` plus a zero `hProcess`) is the honest answer, and it is
-// what keeps one program answering one way on all three POSIX lanes.
+// ⭐⭐ **THE `envp` A CALLER BUILT ARRIVES FINISHED, WHICH IS WHY THE CHILD PATH STAYS ALLOCATION-FREE.**
+// `lpEnvironment` is a NUL-separated BLOCK and `execve`'s third argument is a POINTER VECTOR, and the
+// conversion runs in `SubprocessRuntime.buildSubpEnvVector` — Std-IR the PARENT executes before this chunk
+// is called, so the `clone` copies a vector the child only reads.
 function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	let SlotArgv = 0 as StackSize
 	let SlotCwd = 1 as StackSize
@@ -3260,17 +3270,18 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	let SlotStatusWrite = 9 as StackSize
 	let SlotStatusWord = 10 as StackSize
 	let SlotStatusCount = 11 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(12)
+	let SlotEnv = 12 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(13)
 
 	let piped = asm.newLabel()
 	let cloneFailed = asm.newLabel()
 	let spawnFailed = asm.newLabel()
-	let callerBuiltEnv = asm.newLabel()
 	let childPath = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
 	let noSession = asm.newLabel()
 	let inheritCwd = asm.newLabel()
+	let envChosen = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotArgv), srcReg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), srcReg: X64Register.rdx)
@@ -3278,13 +3289,8 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStartup), srcReg: X64Register.r9)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: win64IncomingArgDisp(SpawnProcInfoIncomingSlot), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), srcReg: X64Register.rax)
-
-	// ⛔ **THE REFUSAL IS TESTED FIRST, BEFORE THE PIPE**: the arm it takes owns nothing, so there is nothing
-	// to unwind on it. `lpEnvironment` is read here and nowhere else — every later use of the environment on
-	// this lane is the parent's own vector, which the guard has just proved is what was asked for.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: win64IncomingArgDisp(SpawnEnvironmentIncomingSlot), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: callerBuiltEnv)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEnv), srcReg: X64Register.rax)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusFds))
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxOpenCloseOnExec)
@@ -3359,14 +3365,6 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: PosixNoProcessId)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
 
-	// The caller-built-environment refusal joins the failure arm at its publishing point. Reached only from
-	// the guard at the top of this chunk, so it holds no pipe and no child to clean up.
-	asm.placeLabel(callerBuiltEnv)
-	x64LinuxEmitPublishErrno(asm, value: LinuxErrnoNotSupported)
-	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixNoProcessHandle)
-	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: PosixNoProcessId)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
-
 	asm.placeLabel(spawned)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixWaitKindProcess)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
@@ -3401,13 +3399,19 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: inheritCwd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallChdir)
 
-	// `execve(argv[0], argv, envp)`. The environment is the vector the entry stub captured — this is
-	// `lpEnvironment = NULL`'s meaning, the parent's environment, and the same one `mrt_host_env_read` walks.
+	// `execve(argv[0], argv, envp)`. `envp` is the caller's own vector when it built one, and otherwise the
+	// vector the entry stub captured — which is what a NULL `lpEnvironment` means, the parent's environment,
+	// and the same one `mrt_host_env_read` walks. Both are finished vectors in the parent's address space, so
+	// the child only reads.
 	asm.placeLabel(inheritCwd)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotArgv), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rsi, disp: 0, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotEnv), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: envChosen)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdx, label: LinuxEnvpLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rdx, disp: 0, wide: true)
+	asm.placeLabel(envChosen)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallExecve)
 
 	// The exec failed. Send the parent the `-errno` the kernel just answered and stop.

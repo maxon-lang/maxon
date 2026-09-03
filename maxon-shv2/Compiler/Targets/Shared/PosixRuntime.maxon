@@ -240,6 +240,31 @@ export let PosixNoFileMode = 0
 // same spelling one file over for the same reason: `MachineWord` is unsigned.
 export let PosixInvalidHandle = 0xFFFFFFFFFFFFFFFF
 
+// ⭐ **THE POSIX PRIORITY TRIPLE, AND THE ONE PLACE IT IS WRITTEN.** `setpriority(which, who, value)` /
+// `getpriority(which, who)`: `PRIO_PROCESS` selects the PROCESS scope (read from this host's
+// `sys/resource.h`, not from memory) and `who = 0` names the calling one — MEASURED to be 0 on an aarch64
+// Linux guest (`bits/resource.h`) and on an x86-64 one, which is why one pair serves all three POSIX lanes.
+//
+// ⚠⚠ **THE TWO OSes DISAGREE ABOUT WHAT `PRIO_PROCESS` SCOPES TO, AND THE NAME HIDES IT.** Darwin scopes a
+// nice value to the PROCESS, which discharges `StdOp.osThreadCreate`'s inheritance contract there with
+// nothing emitted at a thread's birth. LINUX scopes it to the calling THREAD — `who` is a TID, not a PID
+// (MEASURED: one thread at nice 15 while its sibling sat at 10, same process, simultaneously). That is why
+// each `lowerOsEnterBackgroundPriority` asks its route oracle rather than assuming POSIX is one thing, and
+// why `processPriority` is its OWN row in `targetProvidesFacility`.
+//
+// ⚠ On both Linux lanes the disagreement HAS a consequence, and it is bounded rather than absent: `clone`
+// inherits its creator's nice value at birth, so every M started after the call runs at the priority asked
+// for, and only an M that already existed keeps the default. The two `processPriority` rows in
+// `targetProvidesFacility` carry it beside the `true` that rests on it.
+export let PosixPrioProcess = 0
+export let PosixPriorityWhoIsSelf = 0
+
+// The nice value background work runs at. ⚠ NOT 19, the maximum, for the reason Windows does not use
+// `IDLE_PRIORITY_CLASS`: a starve long enough to trip a caller's timeout is reported as a harness bug
+// rather than as a busy machine. The bootstrap's arm64 emitter picks the same 10
+// (`ARM64CodeEmitter.Backend.cs`), so the two compilers de-prioritise a suite to the same depth.
+export let PosixBackgroundNiceValue = 10
+
 // ==========================================================================
 // struct stat — the ONE thing that is not shared
 // ==========================================================================

@@ -229,6 +229,18 @@ export let LinuxCpuCountUnavailable = 0xFFFFFFFFFFFFFFFF
 // may ask about — and is why the syscall needs no `getpid` ahead of it.
 export let LinuxAffinityWhoIsSelf = 0
 
+// ⭐⭐ **`getpriority`'s SYSCALL DOES NOT ANSWER A NICE VALUE — IT ANSWERS `20 - nice`.** A syscall reports
+// failure as a small negative number, and a nice value is legitimately negative, so the kernel biases the
+// answer into a non-negative range and every libc subtracts the bias back off. Each lane's
+// `lowerOsEnterBackgroundPriorityLinux` is that libc. ⚠ The macOS lane needs no such fold because it calls
+// the LIBRARY function, which has already done it — this is a raw-syscall fact, which is why it is here and
+// not beside `PosixBackgroundNiceValue`.
+//
+// ⚠ **IT WOULD HAVE HIDDEN ITSELF AT EXACTLY THAT NICE VALUE:** `20 - 10` is 10, so a lowering that forgot
+// the fold still answers 10 for the one value the specs pin, and is wrong for every other. MEASURED on both
+// guests: a process at nice 7 read back 13.
+export let LinuxGetPriorityBias = 20
+
 // ==========================================================================
 // The search object
 // ==========================================================================
@@ -454,12 +466,6 @@ end 'linuxTlsSlotCount'
 // reader treats as *"the scheduler has not started"*, and the word that offset addresses is already spoken
 // for.
 export let LinuxTlsFirstKey = 1
-
-// `ENOTSUP` (`EOPNOTSUPP`) — 95 on Linux and 45 on Darwin, so it is per-lane for `LinuxErrnoNameTooLong`'s
-// reason and cannot join the five in `Targets/Shared/PosixRuntime`. Like `Arm64DarwinRuntime`'s twin it is PUBLISHED
-// rather than read: `mrt_host_spawn` answers it for a caller-built environment block, a shape this lane has
-// no conversion for either. See that chunk's own note.
-export let LinuxErrnoNotSupported = 95
 
 // ⭐ **THE THREE VERBS ONLY THIS LANE SPELLS AS A CHUNK, SO THEY KEEP THE LANE'S INFIX.**
 // `Targets/Shared/PosixRuntime`'s header states the rule: a name goes under the shared `mrt_host_` prefix

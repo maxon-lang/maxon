@@ -1,141 +1,45 @@
-// GoldenTracking — everything a suite run has to say about its GOLDENS, and none of it is a gate.
+// GoldenCensus — the goldens on disk that NOTHING COMPARES, named on every suite run.
 //
-// ⚖ **USER RULING, 2026-08-02: "the goldens are NOT supposed to be a gate, they are just for
-// reference."** So this file REPORTS and returns nothing. Neither half of it — the drift report below
-// nor the untracked report under it — touches the failed count or the exit code. What makes a run red
-// is a spec test failing: a wrong exit code, wrong stdout, a diagnostic that did not match, a compile
-// that should have succeeded, a leak.
+// ⚖ **THE GOLDENS ARE REFERENCE, NOT A GATE** (user ruling 2026-08-02). This file REPORTS and judges
+// nothing: it touches neither the failed count nor the exit code. What makes a run red is a spec test
+// failing — a wrong exit code, wrong stdout, a diagnostic that did not match, a compile that should have
+// succeeded, a leak.
 //
-// ⛔ **BOTH HALVES USED TO EXIT NON-ZERO, AND THAT IS WHAT MADE THIS FILE WORTH KEEPING BUT NOT WORTH
-// OBEYING.** A cross-target red was filed as *"10 stale golden mismatches + 9 others"*. The 9 were
-// nine float programs exiting 1 on x64-linux — a genuine wrong-answer class (PLAN row `X5`) — and they
-// were invisible for a day because they sat in a list next to ten pieces of bookkeeping that looked
-// exactly as red as they did. A gate that can be satisfied by regenerating a file teaches the reader
-// that red might mean nothing, and once red might mean nothing, the red that means everything gets
-// skimmed.
+// ⛔ **A GOLDEN WHOSE CASE NO LONGER EXISTS IS UNREACHABLE FROM EVERY OTHER DIRECTION.**
+// `SpecTestRunner.checkTestFragment` opens `<fragmentDir>/<test.name>.test` BY PATH and never
+// enumerates, so an orphan is structurally invisible to the comparison itself; and `git diff` and
+// `git status` say nothing about it either, because the file is tracked and unchanged. ⇒ A golden whose
+// case was RENAMED, split or deleted stays on disk and agrees with nothing — a reference that cannot be
+// wrong because nothing reads it. This enumeration is the only thing that finds them, and `W136`'s
+// review found 58 by hand before it existed.
 //
-// ⇒ **THE REPORTS STAY; THE VERDICTS GO.** Both are genuinely useful — the untracked report is how 19
-// owed x64-linux twins were noticed — and neither is evidence that anything is broken.
+// **It rides the suite because the suite is the one thing every rung runs**, exactly as
+// `requireLadderIndexComplete` and `requireHarnessRefusalsFire` do for their tree-level properties. A
+// `scripts/` gate would be a second thing to remember to run.
 //
-// ============================================================================================
-// WHY THE QUESTIONS ARE ASKED HERE, AND WHY ONE OF THEM IS ASKED OF GIT
-// ============================================================================================
+// ⛔ **THE PREDICATE IS THE SPEC'S OWN ROSTER AND THE LANE'S NAME — NEVER WHAT THIS RUN EXECUTED.** A
+// `--filter` run executes a handful of cases; keyed on "did this case run", this would scream on every
+// filtered run and would be switched off inside a week. Every term below is read out of the spec TEXT
+// and out of the lane directory's own name, so a filtered run, a full run, a cross-target run and a run
+// on another host all produce the identical answer.
 //
-// **The suite is the one thing every rung runs**, and it is the only process that knows a golden was
-// compared or written — so the reports ride it, exactly as `requireLadderIndexComplete` and
-// `requireHarnessRefusalsFire` do for their tree-level properties. A `scripts/` gate would be a second
-// thing to remember to run, which is the failure mode this file is about: the doc already said it.
+// ⚠ **A GOLDEN PRESENT ON ONE LANE AND ABSENT ON ANOTHER IS NOT A FINDING, and lane symmetry is never
+// asked.** Measured: `fragments/x64-linux/field-declared-unknown-type/…-nameable-at-a-parameter.test`
+// exists on x64-linux and on no other lane, legitimately — a lane's goldens accrete as that lane is
+// run. The question is only ever whether THIS lane can ever compare THIS file.
 //
-// ⚠ **AND TRACKING ASKS "IS IT TRACKED", NOT "DID THIS RUN MINT ONE".** Reporting only the run that
-// mints a golden would look equivalent and is not: the debt would survive the re-run, because the
-// second run finds the golden already on disk and mints nothing. Tracked-ness is a property of the
-// TREE, so it stays true until somebody actually pays it, and it catches a golden minted by an earlier
-// run, by another lane, or by an agent who has since moved on. It is also satisfied the moment the
-// files are STAGED (`git add`).
-//
-// ⚠ **IT COVERS EVERY LANE'S GOLDENS, not this run's target.** `fragments/x64-linux` and
-// `fragments/arm64-macos` have the identical hole and are worse, because those goldens can only be
-// minted by a lane the rung never runs — the measured rot is ~489 ABSENT x64-linux goldens. Untracked
-// is untracked whoever minted it, so the first run on any lane in a tree that owes goldens says so.
+// ⚠ **IT COVERS EVERY LANE, not this run's target** — orphan debris accretes fastest on the lanes
+// nobody runs, where neither a compare nor a mint ever visits the directory. Which is why a lane's
+// Target comes from its DIRECTORY NAME rather than from the run.
 //
 // ⚠ **A DISABLED OR TARGET-GATED CASE PRODUCES NO GOLDEN, and that is not a debt.** This asks only
-// that what EXISTS be tracked; it has no idea what ought to exist, and cannot acquire one without a
-// second model of which cases are pinnable — which is the harness itself.
-
-// What `git` is asked. `ls-files --others` lists untracked files INDIVIDUALLY (a bare
-// `git status --porcelain` collapses a wholly-untracked directory to one line, which would name a
-// directory where the reader needs the files), and `--exclude-standard` keeps `.gitignore`d scratch
-// out of the answer.
-let GitExecutableName = "git"
-let GitDirFlag = "-C"
-let GitListFilesCommand = "ls-files"
-let GitUntrackedFlag = "--others"
-let GitRespectIgnoresFlag = "--exclude-standard"
-let GitPathspecSeparator = "--"
-
-// ⭐ **THE DRIFT REPORT — what the committed goldens no longer describe.**
+// whether what EXISTS can be compared; it has no model of what ought to exist.
 //
-// STDERR, and that is the same contract the CPU indicator holds (`SuiteCpuTally.reportLine`): stdout
-// is the REPORT — the per-test verdicts and the `N passed, M failed` line a reader's eye lands on, and
-// the stream that must stay byte-identical across worker counts — while an indicator sits beside it.
-// Reference drift is an indicator. Printed on stdout it would compete with the pass/fail line for
-// attention, which is the exact failure this rung exists to undo.
-//
-// ⚠ **SILENT WHEN NOTHING DRIFTED, which is the normal case.** The wall of text only appears when
-// there is something to read, and then it is the whole of what there is to read: the header states
-// once — rather than once per case, as the old per-test FAIL did — that nothing failed and how to
-// refresh the files.
-//
-// Called by the PARENT with the reassembled results, so the entries come out in spec-directory order
-// then declaration order, identically at every worker count.
-export function reportGoldenDrift(results SpecTestResultArray)
-	// Collected before anything is printed, in ONE walk: the header states the COUNT, so it cannot be
-	// written until the last result has been read, and asking the same question of every result twice
-	// would be the one match arm that decides this whole file spelled in two places.
-	var entries = StringArray.create()
-	for result in results 'eachResult'
-		match result.golden 'reference'
-			notPinned then continue
-			matched then continue
-			minted then continue
-			unrecorded then continue
-			// The trailing newline is this caller's: a drift difference does not end in one, and
-			// `resultNoteEntry` emits `detail` verbatim rather than guessing.
-			drifted(detail) then entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: "{detail}\n"))
-		end 'reference'
-	end 'eachResult'
+// ⚠ A finding is NOT always "delete the file": a case may have been RENAMED, in which case the golden
+// should be renamed with it, so **the count is also a lower bound on renames nobody noticed.**
 
-	// The headline is FOUR lines, and the count in its first is why the entries are collected before
-	// anything is printed. The blank-at-zero guard and the entry loop are `reportResultNote`'s — shared
-	// with the skip trailer this one prints above, so the two notes cannot come to disagree about the
-	// shape a reader takes them as one column.
-	let headline = "note: {entries.count()} golden fragment(s) no longer match what the compiler emits. GOLDENS ARE REFERENCE, NOT A GATE:\n{ResultNoteIndent}nothing failed on this and the exit code is unaffected. Read the differences below — they are the only\n{ResultNoteIndent}record of what your change did to the emitted code — then re-run with --update-required (paired with a\n{ResultNoteIndent}--filter) to refresh the files. That diff IS the review.\n"
-	reportResultNote(entries, headline: headline)
-end 'reportGoldenDrift'
-
-// ⭐⭐ **THE CENSUS — HOW MUCH OF THIS RUN'S CODEGEN WAS ACTUALLY CHECKED AGAINST A REFERENCE.**
-//
-// ⛔ **A COUNT OF DRIFTS IS NOT AN ANSWER WITHOUT THE DENOMINATOR, AND FOR MONTHS THERE WAS NO
-// DENOMINATOR.** `reportGoldenDrift` above says how many committed goldens no longer match; it cannot
-// say how many were compared at all, because until this rung a comparison, a first mint and "no golden
-// to speak of" were the same `GoldenDrift.none`. So a lane arriving with sixteen hundred goldens
-// MISSING printed the identical trailer as one where every single case was pinned and matched — and
-// the first is not evidence of anything. Minting is not verification.
-//
-// The four columns are the four things that can happen to one case's reference, and only the first two
-// involved a comparison. `unrecorded` is the one a reader must act on: those cases have NO committed
-// record on this lane and this host was not allowed to write one (see
-// `SpecTestRunner.recordFragmentAndCleanup`), so their emitted code is unreviewed anywhere.
-//
-// STDERR and never a verdict, exactly like the two reports around it — this is the same reference
-// material, counted rather than diffed. SILENT when nothing was pinned at all (the wasm lane).
-export function reportGoldenCensus(results SpecTestResultArray, effectiveTarget Target)
-	var compared = 0 as TestTally
-	var drifted = 0 as TestTally
-	var minted = 0 as TestTally
-	var unrecorded = 0 as TestTally
-
-	for result in results 'eachResult'
-		match result.golden 'reference'
-			notPinned then continue
-			matched then compared = compared + 1
-			drifted then drifted = drifted + 1
-			minted then minted = minted + 1
-			unrecorded then unrecorded = unrecorded + 1
-		end 'reference'
-	end 'eachResult'
-
-	if compared + drifted + minted + unrecorded == 0 'nothingPinned'
-		return
-	end 'nothingPinned'
-
-	printError("note: goldens on {targetToString(effectiveTarget)}: {compared + drifted} COMPARED against a committed reference ({drifted} of them differ, listed above), {minted} MINTED with nothing to compare against, {unrecorded} NOT RECORDED — no committed reference and this host may not write one, so their emitted code is unreviewed on this lane.\n")
-end 'reportGoldenCensus'
-
-// Where a spec directory's goldens live — and whether it has any at all. BOTH tree-level reports below
-// start here: a spec directory that pins no codegen (every harness fixture sub-run, for one) owes
-// neither of them anything, and asking that one question in two places is how two reports come to
-// disagree about which directory they are describing.
+// Where a spec directory's goldens live — and whether it has any at all. A spec directory that pins no
+// codegen (every harness fixture sub-run, for one) owes this census nothing.
 union GoldenRoot
 	at(root FilePath)
 	none
@@ -149,131 +53,6 @@ function goldenRootIn(specDir FilePath) returns GoldenRoot
 
 	return GoldenRoot.at(root)
 end 'goldenRootIn'
-
-// ⭐ **THE TRACKING REPORT — goldens this tree has on disk and never put under version control.**
-//
-// A run that MINTS a golden passes: there is nothing to compare against, and a first run that failed
-// for want of a file it cannot have would be a rite. So an owed golden can only be found by GOING TO
-// LOOK, and it was found three times in one session, every time by a LATER rung's baseline rather than
-// by the rung that created the debt: `A3e` left nine that never existed, the `panic-interpolation`
-// port shipped its fragments untracked, and `A3n` closed a rung adding a whole spec with ZERO of its
-// three goldens. This is the looking.
-export function reportUntrackedGoldens(specDir FilePath)
-	match goldenRootIn(specDir) 'goldens'
-		none then return
-		at then break 'goldens'
-	end 'goldens'
-
-	match untrackedGoldensIn(specDir) 'answer'
-		unavailable(reason) then reportUnchecked(reason)
-		tracked then return
-		untracked(paths) then reportOwed(specDir, paths: paths)
-	end 'answer'
-end 'reportUntrackedGoldens'
-
-// What git had to say about the goldens.
-//
-// `unavailable` is a THIRD arm rather than a silent pass because the two answers read differently to a
-// reader and must not be folded together: "this tree owes nothing" and "nobody asked" are the
-// distinction this whole file exists over, one level up.
-union GoldenTrackingAnswer
-	unavailable(reason String)
-	tracked
-	untracked(paths StringArray)
-end 'GoldenTrackingAnswer'
-
-// Ask git which goldens are untracked, `-C`-anchored at the spec directory so the answer does not
-// depend on where the runner was invoked from — and so the paths come back RELATIVE to it, which is
-// how a reader would type them.
-function untrackedGoldensIn(specDir FilePath) returns GoldenTrackingAnswer
-	var argv = StringArray.create()
-	argv.push(GitDirFlag)
-	argv.push(specDir.toString())
-	argv.push(GitListFilesCommand)
-	argv.push(GitUntrackedFlag)
-	argv.push(GitRespectIgnoresFlag)
-	argv.push(GitPathspecSeparator)
-	argv.push(FragmentsSubdir)
-
-	let run = try runProcess(Executable.name(GitExecutableName), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'gitMissing'
-		return GoldenTrackingAnswer.unavailable("git could not be run: {e.displayReason()}")
-	end 'gitMissing'
-
-	if run.exitCode != 0 'gitRefused'
-		return GoldenTrackingAnswer.unavailable("git exited {run.exitCode}: {run.stderr.trim()}")
-	end 'gitRefused'
-
-	var paths = StringArray.create()
-	for line in run.stdout.split("\n") 'eachPath'
-		let path = line.trim()
-		if path.isEmpty() 'blank'
-			continue
-		end 'blank'
-		paths.push(path)
-	end 'eachPath'
-
-	if paths.count() == 0 'nothingOwed'
-		return GoldenTrackingAnswer.tracked
-	end 'nothingOwed'
-
-	return GoldenTrackingAnswer.untracked(paths)
-end 'untrackedGoldensIn'
-
-// It names every owed file rather than a count: the reader's next act is `git add`, and a count sends
-// them off to re-derive the list this already had.
-function reportOwed(specDir FilePath, paths StringArray)
-	printError("note: {paths.count()} golden fragment(s) under {specDir.toString()}/{FragmentsSubdir} are NOT TRACKED BY GIT:\n")
-	for path in paths 'eachPath'
-		printError("    {path}\n")
-	end 'eachPath'
-	printError("  The suite MINTS a golden the first time it sees a pinnable case, so a rung can close while owing every one\n")
-	printError("  of these, and three did. REVIEW them (they are this tree's only record of what the compiler emits for those\n")
-	printError("  cases) and `git add` them. Staged is enough; this asks that they be under version control, not that they be\n")
-	printError("  committed yet. Nothing failed on this — see this file's header.\n")
-end 'reportOwed'
-
-// git could not answer. Reported LOUDLY: the report is about version control, and a tree that has none
-// — an export, a machine without git — owes nothing to it. Saying so out loud is what keeps "we chose
-// not to look" from reading as "we looked", which is the cross-target gate's own rule for a skipped
-// lane and is right for the same reason.
-function reportUnchecked(reason String)
-	printError("warning: the golden-tracking report did NOT run — {reason}. This run cannot say whether the suite left goldens uncommitted.\n")
-end 'reportUnchecked'
-
-// ============================================================================================
-// ⭐⭐ THE FOURTH QUESTION — DOES ANYTHING COMPARE THIS GOLDEN AT ALL?
-// ============================================================================================
-//
-// The three reports above ask whether a golden DRIFTED, how much of this run was checked against one,
-// and whether the files are under version control. **Not one of them can see a `.test` whose case no
-// longer exists**, and neither can the comparison itself: `SpecTestRunner.checkTestFragment` opens
-// `<fragmentDir>/<test.name>.test` BY PATH and never enumerates, so an orphan is structurally
-// unreachable from that side; and `reportGoldenCensus` above loops over `results`, so a file with NO
-// result cannot appear in any of its four columns. ⇒ A golden whose case was RENAMED, split or deleted
-// stays on disk, stays tracked, never drifts and agrees with nothing — a reference that cannot be wrong
-// because nothing reads it. `W136`'s review found 58 of them by hand and deleted them; this is the
-// question that stops the next rename re-creating the set.
-//
-// ⛔ **THE PREDICATE IS THE SPEC'S OWN ROSTER AND THE LANE'S NAME — NEVER WHAT THIS RUN EXECUTED.** A
-// `--filter` run executes a handful of cases; keyed on "did this case run", this would scream on every
-// filtered run and would be switched off inside a week. Every term below is read out of the spec TEXT
-// and out of the lane directory's own name, so a filtered run, a full run, a cross-target run and a run
-// on another host all produce the identical answer.
-//
-// ⚠ **A GOLDEN PRESENT ON ONE LANE AND ABSENT ON ANOTHER IS NOT A FINDING, and lane symmetry is never
-// asked.** Measured: `fragments/x64-linux/field-declared-unknown-type/…-nameable-at-a-parameter.test`
-// exists on x64-linux and on no other lane, legitimately — a lane's goldens accrete as that lane is
-// run. The question is only ever whether THIS lane can ever compare THIS file.
-//
-// ⚠ **IT COVERS EVERY LANE, not this run's target** — `reportUntrackedGoldens`' own argument, and it
-// bites harder here: orphan debris accretes fastest on the lanes nobody runs, where neither a compare
-// nor a mint ever visits the directory. Which is why a lane's Target comes from its DIRECTORY NAME
-// rather than from the run.
-//
-// ⚖ REPORTED, NEVER JUDGED, exactly like the three above (user ruling 2026-08-02). It touches neither
-// the failed count nor the exit code. And a finding is NOT always "delete the file": a case may have
-// been RENAMED, in which case the golden should be renamed with it, so **the count is also a lower
-// bound on renames nobody noticed.**
 
 // The case names of one spec — its roster, and the subset of it a given lane can pin. A set rather than
 // a walk per file: a spec's goldens are checked against its roster once per file, and a linear scan
@@ -309,7 +88,7 @@ end 'GoldenLane'
 
 typealias GoldenLaneArray = Array with GoldenLane
 
-// ⭐ **THE CENSUS ITSELF.** Called by the PARENT beside the three reports above, on every run.
+// ⭐ **THE CENSUS.** Called by the PARENT after the verdicts and the summary, on every run.
 //
 // `effectiveTarget` is this RUN's target and is used for ONE thing: `parseSpecFile` resolves the
 // target-qualified ```Stdout: / ```Stderr: / ```Maxoncstderr: fences against it. Every field this
@@ -332,13 +111,13 @@ function reportUncomparedUnder(fragmentsRoot FilePath, specDir FilePath, effecti
 	// ⭐ SPEC-OUTER, LANE-INNER, so each spec is parsed ONCE and asked of every lane. The other nesting
 	// reads more naturally and costs four parses of the whole corpus.
 	var declaredSpecs = SpecNameSet.create()
-	let specPaths = try specFilePaths(specDir) otherwise panic("GoldenTracking.reportUncomparedUnder: could not list the spec directory. The parent already listed it to build this run's plan (SpecWorkerPool.buildPlans), and a run that selected nothing never reaches here.")
+	let specPaths = try specFilePaths(specDir) otherwise panic("GoldenCensus.reportUncomparedUnder: could not list the spec directory. The parent already listed it to build this run's plan (SpecWorkerPool.buildPlans), and a run that selected nothing never reaches here.")
 
 	for specPath in specPaths 'eachSpec'
 		let specName = specPath.stem()
 		declaredSpecs.insert(specName)
 
-		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget)) otherwise panic("GoldenTracking.reportUncomparedUnder: a spec the parent already parsed to build this run's plan no longer parses.")
+		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget)) otherwise panic("GoldenCensus.reportUncomparedUnder: a spec the parent already parsed to build this run's plan no longer parses.")
 		// Every ACTIVE case this spec declares. A `<!-- disabled-test: … -->` case is deliberately NOT one:
 		// it is never compiled, never run and mints no golden (`SpecParser`'s header), so a `.test` bearing
 		// its name is a file nothing compares — which is precisely this census's finding, and an enabled
@@ -438,10 +217,10 @@ end 'collectUncomparedIn'
 //
 // ⛔ It was two, and they were identical line for line: where to look, what counts as a golden, how an
 // entry reads, and what to say when the directory will not list. The failure that shape invites is this
-// rung's own thesis pointed at the rung — a new rule about which files the census enumerates lands on
-// the live-spec copy, goldens under a live spec go on being censused, goldens under a VANISHED spec
-// quietly stop, and **absence is the one thing no gate in this tree can see.** The orphan gate catches a
-// census that has stopped working; it cannot catch one that has stopped working in half the tree.
+// census's own thesis pointed at itself — a new rule about which files it enumerates lands on the
+// live-spec copy, goldens under a live spec go on being censused, goldens under a VANISHED spec quietly
+// stop, and **absence is the one thing no gate in this tree can see.** The orphan gate catches a census
+// that has stopped working; it cannot catch one that has stopped working in half the tree.
 function collectGoldensIn(lane GoldenLane, specName String, specGoldens FilePath, classify UncomparedClassifier, entries StringArray)
 	let listed = try Directory.list(specGoldens) otherwise 'cannotList'
 		entries.push(uncheckedEntry("{specGoldens.toString()} could not be listed, so its goldens were not censused"))
@@ -590,8 +369,8 @@ end 'uncomparedReasonText'
 // asserts a tree with nothing to report prints NO such headline.
 export let UncomparedHeadline = "are COMPARED BY NOTHING"
 
-// A part of the tree the census could NOT read. Reported inside the same list rather than swallowed,
-// for `reportUnchecked`'s reason one level up: "we chose not to look" must never read as "we looked".
+// A part of the tree the census could NOT read. Reported inside the same list rather than swallowed:
+// "we chose not to look" must never read as "we looked".
 function uncheckedEntry(what String) returns String
 	return "{ResultNoteIndent}{what}\n"
 end 'uncheckedEntry'

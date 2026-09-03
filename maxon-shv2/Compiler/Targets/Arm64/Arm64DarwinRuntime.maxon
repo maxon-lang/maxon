@@ -576,8 +576,8 @@ end 'buildArm64DarwinEventSetChunk'
 //
 // ⚠ **DARWIN'S NICE VALUE IS PER-PROCESS, SO A WORKER M INHERITS THE BACKGROUND PRIORITY WITH NOTHING
 // EMITTED HERE** — `StdOp.osThreadCreate`'s inheritance contract, discharged on this lane by the platform.
-// A Linux lane scopes nice to the THREAD and would owe real work at this call (`PosixPrioProcess` in the
-// isel carries that asymmetry).
+// A Linux lane scopes nice to the THREAD and would owe real work at this call (`PosixRuntime.PosixPrioProcess`
+// carries that asymmetry).
 function buildArm64DarwinThreadCreateChunk() returns FunctionCodeChunk
 	let SlotEntry = 0 as StackSize
 	let SlotArg = 1 as StackSize
@@ -1033,15 +1033,6 @@ let DarwinDirentNameOffset = 21
 // a `*` matches a leading dot (so `./*` yields `.` and `..`, exactly as `FindFirstFileA` does, and the Std
 // tier's dot filter removes them), and the pattern never spans a `/` because it is only ever a BASE NAME.
 let DarwinDefaultGlobFlags = 0
-
-// `ENOTSUP`. The one errno this lane PUBLISHES rather than reads: `mrt_host_spawn` answers it for a
-// caller-built environment block, which is a shape it has no conversion for. See that chunk's own note.
-//
-// ⚠ The errno values BESIDE this one are `Targets/Shared/PosixRuntime`'s `Posix*`: every POSIX lane
-// measured them identical, so one copy is the point. This one stays Darwin-named because the NUMBERS DIVERGE — `ENOTSUP` is 45 here and 95 on Linux, which is
-// `LinuxErrnoNameTooLong`'s situation rather than the shared five's. Both lanes now publish it, and for the
-// same refusal: `Arm64LinuxRuntime.LinuxErrnoNotSupported` is the twin.
-let DarwinErrnoNotSupported = 45
 
 // ⭐ **THE SEARCH OBJECT `osFileFindFirst` HANDS BACK.** Win32's `HANDLE` carries both the open directory
 // and the pattern still to be matched; POSIX splits them, so this pairs them.
@@ -1799,7 +1790,6 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	let noSession = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
-	let callerBuiltEnv = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotArgv)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCwd)
@@ -1807,19 +1797,6 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotStartup)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotProcInfo)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
-
-	// ⛔⛔ **THE CALLER-BUILT-ENVIRONMENT REFUSAL IS TESTED HERE, BEFORE ANYTHING IS ALLOCATED, AND IT USED
-	// TO BE TESTED AFTER.** `posix_spawn_file_actions_init` and `posix_spawnattr_init` both allocate through
-	// libSystem's malloc and both owe a `_destroy`; the refusal branched straight to the publishing point, past
-	// both destroys, so every refused spawn leaked two blocks. Asking BEFORE the first `init` is the fix that
-	// needs no unwinding at all — there is nothing to release on this arm because nothing has been taken.
-	//
-	// ⚠ `lpEnvironment` is a NUL-separated BLOCK, `posix_spawnp`'s `envp` is a POINTER VECTOR, and the
-	// conversion between them is code this lane does not have. Refusing with an errno the Std tier already
-	// reads as a spawn failure is what keeps that visible: the alternative is a child silently running with the
-	// parent's environment while its caller was told it had another.
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotEnv)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x1, label: callerBuiltEnv)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsInit)
@@ -1854,7 +1831,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnattrSetflags)
 
 	// `environ` — a Mach-O main executable may not name the symbol directly, so it is reached through the
-	// accessor that answers its address. This is `lpEnvironment = NULL`'s meaning: the parent's environment.
+	// accessor that answers its address. This is what a NULL `lpEnvironment` means: the parent's environment.
 	arm64DarwinCallImport(asm, slot: OsImportSlot.nsGetEnviron)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotEnviron)
@@ -1865,7 +1842,15 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotFileActions)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotAttributes)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotArgv)
+
+	// `envp` — the caller's own vector when it built one, and `environ` otherwise. A NULL `lpEnvironment` is
+	// the ONLY thing that means "inherit"; `SubprocessRuntime.buildSubpEnvVector` has already turned a
+	// caller-built block into the `char *const envp[]` this argument takes.
+	let envChosen = asm.newLabel()
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x5, label: envChosen)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotEnviron)
+	asm.placeLabel(envChosen)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnp)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatus)
 
@@ -1882,17 +1867,6 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	// failure test.
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotStatus)
-	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
-	arm64EmitBranchTo(asm, label: published)
-
-	// The caller-built-environment refusal joins the failure arm at its publishing point: errno says why, and
-	// a ZERO `hProcess` is the Std tier's own spawn-failure test. It is reached only from the test at the top
-	// of this chunk, so it owns no attributes object and no file-actions object to destroy.
-	asm.placeLabel(callerBuiltEnv)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinErrnoNotSupported)
 	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)

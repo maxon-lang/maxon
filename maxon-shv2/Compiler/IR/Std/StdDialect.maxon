@@ -1399,7 +1399,7 @@ export union StdOp
 	// CAN BE STATED.** This op is the ONLY way an emitted program acquires an OS thread, at exactly two
 	// sites: `GtRuntime.buildIoInit`'s completion thread and `SchedRuntime.emitSchedWakeOrSpawn`'s worker M.
 	// So a thread born here runs at whatever priority `__proc_bg_priority` last set for the process — and on
-	// BOTH lanes that lower that op, that holds with NOTHING EMITTED HERE: `SetPriorityClass` sets a PROCESS
+	// the two WHOLE-PROCESS lanes, that holds with NOTHING EMITTED HERE: `SetPriorityClass` sets a PROCESS
 	// class covering threads created before and after it, and Darwin scopes a `nice` value to the process in
 	// exactly the same way.
 	//
@@ -1409,9 +1409,9 @@ export union StdOp
 	// THE KERNEL AND NEEDS NOTHING EMITTED HERE**: `clone` gives the child its creator's nice value at birth,
 	// so an M started AFTER `__proc_bg_priority` is already at background priority. ⛔ **The half that is NOT
 	// paid is an M that was ALREADY RUNNING when the call happened**, and closing it needs each M's tid
-	// recorded where the priority lowering can walk them. The two sites that would change are the
-	// `processPriority` row in `TargetFacilities.targetProvidesFacility` and
-	// `StdToArm64Conversion.lowerOsEnterBackgroundPriorityLinux`, and both say so.
+	// recorded where the priority lowering can walk them. The sites that would change are the two Linux
+	// `processPriority` rows in `TargetFacilities.targetProvidesFacility` and each lane's
+	// `lowerOsEnterBackgroundPriorityLinux`, and all of them say so.
 	//
 	// ⚠ **THE WORKER-M SITE IS NOW REACHED, WHICH THIS NOTE SAID IT WAS NOT.** It read *"shv2 reaches neither
 	// site today — `emitSchedWakeOrSpawn` has had no producer since EC10"*; `spawn` publishes a green thread,

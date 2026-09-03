@@ -218,7 +218,7 @@ end 'TargetResolution'
 // accepting a spelling the compiler cannot name back. A spec that names none of them
 // is rejected; the list grows as backends land.
 //
-// EXPORTED because `GoldenTracking.reportUncomparedGoldens` asks the identical question of a
+// EXPORTED because `GoldenCensus.reportUncomparedGoldens` asks the identical question of a
 // `fragments/<name>` LANE DIRECTORY's name — a lane is named by a target spelling, so "which target is
 // this?" has one answer and one reader. A private copy of the loop there would be a second table in all
 // but name, and its failure mode is a census that quietly stops covering the next backend that lands.
@@ -785,22 +785,13 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// `SuiteCpuTally.reportLine`, which is the only place this line is spelled.
 	printError("{run.cpu.reportLine(run.poolSize)}\n")
 
-	// ⚖ **WHAT THE GOLDENS HAVE TO SAY — REPORTED, NEVER JUDGED** (user, 2026-08-02: *"the goldens are
-	// NOT supposed to be a gate, they are just for reference"*). Both reports come AFTER the verdicts
-	// and the summary, on stderr, because they are facts about the TREE rather than about any test and
-	// must never displace the reason a test failed. Neither returns an exit code: see `GoldenTracking`
-	// for what a gate here cost us. Asked on every run, filtered included — a filtered run is exactly
-	// where an agent mints a new spec's goldens and never sees that they are untracked.
-	reportGoldenDrift(run.results)
-	reportGoldenCensus(run.results, effectiveTarget: effectiveTarget)
-
-	// ⭐ THE CENSUS'S MISSING FOURTH COLUMN, and it sits directly under it because it answers the
-	// question the other three cannot even ask: a golden nothing COMPARES. All four columns above are
-	// keyed on a case that produced a result, so a `.test` whose case was renamed away contributes to
-	// none of them — see `GoldenTracking.reportUncomparedGoldens`.
+	// ⚖ **GOLDENS NOTHING COMPARES — REPORTED, NEVER JUDGED** (user, 2026-08-02: *"the goldens are
+	// NOT supposed to be a gate, they are just for reference"*). It comes AFTER the verdicts and the
+	// summary, on stderr, because it is a fact about the TREE rather than about any test and must never
+	// displace the reason a test failed. A `.test` whose case was renamed away is read by nothing and
+	// shows in no diff, so only an enumeration can find it — see `GoldenCensus`. Asked on every run,
+	// filtered included: the answer is read out of the spec text, not out of what this run executed.
 	reportUncomparedGoldens(specDir, effectiveTarget: effectiveTarget)
-
-	reportUntrackedGoldens(specDir)
 
 	if testsExit != 0 'someTestFailed'
 		return testsExit
@@ -914,9 +905,9 @@ end 'withdrawnOptionMessage'
 // arms yield a real string) so the fail reason is extracted without a sentinel.
 //
 // ⚖ **THESE TWO NUMBERS ARE THE PRODUCT, AND NOTHING ABOUT A GOLDEN IS IN THEM** (user, 2026-08-02:
-// *"the gate is the spec tests passing"*). A test whose committed golden drifted still PASSED — it is
-// counted as one, printed as one, and the drift is reported separately and quietly on stderr
-// (`reportGoldenDrift`). `0 failed` means the spec tests passed, with no qualifications to read past.
+// *"the gate is the spec tests passing"*). A test whose committed golden no longer matches what the
+// compiler emits still PASSED — it is counted as one and printed as one. `0 failed` means the spec
+// tests passed, with no qualifications to read past.
 //
 // ⚠ **A CASE THAT DID NOT RUN IS IN NEITHER NUMBER, AND ITS OWN LINE IS WHY THAT IS SAFE.** Counting
 // it as a pass would be a claim nothing supports, and counting it as a failure would redden every
@@ -932,8 +923,8 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	let tally = tallyResults(results)
 	print("\n{tally.passed} passed, {tally.failed} failed\n")
 
-	// Silent at zero, which is the host lane and most of every other — the convention `reportGoldenDrift`
-	// already sets, where "no note" means none.
+	// Silent at zero, which is the host lane and most of every other — the suite's convention for every
+	// trailer, where "no note" means none.
 	if tally.skipped > 0 'anySkipped'
 		print("{tally.skipped} skipped — NOT RUN on this target (see the note on stderr for the constructs)\n")
 	end 'anySkipped'

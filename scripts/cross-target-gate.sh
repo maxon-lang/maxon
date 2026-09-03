@@ -44,10 +44,9 @@
 # ⚖ AND SINCE 2026-08-02, A RED LANE IS A REAL FAILURE AND CANNOT BE ANYTHING ELSE.
 #
 # A suite run exits non-zero ONLY for a wrong exit code, wrong stdout, a diagnostic that did not match,
-# a compile that should have succeeded, or a leak (101). A committed golden that no longer matches what
-# the compiler emits is REPORTED by the run and contributes nothing to its exit code or its failed
-# count (user ruling: "the goldens are NOT supposed to be a gate, they are just for reference" — see
-# maxon-shv2/Testing/GoldenTracking.maxon).
+# a compile that should have succeeded, or a leak (101). Nothing about a committed golden reaches its
+# exit code or its failed count (user ruling: "the goldens are NOT supposed to be a gate, they are just
+# for reference" — see maxon-shv2/Testing/GoldenCensus.maxon).
 #
 # ⛔ THIS SCRIPT'S RED WAS ONCE READ AS BOOKKEEPING, AND THAT IS THE REASON FOR THE RULING. An
 # x64-linux red here was filed as "10 stale golden mismatches + 9 others"; the 9 were nine float

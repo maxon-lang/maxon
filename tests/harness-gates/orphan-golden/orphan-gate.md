@@ -6,7 +6,7 @@ feature: harness-gate-orphaned-goldens
 `HarnessSelfTest.requireOrphanedGoldensAreReported` spawns this harness at this directory TWICE — once
 with `.test` files planted under `fragments/x64-windows/` that no case here can ever read, and once with
 them removed — and requires the suite to NAME each planted file and then to say nothing at all. What is
-under test is `GoldenTracking.reportUncomparedGoldens`, not the programs below.
+under test is `GoldenCensus.reportUncomparedGoldens`, not the programs below.
 
 **The goldens are planted by the gate rather than committed**, which is what buys the negative control: a
 census that named every golden in the tree would satisfy the first run and fail the second, and one that

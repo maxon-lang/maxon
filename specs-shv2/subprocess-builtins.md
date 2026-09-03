@@ -1418,6 +1418,64 @@ end 'main'
 spawned=true echoed=true len=6
 
 ```
+<!-- test: subprocess-builtins.posix-a-caller-built-environment-is-the-childs-whole-environment -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
+The Windows twin's subject on the POSIX lane. ⚠ **It is a sibling rather than a widened marker for
+`posix-collect-echo`'s reason: the CHILD is platform-specific.** `cmd /c echo %VAR%` has no meaning
+here, so the probe is `/bin/sh -c`, whose `echo` is a shell builtin and therefore needs no `PATH` in
+the environment it is handed.
+
+⭐ **BOTH HALVES OF "WHOLE ENVIRONMENT" ARE ASSERTED, AND THE SECOND IS THE ONE A PASSING SPAWN CAN
+STILL GET WRONG.** The child echoes `$HOME` beside the probe: the probe proves the caller's block
+REACHED it, and the EMPTY `$HOME` proves the parent's own environment did not — a runtime that
+accepted the block and then passed the parent's vector would satisfy the first and fail the second,
+which is exactly the silent wrong answer the contract exists to prevent.
+
+⛔ **`$PATH` CANNOT BE THAT WITNESS AND `$HOME` CAN, WHICH IS A FACT ABOUT `sh` RATHER THAN ABOUT THE
+SPAWN.** POSIX has a shell SYNTHESIZE a default `PATH` when the environment it is handed carries
+none, so an inherited and a caller-built environment both leave `$PATH` non-empty — MEASURED at 60
+bytes on macOS and 77 on Linux, a witness that is neither empty nor even the same on two lanes.
+`$HOME` is set in every real parent environment and is synthesized by nothing.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "echo probe=$MAXON_ENV_PROBE home=$HOME")
+
+	var env = ByteArray.create()
+	appendToken(env, token: "MAXON_ENV_PROBE=seen")
+	env.push(0)
+
+	let empty = ""
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 0, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	print("spawned={h >= 0} echoed={out.startsWith("probe=seen home=")} len={out.byteLength()}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+spawned=true echoed=true len=17
+
+```
 
 <!-- test: subprocess-builtins.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->

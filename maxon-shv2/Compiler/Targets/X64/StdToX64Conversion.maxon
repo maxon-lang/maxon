@@ -3400,10 +3400,12 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryThreadCycleTime)))
 	end 'lowerOsThreadCpuTicksWin64'
 
-	// ⭐⭐ **`osEnterBackgroundPriority(result)` ⇒ `SetPriorityClass((HANDLE)-1, 0x4000)` THEN
-	// `GetPriorityClass((HANDLE)-1)`** — two `iatCall`s, and the second one is the answer.
+	// ⭐⭐ **A WRITE AND THEN A READ ON BOTH ROUTES** — `SetPriorityClass`/`GetPriorityClass` through the IAT
+	// on Windows, `setpriority`/`getpriority` as raw syscalls on Linux — and the second call is the answer.
+	// The route is asked ONCE and each arm is its own function, `lowerOsGetPid`'s shape: this op makes TWO
+	// route-dependent calls, so an inline `match` per call would ask the same question twice.
 	//
-	// ⚠ **THE `BOOL` FROM THE SET IS DISCARDED AND THE ANSWER COMES FROM A FRESH READ.** That is not
+	// ⚠ **THE SET'S ANSWER IS DISCARDED AND THE RESULT IS A FRESH READ, ON BOTH ARMS.** That is not
 	// redundancy: capturing RAX after the SET would report the value we asked for, which a lowering that
 	// called nothing could report equally well. Reading it back makes the result a fact about the process
 	// rather than about this function's intentions — MEASURED, where removing the SET moves the answer from
@@ -3413,17 +3415,59 @@ type StdToX64Lowering
 	// already de-prioritised itself and the test binary inherits it, so the same sabotage passes 2/2. Any
 	// edit here owes the hand check in `specs-shv2/process-background-priority.md`, not a suite run.
 	//
-	// ⭐ Setting a priority class needs no privilege in the LOWERING direction (only RAISING above normal
-	// can be refused), so the SET cannot silently fail here and the READ cannot disagree with it.
+	// ⭐ LOWERING a priority needs no privilege on either platform (only RAISING above the default can be
+	// refused), so the SET cannot silently fail here and the READ cannot disagree with it.
 	function lowerOsEnterBackgroundPriority(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osEnterBackgroundPriority")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsEnterBackgroundPriorityWin64(resultId, dstBlock: dstBlock)
+			syscall then self.lowerOsEnterBackgroundPriorityLinux(resultId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsEnterBackgroundPriority'
+
+	function lowerOsEnterBackgroundPriorityWin64(resultId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: CurrentProcessPseudoHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: BelowNormalPriorityClass))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetPriorityClass)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: CurrentProcessPseudoHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetPriorityClass)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsEnterBackgroundPriority'
+	end 'lowerOsEnterBackgroundPriorityWin64'
+
+	// ⛔⛔ **IT MUST BE `setpriority` AND NOT `nice`.** `nice(10)` is RELATIVE — two calls give 10 then 20 —
+	// while `setpriority` states an ABSOLUTE value, so asking twice re-applies the same one.
+	// `process-background-priority.posix-value-is-stable-across-calls` is written for that failure.
+	//
+	// ⛔ **THE BIAS FOLD IS NOT OPTIONAL AND WOULD HIDE ITSELF AT THIS ONE NICE VALUE.** The syscall answers
+	// `LinuxGetPriorityBias - nice` (a raw negative return is how a syscall reports failure), and `20 - 10`
+	// is 10 — so a lowering that skipped the fold still passes `answers-the-posix-nice-value` and is wrong
+	// for every other value. The arithmetic runs in the two registers the syscall already clobbers, which is
+	// what keeps the allocator out of it (`emitLinuxStdHandle`'s shape).
+	//
+	// ⛔ **AN M THAT ALREADY EXISTED KEEPS THE DEFAULT NICE**, because Linux scopes a nice value to the
+	// calling THREAD: `clone` inherits its creator's value at birth, so every M started after this call runs
+	// at background priority and one started before it does not. The `processPriority` row in
+	// `targetProvidesFacility` carries the same statement beside the `true` that rests on it.
+	function lowerOsEnterBackgroundPriorityLinux(resultId ValueId, dstBlock IrBlock)
+		self.emitLinuxPriorityScopeArgs(dstBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: PosixBackgroundNiceValue as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallSetPriority))
+
+		self.emitLinuxPriorityScopeArgs(dstBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallGetPriority))
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.rax)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rax), value: LinuxGetPriorityBias as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(x64PhysReg(X64Register.rax), lhs: x64PhysReg(X64Register.rax), rhs: x64PhysReg(X64Register.rcx)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsEnterBackgroundPriorityLinux'
+
+	// The `(which, who)` pair BOTH priority syscalls open with — the set then adds its value in RDX. One
+	// emitter rather than two, because it IS the same pair: a divergence between the scope the set used and
+	// the scope the read used would change the process and then report on something else.
+	function emitLinuxPriorityScopeArgs(dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: PosixPrioProcess as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: PosixPriorityWhoIsSelf as MachineWord))
+	end 'emitLinuxPriorityScopeArgs'
 
 	// ⭐ **THE x64-WINDOWS GATE FOR EVERY OP THAT LOWERS TO A WIN32 IMPORT, ASKED ONCE.** All of them are
 	// x64-windows only, and `SemanticCheck.requireTargetSupportsCallee` refuses such a program at its own

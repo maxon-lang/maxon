@@ -87,37 +87,6 @@ let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0
 // provenance live here, once.
 let DarwinScNprocessorsOnln = 58
 
-// ⭐ **THE POSIX PRIORITY TRIPLE, AND THE ONE PLACE IT IS WRITTEN.** `setpriority(which, who, value)` /
-// `getpriority(which, who)`: `PRIO_PROCESS` selects the PROCESS scope (read from this host's
-// `sys/resource.h`, not from memory) and `who = 0` names the calling one — and MEASURED to be 0 on an aarch64
-// Linux guest too (`bits/resource.h`), which is why one pair of constants serves both arms.
-//
-// ⚠⚠ **THE TWO OSes DISAGREE ABOUT WHAT `PRIO_PROCESS` SCOPES TO, AND THE NAME HIDES IT.** Darwin scopes a
-// nice value to the PROCESS, which discharges `StdOp.osThreadCreate`'s inheritance contract there with
-// nothing emitted at a thread's birth. LINUX scopes it to the calling THREAD — `who` is a TID, not a PID
-// (MEASURED: one thread at nice 15 while its sibling sat at 10, same process, simultaneously). That is why
-// `lowerOsEnterBackgroundPriority` asks the route oracle rather than assuming POSIX is one thing, and why
-// `processPriority` is its OWN row in `targetProvidesFacility` — arm64-linux served the rest of the `__proc_`
-// band a whole rung before it could serve this one.
-//
-// ⚠ On arm64-linux the disagreement HAS a consequence now that the lane starts worker Ms, and the consequence
-// is bounded rather than absent: `clone` inherits its creator's nice value at birth, so every M started after
-// the call runs at the priority asked for, and only an M that already existed keeps the default. See
-// `lowerOsEnterBackgroundPriorityLinux`, and the `processPriority` row in `targetProvidesFacility`.
-let PosixPrioProcess = 0
-let PosixPriorityWhoIsSelf = 0
-
-// ⭐⭐ **`getpriority`'s SYSCALL DOES NOT ANSWER A NICE VALUE — IT ANSWERS `20 - nice`.** A syscall reports
-// failure as a small negative number, and a nice value is legitimately negative, so the kernel biases the
-// answer into a non-negative range and every libc subtracts the bias back off. `lowerOsEnterBackgroundPriorityLinux`
-// is that libc. ⚠ The macOS lane needs no such fold because it calls the LIBRARY function, which has already
-// done it — this is a raw-syscall fact, which is why it lives beside the numbers and not beside the nice
-// value below.
-//
-// ⚠ **IT WOULD HAVE HIDDEN ITSELF AT EXACTLY THIS NICE VALUE:** `20 - 10` is 10, so a lowering that forgot
-// the fold still answers 10 for the one value the specs pin, and is wrong for every other.
-let LinuxGetPriorityBias = 20
-
 // ⭐⭐ **`MSG_NOSIGNAL` — AND THE TWO POSIX LANES DISAGREE ABOUT ITS VALUE, WHICH IS WHY IT IS HERE AND
 // NOT IN `PosixRuntime`.** Darwin's is **0x80000** (`MacOSX.sdk/usr/include/sys/socket.h:594`) and Linux's
 // is 0x4000 (`LinuxMsgNoSignal`); the flag word is a lowering's argument on both, so each names its own.
@@ -131,12 +100,6 @@ let LinuxGetPriorityBias = 20
 // Windows needs no counterpart: there is no SIGPIPE to suppress, which is why `SendRecvNoFlags` stands
 // unqualified on that lane.
 let DarwinMsgNoSignal = 0x80000
-
-// The nice value background work runs at. ⚠ NOT 19, the maximum, for the reason Windows does not use
-// `IDLE_PRIORITY_CLASS`: a starve long enough to trip a caller's timeout is reported as a harness bug
-// rather than as a busy machine. The bootstrap's arm64 emitter picks the same 10
-// (`ARM64CodeEmitter.Backend.cs`), so the two compilers de-prioritise a suite to the same depth.
-let PosixBackgroundNiceValue = 10
 
 // The `madvise` advice that DECOMMITS a range on Darwin (F1a). Here rather than in `PosixMmap` for exactly
 // `MmapAnonPrivateMacos`'s reason one line up: arm64 is the only backend that targets macOS.
@@ -2790,12 +2753,10 @@ type StdToArm64Lowering
 
 	// ⭐ `osProcessSpawn` / `osProcessSpawnInherit` ⇒ ONE chunk. See the two arms' own comments for why the
 	// inheritance flag that separates them on Windows has no POSIX twin to lower.
-	// ⚠ **`envPtr` IS PASSED ON AND EACH LANE'S CHUNK ANSWERS FOR IT.** `lpEnvironment` is a BLOCK on Windows
-	// and `envp` is a POINTER VECTOR under POSIX, so a non-null one needs a conversion neither POSIX lane has.
-	// BOTH refuse it with `ENOTSUP` and a zero `hProcess`, which the Std tier reads as
-	// `SubprocessError.spawnFailed` — a named spawn failure being the honest answer where a child quietly
-	// running with the wrong environment is not. `Environment.inherit`, the default, passes a constant 0 and is
-	// unaffected on both lanes.
+	// ⚠ **`envPtr` IS PASSED ON AND EACH LANE'S CHUNK CHOOSES BETWEEN IT AND THE PARENT's.** It arrives in the
+	// shape that lane's spawn primitive takes — `SubprocessRuntime.SpawnEnvironmentShape` settles that one
+	// tier up, so a POSIX chunk receives a finished `char *const envp[]` and not a block. A zero is
+	// `Environment.inherit`, the default, and means the parent's own environment.
 	function lowerOsProcessSpawn(commandId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId, dstRef BlockRef)
 		self.emitHostChunkCall(dstRef, chunk: HostSpawnName, args: sixArgs(commandId, second: cwdPtrId, third: creationFlagsId, fourth: startupPtrId, fifth: procInfoPtrId, sixth: envPtrId))
 	end 'lowerOsProcessSpawn'

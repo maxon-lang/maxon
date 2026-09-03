@@ -2341,20 +2341,11 @@ end 'buildArm64LinuxEnvReadChunk'
 // `posix_spawnp` performs a SECOND, redundant walk; this one performs none, and a bare name that the Std
 // walk could not resolve fails here exactly as an unresolvable absolute path does there.
 //
-// ⛔⛔ **A CALLER-BUILT ENVIRONMENT BLOCK IS REFUSED HERE EXACTLY AS THE DARWIN TWIN REFUSES IT, AND THE
-// SIXTH ARGUMENT EXISTS SO THAT IT CAN BE.** `lpEnvironment` is a NUL-separated BLOCK and `execve`'s third
-// argument is a POINTER VECTOR; the conversion is code neither POSIX lane has. It is not free on this lane
-// either, which is the thing `execve takes envp directly` makes it look like: the vector would have to be
-// built where it can be handed over, and that is the child, between the `clone` and the `execve`, where
-// nothing may allocate and nothing may lock — leaving an unbounded stack-built vector on a green thread's
-// 2 KB seed, which is the one measurement this chunk's own stack-depth note asks not to guess at.
-//
-// ⇒ **A NAMED SPAWN FAILURE IS THE ANSWER, AND IT IS STRICTLY BETTER THAN WHAT WAS HERE.** Before the
-// operand existed this chunk took five arguments and the block was simply not passed, so an
-// `Environment.custom` child on this lane ran with the PARENT's environment while its caller was told it had
-// another — the silent wrong answer `StdDialect.osProcessSpawn`'s note says the design exists to prevent.
-// A zero `hProcess` plus `ENOTSUP` is the Std tier's own spawn-failure test, and the two POSIX lanes now
-// answer one program one way.
+// ⭐⭐ **THE SIXTH ARGUMENT IS AN `envp` THE PARENT ALREADY BUILT, WHICH IS WHY THE CHILD PATH STAYS
+// ALLOCATION-FREE.** `lpEnvironment` is a NUL-separated BLOCK and `execve`'s third argument is a POINTER
+// VECTOR, so a conversion is needed — but it runs in `SubprocessRuntime.buildSubpEnvVector`, Std-IR the
+// PARENT executes before this chunk is called. The `clone` copies the address space, so the child inherits
+// the finished vector and does nothing between the `clone` and the `execve` but raw syscalls.
 //
 // ⚠ **AN ORDINARY DESCRIPTOR THE PARENT HOLDS IS INHERITED, WHERE `POSIX_SPAWN_CLOEXEC_DEFAULT` WOULD CLOSE
 // IT.** What matters is that no PIPE end leaks — an inherited write end is an EOF that never arrives — and
@@ -2374,12 +2365,12 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	let SlotStatusWrite = 9 as StackSize
 	let SlotStatusWord = 10 as StackSize
 	let SlotStatusCount = 11 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(12)
+	let SlotEnv = 12 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(13)
 
 	let piped = asm.newLabel()
 	let cloneFailed = asm.newLabel()
 	let spawnFailed = asm.newLabel()
-	let callerBuiltEnv = asm.newLabel()
 	let childPath = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
@@ -2389,12 +2380,7 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotFlags)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotStartup)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotProcInfo)
-
-	// ⛔ **THE REFUSAL IS TESTED FIRST, BEFORE THE PIPE, FOR THE DARWIN TWIN'S REASON**: the arm it takes owns
-	// nothing, so there is nothing to unwind on it. `x5` is `lpEnvironment` and is read here and nowhere else,
-	// so it needs no slot of its own — every later use of the environment on this lane is the parent's own
-	// vector, which the guard has just proved is what was asked for.
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x5, label: callerBuiltEnv)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotStatusFds)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxOpenCloseOnExec)
@@ -2462,15 +2448,6 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
 	arm64EmitBranchTo(asm, label: published)
 
-	// The caller-built-environment refusal joins the failure arm at its publishing point: the errno word says
-	// why, and a ZERO `hProcess` is the Std tier's own spawn-failure test. Reached only from the guard at the
-	// top of this chunk, so it holds no pipe and no child to clean up.
-	asm.placeLabel(callerBuiltEnv)
-	arm64LinuxEmitPublishErrno(asm, value: LinuxErrnoNotSupported)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
-	arm64EmitBranchTo(asm, label: published)
-
 	asm.placeLabel(spawned)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixWaitKindProcess)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
@@ -2506,15 +2483,19 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: inheritCwd)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallChdir)
 
-	// `execve(argv[0], argv, envp)`. The environment is the vector the entry stub captured — this is
-	// `lpEnvironment = NULL`'s meaning, the parent's environment, and the same one `mrt_host_env_read` walks
-	// and `StdToArm64Conversion.lowerOsEnvBlock` answers. The guard at the top of this chunk is what makes
-	// "NULL" the only `lpEnvironment` that can reach here.
+	// `execve(argv[0], argv, envp)`. `envp` is the caller's own vector when it built one, and otherwise the
+	// vector the entry stub captured — which is what a NULL `lpEnvironment` means, the parent's environment,
+	// and the same one `mrt_host_env_read` walks and `StdToArm64Conversion.lowerOsEnvBlock` answers. Both are
+	// finished vectors in the parent's address space, so the child only reads.
+	let envChosen = asm.newLabel()
 	asm.placeLabel(inheritCwd)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotArgv)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotEnv)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: envChosen)
 	arm64LinuxEmitDataAddr(asm, dest: Arm64Register.x16, label: LinuxEnvpLabel)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x16, byteOffset: 0)
+	asm.placeLabel(envChosen)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallExecve)
 
 	// The exec failed. Send the parent the `-errno` the kernel just answered and stop.

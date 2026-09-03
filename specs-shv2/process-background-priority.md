@@ -109,8 +109,11 @@ fail, and the value it reports is the one just written.
 ⚠ **CHILD INHERITANCE IS A DARWIN PROPERTY AND NOT A POSIX ONE.** Darwin scopes a nice value to the
 PROCESS, so one call covers every thread and every child, exactly as `SetPriorityClass` does. LINUX
 scopes it to the THREAD: a running thread keeps its old value and a new one inherits only its
-creator's. So a Linux lane owes work at thread creation as well as a call here, which is why that
-lane is not served by re-spelling this one.
+creator's. Half of that is paid by the kernel — a thread `clone` mints starts at its creator's nice
+value, so every worker started after the call is already at background priority — and the half that
+is not is a thread that was ALREADY RUNNING when the call happened, which keeps the default. No case
+below can see it: each reads the value back on the calling thread, which is the thread the call
+scoped to.
 
 ⚠ On wasm the refusal is more than "not yet", as it is for the pid: a WASI component has no process
 and no scheduler priority, so a lowering there could only pretend to have done something.
@@ -170,7 +173,7 @@ end 'main'
 ```
 
 <!-- test: process-background-priority.answers-the-posix-nice-value -->
-<!-- targets: arm64-macos, arm64-linux -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
 `answers-the-below-normal-class`'s postcondition in the POSIX unit: after the call the process sits
 at the background NICE value (10), and the answer is a live reading rather than the 0 a normal-priority
 process reports or the `-1` `getpriority` answers when it is asked about a process that is not there.
@@ -197,7 +200,7 @@ end 'main'
 ```
 
 <!-- test: process-background-priority.posix-value-is-stable-across-calls -->
-<!-- targets: arm64-macos, arm64-linux -->
+<!-- targets: arm64-macos, arm64-linux, x64-linux -->
 ⭐ **THE CASE THAT CATCHES `nice`.** Asking twice re-applies the same absolute value and reads back the
 same answer. A lowering built on `nice(10)` instead of `setpriority(PRIO_PROCESS, 0, 10)` sinks one
 step per call — 10 then 20 — so it fails here while still passing the case above, which is exactly

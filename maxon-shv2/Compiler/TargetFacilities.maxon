@@ -672,7 +672,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// ⚠ The lowering also folds `getpriority`'s SYSCALL BIAS: the raw call answers `20 - nice`, and
 			// without the fold `answers-the-posix-nice-value` would pass by the coincidence that `20 - 10` is
 			// 10 while every other nice value read back wrong (MEASURED on an aarch64 guest — nice 15 answered
-			// 5). See `StdToArm64Conversion.LinuxGetPriorityBias`.
+			// 5). See `LinuxRuntime.LinuxGetPriorityBias`.
 			processPriority gives true
 			// ⭐ **L3 — `sched_getaffinity` and a popcount, which is what the old text here already named.** It
 			// is preferred to reading `/sys/devices/system/cpu/online` for two reasons: it needs no filesystem
@@ -783,14 +783,23 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			reschedule gives true
 			greenThreads gives true
 			subprocess gives true
-			// ⚠ `setpriority` scopes a nice value to the calling THREAD on Linux, so this row owes the
-			// thread-inheritance work at `StdOp.osThreadCreate` that the arm64-linux row records: `clone`
-			// inherits its creator's nice value at birth, so an M started AFTER the call runs at the priority
-			// the call asked for, and an M that already existed keeps the default. That is the same gap the
-			// other Linux lane records, and it is why this row stays `false` where that one is `true` — this
-			// lane has no `getpriority`/`setpriority` lowering at all, and writing one would be a second
-			// landing rather than a widening of this one.
-			processPriority gives false
+			// ⭐⭐ **THE arm64-linux ROW'S TWO SYSCALLS WITH THIS LANE'S NUMBERS, AND THE NUMBERS ARE SWAPPED
+			// RATHER THAN MERELY DIFFERENT.** x86-64 has `getpriority` at 140 and `setpriority` at 141;
+			// AArch64 takes `asm-generic/unistd.h`'s order and has them the other way round, so a lane reusing
+			// the twin's constant would SET when it meant to READ. Both were VERIFIED by invoking them on an
+			// x86-64 guest — see `X64LinuxRuntime.X64LinuxSyscallGetPriority`.
+			//
+			// ⛔ **THE SAME GAP THE arm64-linux ROW RECORDS, STATED RATHER THAN CLAIMED DISCHARGED: an M that
+			// already existed when `__proc_bg_priority` ran keeps the default nice.** Linux scopes a nice
+			// value to the calling THREAD, and `clone` inherits its creator's at birth — so every M started
+			// AFTER the call runs at the priority asked for and only an earlier one does not. Closing it needs
+			// each M's tid in its P and a walk in a chunk, where this is two inline `syscall`s. No case reaches
+			// it: the specs read the value back on the calling thread, which is the thread the call scoped to.
+			//
+			// ⚠ The lowering also folds `getpriority`'s SYSCALL BIAS — the raw call answers `20 - nice`
+			// (`LinuxRuntime.LinuxGetPriorityBias`), and without the fold `answers-the-posix-nice-value` would
+			// pass by the coincidence that `20 - 10` is 10 while every other value read back wrong.
+			processPriority gives true
 			// ⭐⭐ **THE SOCKET BAND — the arm64-linux row's lowerings with this lane's own syscall numbers
 			// (41/42/44/45 against 198/203/206/207) and its own register ABI, and the SAME Std-IR resolver.** That
 			// resolver is why the split between the two Linux lanes here is four numbers rather than a second
