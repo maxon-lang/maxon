@@ -84,10 +84,11 @@ internal static class TestExecutor {
   /// Run <paramref name="selected"/> across <paramref name="groups"/>.
   /// </summary>
   /// <param name="onFileComplete">
-  /// Invoked once per file, in DISCOVERY ORDER, as soon as that file and every file before it has
-  /// finished — never in completion order. Execution is parallel and reporting is not: a run that
-  /// printed results as they landed would be unreadable interactively and unusable as a golden,
-  /// because the order would depend on which worker won a race.
+  /// Invoked once per file, in <see cref="ReportOrder"/>, as soon as that file and every file before
+  /// it in that order has finished — never in completion order. Execution is parallel and reporting
+  /// is not: a run that printed results as they landed would be unreadable interactively and unusable
+  /// as a golden, because the order would depend on which worker won a race and on which name the
+  /// filesystem enumerated first.
   /// </param>
   public static TestExecution Run(
       IReadOnlyList<TestFileGroup> groups, IReadOnlySet<int> selected, TestRunOptions options,
@@ -107,6 +108,10 @@ internal static class TestExecutor {
     // per shard — quadratic in a project's size for a lookup that never changes. Read-only from
     // here on, so sharing it across workers needs no lock.
     var lookup = BuildLookup(groups);
+
+    // Shards are claimed in the walk's order and flushed in the report's, so an order dependence
+    // that changes a RESULT still surfaces while the transcript does not move between hosts.
+    var reportOrder = ReportOrder.Of(groups);
 
     var nextShard = -1;
     var failures = 0;
@@ -137,7 +142,7 @@ internal static class TestExecutor {
         lock (flushLock) {
           collected[shard.FileIndex].AddRange(results);
           pending[shard.FileIndex] -= shard.TestIndices.Count;
-          FlushReadyFiles(groups, collected, pending, ref nextToFlush, onFileComplete);
+          FlushReadyFiles(groups, reportOrder, collected, pending, ref nextToFlush, onFileComplete);
         }
       }
     }
@@ -162,10 +167,10 @@ internal static class TestExecutor {
     // lines never appeared. This is also what covers a file left PARTIALLY done, which zeroing only
     // the untouched files would not.
     Array.Fill(pending, 0);
-    FlushReadyFiles(groups, collected, pending, ref nextToFlush, onFileComplete);
+    FlushReadyFiles(groups, reportOrder, collected, pending, ref nextToFlush, onFileComplete);
 
     var files = new List<TestFileResults>();
-    for (var f = 0; f < groups.Count; f++) {
+    foreach (var f in reportOrder) {
       if (collected[f].Count == 0) continue;
       // Sorted back into declaration order: a file's tests may have been split across shards under
       // --isolate and finished in any order, but the file declares them in one.
@@ -206,15 +211,16 @@ internal static class TestExecutor {
   }
 
   /// <summary>
-  /// Emit every file that is finished AND has no unfinished file before it. Called under the
-  /// caller's lock; <paramref name="nextToFlush"/> is the low-water mark that makes the sequence a
-  /// prefix rather than a set — which is what turns parallel execution back into discovery order.
+  /// Emit every file that is finished AND has no unfinished file before it in <paramref
+  /// name="reportOrder"/>. Called under the caller's lock; <paramref name="nextToFlush"/> is the
+  /// low-water mark that makes the sequence a prefix rather than a set — which is what turns parallel
+  /// execution back into one defined order.
   /// </summary>
   private static void FlushReadyFiles(
-      IReadOnlyList<TestFileGroup> groups, List<UnitTestResult>[] collected, int[] pending,
-      ref int nextToFlush, Action<TestFileResults>? onFileComplete) {
-    while (nextToFlush < groups.Count) {
-      var index = nextToFlush;
+      IReadOnlyList<TestFileGroup> groups, int[] reportOrder, List<UnitTestResult>[] collected,
+      int[] pending, ref int nextToFlush, Action<TestFileResults>? onFileComplete) {
+    while (nextToFlush < reportOrder.Length) {
+      var index = reportOrder[nextToFlush];
       if (pending[index] > 0) return;
 
       if (collected[index].Count > 0 && onFileComplete != null) {

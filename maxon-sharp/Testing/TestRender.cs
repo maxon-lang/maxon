@@ -10,9 +10,9 @@ namespace MaxonSharp.Testing;
 ///
 /// Text is emitted in TWO pieces on purpose. <see cref="FileBlock"/> is printed as each file
 /// finishes, so an interactive run shows progress; <see cref="Summary"/> is printed once at the end.
-/// The executor hands files over in discovery order regardless of which finished first, so the
-/// concatenation of the pieces is the same bytes every time — which is the only reason a golden can
-/// gate this at all.
+/// The executor hands files over in <see cref="ReportOrder"/> regardless of which finished first and
+/// of what the filesystem enumerated first, so the concatenation of the pieces is the same bytes on
+/// every host — which is the only reason a golden can gate this at all.
 ///
 /// JSON is written by hand with <see cref="Utf8JsonWriter"/> and no DTOs, matching
 /// <c>CoverageRender.Json</c>: the shape is decided here rather than by whatever the model's field
@@ -294,7 +294,8 @@ internal static class TestRender {
     var count = 0;
     var files = 0;
 
-    foreach (var group in groups) {
+    foreach (var index in ReportOrder.Of(groups)) {
+      var group = groups[index];
       var members = group.Tests.Where(t => selected.Contains(t.Index)).ToList();
       if (members.Count == 0) continue;
 
@@ -323,7 +324,8 @@ internal static class TestRender {
     using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false })) {
       w.WriteStartObject();
       w.WriteStartArray("tests");
-      foreach (var group in groups) {
+      foreach (var index in ReportOrder.Of(groups)) {
+        var group = groups[index];
         foreach (var member in group.Tests) {
           if (!selected.Contains(member.Index)) continue;
 

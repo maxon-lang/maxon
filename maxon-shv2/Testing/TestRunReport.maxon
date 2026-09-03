@@ -182,7 +182,7 @@ end 'tallyTestRun'
 
 // Everything one `maxon test` run produced.
 export type TestRunReport
-	// Results grouped by file, in discovery order.
+	// Results grouped by file, in the order `reportFileOrder` defines.
 	export let files as TestFileResultsArray
 	// Wall time spent producing the test binary.
 	export let compileMs as DurationMs
@@ -237,3 +237,65 @@ let ReportSeparator = "/"
 function forwardSlashed(path FilePath) returns String
 	return path.toString().replace(HostAlienSeparator, with: ReportSeparator)
 end 'forwardSlashed'
+
+// Where the walk found one file, so a result collected in walk order can be placed in report order.
+export typealias ReportFileIndex = int(0 to u64.max)
+
+// One file's place in a report: the path its section is headed with, and where the walk found it.
+export type ReportFile
+	export let displayPath as String
+	export let index as ReportFileIndex
+	export let group as TestFileGroup
+
+	export static function create(displayPath String, index ReportFileIndex, group TestFileGroup) returns ReportFile
+		return Self{displayPath: displayPath, index: index, group: group}
+	end 'create'
+end 'ReportFile'
+
+export typealias ReportFileArray = Array with ReportFile
+
+// ⭐⭐ **THE ORDER EVERY FACE OF A REPORT EMITS ITS PER-FILE SECTIONS IN**: ascending by the display
+// path that heads each section.
+//
+// A directory enumeration's order is a property of the FILESYSTEM — NTFS answers `loud` before
+// `quiet`, APFS the other way — so a report that inherited it says something different on each host
+// and can never be a committed expectation. Ordering here rather than at the walk is what leaves the
+// RUN in the filesystem's order: an order dependence that changes a RESULT must still be free to
+// surface.
+export function reportFileOrder(groups TestFileGroupArray) returns ReportFileArray
+	var ordered = ReportFileArray.create()
+
+	for (iter, group) in groups.withIterator() 'eachGroup'
+		ordered.push(ReportFile.create(reportPathDisplay(group.file), index: iter.index(), group: group))
+	end 'eachGroup'
+
+	// TOTAL, because one file is one group and no two groups name the same path.
+	ordered.sort(function(left ReportFile, right ReportFile) gives comparePathText(left.displayPath, right: right.displayPath))
+
+	return ordered
+end 'reportFileOrder'
+
+// ⚠ **THE MEASURE IS BYTES**, as it is for every other table this command prints. The reference
+// compares UTF-16 code units; the two agree for every ASCII path, and neither is a collation.
+function comparePathText(left String, right String) returns Ordering
+	let leftBytes = left.toByteArray()
+	let rightBytes = right.toByteArray()
+
+	for (iter, leftByte) in leftBytes.withIterator() 'eachByte'
+		if iter.index() >= rightBytes.count() 'rightIsAPrefix'
+			return Ordering.greaterThan
+		end 'rightIsAPrefix'
+
+		let rightByte = try rightBytes.get(iter.index()) otherwise panic("comparePathText: the index is in bounds by the guard above")
+
+		if leftByte != rightByte 'differs'
+			return Ordering.lessThan if leftByte < rightByte else Ordering.greaterThan
+		end 'differs'
+	end 'eachByte'
+
+	if leftBytes.count() < rightBytes.count() 'leftIsAPrefix'
+		return Ordering.lessThan
+	end 'leftIsAPrefix'
+
+	return Ordering.equalTo
+end 'comparePathText'

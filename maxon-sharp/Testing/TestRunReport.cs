@@ -1,4 +1,6 @@
+using System.Text;
 using MaxonSharp.Compiler;
+using MaxonSharp.Debug;
 
 namespace MaxonSharp.Testing;
 
@@ -84,6 +86,29 @@ internal sealed record UnitTestResult(
 internal sealed record TestFileResults(string Path, IReadOnlyList<UnitTestResult> Results);
 
 /// <summary>
+/// The order every face of a report emits its per-file sections in: ascending by the display path
+/// that heads each section.
+///
+/// A directory enumeration's order is a property of the FILESYSTEM — NTFS answers <c>loud</c> before
+/// <c>quiet</c>, APFS the other way — so a report that inherited it says something different on each
+/// host and can never be a committed expectation. Ordering here rather than at the walk is what
+/// leaves the RUN in the filesystem's order: an order dependence that changes a RESULT must still be
+/// free to surface.
+///
+/// The measure is UTF-8 BYTES because that is what the other compiler compares, and ordinal UTF-16
+/// disagrees with it above the BMP; both reports have to be the same bytes. It is total — one file
+/// is one group, and no two groups name the same path.
+/// </summary>
+internal static class ReportOrder {
+  public static int[] Of(IReadOnlyList<TestFileGroup> groups) {
+    var keys = groups.Select(g => Encoding.UTF8.GetBytes(ReportPath.Display(g.Path))).ToArray();
+    var order = Enumerable.Range(0, groups.Count).ToArray();
+    Array.Sort(order, (left, right) => keys[left].AsSpan().SequenceCompareTo(keys[right]));
+    return order;
+  }
+}
+
+/// <summary>
 /// What the EXECUTOR observed: results, how long running them took, and whether it stopped early.
 ///
 /// Separate from <see cref="TestRunReport"/> because the executor genuinely does not know the rest —
@@ -100,7 +125,7 @@ internal sealed record TestExecution(IReadOnlyList<TestFileResults> Files, long 
 /// and JSON therefore cannot report different totals for one run — there is only one place a total
 /// comes from.
 /// </summary>
-/// <param name="Files">Results grouped by file, in discovery order.</param>
+/// <param name="Files">Results grouped by file, in <see cref="ReportOrder"/>.</param>
 /// <param name="CompileMs">Wall time spent producing the binary; 0 when the cache was warm.</param>
 /// <param name="RunMs">Wall time spent running it, including every re-run attribution needed.</param>
 /// <param name="Compiled">

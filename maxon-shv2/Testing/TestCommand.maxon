@@ -281,6 +281,45 @@ end 'reportNothingToRun'
 // COMPILE AND RUN
 // ============================================================================================
 
+// How far through the report order the run has already emitted.
+typealias ReportCursor = int(0 to u64.max)
+
+// ⭐ **EMIT EVERY FILE THAT HAS RUN AND HAS NO UNEMITTED FILE BEFORE IT IN REPORT ORDER.** The cursor
+// is what makes that a PREFIX rather than a set: results still appear as they land, and where they
+// land in the transcript no longer depends on which file the walk handed back first.
+//
+// `ran` holds one entry per group in walk order, so a group's index into it is its position in the
+// walk — which is what `ReportFile.index` names.
+function emitReadyFiles(files TestFileResultsArray, ran TestFileResultsArray, order ReportFileArray, from ReportCursor, args MaxonArgs, color bool) returns ReportCursor
+	var cursor = from
+
+	while cursor < order.count() 'inReportOrder'
+		let entry = try order.get(cursor) otherwise panic("emitReadyFiles: the cursor is inside the order by the loop's own guard")
+
+		if entry.index >= ran.count() 'hasNotRunYet'
+			break
+		end 'hasNotRunYet'
+
+		let fileResults = try ran.get(entry.index) otherwise panic("emitReadyFiles: every walk position below `ran.count()` has an entry")
+
+		// A file the selection reached nothing in is absent from the report ENTIRELY — it heads no
+		// section, and the footer's file count must not claim it.
+		if not fileResults.results.isEmpty() 'selectedSomething'
+			// STREAMED for a text run so results appear as they land; a `--json` run is one document and
+			// cannot be emitted in pieces.
+			if not args.jsonReport 'streamTheBlock'
+				print(testFileBlock(fileResults, color: color, showTiming: args.showTiming))
+			end 'streamTheBlock'
+
+			files.push(fileResults)
+		end 'selectedSomething'
+
+		cursor = cursor + 1
+	end 'inReportOrder'
+
+	return cursor
+end 'emitReadyFiles'
+
 function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
 	let buildRoot = try prepareTestBuildRoot(projectDir) otherwise (e) 'noBuildRoot'
 		return refuseTestRun(stagingRefusalReason(e))
@@ -308,23 +347,17 @@ function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, 
 
 	let plan = TestLaunchPlan.create(product.outputPath, timeoutMs: args.testTimeoutMs)
 	var progress = TestRunProgress.create()
+	let reportOrder = reportFileOrder(staged.groups)
+	var ran = TestFileResultsArray.create()
 	var files = TestFileResultsArray.create()
+	var emitted = 0 as ReportCursor
 
+	// The RUN follows the walk, so an order dependence that changes a RESULT still surfaces; only the
+	// REPORT is ordered, by `emitReadyFiles`.
 	for group in staged.groups 'eachFile'
 		let results = runFileTests(plan, group: group, selected: selected, isolate: args.isolate, bail: args.bail, progress: progress)
-		if results.isEmpty() 'nothingSelectedInThisFile'
-			continue
-		end 'nothingSelectedInThisFile'
-
-		let fileResults = TestFileResults.create(group.file, results: results)
-
-		// STREAMED for a text run so results appear as they land; a `--json` run is one document and
-		// cannot be emitted in pieces.
-		if not args.jsonReport 'streamTheBlock'
-			print(testFileBlock(fileResults, color: color, showTiming: args.showTiming))
-		end 'streamTheBlock'
-
-		files.push(fileResults)
+		ran.push(TestFileResults.create(group.file, results: results))
+		emitted = emitReadyFiles(files, ran: ran, order: reportOrder, from: emitted, args: args, color: color)
 	end 'eachFile'
 
 	let report = TestRunReport.create(files, compileMs: compileMs, runMs: Clock.elapsedMs(runStarted), bailed: progress.bailed)

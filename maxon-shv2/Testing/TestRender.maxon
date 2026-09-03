@@ -5,10 +5,10 @@
 // expectation rather than against taste: a column width, a trailing space and the position of a
 // newline are all part of the contract.
 //
-// Text is emitted in TWO pieces on purpose. `testFileBlock` is printed as each file finishes, so a run
-// shows progress; `testRunSummary` is printed once at the end. The run is serial and reports in
-// discovery order, so the concatenation of the pieces is the same bytes every time — which is the only
-// reason a fixture can pin it at all.
+// Text is emitted in TWO pieces on purpose. `testFileBlock` is printed as each file becomes ready, so
+// a run shows progress; `testRunSummary` is printed once at the end. Both pieces follow
+// `reportFileOrder`, so the concatenation is the same bytes on every host — which is the only reason a
+// fixture can pin it at all.
 //
 // JSON is written through `JsonDoc` with no reflection and no DTO: the shape is decided HERE, so
 // renaming a field of `UnitTestResult` cannot silently change a consumer's contract.
@@ -332,11 +332,11 @@ export function testListText(groups TestFileGroupArray, selected TestSelection, 
 	var tests = 0 as ReportedTestCount
 	var files = 0 as ReportedTestCount
 
-	for group in groups 'eachFile'
+	for entry in reportFileOrder(groups) 'eachFile'
 		var names = ""
 		var here = 0 as ReportedTestCount
 
-		for member in group.tests 'eachTest'
+		for member in entry.group.tests 'eachTest'
 			if not testIsSelected(selected, index: member.index) 'notInThisRun'
 				continue
 			end 'notInThisRun'
@@ -351,7 +351,7 @@ export function testListText(groups TestFileGroupArray, selected TestSelection, 
 
 		files = files + 1
 		tests = tests + here
-		listing.append("{painted(reportPathDisplay(group.file), code: SgrBold, color: color)}:\n{names}")
+		listing.append("{painted(entry.displayPath, code: SgrBold, color: color)}:\n{names}")
 	end 'eachFile'
 
 	listing.append("\n{testCountLine(tests, files: files)}\n")
@@ -472,13 +472,13 @@ export function testListJson(groups TestFileGroupArray, selected TestSelection) 
 	var doc = JsonDoc.create()
 	var listed = JsonNodeIdArray.create()
 
-	for group in groups 'eachFile'
-		for member in group.tests 'eachTest'
+	for entry in reportFileOrder(groups) 'eachFile'
+		for member in entry.group.tests 'eachTest'
 			if not testIsSelected(selected, index: member.index) 'notInThisRun'
 				continue
 			end 'notInThisRun'
 
-			listed.push(listedTestNode(doc, path: group.file, test: member.test))
+			listed.push(listedTestNode(doc, path: entry.group.file, test: member.test))
 		end 'eachTest'
 	end 'eachFile'
 
