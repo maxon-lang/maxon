@@ -1,0 +1,30 @@
+// pressure-refusal.test.maxon — a register-pressure refusal is rendered identically whatever the
+// processor count. The diagnostic ranks every blocking value by its reads inside the loop and names each
+// one's source span; a pool that let the worker order reach that ranking would print a different message
+// every run, and a message nobody can diff between two runs cannot be pinned by any spec.
+//
+// Both runs are asked to REFUSE, and to refuse for register pressure, before their stderr is compared:
+// two builds refused for the same unrelated reason — a missing stdlib, an unspellable path — would agree
+// byte for byte and read as this contract holding.
+//
+// The fixture is calibrated to x64's fourteen-register pool; on a wider register file it compiles, and the
+// refusal assertion goes red for that reason rather than for the allocator's.
+
+test 'a register-pressure refusal renders identically at every processor count'
+	let staged = stagedProgram("pressure-program", caseLabel: "pressure-refusal")
+	let noArguments = StringArray.create()
+
+	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true)
+	let pinnedExit = pinnedRun.exitCode()
+	try Expect.notEqual(pinnedExit, expected: 0, message: "the pressure program COMPILED pinned to one processor. It is seventeen hot values against a pool of fourteen and must be refused; a compile here means the allocator spilled inside the loop or the pool grew.")
+	try Expect.contains(pinnedRun.stderr, needle: RegisterPressureRefusalPhrase, message: "the pressure program was refused pinned to one processor, but not for register pressure. It wrote to stderr: {pinnedRun.stderr}")
+
+	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false)
+	let defaultExit = defaultRun.exitCode()
+	try Expect.notEqual(defaultExit, expected: 0, message: "the pressure program COMPILED at the default processor count. It is seventeen hot values against a pool of fourteen and must be refused; a compile here means the allocator spilled inside the loop or the pool grew.")
+	try Expect.contains(defaultRun.stderr, needle: RegisterPressureRefusalPhrase, message: "the pressure program was refused at the default processor count, but not for register pressure. It wrote to stderr: {defaultRun.stderr}")
+
+	let pinnedStderr = normalizedStderr(pinnedRun, staged: staged)
+	let defaultStderr = normalizedStderr(defaultRun, staged: staged)
+	try Expect.equal(defaultStderr, expected: pinnedStderr, message: "the register-pressure refusal reads differently at the default processor count than pinned to one. The message ranks and names every blocking value, so a difference means the pool's worker order reached the diagnostic — the refusal is now a property of the machine rather than of the program.")
+end 'a register-pressure refusal renders identically at every processor count'

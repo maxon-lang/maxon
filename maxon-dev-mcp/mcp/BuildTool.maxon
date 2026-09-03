@@ -1,6 +1,10 @@
 // `build` MCP tool. Invokes the canonical Maxon build commands so MCP clients can
-// drive `dotnet build` and `./bin/maxon build maxon-shv2` through one structured
-// tool call — no more re-deriving the commands each session.
+// drive `dotnet build` and `scripts/build-shv2.sh` through one structured tool
+// call — no more re-deriving the commands each session.
+//
+// The shv2 arm does NOT re-spell that build. The tree's shv2 is the compiler shv2
+// EMITS, so producing it is two compiles and a swap; that sequence is written once,
+// in the script, which humans run directly and which this tool spawns.
 //
 // `target` names exactly ONE compiler. The old `both` / `all` chains existed to
 // sequence the bootstrap ahead of the deprecated v1 self-hosted compiler; with two
@@ -10,10 +14,25 @@
 // `Byte` and `ByteArray` resolve to `File.maxon`'s exported aliases — see the note in
 // `Util.maxon`. A file-private copy no longer unifies with `String.toByteArray()`.
 
-// Default per-target timeout: 5 minutes. dotnet build on a clean cache plus the
-// bootstrapped shv2 build can take a couple of minutes each, so a 5-minute ceiling
+// `dotnet build` on a clean cache takes a couple of minutes, so a 5-minute ceiling
 // is generous but not infinite.
-let defaultBuildTimeoutMs = 300000
+let csharpBuildTimeoutMs = 300000
+
+// shv2's build is TWO full compiles — the seed, then the seed compiling the tree
+// binary — plus the swap between them, and each half is minutes on its own. The
+// ceiling is set well clear of their sum rather than at it: a build that runs long
+// should be reported with its elapsed time, not killed at the moment it becomes
+// interesting.
+let shv2BuildTimeoutMs = 1800000
+
+// The one place the two-compile sequence is written. Humans run it directly; this
+// tool spawns it, so there is a single implementation to be wrong.
+let shv2BuildScriptRelativePath = "scripts/build-shv2.sh"
+
+// Where the script is asked to leave its structured result. It sits in the
+// compiler's own output directory, which is already gitignored and already holds
+// everything else this build produces.
+let shv2BuildResultRelativePath = "maxon-shv2/.maxon/build-shv2-result.json"
 
 // Tail of captured output we surface in `rawTail`. Long enough to include
 // the error summary at the end of a failed dotnet build without flooding
@@ -33,7 +52,7 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 
 	return match compiler 'pick'
 		csharp gives runCsharpBuild(repoRoot)
-		shv2 gives runBootstrappedBuild(repoRoot, compiler: compiler, project: "maxon-shv2")
+		shv2 gives runShv2Build(repoRoot)
 	end 'pick'
 end 'buildToolHandler'
 
@@ -48,37 +67,46 @@ function runCsharpBuild(repoRoot FilePath) returns ToolOutcome
 	let timing = Clock.nowMs()
 	var argv = StringArray.create()
 	argv.push("build")
-	let result = try Subprocess.run(Executable.name("dotnet"), arguments: argv, workingDirectory: cwd, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
-		return subprocessErrorOutcome("csharp", err: err, durationMs: Clock.elapsedMs(timing))
+	let result = try Subprocess.run(Executable.name("dotnet"), arguments: argv, workingDirectory: cwd, timeoutMs: csharpBuildTimeoutMs) otherwise (err) 'spawn'
+		return subprocessErrorOutcome(Compiler.csharp.name, err: err, durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
 	let elapsed = Clock.elapsedMs(timing)
 
 	let binaryPath = compilerBinaryPath(repoRoot, compiler: Compiler.csharp)
-	return buildOutcome("csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath)
+	return buildOutcome(Compiler.csharp.name, result: result, durationMs: elapsed, expectedBinary: binaryPath, stagesJson: "")
 end 'runCsharpBuild'
 
-// shv2 is compiled BY the C# bootstrap from its project directory. Kept as its own
-// function (rather than folded into the dispatch above) because the prerequisite
-// check — the bootstrap binary must already exist — belongs with the command that
-// needs it, and any future bootstrapped compiler builds the same way.
-function runBootstrappedBuild(repoRoot FilePath, compiler Compiler, project String) returns ToolOutcome
-	let csharpBinary = compilerBinaryPath(repoRoot, compiler: Compiler.csharp)
-	if not File.exists(csharpBinary) 'noCsharp'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build {compiler.name}: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via target=csharp.")
-	end 'noCsharp'
+// The tree's shv2 is the compiler shv2 EMITS, so building it is the seed compile,
+// the seed compiling the tree binary, and a rename swap between them. That sequence
+// lives in `scripts/build-shv2.sh` and is spawned, never re-spelled here — including
+// its prerequisite check, so "the bootstrap has not been built" is answered in one
+// place whether a human or this tool asked.
+function runShv2Build(repoRoot FilePath) returns ToolOutcome
+	let script = childPath(repoRoot, segment: shv2BuildScriptRelativePath)
+	if not File.exists(script) 'noScript'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build shv2: `{script.path}` does not exist, so this checkout has no shv2 build to run.")
+	end 'noScript'
+
+	// A STALE result document is worse than none: read back after a run that broke
+	// before writing one, it would report the PREVIOUS build's binaries and durations
+	// as this one's. Deleting it up front makes its absence mean something.
+	let resultPath = childPath(repoRoot, segment: shv2BuildResultRelativePath)
+	try File.delete(resultPath) otherwise ignore
+
+	var argv = StringArray.create()
+	argv.push(shv2BuildScriptRelativePath)
+	argv.push("--result-json={resultPath.path}")
 
 	let timing = Clock.nowMs()
-	var argv = StringArray.create()
-	argv.push("build")
-	argv.push(project)
-	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
-		return subprocessErrorOutcome(compiler.name, err: err, durationMs: Clock.elapsedMs(timing))
+	let result = try Subprocess.run(Executable.name("bash"), arguments: argv, workingDirectory: repoRoot, timeoutMs: shv2BuildTimeoutMs) otherwise (err) 'spawn'
+		return subprocessErrorOutcome(Compiler.shv2.name, err: err, durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
 	let elapsed = Clock.elapsedMs(timing)
 
-	let binaryPath = compilerBinaryPath(repoRoot, compiler: compiler)
-	return buildOutcome(compiler.name, result: result, durationMs: elapsed, expectedBinary: binaryPath)
-end 'runBootstrappedBuild'
+	let binaryPath = compilerBinaryPath(repoRoot, compiler: Compiler.shv2)
+	let stagesJson = try File.readText(resultPath) otherwise ""
+	return buildOutcome(Compiler.shv2.name, result: result, durationMs: elapsed, expectedBinary: binaryPath, stagesJson: stagesJson)
+end 'runShv2Build'
 
 // =============================================================================
 // Outcome construction
@@ -86,7 +114,12 @@ end 'runBootstrappedBuild'
 
 // Build the success/error JSON envelope for one build invocation. Shared by every
 // target because the shape is identical.
-function buildOutcome(target String, result CollectedOutput, durationMs DurationMs, expectedBinary FilePath) returns ToolOutcome
+//
+// `stagesJson` is the build script's own result document, empty for a target that
+// produces one binary and has nothing further to say. It carries no default: four
+// other tools here declare a file-private `buildOutcome`, and a default published
+// under a name several declarations share cannot be resolved at parse time (E2015).
+function buildOutcome(target String, result CollectedOutput, durationMs DurationMs, expectedBinary FilePath, stagesJson String) returns ToolOutcome
 	var doc = JsonDoc.create()
 	let targetId = doc.add(JsonNode.stringNode(target))
 	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode()))
@@ -114,6 +147,9 @@ function buildOutcome(target String, result CollectedOutput, durationMs Duration
 		keys.push("binaryPath")
 		children.push(binaryId)
 	end 'haveBinary'
+	if not stagesJson.isEmpty() 'haveStages'
+		pushStages(doc, keys: keys, children: children, stagesJson: stagesJson)
+	end 'haveStages'
 	keys.push("errors")
 	children.push(errorsArr)
 	keys.push("rawTail")
@@ -122,6 +158,24 @@ function buildOutcome(target String, result CollectedOutput, durationMs Duration
 
 	return ToolOutcome.success(doc, root: doc.root)
 end 'buildOutcome'
+
+// Splice the build script's own result document — each binary it produced and how
+// long that compile took — into the envelope. The script is the only party that
+// knows those paths, so they are echoed from it rather than re-derived here.
+//
+// A document that will not parse gets its own key rather than a half-filled
+// `stages`: the two facts are "the script reported this" and "the script reported
+// something unreadable", and a reader must not have to tell them apart by shape.
+function pushStages(doc JsonDoc, keys StringArray, children JsonNodeIdArray, stagesJson String)
+	let parsed = try Json.parse(stagesJson) otherwise (err) 'badJson'
+		keys.push("stagesError")
+		children.push(doc.add(JsonNode.stringNode("the build script's result document is not valid JSON ({err.name})")))
+		return
+	end 'badJson'
+
+	keys.push("stages")
+	children.push(copyJsonNode(parsed, srcId: parsed.root, dst: doc))
+end 'pushStages'
 
 // Surface a Subprocess spawn / timeout / I/O failure as a JSON-RPC error. We
 // can't construct the success-shaped buildOutcome here because we never got an

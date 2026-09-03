@@ -378,20 +378,50 @@ let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
 let GtOffParkKind = GtOffCoroTail + PointerFieldBytes
 let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 
-// 0x128 = 296 bytes = 0xC8 header + ArgBufBytes (0x30) inline arg region + the teardown word + EC10's three
-// (owner, coroHead, coroTail) + W218's two (parkKind, parkArg). The header words 0x60–0xA0 remain RESERVED
-// (the reference's io_result/io_handle/cancel/tib fields), slab-zeroed and unused until the subprocess/IOCP
-// slice fills them. Must be a multiple of 8 (whole-word fields).
+// ⭐⭐⭐ **WHAT THIS GREEN THREAD HAS ALLOCATED AND FREED — the memory columns a POOL can be measured with,
+// and the process-wide ones structurally cannot.** `__mm_alloc_total` and its five siblings are one set of
+// words for the whole process, so a bracket opened inside one worker counts every other worker's traffic
+// too: MEASURED, `regalloc:splitting` reported 1,207,232,853 allocations at sixteen processors against
+// 77,890,562 at one, for the identical compile. The `phase regalloc` row and the run total stayed right,
+// because those brackets are the main thread's and the main thread is the only one open at the time — only
+// the sub-phase rows lied, silently, into `--metrics`, `--log=compiler:debug`, `scale-test` and
+// `docs/optimization-log.md`.
 //
-// ⚠ **EC10 GREW IT 0x100 → 0x118 AND W218 0x118 → 0x128, APPEND-ONLY BOTH TIMES, AND THAT IS WHY NOTHING
-// W212 PLACED HAS EVER MOVED.** Every field of the authoritative GtLayout (0x00–0xA8) and every offset a
-// hand-assembled chunk spells is BELOW 0xC8, and `SchedRuntime`'s P fields after the inline GT are each
-// DERIVED from the one before — so the growth walks them all along correctly and no number is restated
-// anywhere.
+// ⭐ **THEY SUM BOTH ALLOCATOR LAYERS, where the global columns are per-layer.** `PhaseProbe` adds tracked
+// and raw before it reports either number, so a per-thread column that could only answer for one of them
+// would need the reader to hold two of these and would still be missing the other layer's frees.
+//
+// ⭐ **`frees` IS COUNTED HERE AND DERIVED THERE, AND THAT IS NOT AN INCONSISTENCY.** The global pair is
+// (cumulative, live), from which `freed = Δtotal − Δlive` falls out exactly; that identity exists because a
+// LIVE count is what the leak gate needs anyway. Nothing needs a per-thread live count — a green thread does
+// not own the boxes it allocated — so counting frees directly is one word and one add rather than a second
+// column kept solely to be subtracted.
+//
+// ⚠ **THEY ARE STEPPED WITHOUT A LOCK AND WITHOUT AN ATOMIC, and the ownership model is what makes that
+// sound**: a green thread runs on at most one M at a time, and a coroutine runs only on its owner's M, so
+// the one party that can step these words is the one thread they belong to. (The global columns take
+// `MultiMSharing.atomicStep` for the opposite reason — every thread steps the same word.)
+//
+// EXPORTED because the allocator steps them and the readers below are reached from `MmRuntime`'s counter
+// family, which is where a caller looks for a memory column.
+export let GtOffThreadAllocs = GtOffParkArg + PointerFieldBytes
+export let GtOffThreadFrees = GtOffThreadAllocs + PointerFieldBytes
+export let GtOffThreadAllocBytes = GtOffThreadFrees + PointerFieldBytes
+
+// 0x140 = 320 bytes = 0xC8 header + ArgBufBytes (0x30) inline arg region + the teardown word + EC10's three
+// (owner, coroHead, coroTail) + W218's two (parkKind, parkArg) + the three per-thread traffic columns. The
+// header words 0x60–0xA0 remain RESERVED (the reference's io_result/io_handle/cancel/tib fields),
+// slab-zeroed and unused until the subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word
+// fields).
+//
+// ⚠ **EVERY GROWTH HAS BEEN APPEND-ONLY, AND THAT IS WHY NOTHING W212 PLACED HAS EVER MOVED.** Every field
+// of the authoritative GtLayout (0x00–0xA8) and every offset a hand-assembled chunk spells is BELOW 0xC8,
+// and `SchedRuntime`'s P fields after the inline GT are each DERIVED from the one before — so a growth walks
+// them all along correctly and no number is restated anywhere.
 //
 // EXPORTED because `SchedRuntime`'s P struct embeds a whole GT inline as its M's scheduler context, so the
 // P's own size and its `pendingYielder` offset are DERIVED from this number rather than restating it.
-export let GtStructSize = GtOffParkArg + PointerFieldBytes
+export let GtStructSize = GtOffThreadAllocBytes + PointerFieldBytes
 
 // ⭐⭐ **THE THREE PARK KINDS — what `__gt_register_park` dispatches on.** Each names the STORE the deferred
 // registration puts the thread on, because that store is the whole of what the two halves of a park differ

@@ -239,7 +239,7 @@ end 'ReuseCopyPlan'
 // not free — leaving them out put ~10% of the compile in a nameless remainder, the
 // same "big cost hiding in the wrong bucket" defect this instrumentation exists to
 // catch. Whatever these arms still do not claim surfaces as an explicit
-// `(unattributed)` row (see CompileTimings.regAllocUnattributedCost), never as silence.
+// `(unattributed)` row (see CompileTimings.regAllocRemainder), never as silence.
 //
 // Ordinals index a per-run array and are persisted nowhere, so this list may be
 // reordered freely — but every arm must stay a DISJOINT interval (see `allocateFunction`,
@@ -258,6 +258,67 @@ end 'RegAllocPhase'
 // `StringArray` is namespaced to Build and not visible here, and a name is not a `RegCount`, so the
 // class rows above cannot carry it.
 export typealias PressureFuncByClass = Array with String
+
+// ONE FUNCTION'S ALLOCATOR COUNTERS - every figure the core moves, and nothing it does not.
+//
+// It is split from `RegAllocStats` because the two have different owners and different lifetimes. These
+// are pure SUMS over one function, produced by code that runs on a pool worker, so they must be a value
+// with no `Project` behind it and no module-wide maximum in it. `RegAllocStats.merge` folds one of
+// these in when the function's result reaches the main thread.
+//
+// Every field is a scalar, which is also what lets one cross a message boundary whole.
+module type RegAllocCounters
+	export var copiesInserted as EventCount
+	export var hintsHonoured as EventCount
+	export var hintsMissed as EventCount
+	export var valuesColored as EventCount
+	export var registersUsed as RegMask
+	// Cold-spill splitter (M5.3) counters: values spilled to a slot, reloads emitted for
+	// them (one per use-block), and constants rematerialized instead of spilled.
+	export var valuesSplit as EventCount
+	export var reloadsInserted as EventCount
+	export var rematerialized as EventCount
+	// Of `valuesSplit`, how many were FORCED spills at a fixed-register point (a call / `idiv`)
+	// rather than COLD splits of an idle value - the amended Rule 2's mechanism. These are the
+	// spills permitted INSIDE a loop, so this is the counter to watch: it is the number of
+	// store/reload brackets in hot code, and each one is a program that would otherwise have been
+	// a FALSE E5001.
+	export var forcedSpills as EventCount
+	// Values the COLORER could not place, split by one of the two cures. THE TWO CURES ARE COUNTED
+	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure - every value they
+	// relieve sat at a point Hall calls FEASIBLE - so both are counted beside `forcedSpills` rather than
+	// inside it, and both are also included in it (a repair IS a forced bracket).
+	//
+	// `repairedByEviction` IS EXPECTED TO READ ZERO, AND THAT IS WHAT IT IS FOR. Cure (a) runs first
+	// and handles everything the corpus produces, so a single merged counter could never tell a reader
+	// that `SplitDriver.repairByEvictingOccupant` has not executed since it was written. Split, the zero
+	// is legible: it is the standing evidence that the eviction path is UNEXERCISED by the suite, and the
+	// only thing that will tell a future rung so. Do not merge them back to tidy the report.
+	export var repairedByWidening as EventCount
+	export var repairedByEviction as EventCount
+
+	export static function create() returns RegAllocCounters
+		return Self{copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, repairedByWidening: 0, repairedByEviction: 0}
+	end 'create'
+
+	export function noteRegisterUse(regNum RegNum)
+		self.registersUsed = regMaskAdd(self.registersUsed, regNum: regNum)
+	end 'noteRegisterUse'
+end 'RegAllocCounters'
+
+// ONE FUNCTION'S FIGURES THAT ARE NOT SUMS, which is why they are not counters. `maxPressure` is a
+// maximum per register file and `livenessMarkSteps` feeds both a total and a maximum, so folding them
+// is the module report's job and measuring them is the core's. The NAME that goes with the pressure is
+// the main thread's to supply - the core has no `String` to spare and no report to write it into.
+module type RegAllocFacts
+	export var livenessMarkSteps as EventCount
+	export var maxPressure as RegCountColumn
+	export var maxLoopDepth as LoopDepth
+
+	export static function create() returns RegAllocFacts
+		return Self{livenessMarkSteps: 0, maxPressure: zeroClassRow(), maxLoopDepth: 0}
+	end 'create'
+end 'RegAllocFacts'
 
 // Per-run counters + timers, logged under LogCategory.codegen. Counters matter more
 // than the clock at M5.1's sub-millisecond functions (design §"Stats").
@@ -355,9 +416,22 @@ export type RegAllocStats
 		end 'newMax'
 	end 'recordLoopDepth'
 
-	export function noteRegisterUse(regNum RegNum)
-		self.registersUsed = regMaskAdd(self.registersUsed, regNum: regNum)
-	end 'noteRegisterUse'
+	// Fold ONE function's counters in. Every field here is a plain sum except `registersUsed`, which is
+	// a UNION: it names the distinct registers the whole module coloured into, and a function that used
+	// rax does not stop the module having used it.
+	export function merge(counters RegAllocCounters)
+		self.copiesInserted = self.copiesInserted + counters.copiesInserted
+		self.hintsHonoured = self.hintsHonoured + counters.hintsHonoured
+		self.hintsMissed = self.hintsMissed + counters.hintsMissed
+		self.valuesColored = self.valuesColored + counters.valuesColored
+		self.registersUsed = self.registersUsed or counters.registersUsed
+		self.valuesSplit = self.valuesSplit + counters.valuesSplit
+		self.reloadsInserted = self.reloadsInserted + counters.reloadsInserted
+		self.rematerialized = self.rematerialized + counters.rematerialized
+		self.forcedSpills = self.forcedSpills + counters.forcedSpills
+		self.repairedByWidening = self.repairedByWidening + counters.repairedByWidening
+		self.repairedByEviction = self.repairedByEviction + counters.repairedByEviction
+	end 'merge'
 end 'RegAllocStats'
 
 // The allocatable register pool for `target`. M5.6 GREW the pool to the full 14 GPRs
@@ -376,7 +450,7 @@ end 'RegAllocStats'
 // instead of no home at all. The XMM half needs no `push` — there is no `push xmm` — so the prologue
 // preserves it in ordinary 8-byte frame SLOTS, exactly as arm64 preserves d8–d15.
 // The pool is a property of the target — arm64 declares its own when its backend lands.
-function allocatablePool(target Target) returns RegMask
+module function allocatablePool(target Target) returns RegMask
 	match target.cpu 'cpu'
 		x64 then return x64AllocatablePool()
 		arm64 then return arm64AllocatablePool()
@@ -636,7 +710,7 @@ end 'assertOneCallClobber'
 // `arm64CallerSavedMask`'s 40-iteration derivation would be a far larger one. Threaded as a plain
 // `RegMask` beside `pool`, the per-value path does no work at all for it — strictly LESS than
 // before, when it rebuilt x64's fifteen-register mask on every colouring decision.
-function callerSavedMaskFor(target Target) returns RegMask
+module function callerSavedMaskFor(target Target) returns RegMask
 	match target.cpu 'cpu'
 		x64 then return callerSavedMask()
 		arm64 then return arm64CallerSavedMask()
@@ -862,7 +936,7 @@ end 'assertCalleeSavedListsMatchMasks'
 export typealias ValueClassColumns = Array with ValueClassColumn
 
 export function allocateRegisters(module TargetModule, target Target, project Project, valueClasses ValueClassColumns) throws CompileError
-	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
+	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)})")
 	// ⭐ THE THREE PER-ISA FACTS THE WHOLE ALLOCATOR RUNS ON, SOURCED ONCE HERE AND CARRIED TOGETHER.
 	// Each is a `match` on the target that must happen exactly once per module: asking any of them
 	// per value is a cost, and asking any of them WITHOUT the target is how one of them came to be
@@ -910,24 +984,139 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// always has a safe home for its parallel copies. This runs OUTSIDE the
 	// per-function loop (it mutates `func.blockRefs`, which the loop's `func` borrow
 	// would forbid).
-	let edgeProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.criticalEdges)
+	let edgeProbe = PhaseProbe.beginCounters()
 	splitCriticalEdges(module, target: target)
-	recordRegAllocPhase(project, phase: RegAllocPhase.criticalEdges, probe: edgeProbe)
+	addRegAllocDelta(project, phase: RegAllocPhase.criticalEdges, delta: edgeProbe.elapsed())
 
-	// Index-based (not `for func in ...`) because the loop index IS the function's
-	// Maxon-tier index: function indices are 1:1 across Maxon -> Std -> Target, and
-	// `mrt_start` is prepended only AFTER this pass, so `module.functions` here is the
-	// user functions in their Maxon declaration order. The E5001 diagnostic passes this
-	// index to `ValueOriginTable.lookup` to map a value back to its source op.
-	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		var func = try module.functions.get(funcIndex) otherwise panic("allocateRegisters: functions.get OOB at {funcIndex}")
-		let classes = try valueClasses.get(funcIndex) otherwise panic("allocateRegisters: the lowering produced class columns for {valueClasses.count()} function(s) but the module has {module.funcCount()} — every function's vregs are classified as they are minted, so the two counts are the same walk of the same module")
-		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, callerSaved: callerSaved, file: file, valueClass: classes, opFacts: opFacts, stats: stats, project: project)
-	end 'eachFunc'
+	#if compiler(shv2)
+		try allocateOnAWorkerPool(module, target: target, project: project, valueClasses: valueClasses, pool: pool, callerSaved: callerSaved, file: file, opFacts: opFacts, stats: stats)
+	#else
+		try allocateOnThisThread(module, project: project, valueClasses: valueClasses, pool: pool, callerSaved: callerSaved, file: file, opFacts: opFacts, stats: stats)
+	#endif
 	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
 end 'allocateRegisters'
 
+// EVERY FUNCTION, ONE AFTER THE OTHER, ON THE THREAD THAT ASKED.
+//
+// THIS ARM EXISTS FOR THE SEED COMPILER AND FOR NOTHING ELSE. `spawn` is shv2's own, so a binary the
+// BOOTSTRAP built cannot carry the pool; the seed's one job is to compile the compiler that can. A run
+// under `MAXON_MAX_PROCS=1` does NOT come here - it is the pool with one processor in it, which is what
+// makes the pinned and the default lane the same code path and their outputs comparable.
+//
+// Index-based (not `for func in ...`) because the loop index IS the function's Maxon-tier index:
+// function indices are 1:1 across Maxon -> Std -> Target, and `mrt_start` is prepended only AFTER this
+// pass, so `module.functions` here is the user functions in their Maxon declaration order. The E5001
+// diagnostic passes this index to `ValueOriginTable.lookup` to map a value back to its source op.
+function allocateOnThisThread(module TargetModule, project Project, valueClasses ValueClassColumns, pool RegMask, callerSaved RegMask, file RegisterFile, opFacts OpVariantFacts, stats RegAllocStats) throws CompileError
+	// Deliberately NOT the pool grammar `tests/parallel-compile/` pins: a seed really did allocate
+	// serially, and a line claiming "1 worker(s) over 1 processor(s)" would read as a scheduler pinned to
+	// one processor rather than as a compiler with no pool at all.
+	logDebug(LogCategory.codegen, message: function() gives "regalloc: no worker pool in a bootstrap-built compiler, {module.funcCount()} function(s)")
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		var func = try module.functions.get(funcIndex) otherwise panic("allocateOnThisThread: functions.get OOB at {funcIndex}")
+		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, callerSaved: callerSaved, file: file, valueClass: classColumnFor(valueClasses, module: module, funcIndex: funcIndex), opFacts: opFacts, stats: stats, project: project)
+	end 'eachFunc'
+end 'allocateOnThisThread'
+
+// This function's register-class column, with the count check both drivers ask.
+module function classColumnFor(valueClasses ValueClassColumns, module TargetModule, funcIndex FuncIndex) returns ValueClassColumn
+	return try valueClasses.get(funcIndex) otherwise panic("classColumnFor: the lowering produced class columns for {valueClasses.count()} function(s) but the module has {module.funcCount()} — every function's vregs are classified as they are minted, so the two counts are the same walk of the same module")
+end 'classColumnFor'
+
+// The MAIN THREAD's half of one function's allocation - everything the core cannot do.
+//
+// Four things, and each is one a pool worker structurally may not touch: EXTRACT the unit and SPLICE its
+// result (both read and write the shared module), bill the sub-phase brackets to the compile's tables,
+// aggregate this function's figures into the module-wide report, and RENDER a register-pressure refusal,
+// which needs `project.opRanges` / `valueOrigins`.
+//
+// EVERY MODE RUNS EXTRACT -> ALLOCATE -> SPLICE, INCLUDING THIS SERIAL ONE. The emitted code is then one
+// function of the function ORDER and of nothing else - a pool of one and a pool of sixteen do the same
+// arithmetic on the same input - which is what makes byte identity across processor counts a property of
+// the design rather than a coincidence to re-check.
 function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, stats RegAllocStats, project Project) throws CompileError
+	if let result = try RegAllocResult.byAllocating(RegAllocUnit.extract(module, func: func, valueClass: valueClass), pool: pool, callerSaved: callerSaved, file: file, opFacts: opFacts) 'allocated'
+		spliceRegAllocResult(module, func: func, result: result)
+		foldFunctionAllocation(project, stats: stats, func: func, counters: result.counters, costs: result.costs, facts: result.facts)
+	end 'allocated' else (e) 'refused'
+		match e 'why'
+			hotOverflow then try refuseForRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, pool: pool, callerSaved: callerSaved, file: file, valueClass: valueClass, opFacts: opFacts)
+		end 'why'
+	end 'refused'
+end 'allocateFunction'
+
+// RENDER THE E5001 A UNIT RUN REFUSED WITH, BY RUNNING THE CORE AGAIN ON THE FUNCTION ITSELF.
+//
+// The refusal's analysis state - the liveness it was measured against, the fresh-id lineage, the peak -
+// is far too large to come back through a reply cell, and on the parallel path it is on another green
+// thread's stack besides. What comes home is the bare `RegAllocRefusal`. So the second run is how the
+// state is recovered, and it is EXACT rather than approximate: the first run allocated a COPY, so this
+// function has not been touched, and the same core on the same input refuses at the same peak. A compile
+// that reaches here is failing, so the second run costs nothing anybody will see.
+module function refuseForRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts) throws CompileError
+	var refusal = RegAllocRefusalSite.create()
+	var counters = RegAllocCounters.create()
+	var costs = RegAllocCosts.create()
+	var facts = RegAllocFacts.create()
+
+	try allocateFunctionCore(module, func: func, hasAuthor: not func.sourceFilePath.isEmpty(), pool: pool, callerSaved: callerSaved, file: file, valueClass: valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal) otherwise 'refusedAgain'
+		try renderRegisterPressureRefusal(project, module: module, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
+	end 'refusedAgain'
+
+	panic("refuseForRegisterPressure: the core refused a COPY of '{String.from(func.name)}' and then allocated the function itself - the two runs saw the same input, so one refusing and the other not is a nondeterminism in the allocator, not a program the compiler can report on")
+end 'refuseForRegisterPressure'
+
+// Render the E5001 a refused core run recorded. The core throws without a `Project` and leaves the
+// analysis state in `refusal`; this is the only place that state is read.
+function renderRegisterPressureRefusal(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, refusal RegAllocRefusalSite) throws CompileError
+	match refusal.refused 'what'
+		none then panic("renderRegisterPressureRefusal: the core refused '{String.from(func.name)}' and left no site - `noVictimAtPeak` records the site and throws in one statement, so a `RegAllocRefusal` without one means a second thrower reached this path")
+		at(liveness, lineage, peak) then try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+	end 'what'
+end 'renderRegisterPressureRefusal'
+
+// Fold ONE function's allocation into the compile: its sub-phase costs into both timing tables, its
+// counters into the module's, and its per-function figures into the module's maxima.
+//
+// The trace event goes last because `arg1` is the CUMULATIVE `valuesSplit`, so the merge must already
+// have happened - and this runs in FUNCTION-INDEX order, so the event stream is the same one a serial
+// allocation produces whatever order a pool finished in.
+module function foldFunctionAllocation(project Project, stats RegAllocStats, func IrFunction, counters RegAllocCounters, costs RegAllocCosts, facts RegAllocFacts)
+	for phase in RegAllocPhase.allCases 'eachSubPhase'
+		addRegAllocDelta(project, phase: phase, delta: costs.accumulated(phase))
+	end 'eachSubPhase'
+
+	stats.merge(counters)
+	stats.recordLivenessMarkSteps(facts.livenessMarkSteps)
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		stats.recordPressure(classRowGet(facts.maxPressure, class: class), class: class, funcName: func.name)
+	end 'eachClass'
+	stats.recordLoopDepth(facts.maxLoopDepth)
+	stats.functionsAllocated = stats.functionsAllocated + 1
+
+	// PER-FUNCTION allocator facts, on the wire. The two numbers that decide whether this
+	// function was hard - peak pressure, and how many values had to leave a register - are
+	// exactly what you want when hunting a spill regression or a false E5001, and the counters
+	// beside them are aggregated over the module. A formatted log line here would run once per
+	// function and allocate a String into the very `mm` stream a memory investigation is reading.
+	//
+	// This event allocates NOTHING. `__DebugStream.nameId` is folded to a u16 by the compiler,
+	// so the name below never exists at runtime - which is the whole reason the structured tier
+	// exists, and why it can sit on a per-function path at all.
+	let event = __DebugStream.nameId("regalloc.functionAllocated") as TraceName
+	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(facts.maxPressure), arg1: stats.valuesSplit)
+end 'foldFunctionAllocation'
+
+// THE WHOLE PER-FUNCTION ALLOCATION, AND NOTHING THE COMPILE OWNS.
+//
+// No `Project`, no logger, no module-wide aggregate, no trace span - because this is what a pool worker
+// runs, and a message that reaches a module `var` is E3143. Everything it measures it measures into
+// values its caller hands it: `counters` (this function's sums), `facts` (this function's own figures)
+// and `costs` (the sub-phase brackets). A hot-loop overflow leaves through `refusal` and a `throw`,
+// because E5001 can only be built from tables a `Project` holds.
+module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs RegAllocCosts, facts RegAllocFacts, refusal RegAllocRefusalSite) throws RegAllocRefusal
 	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
 	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
@@ -939,9 +1128,9 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// adds or removes a block, so the skeleton stays exactly this function's for the whole of
 	// allocation. (`splitCriticalEdges` DID add blocks — which is why it runs before this, and
 	// why its own skeleton cannot be carried forward.)
-	let orderProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.blockOrder)
+	let orderProbe = PhaseProbe.beginCounters()
 	let topo = reorderFuncBlocksRpo(module, func: func)
-	recordRegAllocPhase(project, phase: RegAllocPhase.blockOrder, probe: orderProbe)
+	costs.record(RegAllocPhase.blockOrder, probe: orderProbe)
 
 	// Cold-spill live-range splitting (M5.3): where register pressure exceeds the pool, split
 	// idle values out (store in a cold, dominating spot and reload at their uses) or
@@ -960,13 +1149,13 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	//
 	// The subtraction now covers ALL FOUR quantities, not just the clock: liveness allocates as well
 	// as costs time, and billing the splitter for liveness's allocations would put the allocator's
-	// memory in the wrong bucket the same way the original bug put its time there. `recordPhaseExcluding`
-	// does it in one place for all four (see PhaseProbe).
-	let livenessBefore = regAllocAccumulated(project, phase: RegAllocPhase.liveness)
-	let splitProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.splitting)
-	var driver = SplitDriver.create(module, func: func, topo: topo, pool: pool, file: file, valueClass: valueClass, opFacts: opFacts, project: project)
-	try driver.relievePressure(module, func: func, funcIndex: funcIndex, stats: stats, project: project)
-	recordPhaseExcluding(project, phase: RegAllocPhase.splitting, probe: splitProbe, innerPhase: RegAllocPhase.liveness, innerBefore: livenessBefore)
+	// memory in the wrong bucket the same way the original bug put its time there.
+	// `RegAllocCosts.recordExcluding` does it in one place for all four (see PhaseProbe).
+	let livenessBefore = costs.accumulated(RegAllocPhase.liveness)
+	let splitProbe = PhaseProbe.beginCounters()
+	var driver = SplitDriver.create(module, func: func, topo: topo, pool: pool, file: file, valueClass: valueClass, opFacts: opFacts, costs: costs)
+	try driver.relievePressure(module, func: func, hasAuthor: hasAuthor, counters: counters, refusal: refusal)
+	costs.recordExcluding(RegAllocPhase.splitting, probe: splitProbe, innerPhase: RegAllocPhase.liveness, innerBefore: livenessBefore)
 
 	let liveness = driver.liveness
 
@@ -974,7 +1163,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// op) — consumed by the rewrite, which splices them. Populated during coloring.
 	var reuseCopies = ReuseCopyPlan.create()
 
-	let alloc = colorRepairingConfinements(module, driver: driver, func: func, pool: pool, callerSaved: callerSaved, stats: stats, reuseCopies: reuseCopies, project: project)
+	let alloc = colorRepairingConfinements(module, driver: driver, func: func, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, costs: costs)
 
 	// THE FRAME, fixed only now — after the relief loop AND after every repair. See
 	// `SplitDriver.fixFrameSize`: a repair consumes a spill slot after the splitter has finished, so a
@@ -986,39 +1175,24 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// (`maxPressure`). Read before the loop above, the one counter that would show a repair's liveness
 	// cost dropped every one of them, and the pressure was the pre-repair figure. Loop depth is a
 	// property of the CFG, which splitting cannot change, so it reads the same either side.
-	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
-	// PER CLASS, so the report names the file that was tight rather than a mixed figure that is no
-	// file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files and
-	// over its limit in neither; one number cannot say that.
+	facts.livenessMarkSteps = liveness.livenessMarkSteps
+	// PER CLASS, so the module report can name the file that was tight rather than a mixed figure that
+	// is no file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files
+	// and over its limit in neither; one number cannot say that.
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
-		stats.recordPressure(liveness.maxPressureOf(class), class: class, funcName: func.name)
+		classRowSet(facts.maxPressure, class: class, value: liveness.maxPressureOf(class))
 	end 'eachClass'
-	stats.recordLoopDepth(liveness.cfg.maxLoopDepth())
+	facts.maxLoopDepth = liveness.cfg.maxLoopDepth()
 
-	let planProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.ssaDestruction)
-	let plans = buildSsaDestructionPlan(module, alloc: alloc, liveness: liveness, stats: stats)
-	recordRegAllocPhase(project, phase: RegAllocPhase.ssaDestruction, probe: planProbe)
+	let planProbe = PhaseProbe.beginCounters()
+	let plans = buildSsaDestructionPlan(module, alloc: alloc, liveness: liveness, counters: counters)
+	costs.record(RegAllocPhase.ssaDestruction, probe: planProbe)
 
-	let rewriteProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.rewrite)
+	let rewriteProbe = PhaseProbe.beginCounters()
 	applyAllocation(module, func: func, alloc: alloc, plans: plans, reuseCopies: reuseCopies)
-	recordRegAllocPhase(project, phase: RegAllocPhase.rewrite, probe: rewriteProbe)
-
-	stats.functionsAllocated = stats.functionsAllocated + 1
-
-	// PER-FUNCTION allocator facts, on the wire. The two numbers that decide whether this
-	// function was hard — peak pressure, and how many values had to leave a register — are
-	// exactly what you want when hunting a spill regression or a false E5001, and until now
-	// there was NO way to see them per function: the counters are aggregated over the module,
-	// and a formatted log line here would run once per function and allocate a String into the
-	// very `mm` stream a memory investigation is reading.
-	//
-	// This event allocates NOTHING. `__DebugStream.nameId` is folded to a u16 by the compiler,
-	// so the name below never exists at runtime — which is the whole reason the structured tier
-	// exists, and why it can sit on a per-function path at all.
-	let event = __DebugStream.nameId("regalloc.functionAllocated") as TraceName
-	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(liveness.maxPressure), arg1: stats.valuesSplit)
-end 'allocateFunction'
+	costs.record(RegAllocPhase.rewrite, probe: rewriteProbe)
+end 'allocateFunctionCore'
 
 // The values ONE colouring pass could not place — and, for each, the two things its failing POINT knew
 // that no later pass can re-derive, because by then the point no longer exists.
@@ -1112,7 +1286,7 @@ end 'StuckValues'
 // round repairs at least one value or panics, Φ = Σ_v (clobbers `v` is live across) strictly falls, and
 // the bound below is what makes a non-convergence loud rather than infinite. In practice the corpus
 // converges in ONE round.
-function colorRepairingConfinements(module TargetModule, driver SplitDriver, func IrFunction, pool RegMask, callerSaved RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan, project Project) returns Allocation
+function colorRepairingConfinements(module TargetModule, driver SplitDriver, func IrFunction, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, costs RegAllocCosts) returns Allocation
 	var stuck = StuckValues.create()
 
 	// ⚠ THE COUNTERS ONE COLOURING PASS MOVES, SNAPSHOT BEFORE THE FIRST — because a pass that ends with
@@ -1120,13 +1294,13 @@ function colorRepairingConfinements(module TargetModule, driver SplitDriver, fun
 	// rewrite never spliced and hints honoured against an allocation nothing emitted. They are plain
 	// locals rather than a snapshot object: this runs for EVERY function, and a heap object here would be
 	// an allocation per function on the pass the scale ladder watches, to serve the few that repair.
-	let colouredAtEntry = stats.valuesColored
-	let copiesAtEntry = stats.copiesInserted
-	let honouredAtEntry = stats.hintsHonoured
-	let missedAtEntry = stats.hintsMissed
-	let registersAtEntry = stats.registersUsed
+	let colouredAtEntry = counters.valuesColored
+	let copiesAtEntry = counters.copiesInserted
+	let honouredAtEntry = counters.hintsHonoured
+	let missedAtEntry = counters.hintsMissed
+	let registersAtEntry = counters.registersUsed
 
-	var alloc = colorOnce(module, driver: driver, pool: pool, callerSaved: callerSaved, stats: stats, reuseCopies: reuseCopies, stuck: stuck, project: project)
+	var alloc = colorOnce(module, driver: driver, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, stuck: stuck, costs: costs)
 
 	// Each ROUND makes at least one repair (or panics), so the splitter's own runaway bound over the same
 	// potential bounds the rounds too — see `splitRunawayBound`, which both loops now count against.
@@ -1141,18 +1315,18 @@ function colorRepairingConfinements(module TargetModule, driver SplitDriver, fun
 
 		// Billed to SPLITTING, because that is what it is: the same mutator, the same slots, the same
 		// incremental repair. Only the reason for the cut is the colorer's.
-		let repairProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.splitting)
-		repairStuckValues(module, driver: driver, func: func, stuck: stuck, stats: stats)
-		recordRegAllocPhase(project, phase: RegAllocPhase.splitting, probe: repairProbe)
+		let repairProbe = PhaseProbe.beginCounters()
+		repairStuckValues(module, driver: driver, func: func, stuck: stuck, counters: counters)
+		costs.record(RegAllocPhase.splitting, probe: repairProbe)
 
 		// The pass just discarded is UN-COUNTED, so the counters describe the colouring that SURVIVES.
-		stats.valuesColored = colouredAtEntry
-		stats.copiesInserted = copiesAtEntry
-		stats.hintsHonoured = honouredAtEntry
-		stats.hintsMissed = missedAtEntry
-		stats.registersUsed = registersAtEntry
+		counters.valuesColored = colouredAtEntry
+		counters.copiesInserted = copiesAtEntry
+		counters.hintsHonoured = honouredAtEntry
+		counters.hintsMissed = missedAtEntry
+		counters.registersUsed = registersAtEntry
 
-		alloc = colorOnce(module, driver: driver, pool: pool, callerSaved: callerSaved, stats: stats, reuseCopies: reuseCopies, stuck: stuck, project: project)
+		alloc = colorOnce(module, driver: driver, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, stuck: stuck, costs: costs)
 	end 'repairAndRecolour'
 
 	return alloc
@@ -1162,18 +1336,18 @@ end 'colorRepairingConfinements'
 // caller's and BOTH are emptied here: a pass that ends with stuck values is discarded whole, and both
 // were filled against the allocation it produced.
 //
-// ⚠ `stats` is NOT emptied, and cannot be — it is the whole MODULE's, and this is one function's pass.
+// ⚠ `counters` is NOT emptied, and cannot be — it is this FUNCTION's, and this is one of its passes.
 // So a function that needed a repair counts its colouring decisions twice in `valuesColored` /
 // `copiesInserted` / `hintsHonoured` / `hintsMissed`. That is a debug figure and it is the honest one to
 // leave: the decisions really were made. The counter to read when asking how much a program paid for
 // this is `repairedByWidening` / `repairedByEviction`, which count the repairs themselves and not the
 // passes.
-function colorOnce(module TargetModule, driver SplitDriver, pool RegMask, callerSaved RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan, stuck StuckValues, project Project) returns Allocation
+function colorOnce(module TargetModule, driver SplitDriver, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, stuck StuckValues, costs RegAllocCosts) returns Allocation
 	reuseCopies.clear()
 	stuck.clear()
-	let colorProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.coloring)
-	let alloc = colorFunction(module, liveness: driver.liveness, pool: pool, callerSaved: callerSaved, stats: stats, reuseCopies: reuseCopies, stuck: stuck)
-	recordRegAllocPhase(project, phase: RegAllocPhase.coloring, probe: colorProbe)
+	let colorProbe = PhaseProbe.beginCounters()
+	let alloc = colorFunction(module, liveness: driver.liveness, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, stuck: stuck)
+	costs.record(RegAllocPhase.coloring, probe: colorProbe)
 	return alloc
 end 'colorOnce'
 
@@ -1189,11 +1363,11 @@ end 'colorOnce'
 //
 // A value neither cure can relieve does not fail the ROUND on its own: a round that repairs anything
 // makes progress, and the re-colour may well place that value once its neighbours have moved.
-function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunction, stuck StuckValues, stats RegAllocStats)
+function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunction, stuck StuckValues, counters RegAllocCounters)
 	var repaired = 0 as EventCount
 	for k in 0 upto stuck.count() 'eachStuckValue'
 		let v = stuck.valueAt(k)
-		if driver.repairAtExhaustion(module, v: v, free: stuck.freeAt(k), stats: stats) 'widened'
+		if driver.repairAtExhaustion(module, v: v, free: stuck.freeAt(k), counters: counters) 'widened'
 			repaired = repaired + 1
 			continue
 		end 'widened'
@@ -1206,7 +1380,7 @@ function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunct
 			if evicted 'alreadyFreedOne'
 				continue
 			end 'alreadyFreedOne'
-			if driver.repairByEvictingOccupant(module, v: v, w: stuck.occupantAt(k, j: j), stats: stats) 'freed'
+			if driver.repairByEvictingOccupant(module, v: v, w: stuck.occupantAt(k, j: j), counters: counters) 'freed'
 				evicted = true
 			end 'freed'
 		end 'eachOccupant'
@@ -1456,7 +1630,7 @@ end 'collectPhiEdgeHints'
 // The colorer — a forward sweep over a `RegMask` in-use mask, per block
 // ==========================================================================
 
-function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, callerSaved RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan, stuck StuckValues) returns Allocation
+function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, stuck StuckValues) returns Allocation
 	let topo = liveness.cfg.topo
 	let valueCount = liveness.valueCount
 	let wordsPerRow = liveness.wordsPerRow
@@ -1487,7 +1661,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 		// dominator), then allocate the block-arg phis defined at entry.
 		var inUse = seedInUse(liveness, local: local, alloc: alloc, liveBuf: liveBuf)
 		for arg in block.blockArgs 'eachPhi'
-			inUse = allocateDef(arg.valueId, working: inUse, dyingRegs: 0, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, stats: stats, stuck: stuck)
+			inUse = allocateDef(arg.valueId, working: inUse, dyingRegs: 0, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, stuck: stuck)
 		end 'eachPhi'
 
 		ordered.clear()
@@ -1496,7 +1670,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
-			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, seq: blockBaseSeq + pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, stats: stats, buf: buf, reuseCopies: reuseCopies, stuck: stuck)
+			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, seq: blockBaseSeq + pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, buf: buf, reuseCopies: reuseCopies, stuck: stuck)
 		end 'eachOp'
 
 		blockBaseSeq = blockBaseSeq + ordered.count()
@@ -1535,7 +1709,7 @@ end 'seedInUse'
 // = the currently-in-use registers (minus those DYING at this op, which a def may
 // reuse) ∪ `v`'s forbidden set ∪ the non-pool registers. Returns `working` with the
 // assigned register added, so the next def at the same op avoids it.
-function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, stats RegAllocStats, stuck StuckValues) returns RegMask
+function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, stuck StuckValues) returns RegMask
 	if alloc.isColored(v) 'doubleDef'
 		panic("allocateDef: value {v} is already colored — a value has two defs, violating the single-def SSA invariant (RULE 1)")
 	end 'doubleDef'
@@ -1571,11 +1745,11 @@ function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorH
 		return reportExhaustion(v, working: working, classPool: classPool, callerSaved: callerSaved, held: held, alloc: alloc, liveness: liveness, stuck: stuck)
 	end 'noRegisterForThisValue'
 
-	let reg = chooseRegister(v, classPool: classPool, callerSaved: callerSaved, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, stats: stats)
+	let reg = chooseRegister(v, classPool: classPool, callerSaved: callerSaved, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, counters: counters)
 	assertColouredInClass(v, reg: reg, class: class, file: liveness.registerFile)
 	alloc.assign(v, regNum: reg)
-	stats.valuesColored = stats.valuesColored + 1
-	stats.noteRegisterUse(reg)
+	counters.valuesColored = counters.valuesColored + 1
+	counters.noteRegisterUse(reg)
 	return regMaskAdd(working, regNum: reg)
 end 'allocateDef'
 
@@ -1635,7 +1809,7 @@ end 'assertColouredInClass'
 // protected"*, which reads as "protect it and greedy is exact"; A5g measured four programs where the
 // half IS protected and the greedy still loses. What protecting it buys is that the common shape stops
 // reaching `reportExhaustion`; what catches the rest is the repair.
-function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns RegNum
+function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, counters RegAllocCounters) returns RegNum
 	// The volatility preference is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
 	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
 	let takeable = preferredVolatilityMask(groupBlocked, classPool: classPool, callerSaved: callerSaved) or dyingRegs
@@ -1643,7 +1817,7 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 	if hints.hasFixed(v) 'fixed'
 		let fr = hints.fixedOf(v)
 		if hintIsTakeable(fr, blocked: blocked, takeable: takeable) 'fixedFree'
-			stats.hintsHonoured = stats.hintsHonoured + 1
+			counters.hintsHonoured = counters.hintsHonoured + 1
 			return fr
 		end 'fixedFree'
 	end 'fixed'
@@ -1652,7 +1826,7 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 		if alloc.isColored(p) 'partnerColored'
 			let cr = alloc.regNumOf(p)
 			if hintIsTakeable(cr, blocked: blocked, takeable: takeable) 'copyFree'
-				stats.hintsHonoured = stats.hintsHonoured + 1
+				counters.hintsHonoured = counters.hintsHonoured + 1
 				return cr
 			end 'copyFree'
 		end 'partnerColored'
@@ -1662,12 +1836,12 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 	// `pinnedPartnerRegister`).
 	let pinned = pinnedPartnerRegister(v, hints: hints, alloc: alloc, liveness: liveness)
 	if pinned != NoFixedHint and hintIsTakeable(pinned, blocked: blocked, takeable: takeable) 'pinnedFree'
-		stats.hintsHonoured = stats.hintsHonoured + 1
+		counters.hintsHonoured = counters.hintsHonoured + 1
 		return pinned
 	end 'pinnedFree'
 
 	if hints.hasFixed(v) or hints.hasCopy(v) 'missed'
-		stats.hintsMissed = stats.hintsMissed + 1
+		counters.hintsMissed = counters.hintsMissed + 1
 	end 'missed'
 
 	// Prefer the copy group's volatility. If nothing in it is free, `v` cannot coalesce with its
@@ -1979,7 +2153,7 @@ end 'pickPreferredRegister'
 // that die here (so a def may reuse a dying use's register), allocate the def (a reuse
 // def goes through `allocateReuseDef`, which may record a copy), then return the
 // block's in-use mask for the point AFTER the op.
-function colorOpForward(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq OpSeq, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
+function colorOpForward(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq OpSeq, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, buf OperandList, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("colorOpForward: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -1997,9 +2171,9 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq 
 	for o in buf 'allocDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
 			if operandIsReuseDef(o) 'reuse'
-				working = allocateReuseDef(o, seq: seq, pos: pos, deaths: deaths, buf: buf, working: working, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, stats: stats, reuseCopies: reuseCopies, stuck: stuck)
+				working = allocateReuseDef(o, seq: seq, pos: pos, deaths: deaths, buf: buf, working: working, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, stuck: stuck)
 			end 'reuse' else 'plain'
-				working = allocateDef(operandValueId(o), working: working, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, stats: stats, stuck: stuck)
+				working = allocateDef(operandValueId(o), working: working, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, stuck: stuck)
 			end 'plain'
 		end 'vd'
 	end 'allocDefs'
@@ -2026,7 +2200,7 @@ end 'colorOpForward'
 // register (never another dying operand's — a copy into it would clobber a value the op
 // still reads); when the input OUTLIVES, no operand register is free before the op, so
 // the dest may reuse none. `defDyingRegs` encodes exactly that.
-function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
+function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, stuck StuckValues) returns RegMask
 	let destId = operandValueId(o)
 	let inputId = operandReuseInputValueId(o, buf: buf)
 	let inputReg = alloc.regNumOf(inputId)
@@ -2053,12 +2227,12 @@ function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeat
 		defDyingRegs = regMaskAdd(defDyingRegs, regNum: inputReg)
 	end 'inputDiesHere'
 
-	let updated = allocateDef(destId, working: working, dyingRegs: defDyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, stats: stats, stuck: stuck)
+	let updated = allocateDef(destId, working: working, dyingRegs: defDyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, stuck: stuck)
 
 	let destReg = alloc.regNumOf(destId)
 	if destReg != inputReg 'needsCopy'
 		reuseCopies.record(seq, destReg: destReg, srcReg: inputReg)
-		stats.copiesInserted = stats.copiesInserted + 1
+		counters.copiesInserted = counters.copiesInserted + 1
 	end 'needsCopy'
 
 	return updated

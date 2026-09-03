@@ -194,9 +194,12 @@ cheapest moment to ask.
 - ⚠ **`git status` must be CLEAN.** The suite MINTS goldens as it runs; on a dirty tree you cannot tell
   yours from the leftovers.
 - **BUILD.** Both binaries are gitignored and nothing rebuilds them, so a stale one lies in *both*
-  directions. `build target=csharp` first if `maxon-sharp/` is newer than `bin/` (shv2 is built BY the
-  bootstrap), then `build target=shv2`. This is not a baseline — it is making the binary current, and
-  every red you read in §1 is read off it.
+  directions. `build target=csharp` first if `maxon-sharp/` is newer than `bin/`, then
+  `build target=shv2` — which is TWO compiles (~4 min): the bootstrap builds a SEED, and the seed
+  builds the tree binary, because the shv2 this tree runs is the one shv2 EMITS. ⛔ **`bin/maxon build
+  maxon-shv2` on its own is only the seed step**, and a seed left in the tree slot is a compiler with
+  every `#if compiler(shv2)` construct missing from it and nothing to detect that. This is not a
+  baseline — it is making the binary current, and every red you read in §1 is read off it.
 - **No baseline suite run.** The §7 gate is `failed: 0`, not a delta from a remembered total, so there is
   nothing to measure yet. (When §7 comes back red you therefore may not assume the red is yours — §7 says
   how to attribute it.)
@@ -396,7 +399,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **Build** exit 0 | `csharp` if it is stale, then `shv2`. Always — both are gitignored and the rebase may have moved their sources |
 | **Full `run_spec_test compiler=shv2`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test compiler=shv2 target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
-| **SELF-COMPILE** — `maxon-shv2/.maxon/maxon-shv2.exe build maxon-shv2 -o temp/land-selfcompile` | exit 0, ~3 min. Output discarded; only the exit code matters |
+| **SELF-COMPILE** — `maxon-shv2/.maxon/maxon-shv2.exe build maxon-shv2 -o temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
 | **Every touched golden staged — MINTED *and* MODIFIED** | `git status --short specs-shv2/fragments/ specs/` → `git add` **every line**, `??` and ` M` alike. See the box below |
 | **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |
 | **Bootstrap suite** | **ONLY if a bootstrap problem is suspected** — you touched `maxon-sharp/` or `stdlib/`, or the thing being verified is a cross-compiler answer. Otherwise skip it (user ruling, 2026-08-29). ⚠ *Building* the bootstrap is a different question: required whenever it is stale |

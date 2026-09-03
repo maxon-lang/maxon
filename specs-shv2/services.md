@@ -1155,6 +1155,61 @@ typealias Integer = int(i64.min to i64.max)
 2
 ```
 
+<!-- test: a-handle-read-out-of-an-array-survives-a-second-send -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⭐⭐ **A HANDLE READ *OUT OF* A CONTAINER, WHICH `handles-in-an-array` NEVER DOES — IT ONLY PUSHES AND
+DROPS.** Binding an element to a local promotes a BORROW to an owned name, and the language's two retain
+doors disagreed about what that costs for a handle: the void one asked
+`SignatureIndex.managedNameRetainCallee` and got the mailbox's `handles`/`refs` pair, the RETURNING one
+(`Parser.retainBorrowedAggregate`, the door every `arr.get(i)` binding takes) spelled the plain box incref
+directly. So the local's drop stepped a pair its retain never stepped, the mailbox was CLOSED AND FREED while
+the array's handle still named it — and the SECOND `get` sent into freed memory.
+
+⚠ **ONE SEND WAS CLEAN, WHICH IS WHY NOTHING CAUGHT IT.** The first message is already queued when the
+mailbox dies, so it is still handled and still answered; the loop only stops afterwards. **MEASURED at
+`MAXON_MAX_PROCS` 1 and 16 alike: two sends is exit 92 (`RuntimeAbort.schedulerDeadlock`) and a `.clone()` of
+the borrowed element is exit 89 (`slabFreeOfParkedSpan`)** — a heap corruption, not a diagnostic. This case
+therefore sends THREE times through three separate reads, and its answer is the accumulated total.
+```maxon
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump(by Integer) returns Integer
+		self.n = self.n + by
+		return self.n
+	end 'bump'
+end 'Counter'
+
+typealias CounterHandleArray = Array with Counter.handle
+typealias BumpReplyArray = Array with Promise with (Integer, ServiceError)
+
+function main() returns ExitCode
+	var hs = CounterHandleArray.create()
+	hs.push(spawn Counter.create())
+
+	var replies = BumpReplyArray.create()
+	for step in 1 to 3 'eachSend'
+		var h = try hs.get(0) otherwise panic("hs.get(0)")
+		replies.push(h.bump(step))
+	end 'eachSend'
+
+	var total = 0
+	for r in replies 'eachReply'
+		total = try await r otherwise 0
+	end 'eachReply'
+
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+6
+```
+
 <!-- test: a-handle-payload-beside-a-consumed-string-payload -->
 <!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 ⭐⭐ **TWO SERVICES, TWO PAYLOAD KINDS, AND THE CROSSING BETWEEN TWO NAME TABLES.** `Logger.say` takes a
@@ -4142,6 +4197,54 @@ end 'main'
 ```
 ```exitcode
 71
+```
+
+<!-- test: a-reply-over-a-declared-type-stores-in-a-promise-naming-it -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⭐ **A REPLY'S RESULT MAY BE A DECLARED TYPE, AND THE STORAGE TYPE THAT NAMES ONE IS THE SAME INSTANCE THE
+SEND MINTS.** `Promise with (T, E)` is interned on its base and its ARGUMENTS, and a declared type reached
+the two roads under two different tags — `structRef` off the message's `returns` clause, `named` off the
+type argument the author wrote — which mangle to one symbol. Interned as two, a program was refused as a
+duplicate definition of its own promise. Every `Promise with (Integer, …)` case above is blind to it: a
+scalar argument carries no name, so it carries no second tag.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Tally
+	export var n as Integer
+
+	export static function create(n Integer) returns Tally
+		return Self{n: n}
+	end 'create'
+end 'Tally'
+
+type Counter
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bumped(by Integer) returns Tally
+		self.count = self.count + by
+		return Tally.create(self.count)
+	end 'bumped'
+end 'Counter'
+
+typealias TallyReply = Promise with (Tally, ServiceError)
+typealias TallyReplyArray = Array with TallyReply
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	var ps = TallyReplyArray.create()
+	ps.push(h.bumped(4))
+	let p = try ps.remove(0) otherwise panic("the reply was pushed into slot 0")
+	let tally = try await p otherwise return 70 as ExitCode
+	return tally.n as ExitCode
+end 'main'
+```
+```exitcode
+4
 ```
 
 <!-- test: error.a-stored-reply-that-names-the-wrong-errors-is-refused -->

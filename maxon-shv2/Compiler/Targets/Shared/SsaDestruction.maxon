@@ -104,7 +104,7 @@ end 'MoveSequence'
 
 // Build the per-edge SSA-destruction plan for a function. A fully-coalesced edge
 // (every phi shares its incoming value's register) produces no moves and no plan.
-export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns EdgeMovePlanArray
+export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, counters RegAllocCounters) returns EdgeMovePlanArray
 	let topo = liveness.cfg.topo
 	var plans = EdgeMovePlanArray.create()
 
@@ -113,7 +113,7 @@ export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, l
 		for edge in predBlock.branchEdges 'eachEdge'
 			let plan = buildEdgePlan(module, topo: topo, predBlock: predBlock, predLocal: predLocal, edge: edge, alloc: alloc)
 			if plan.moveCount() > 0 'hasMoves'
-				stats.copiesInserted = stats.copiesInserted + plan.moveCount()
+				counters.copiesInserted = counters.copiesInserted + plan.moveCount()
 				plans.push(plan)
 			end 'hasMoves'
 		end 'eachEdge'

@@ -114,7 +114,7 @@ cleanup() { unlock_output; }
 trap cleanup EXIT INT TERM
 
 if [ ! -x "$SHV2" ]; then
-	printf 'output-lock-gate: %s is missing — build it first (`./bin/maxon%s build maxon-shv2`)\n' "$SHV2" "$EXE_EXT" >&2
+	printf 'output-lock-gate: %s is missing — build it first (`scripts/build-shv2.sh`)\n' "$SHV2" >&2
 	exit 2
 fi
 

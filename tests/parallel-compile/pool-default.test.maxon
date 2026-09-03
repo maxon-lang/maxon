@@ -1,0 +1,20 @@
+// pool-default.test.maxon — with no processor pin, the allocator builds one worker per processor over
+// every processor the machine has, and says so.
+//
+// Only the line up to the function count is pinned: that count is the allocator's, runtime functions
+// included, and nothing outside the compiler can predict it. `defaultPoolNeedle` refuses loudly on a host
+// with more processors than the fixture declares functions, where W = min(P, F) is not knowable from here.
+
+test 'the pool is one worker per processor at the default'
+	let staged = stagedProgram("pool-program", caseLabel: "pool-default")
+
+	var arguments = StringArray.create()
+	arguments.push(CodegenDebugLogFlag)
+	let run = spawnBuild(staged, label: "default-processors", extraArguments: arguments, singleProcessor: false)
+
+	let observedExit = run.exitCode()
+	try Expect.equal(observedExit, expected: 0, message: "the pool program did not compile at the default processor count. It wrote to stderr: {run.stderr}")
+
+	let needle = defaultPoolNeedle(staged)
+	try Expect.contains(run.stderr, needle: needle, message: "`{CodegenDebugLogFlag}` did not report a pool of one worker per processor over the machine's processors. The report is the only thing that says the allocator ran in PARALLEL rather than merely correctly; the two byte-identity cases beside this one cannot tell a pool of one from a pool of sixteen. It wrote to stderr: {run.stderr}")
+end 'the pool is one worker per processor at the default'

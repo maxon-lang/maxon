@@ -500,9 +500,12 @@ public enum ErrorCode {
   /// a pure-function call's result was discarded. Pure callees must
   /// have their result used -- neither bare `foo()` nor `_ = foo()` is
   /// permitted. Fires from `checkDiscardedResults`.
-  /// shv2 raises it at ONE door so far -- a tuple assignment whose every target is `_`
-  /// (`(_, _) = makePair(10, b: 32)`, `specs/tuple-assign.md`), which uses none of the
-  /// result. Its bare-call and `_ =` doors stay shelved in `specs-shv2/discarded-results.md`.
+  /// shv2 raises it at TWO doors. A tuple assignment whose every target is `_`
+  /// (`(_, _) = makePair(10, b: 32)`, `specs/tuple-assign.md`) uses none of the result,
+  /// and the whole-program effect summary judges the callee. A discarded MATH INTRINSIC
+  /// (`round(10)` as a statement) needs no summary: the roster is machine instructions, so
+  /// the statement is provably dead. Its bare-call and `_ =` doors over DECLARED callees
+  /// stay shelved in `specs-shv2/discarded-results.md`.
   /// </summary>
   SemanticDiscardedPureResult = 3064,
   /// <summary>

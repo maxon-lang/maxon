@@ -21,6 +21,23 @@ functions any file declares. This spec pins the six that read the ALLOCATOR's ow
 | `__Builtins.mmRawAllocLive()` | RAW allocations currently live |
 | `__Builtins.mmRawAllocBytes()` | cumulative bytes handed out by RAW allocations |
 
+⭐ **AND THREE MORE THAT ASK THE SAME QUESTION OF ONE GREEN THREAD**, because the six above are
+process-wide and a POOL cannot be measured with a process-wide column — a bracket opened inside a worker
+counts every other worker's traffic:
+
+| Intrinsic | Meaning |
+|---|---|
+| `__Builtins.threadAllocTotal()` | cumulative allocations by the CALLING green thread, BOTH layers |
+| `__Builtins.threadFreeTotal()` | cumulative frees by the calling green thread, both layers |
+| `__Builtins.threadAllocBytes()` | cumulative bytes handed to the calling green thread, both layers |
+
+They sum the two layers where the six are per-layer, because `PhaseProbe` adds them before it reports any
+figure. `frees` is COUNTED here and DERIVED there: `Δtotal − Δlive` needs a LIVE column, and a live count per
+green thread would mean nothing — a thread does not own the boxes it allocated and may exit with them alive.
+A program with no green threads answers all three from the process-wide words, which is not a fallback but
+the same fact: single-threaded, *"what did this thread allocate"* and *"what did this process allocate"* are
+one question.
+
 All six take no arguments and answer an `int`. Their caller in this tree is
 `maxon-shv2/Compiler/PhaseProbe.maxon`, which sums the two layers into `totalAllocs()`,
 `liveAllocs()` and `totalAllocBytes()` — so `scale-test`, and every row of
@@ -440,6 +457,90 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: builtins-mm-counters.a-thread-is-billed-only-its-own-allocations -->
+<!-- targets: x64-windows -->
+⭐⭐⭐ **THE CASE THE POOL NEEDS, AND THE ONE THE SIX ABOVE STRUCTURALLY CANNOT BE.** Every column above is
+a process-wide `.data` word, which is exact while ONE thread allocates and worthless the moment several do:
+a bracket opened inside a worker counts every other worker's traffic for the whole of its span. MEASURED on
+a stage-2 self-compile, `regalloc:splitting` reported **1,207,232,853** allocations at sixteen processors
+against **77,890,562** at one — the identical compile, and the sub-phase rows went into `--metrics`,
+`--log=compiler:debug`, `scale-test` and `docs/optimization-log.md` saying so.
+
+The three per-thread columns answer the same question of the CALLING GREEN THREAD. Both halves below are
+necessary and neither alone is enough:
+
+* **SERIAL, they must AGREE TO THE DIGIT.** A per-thread column that merely moved could be anything; what
+  makes it a memory figure is that it equals the process's own when the process is one thread. This is also
+  what keeps a main-thread phase row and the run total commensurable.
+* **CONCURRENT, they must DIVERGE.** The service allocates tens of thousands of times inside an interval in
+  which `main` is parked on `await` and allocates almost nothing. A per-thread column that was secretly the
+  process-wide one passes the first half and fails here.
+
+⚠ The spawn comes FIRST so both readings are taken with a scheduler already installed — it comes up lazily,
+and before it there is no green thread for a per-thread column to be about.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+type Churn
+	var rounds as Integer
+
+	static function create() returns Self
+		return Self{rounds: 0}
+	end 'create'
+
+	export function churn(n Integer) returns Integer
+		var buf = Bytes.create()
+		for _ in 0 upto n 'push'
+			buf.push(3)
+		end 'push'
+		self.rounds = self.rounds + 1
+		return buf.count() as Integer
+	end 'churn'
+end 'Churn'
+
+function processWide() returns Tally
+	return (__Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()) as Tally
+end 'processWide'
+
+function main() returns ExitCode
+	let h = spawn Churn.create()
+
+	let serialThreadBefore = __Builtins.threadAllocTotal()
+	let serialProcessBefore = processWide()
+	var warm = Bytes.create()
+	for _ in 0 upto 4096 'warm'
+		warm.push(1)
+	end 'warm'
+	let serialThread = __Builtins.threadAllocTotal() - serialThreadBefore
+	let serialProcess = processWide() - serialProcessBefore
+
+	let busyThreadBefore = __Builtins.threadAllocTotal()
+	let busyProcessBefore = processWide()
+	let reply = h.churn(60000)
+	_ = try await reply otherwise 0
+	let busyThread = __Builtins.threadAllocTotal() - busyThreadBefore
+	let busyProcess = processWide() - busyProcessBefore
+
+	var score = 0
+	if serialThread > 0 and serialThread == serialProcess 'serialSourcesAgree'
+		score = score + 1
+	end 'serialSourcesAgree'
+	if busyProcess > busyThread 'theServiceIsNotBilledToMain'
+		score = score + 2
+	end 'theServiceIsNotBilledToMain'
+	if __Builtins.threadFreeTotal() > 0 and __Builtins.threadAllocBytes() > 0 'theOtherTwoColumnsMove'
+		score = score + 4
+	end 'theOtherTwoColumnsMove'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: builtins-mm-counters.alloc-total-arity-checked -->

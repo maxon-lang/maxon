@@ -135,7 +135,7 @@ pass() { printf '  PASS  %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n         saw: %s\n' "$1" "$2"; FAILED=1; }
 
 if [ ! -x "$SHV2" ]; then
-	printf 'stale-binary-gate: %s is missing — build it first (`./bin/maxon%s build maxon-shv2`)\n' "$SHV2" "$EXE_EXT" >&2
+	printf 'stale-binary-gate: %s is missing — build it first (`scripts/build-shv2.sh`)\n' "$SHV2" >&2
 	exit 2
 fi
 
@@ -291,7 +291,7 @@ fi
 if grep -q 'STALE' "$WORK/out.log" \
 	&& grep -q 'Main\.maxon' "$WORK/out.log" \
 	&& grep -q 'maxon-shv2\.exe\|maxon-shv2$\|\.maxon[/\\]maxon-shv2' "$WORK/out.log" \
-	&& grep -q 'build maxon-shv2' "$WORK/out.log"; then
+	&& grep -q 'build-shv2\.sh' "$WORK/out.log"; then
 	pass "CHECK 2c: the message names the binary, names the newer source, and says how to fix it"
 else
 	fail "CHECK 2c: the message names the binary, names the newer source, and says how to fix it" \

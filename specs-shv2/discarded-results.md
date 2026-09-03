@@ -326,6 +326,25 @@ end 'main'
 error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:2: result of pure function 'makePair' must be used
 ```
 
+<!-- test: math-intrinsic-discarded -->
+⭐ **A MATH INTRINSIC DISCARDED IN STATEMENT POSITION IS E3064, AND IT NEEDS NO PURITY ANALYSIS TO SAY SO.**
+`round`, `floor`, `ceil`, `sqrt`, `abs`, `trunc`, `min` and `max` are compiler-owned: each IS a machine
+instruction over its arguments, reading no memory and writing none. A statement that takes none of the
+answer therefore has no other reason to run, and the parser can prove it at the call — where the
+whole-program effect summary the DECLARED-callee doors wait on cannot even be asked, since an intrinsic
+emits no call and has no entry in the module's function index.
+
+⛔ It used to compile SILENTLY, exit 0, emitting the instruction and throwing the answer away.
+```maxon
+function main() returns ExitCode
+	round(1.5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/math-intrinsic-discarded.test:3:2: result of pure function 'round' must be used
+```
+
 <!-- disabled-test: transitive-impure -->
 <!-- MEASURED 2026-08-13: compiles clean. E3065, exactly as `impure-function-discarded` — and the TRANSITIVE half it is named for already works: the effect summary closes over the call graph and reads `computeAndPrint` as effectful through `printValue`, proven two hops deep by probe. Only the code and the door are missing. -->
 ```maxon

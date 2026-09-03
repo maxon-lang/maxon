@@ -66,6 +66,10 @@ export typealias ByteCountArray = Array with HeapByteCount
 // The phase spans this process has OPENED and not yet closed, innermost LAST.
 typealias TraceNameArray = Array with TraceName
 
+// ⚠ **THE REGISTER ALLOCATOR'S SUB-PHASES NO LONGER RIDE THIS STACK** — they bracket with
+// `PhaseProbe.beginCounters`, which opens no span, because a pool of workers cannot open seven
+// strictly-nesting spans at once. Only the `regalloc` phase itself has one, on the main thread.
+//
 // ⭐⭐ **A TRACE SPAN IS OPENED IN ONE PLACE AND CLOSED IN ONE PLACE, AND NEITHER OF THEM IS A THROW SITE
 // (A1v).** `begin` emits the BEGIN; the two `record*Delta` writers emit the END. A stage that THROWS
 // between them never reaches its writer, so the span stays open for the rest of the trace and every event
@@ -81,8 +85,7 @@ typealias TraceNameArray = Array with TraceName
 // argument: an END per throw site is one fact written once per site, and the NEXT throwing exit forgets it
 // in exactly the way the third and fourth did. A closure-based bracket would be the other shape, and this
 // language has no throwing function type, so the body could not be passed. The stack costs one push and one
-// pop per probe — the register allocator's ×7-per-function probes included — and no allocation once it has
-// reached its depth.
+// pop per probe and no allocation once it has reached its depth.
 //
 // ⚠ **CLOSING A SPAN IS NOT RECORDING A PHASE.** The drain emits the END only; it writes no row into the
 // timing or memory tables. An aborted phase consumed a time and a byte count that describe half a stage, and
@@ -121,7 +124,7 @@ export type PhaseDelta
 	end 'zero'
 
 	// This delta MINUS an inner one — the "subtract the inner delta" discipline, applied
-	// to all four quantities at once (see `recordPhaseExcluding`).
+	// to all four quantities at once (see `RegAllocCosts.recordExcluding`).
 	//
 	// Every component is a non-negative range, so an inner delta that EXCEEDS the outer
 	// one traps here rather than wrapping. That is the intent: the inner phase is a
@@ -139,15 +142,34 @@ export type PhaseDelta
 	end 'minus'
 end 'PhaseDelta'
 
-// An open bracket: the four counters as they stood when the phase began.
+// ⭐⭐ **WHICH COUNTERS A BRACKET READS — and the two are not interchangeable, which is why the probe
+// remembers its own.**
+//
+//   * `processWide` sums the allocator's own `.data` columns. Exact for a phase NOTHING ELSE IS RUNNING
+//     ALONGSIDE, which every main-thread phase is, and it is what the run total must be measured with:
+//     the totals are the process's.
+//   * `callingThread` reads the columns the allocator keeps on the running GREEN THREAD. It is what a
+//     bracket opened inside a POOL WORKER must use — the register allocator's sub-phases are the only
+//     ones — because the process-wide words are being stepped by fifteen other workers at the same time.
+//
+// ⛔ **THE TWO MUST NOT BE MIXED WITHIN ONE BRACKET.** A probe opened on one source and closed on the
+// other subtracts two unrelated numbers, so the source travels in the probe and `elapsed` reads it back.
+union CounterSource
+	processWide
+	callingThread
+end 'CounterSource'
+
+// An open bracket: the counters as they stood when the phase began, and WHICH counters they were.
 export type PhaseProbe
 	export let nanos as DurationNanos
 	export let cpuTicks as CpuTicks
-	// Cumulative allocations, and allocations LIVE, at the instant the phase opened. Both
-	// are needed because frees are derived from the pair, not counted (see `elapsed`).
+	// Cumulative allocations and cumulative FREES at the instant the phase opened. The process-wide source
+	// keeps no free counter — it keeps a LIVE one — so its cumulative frees are read as `total - live`,
+	// which is exact at every instant by definition. See `freesSoFar`.
 	export let allocTotal as AllocCount
-	export let allocLive as AllocCount
+	export let freeTotal as AllocCount
 	export let bytes as ByteCount
+	export let source as CounterSource
 
 	// Open a bracket, and open the matching TRACE SPAN.
 	//
@@ -158,7 +180,7 @@ export type PhaseProbe
 	//
 	// The span is emitted FIRST, before the counters, so the trace's interval strictly contains
 	// the timed one and the emission itself lands outside what it measures. (The END is emitted
-	// by `recordPhaseDelta` / `recordRegAllocDelta` — the only writers of attribution — after
+	// by `recordPhaseDelta` — the only writer of attribution that closes one — after
 	// `elapsed()` has closed the counters, for the same reason. `elapsed()` stays PURE, which is
 	// what lets `compile` reuse one probe as both the `load` bracket and the whole-compile total
 	// without emitting a second, unpaired END.)
@@ -169,23 +191,44 @@ export type PhaseProbe
 		// Recorded OUTSIDE the counters, beside the emission it pairs with, so the span the stack knows
 		// about and the span the trace shows are opened by the same statement (see `openPhaseSpans`).
 		openPhaseSpans.push(name)
-		let allocTotal = totalAllocs()
-		let allocLive = liveAllocs()
-		let bytes = totalAllocBytes()
-		let nanos = Clock.nowNanos()
-		return Self{nanos: nanos, cpuTicks: threadCpuTicks(), allocTotal: allocTotal, allocLive: allocLive, bytes: bytes}
+		// ⭐ THE PROCESS-WIDE COLUMNS, DELIBERATELY. A trace span is the MAIN THREAD's — the pool's workers
+		// open none (see `beginCounters`) — so this bracket is the one that must agree with the run total.
+		return Self.openOn(CounterSource.processWide)
 	end 'begin'
+
+	// ⭐ **THE COUNTERS ALONE — no trace span, and therefore no `Project` and no process-wide stack.**
+	//
+	// The register allocator's sub-phases bracket with this. A sub-phase bracket runs on whichever
+	// worker the pool gave the function to, and a span stack that strictly nests cannot describe
+	// seven brackets opened on sixteen green threads at once — `closePhaseSpan` would panic on the
+	// first interleaving, correctly. Emitting a zero-width marker on the main thread instead would be
+	// a lie about a duration, so the sub-phases contribute to the TIMING and MEMORY tables (which
+	// SUM, and so survive being measured concurrently) and not to the trace.
+	//
+	// ⭐⭐ **AND IT READS THE CALLING THREAD'S COLUMNS, NOT THE PROCESS'S.** A sub-phase bracket runs on
+	// whichever worker the pool gave the function to, and the process-wide words are being stepped by every
+	// other worker for the whole of it: MEASURED, `regalloc:splitting` reported 1,207,232,853 allocations at
+	// sixteen processors against 77,890,562 at one, for the identical compile. The rows SUM over the workers,
+	// so the per-thread reading restores the number the one-processor run reports.
+	export static function beginCounters() returns PhaseProbe
+		return Self.openOn(CounterSource.callingThread)
+	end 'beginCounters'
+
+	// The two openers differ in ONE thing — which counters — so they are one body with that as its argument.
+	// Memory counters first, clock next, CPU last, exactly as this file's header requires.
+	static function openOn(source CounterSource) returns PhaseProbe
+		let allocTotal = allocsSoFar(source)
+		let freeTotal = freesSoFar(source)
+		let bytes = bytesSoFar(source)
+		let nanos = Clock.nowNanos()
+		return Self{nanos: nanos, cpuTicks: threadCpuTicks(), allocTotal: allocTotal, freeTotal: freeTotal, bytes: bytes, source: source}
+	end 'openOn'
 
 	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
 	// trace shows and the row the timing table shows can never disagree about which phase it is.
 	export static function beginPhase(project Project, phase CompilePhase) returns PhaseProbe
 		return Self.begin(compilePhaseName(phase), unit: project.traceUnit)
 	end 'beginPhase'
-
-	// Open a bracket around a register-allocator sub-phase. Same contract.
-	export static function beginRegAllocPhase(project Project, phase RegAllocPhase) returns PhaseProbe
-		return Self.begin(regAllocPhaseName(phase), unit: project.traceUnit)
-	end 'beginRegAllocPhase'
 
 	// Close the bracket. Clock first, counters after — see this file's header.
 	//
@@ -204,18 +247,19 @@ export type PhaseProbe
 	export function elapsed() returns PhaseDelta
 		let endCpuTicks = threadCpuTicks()
 		let elapsedNanos = Clock.elapsedNanos(self.nanos)
-		let endAllocTotal = totalAllocs()
-		let endAllocLive = liveAllocs()
-		let endBytes = totalAllocBytes()
+		// CLOSED ON THE SOURCE IT WAS OPENED ON — see `CounterSource`.
+		let endAllocTotal = allocsSoFar(self.source)
+		let endFreeTotal = freesSoFar(self.source)
+		let endBytes = bytesSoFar(self.source)
 
 		let allocs = endAllocTotal - self.allocTotal
-		let liveDelta = endAllocLive - self.allocLive
+		let frees = endFreeTotal - self.freeTotal
 
 		// The CPU counter is per-thread and monotonic, so this subtraction cannot go
 		// negative while the phase runs on the thread that opened it. If green threads ever
 		// migrate a compile across Ms, that stops being true and this is where it would
 		// surface — as a trap on the non-negative range, not as a quietly wrapped number.
-		return PhaseDelta.create(elapsedNanos, cpuTicks: endCpuTicks - self.cpuTicks, allocs: allocs, frees: allocs - liveDelta, bytes: endBytes - self.bytes)
+		return PhaseDelta.create(elapsedNanos, cpuTicks: endCpuTicks - self.cpuTicks, allocs: allocs, frees: frees, bytes: endBytes - self.bytes)
 	end 'elapsed'
 end 'PhaseProbe'
 
@@ -232,17 +276,80 @@ end 'PhaseProbe'
 // cannot see an array buffer being allocated or REGROWN at all — which is not a hypothetical:
 // with the raw count missing, a change of the Array growth policy moved the byte column 22% at
 // the top rung and this column, on the same runs, by exactly zero at every rung.
-function totalAllocs() returns AllocCount
+function allocsSoFar(source CounterSource) returns AllocCount
+	return match source 'which'
+		processWide gives processWideAllocs()
+		callingThread gives callingThreadAllocs()
+	end 'which'
+end 'allocsSoFar'
+
+// ⭐ **THE CUMULATIVE FREE COUNT, AND THE TWO SOURCES REACH IT DIFFERENTLY.** The allocator's process-wide
+// columns are (cumulative, live) — a live count is what the leak gate needs — so `freed = total - live`,
+// which is exact at every instant by definition. A green thread keeps no live count (it does not own the
+// boxes it allocated), so its frees are counted directly.
+function freesSoFar(source CounterSource) returns AllocCount
+	return match source 'which'
+		processWide gives processWideAllocs() - processWideLive()
+		callingThread gives callingThreadFrees()
+	end 'which'
+end 'freesSoFar'
+
+function bytesSoFar(source CounterSource) returns ByteCount
+	return match source 'which'
+		processWide gives processWideBytes()
+		callingThread gives callingThreadBytes()
+	end 'which'
+end 'bytesSoFar'
+
+function processWideAllocs() returns AllocCount
 	return (__Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()) as AllocCount
-end 'totalAllocs'
+end 'processWideAllocs'
 
-function liveAllocs() returns AllocCount
+function processWideLive() returns AllocCount
 	return __Builtins.mmAllocLive() + __Builtins.mmRawAllocLive()
-end 'liveAllocs'
+end 'processWideLive'
 
-function totalAllocBytes() returns ByteCount
-	return __Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()
-end 'totalAllocBytes'
+function processWideBytes() returns ByteCount
+	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as ByteCount
+end 'processWideBytes'
+
+// ⛔⛔ **THE PER-THREAD COLUMNS ARE shv2's OWN SURFACE, AND THE THREE FUNCTIONS BELOW ARE CONDITIONALLY
+// COMPILED FOR THAT REASON RATHER THAN AS A PORTABILITY SHIM.** The only brackets that read them are the
+// register allocator's sub-phases, and the pool those run on is `#if compiler(shv2)` too (`RegAllocPool`):
+// a binary the BOOTSTRAP emitted runs the SERIAL allocator, so no bracket in it is ever open while another
+// thread allocates, and the process-wide columns there ARE the calling thread's. Both arms answer the same
+// QUESTION correctly under the compiler that built them; neither stands in for the other.
+//
+// ⚠ It is also why the bootstrap needs no `__Builtins.threadAllocTotal`: it never compiles a call to one.
+#if compiler(shv2)
+
+function callingThreadAllocs() returns AllocCount
+	return __Builtins.threadAllocTotal() as AllocCount
+end 'callingThreadAllocs'
+
+function callingThreadFrees() returns AllocCount
+	return __Builtins.threadFreeTotal() as AllocCount
+end 'callingThreadFrees'
+
+function callingThreadBytes() returns ByteCount
+	return __Builtins.threadAllocBytes() as ByteCount
+end 'callingThreadBytes'
+
+#else
+
+function callingThreadAllocs() returns AllocCount
+	return processWideAllocs()
+end 'callingThreadAllocs'
+
+function callingThreadFrees() returns AllocCount
+	return processWideAllocs() - processWideLive()
+end 'callingThreadFrees'
+
+function callingThreadBytes() returns ByteCount
+	return processWideBytes()
+end 'callingThreadBytes'
+
+#endif
 
 // CPU time consumed by the thread running this compile, in the platform's own unit.
 //
@@ -258,6 +365,8 @@ end 'threadCpuTicks'
 // These are the ONLY writers of per-phase attribution. Both tables are written together,
 // from one delta, so time and memory can never be bracketed differently. They are therefore also
 // where the trace span CLOSES — the third table, written from the same call, for the same reason.
+// The register allocator's sub-phase writer is `addRegAllocDelta` at the foot of this file, and it
+// closes no span because its brackets open none.
 
 export function recordPhase(project Project, phase CompilePhase, probe PhaseProbe)
 	recordPhaseDelta(project, phase: phase, delta: probe.elapsed())
@@ -273,33 +382,10 @@ function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	// anywhere, which is exactly what a second command must be allowed to conclude — and the write
 	// itself is throttled to one every few seconds, so the per-phase call costs a clock read (see
 	// `touchTreeLock`). The register allocator's own per-FUNCTION probes deliberately do not ride
-	// this: they go through `recordRegAllocDelta`, and one heartbeat per compile phase is already
+	// this: they go through `addRegAllocDelta`, and one heartbeat per compile phase is already
 	// twelve times finer than the window it feeds.
 	touchTreeLock()
 end 'recordPhaseDelta'
-
-// Record `phase`, less whatever an INNER phase already claimed while it ran.
-//
-// The register allocator's splitter owns every liveness computation, so the wall clock
-// around the splitter contains the whole of liveness — and so does its allocation count,
-// and its byte volume. Billing the splitter for all three would put the allocator's
-// biggest cost inside the wrong bucket, which is the failure CompileTimings was built to
-// stop and which it stopped only for the clock. `inner` is the accumulated total of the
-// inner phase taken BEFORE the outer one opened; this subtracts what it grew by.
-module function recordPhaseExcluding(project Project, phase RegAllocPhase, probe PhaseProbe, innerPhase RegAllocPhase, innerBefore PhaseDelta)
-	let innerGrowth = regAllocAccumulated(project, phase: innerPhase).minus(innerBefore)
-	recordRegAllocDelta(project, phase: phase, delta: probe.elapsed().minus(innerGrowth))
-end 'recordPhaseExcluding'
-
-module function recordRegAllocPhase(project Project, phase RegAllocPhase, probe PhaseProbe)
-	recordRegAllocDelta(project, phase: phase, delta: probe.elapsed())
-end 'recordRegAllocPhase'
-
-function recordRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
-	project.timings.regAlloc.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
-	project.memory.regAlloc.addPhase(phase, delta: delta)
-	closePhaseSpan(regAllocPhaseName(phase), unit: project.traceUnit)
-end 'recordRegAllocDelta'
 
 // Close the innermost open span, which must be `name`. ONE door for both writers above, so the stack and
 // the trace cannot be updated by two statements that could drift.
@@ -330,23 +416,102 @@ export function closeOpenPhaseSpans(unit TraceUnit)
 	end 'drain'
 end 'closeOpenPhaseSpans'
 
-// Everything a register-allocator sub-phase has claimed so far, across both tables. The
-// "before" snapshot `recordPhaseExcluding` subtracts against.
+// ⭐ **FOLD ONE REGISTER-ALLOCATOR SUB-PHASE'S COST INTO BOTH TABLES.** The one writer of register-
+// allocator attribution, and the twin of `recordPhaseDelta` one tier down — with no span to close,
+// because the sub-phases open none (see `PhaseProbe.beginCounters`).
 //
-// ⚠ IT READS THE TWO COST COLUMNS DIRECTLY RATHER THAN THROUGH `costOf`, AND THAT IS A
-// MEASUREMENT DECISION. Returning a struct by value ALLOCATES — measured, one allocation per
-// return, and INDEPENDENT of the field count (a 4-, 5- and 6-field struct each cost exactly
-// one per return over 10,000 returns). So the `PhaseCost` that `costOf` hands back is a heap
-// allocation, this function runs once per FUNCTION via `recordPhaseExcluding`, and the bill
-// landed in the trend log's bit-for-bit-reproducible column: the instrument moving the number
-// it reports. The PhaseDelta returned below allocates too, but it always did and is already in
-// every historical row; this one would have been new.
+// It takes a DELTA rather than a probe because the bracket it describes did not run here: the allocator
+// measures each sub-phase into a `RegAllocCosts` value the function it allocated carries back, and the
+// driver folds that value in on the main thread. In a PARALLEL compile several such brackets overlap in
+// wall time, so these rows SUM over workers — see `RegAllocCosts` for which columns that makes a sum and
+// which it leaves exact.
+module function addRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
+	project.timings.regAlloc.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
+	project.memory.regAlloc.addPhase(phase, delta: delta)
+end 'addRegAllocDelta'
+
+// ⭐⭐ **ONE FUNCTION'S REGISTER-ALLOCATOR SUB-PHASE COSTS, MEASURED WITHOUT A `Project`.**
 //
-// `costOf` remains the right accessor everywhere else — the report and the metrics file read
-// it a few dozen times per compile, where one allocation buys the pairing guarantee.
-module function regAllocAccumulated(project Project, phase RegAllocPhase) returns PhaseDelta
-	let idx = phase.ordinal
-	let nanos = try project.timings.regAlloc.phaseNanos.get(idx) otherwise panic("regAllocAccumulated: phaseNanos index OOB for '{regAllocPhaseName(phase)}'")
-	let cpuTicks = try project.timings.regAlloc.phaseCpuTicks.get(idx) otherwise panic("regAllocAccumulated: phaseCpuTicks index OOB for '{regAllocPhaseName(phase)}'")
-	return PhaseDelta.create(nanos, cpuTicks: cpuTicks, allocs: project.memory.regAlloc.allocsOf(phase), frees: project.memory.regAlloc.freesOf(phase), bytes: project.memory.regAlloc.bytesOf(phase))
-end 'regAllocAccumulated'
+// The allocator's core runs on a pool worker, which has no `Project` — a module `var` reached from a
+// message is E3143, and `Project` is how the compile's tables are reached. So the core accumulates into
+// one of these, the result carries it home, and the driver folds it in with `addRegAllocDelta`.
+//
+// ⚠ **WHICH COLUMNS SURVIVE A PARALLEL COMPILE, AND WHAT THEY SUM TO.** `nanos` and `cpuTicks` are
+// per-bracket durations and remain exactly that: summed over workers they answer *"how much time did the
+// pool spend splitting"*, which is the question the trend log asks. The three MEMORY columns are the
+// CALLING GREEN THREAD's (`PhaseProbe.beginCounters` opens on `CounterSource.callingThread`), so a
+// bracket counts what its own worker allocated and nothing else — the sum over workers is then the same
+// figure a one-processor run reports, which is what makes the two lanes comparable at all.
+//
+// ⛔⛔ **THEY READ THE PROCESS-WIDE COUNTERS UNTIL THIS RUNG, AND THE ROWS WERE FICTION ABOVE ONE
+// PROCESSOR.** MEASURED on a stage-2 self-compile: `regalloc:splitting` reported 1,207,232,853
+// allocations at sixteen processors against 77,890,562 at one, for the identical compile — every bracket
+// included the fifteen other workers' traffic for the whole of its span, silently, into `--metrics`,
+// `--log=compiler:debug`, `scale-test` and `docs/optimization-log.md`. The `regalloc` PHASE row and the
+// run total were right throughout: those brackets are the main thread's, and they still open on
+// `CounterSource.processWide` for exactly that reason.
+//
+// Five scalar columns rather than an `Array with PhaseDelta`, for `RegAllocStats.phaseNanos`' reason: a
+// boxed pair per sub-phase per function is thousands of allocations on the one pass the scale ladder
+// watches.
+module type RegAllocCosts
+	var nanos as DurationNanosArray
+	var cpuTicks as CpuTicksArray
+	var allocs as AllocCountArray
+	var frees as AllocCountArray
+	var bytes as ByteCountArray
+
+	export static function create() returns RegAllocCosts
+		let width = RegAllocPhase.allCases.count()
+		var spentNanos = DurationNanosArray.create()
+		spentNanos.resize(width)
+		var spentCpu = CpuTicksArray.create()
+		spentCpu.resize(width)
+		var spentAllocs = AllocCountArray.create()
+		spentAllocs.resize(width)
+		var spentFrees = AllocCountArray.create()
+		spentFrees.resize(width)
+		var spentBytes = ByteCountArray.create()
+		spentBytes.resize(width)
+		return Self{nanos: spentNanos, cpuTicks: spentCpu, allocs: spentAllocs, frees: spentFrees, bytes: spentBytes}
+	end 'create'
+
+	export function add(phase RegAllocPhase, delta PhaseDelta)
+		let idx = phase.ordinal
+		try self.nanos.set(idx, value: (try self.nanos.get(idx) otherwise panic("RegAllocCosts.add: nanos index OOB for '{phase.name}'")) + delta.nanos) otherwise panic("RegAllocCosts.add: nanos index OOB for '{phase.name}'")
+		try self.cpuTicks.set(idx, value: (try self.cpuTicks.get(idx) otherwise panic("RegAllocCosts.add: cpuTicks index OOB for '{phase.name}'")) + delta.cpuTicks) otherwise panic("RegAllocCosts.add: cpuTicks index OOB for '{phase.name}'")
+		try self.allocs.set(idx, value: (try self.allocs.get(idx) otherwise panic("RegAllocCosts.add: allocs index OOB for '{phase.name}'")) + delta.allocs) otherwise panic("RegAllocCosts.add: allocs index OOB for '{phase.name}'")
+		try self.frees.set(idx, value: (try self.frees.get(idx) otherwise panic("RegAllocCosts.add: frees index OOB for '{phase.name}'")) + delta.frees) otherwise panic("RegAllocCosts.add: frees index OOB for '{phase.name}'")
+		try self.bytes.set(idx, value: (try self.bytes.get(idx) otherwise panic("RegAllocCosts.add: bytes index OOB for '{phase.name}'")) + delta.bytes) otherwise panic("RegAllocCosts.add: bytes index OOB for '{phase.name}'")
+	end 'add'
+
+	// Everything one sub-phase has claimed so far — the "before" snapshot `recordExcluding` subtracts
+	// against, and what the driver folds home one phase at a time.
+	export function accumulated(phase RegAllocPhase) returns PhaseDelta
+		let idx = phase.ordinal
+		let spentNanos = try self.nanos.get(idx) otherwise panic("RegAllocCosts.accumulated: nanos index OOB for '{phase.name}'")
+		let spentCpu = try self.cpuTicks.get(idx) otherwise panic("RegAllocCosts.accumulated: cpuTicks index OOB for '{phase.name}'")
+		let spentAllocs = try self.allocs.get(idx) otherwise panic("RegAllocCosts.accumulated: allocs index OOB for '{phase.name}'")
+		let spentFrees = try self.frees.get(idx) otherwise panic("RegAllocCosts.accumulated: frees index OOB for '{phase.name}'")
+		let spentBytes = try self.bytes.get(idx) otherwise panic("RegAllocCosts.accumulated: bytes index OOB for '{phase.name}'")
+		return PhaseDelta.create(spentNanos, cpuTicks: spentCpu, allocs: spentAllocs, frees: spentFrees, bytes: spentBytes)
+	end 'accumulated'
+
+	export function record(phase RegAllocPhase, probe PhaseProbe)
+		self.add(phase, delta: probe.elapsed())
+	end 'record'
+
+	// Record `phase`, less whatever an INNER phase already claimed while it ran.
+	//
+	// The splitter owns every liveness computation, so the wall clock around the splitter contains the
+	// whole of liveness — and so does its allocation count, and its byte volume. Billing the splitter for
+	// all three would put the allocator's biggest cost inside the wrong bucket, which is the failure
+	// CompileTimings was built to stop and which it stopped only for the clock. `innerBefore` is the
+	// accumulated total of the inner phase taken BEFORE the outer one opened; this subtracts what it grew
+	// by. The two brackets NEST, so every component of the subtraction is non-negative even when other
+	// workers are inflating the memory columns — `PhaseDelta.minus` traps if that ever stops holding.
+	export function recordExcluding(phase RegAllocPhase, probe PhaseProbe, innerPhase RegAllocPhase, innerBefore PhaseDelta)
+		let innerGrowth = self.accumulated(innerPhase).minus(innerBefore)
+		self.add(phase, delta: probe.elapsed().minus(innerGrowth))
+	end 'recordExcluding'
+end 'RegAllocCosts'

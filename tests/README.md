@@ -26,6 +26,7 @@ SERVER its tests spawn.
 | `lsp/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the server, not the dir |
 | `lsp-fixtures/` | `lsp-selftest` | `DeclFixtureRelativePath` |
 | `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
+| `parallel-compile/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the compiler it spawns |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler, `maxon-sharp/` and
@@ -62,6 +63,10 @@ tests/
     <area>.test.maxon            one LSP method area per file
   lsp-fixtures/type-declaration/ decl.maxon, whose LINE NUMBERS are the assertion
   ladders/                       hand-built scaling generators + the README indexing them
+  parallel-compile/
+    parallel.test.maxon          the shared half: the spawn, the staging, the counts
+    <contract>.test.maxon        ONE contract per file - see its README section
+    fixtures/<program>/main.maxon.fixture   stored name only - see rule 1
 ```
 
 ## The six rules, and the hazard each one answers
@@ -166,3 +171,17 @@ Written down because a limit nobody states gets mistaken for coverage.
 - **`unchanged` is two different facts.** A file the lexer rejects is reported exactly
   like one that was already perfect. One fixture pins that for one file; nothing tells
   you it is happening to two hundred.
+
+## `parallel-compile/` — the register allocator's worker pool
+
+It gates a COMPILER phase rather than a driver command, and it lives here for the same reason `fmt/` does: what it asserts is what `maxon-shv2 build`
+REPORTS and EMITS at two processor counts, which a `specs-shv2` program cannot observe about
+the compiler that compiled it. `parallel.test.maxon` is the shared half; each contract line has
+its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `pressure-refusal` — and
+`fixtures/<program>/main.maxon.fixture` holds the two programs. It applies rule 1's `.fixture`
+half only (no `dot-` names), rule 4 (the child runs in its staging directory), and departs from
+rule 5 on rule 5's own terms: the four contracts need six compiles between them, and `maxon
+test` runs files concurrently, so every case stages into a directory named for ITSELF under
+`temp/parallel-compile/`. Its expectations are not generated — they are properties (a pinned
+report prefix, byte identity, stderr equality between two runs), each guarded by a positive
+control so two runs that both failed to build cannot read as agreement.

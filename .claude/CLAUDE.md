@@ -58,7 +58,7 @@ must (see Building and Testing below).
 | Task | Use this tool |
 |------|---------------|
 | Build the C# compiler | `mcp__maxon-dev__build` with `target: "csharp"` |
-| Build the shv2 compiler | `mcp__maxon-dev__build` with `target: "shv2"` (built BY the bootstrap — build `csharp` first if it is stale) |
+| Build the shv2 compiler | `mcp__maxon-dev__build` with `target: "shv2"` — spawns `scripts/build-shv2.sh`: the bootstrap builds a SEED, the seed builds the tree binary (two compiles, ~4 min; build `csharp` first if it is stale) |
 | Run a spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler` to pick the suite; `"shv2"` runs `specs-shv2`) |
 | MEASURE per-phase MEMORY + CPU-TIME SCALING (shv2) — an instrument, **no verdict** | `mcp__maxon-dev__run_scale_test` (no `compiler` arg — shv2 only) |
 | Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`; either compiler) |
@@ -134,7 +134,7 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 
 ### shv2 compiler (maxon-shv2)
 
-- **Build:** `./bin/maxon.exe build maxon-shv2` (requires C# compiler already built)
+- **Build:** `scripts/build-shv2.sh` (requires C# compiler already built)
 - **Spec tests:** `./maxon-shv2/.maxon/maxon-shv2.exe spec-test` (the `specs-shv2` suite)
 - **Unit tests (`maxon test`'s own):** `./maxon-shv2/.maxon/maxon-shv2.exe test tests/test-command`
 
@@ -184,6 +184,26 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 >   a port rather than a record of what its author expected. Re-run it after changing any input.
 
 The shv2 compiler binary is at `./maxon-shv2/.maxon/maxon-shv2.exe` (Windows) or `./maxon-shv2/.maxon/maxon-shv2` (Linux/macOS).
+
+> ### ⭐ THE TREE'S shv2 IS THE COMPILER shv2 EMITS. THE BOOTSTRAP ONLY BUILDS THE **SEED**.
+>
+> `scripts/build-shv2.sh` runs **two** compiles: the bootstrap produces the seed at
+> `maxon-shv2/.maxon/maxon-shv2-seed.exe` (~40 s), and the seed compiles the tree binary
+> `maxon-shv2/.maxon/maxon-shv2.exe` (~170 s), which is RENAMED into place — a compiler cannot
+> overwrite a running image (**E6002**), and the tree binary compiling itself is exactly that shape.
+> The last good binary is kept at `maxon-shv2/.maxon/maxon-shv2.previous.exe`; a FAILED build leaves
+> the slot **empty** rather than reinstating it, because a stale compiler that answers as though it
+> were current is the failure every staleness refusal in this repo exists to prevent.
+>
+> ⛔ **SO `./bin/maxon.exe build maxon-shv2` ON ITS OWN IS THE SEED STEP, NOT THE BUILD.** Run
+> straight, it writes a bootstrap-emitted compiler into the tree slot and **nothing detects that** —
+> the binary is fresh, the suite is green, and every `#if compiler(shv2)` construct (the parallel
+> compile driver among them) is simply absent from the compiler you are then measuring. Use the
+> script, or the MCP `build` tool with `target: "shv2"`, which spawns it.
+>
+> `scripts/self-host-ab.sh` reads the SEED as its stage-1 — the tree binary is already stage-2 — and
+> its `cmp` gate is unchanged in meaning: the serial seed's product and that product's own product
+> must agree byte for byte.
 
 **⭐ THE EMITTED-CODE INSTRUMENT: `scripts/self-host-ab.sh`.** A green suite and `scale-test` both measure
 the compiler's LOGIC, which every stage of the self-host chain shares byte for byte. The QUALITY OF THE

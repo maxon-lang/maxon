@@ -305,6 +305,41 @@ export type PressurePeak
 	end 'create'
 end 'PressurePeak'
 
+// ⭐⭐ **THE REGISTER ALLOCATOR'S ONE REFUSAL, AND IT CARRIES NO PAYLOAD ON PURPOSE.**
+//
+// A hot-loop overflow the splitter cannot relieve is E5001 — a diagnostic that names a source span for
+// every value blocking the loop. Building it needs `project.opRanges` and `project.valueOrigins`, and the
+// allocator's core runs where there is no `Project`: on a pool worker, whose cone may not reach a module
+// `var` (E3143) and which owns no compile. So the core throws THIS, and whoever holds a `Project` renders.
+//
+// One case, no fields: everything the renderer needs is the analysis state, which cannot be squeezed into
+// an error value and is left in a `RegAllocRefusalSite` instead.
+module enum RegAllocRefusal implements Error
+	hotOverflow
+end 'RegAllocRefusal'
+
+// What a refused allocation leaves for the renderer: the liveness the refusal was measured against, the
+// fresh-id lineage the diagnostic chases a blocking reload back through, and the peak itself.
+//
+// ⚠ **NONE OF IT CAN CROSS A MESSAGE BOUNDARY**, and it is not asked to. A worker's refusal comes home as
+// the bare `RegAllocRefusal`; the main thread then runs the core AGAIN on the ORIGINAL function — which
+// the parallel path never mutated, because what it handed the worker was a copy — and renders from the
+// site that second run fills. A compile that reaches here is failing, so the second run is free.
+module union RefusedAllocation
+	none
+	at(liveness LivenessResult, lineage SplitLineage, peak PressurePeak)
+end 'RefusedAllocation'
+
+// The one-slot mailbox a refusal writes into. A record rather than a return value because the refusal
+// leaves by a `throw`, and Maxon has no way to carry a second value out of one.
+module type RegAllocRefusalSite
+	export var refused as RefusedAllocation
+
+	export static function create() returns RegAllocRefusalSite
+		return Self{refused: RefusedAllocation.none}
+	end 'create'
+end 'RegAllocRefusalSite'
+
 // The peak's RANK and LOCATION — everything the sweep's argmax is actually over, and NOTHING it is
 // not. It carries no live row, and that omission is the point.
 //
@@ -1768,7 +1803,6 @@ export type PressureIndex
 		scratch.applyMoves(pending)
 		self.rebuildRange(node, first: first, len: len)
 		self.promoteFrom(blockLocal, node: node)
-		logDebug(LogCategory.codegen, message: function() gives "PressureIndex: re-spaced {count} op(s) of block {blockLocal} across {len} slot(s)")
 	end 'respaceRange'
 
 	// Re-space every block's run so each op has its full gap again, GROWING the space of a block that has
@@ -1805,7 +1839,6 @@ export type PressureIndex
 
 		scratch.applyMoves(pending)
 		self.rebuildRange(1, first: 0, len: self.slotCount)
-		logDebug(LogCategory.codegen, message: function() gives "PressureIndex: re-spaced {topo.numBlocks} block(s) into {self.slotCount} slots")
 	end 'relayout'
 
 	// Move one op from `oldSlot` to `newSlot`: seat it, carry its population numbers across, and record
@@ -2614,8 +2647,8 @@ end 'SplitScratch'
 //    design exists to remove.
 //  • `nextValueId` is the id space itself, and `cfg.valueCount` follows it.
 //
-// `module`, `func`, `stats` and `project` stay ARGUMENTS, as they are everywhere else in this file: they
-// are the compile's, not this function's, and holding them here would be a second name for each.
+// `module`, `func` and `counters` stay ARGUMENTS, as they are everywhere else in this file: they are the
+// compile's, not this function's, and holding them here would be a second name for each.
 export type SplitDriver
 	export var cfg as FuncCfg
 	export var liveness as LivenessResult
@@ -2647,9 +2680,9 @@ export type SplitDriver
 	// The ONE liveness build happens here too. Everything after it is an incremental repair of the region
 	// a split dirtied (`refreshAfterSplit`) — the whole-function rebuild this used to run per split was
 	// the O(function × splits) quadratic.
-	export static function create(module TargetModule, func IrFunction, topo FuncTopology, pool RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, project Project) returns SplitDriver
+	export static function create(module TargetModule, func IrFunction, topo FuncTopology, pool RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, costs RegAllocCosts) returns SplitDriver
 		var cfg = buildFuncCfg(module, func: func, topo: topo)
-		let liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts, project: project)
+		let liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts, costs: costs)
 		// The one contribution to `forbidden` that does not come from a block sweep, so the one the
 		// dirty-region rebuild has to re-apply by hand when the victim is a parameter. Resolved once.
 		let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
@@ -2692,11 +2725,12 @@ export type SplitDriver
 	// Mutates the IR (inserts spill/reload/remat ops, rewrites reloaded uses to fresh values) and leaves
 	// `self.liveness` current on the split IR, `maxPressure ≤ pool` guaranteed.
 	//
-	// `throws CompileError` because a HOT overflow — a program point over its pool where NO crossing
-	// value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder panic. `project`
-	// (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001 diagnostic maps each
-	// blocking Target ValueId back to its source span through.
-	export function relievePressure(module TargetModule, func IrFunction, funcIndex FuncIndex, stats RegAllocStats, project Project) throws CompileError
+	// `throws RegAllocRefusal` because a HOT overflow — a program point over its pool where NO crossing
+	// value is cold-spillable — is E5001, not a placeholder panic. It is not RENDERED here: the
+	// diagnostic reads `project.opRanges` / `valueOrigins` to map each blocking Target ValueId back to
+	// its source span, and this runs where there is no `Project` (see `RegAllocRefusalSite`). What the
+	// refusal leaves behind is this driver and the peak, in `refusal`.
+	export function relievePressure(module TargetModule, func IrFunction, hasAuthor bool, counters RegAllocCounters, refusal RegAllocRefusalSite) throws RegAllocRefusal
 		var work = self.scratch
 		var funcLiveness = self.liveness
 
@@ -2774,7 +2808,7 @@ export type SplitDriver
 			// A full-pool overflow is REFUSED rather than relieved because the only relief that works inside a
 			// loop is a reload before every use, and paying that per iteration behind the author's back is what
 			// this design will not do silently (`isColdSpillable`). That argument ends where the author does.
-			// A function whose `sourceFilePath` is empty was never parsed — the runtime's own scaffolding and
+			// A function with no AUTHOR was never parsed — the runtime's own scaffolding and
 			// the synthesized builtin bodies — so there is no line to name, no value the author can see and
 			// nothing to rewrite. The diagnostic cannot even be BUILT for one: every route `defRangeOf` chases
 			// ends in a table only the parser fills, so it panics on the first blocking value (RULE 3). Here the
@@ -2792,13 +2826,13 @@ export type SplitDriver
 			// different decision because of it. Termination is unchanged: the forced bracket makes the victim
 			// dead across the peak exactly as the cold split does (`splitScopeAt` picks which uses it rewrites),
 			// so the potential Φ still falls by at least one every iteration.
-			if (not choiceFound(choice)) and func.sourceFilePath.isEmpty() 'noAuthorToRefuse'
+			if (not choiceFound(choice)) and not hasAuthor 'noAuthorToRefuse'
 				choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work, placement: SpillPlacement.forced)
 			end 'noAuthorToRefuse'
 
 			// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
 			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
-			let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage)
+			let victim = try victimAtPeak(choice, refusal: refusal, func: func, hasAuthor: hasAuthor, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage)
 
 			// `chooseVictim` re-pointed the function's ONE anchor at this peak, and the mutation below cuts
 			// there. Asserted rather than assumed: the two are a few lines apart today, and a reorder that
@@ -2822,8 +2856,8 @@ export type SplitDriver
 			let freshFrom = self.nextValueId
 			match choice 'act'
 				none then panic("SplitDriver.relievePressure: `victimAtPeak` returned for a `none` choice — it must throw")
-				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
-				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
+				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
+				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work)
 			end 'act'
 
 			self.commitSplit(module, victim: victim, freshFrom: freshFrom)
@@ -2956,7 +2990,7 @@ export type SplitDriver
 	//
 	// A split also never raises peak pressure, so `relievePressure`'s own Φ = 0 survives every repair —
 	// asserted after each one.
-	export function repairAtExhaustion(module TargetModule, v ValueId, free RegMask, stats RegAllocStats) returns bool
+	export function repairAtExhaustion(module TargetModule, v ValueId, free RegMask, counters RegAllocCounters) returns bool
 		var work = self.scratch
 		var funcLiveness = self.liveness
 		let index = funcLiveness.useIndex
@@ -2981,11 +3015,11 @@ export type SplitDriver
 		end 'nothingToSplitAround'
 
 		work.anchor.takeForcedCutAt(cut.blockLocal, pos: cut.pos)
-		self.applyRepairSplit(module, victim: v, stats: stats)
+		self.applyRepairSplit(module, victim: v, counters: counters)
 		// Counted HERE and not in the shared tail: WHICH cure ran is the one thing the two callers know
 		// and `applyRepairSplit` does not, and keeping the two counts apart is the whole point of having
 		// two (see `RegAllocStats.repairedByEviction`).
-		stats.repairedByWidening = stats.repairedByWidening + 1
+		counters.repairedByWidening = counters.repairedByWidening + 1
 		return true
 	end 'repairAtExhaustion'
 
@@ -3034,7 +3068,7 @@ export type SplitDriver
 	// ⇒ A future rung that changes the volatility preference, the parameter forbid, or the unused-
 	// parameter rule should re-try the construction. Until one does, the zero counter is the standing
 	// record that this cure is UNEXERCISED by the suite.
-	export function repairByEvictingOccupant(module TargetModule, v ValueId, w ValueId, stats RegAllocStats) returns bool
+	export function repairByEvictingOccupant(module TargetModule, v ValueId, w ValueId, counters RegAllocCounters) returns bool
 		var work = self.scratch
 		var funcLiveness = self.liveness
 		self.buildSplitIndexOnce(module)
@@ -3058,8 +3092,8 @@ export type SplitDriver
 		end 'noLongerLiveAcrossThePoint'
 
 		work.anchor.takeForcedCutAt(point.blockLocal, pos: point.pos)
-		self.applyRepairSplit(module, victim: w, stats: stats)
-		stats.repairedByEviction = stats.repairedByEviction + 1
+		self.applyRepairSplit(module, victim: w, counters: counters)
+		counters.repairedByEviction = counters.repairedByEviction + 1
 		return true
 	end 'repairByEvictingOccupant'
 
@@ -3081,7 +3115,7 @@ export type SplitDriver
 	// ONE repair's mutation, with `scratch.anchor` already pointing at the cut. Both cures make the same
 	// mutation and owe the same preparation and repair, so it is written once — the difference between
 	// them is entirely WHERE they cut and WHOM they cut.
-	function applyRepairSplit(module TargetModule, victim ValueId, stats RegAllocStats)
+	function applyRepairSplit(module TargetModule, victim ValueId, counters RegAllocCounters)
 		var work = self.scratch
 		var funcLiveness = self.liveness
 		let index = funcLiveness.useIndex
@@ -3102,7 +3136,7 @@ export type SplitDriver
 
 		let freshFrom = self.nextValueId
 		self.beginSplit(index, victim: victim, takesSlot: true)
-		self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: victim, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
+		self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: victim, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work)
 		self.commitSplit(module, victim: victim, freshFrom: freshFrom)
 
 		// A REPAIR MUST NOT CREATE AN OVER-POOL POINT, and by Φ it cannot: a store/reload bracket only
@@ -3285,9 +3319,9 @@ end 'findConfiningClobber'
 //
 // It is read out BEFORE the mutation because the incremental update needs the PRE-split index's answer
 // for where the victim is live and where it is used.
-function victimAtPeak(choice SpillChoice, project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns ValueId throws CompileError
+function victimAtPeak(choice SpillChoice, refusal RegAllocRefusalSite, func IrFunction, hasAuthor bool, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns ValueId throws RegAllocRefusal
 	match choice 'act'
-		none then try noVictimAtPeak(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+		none then try noVictimAtPeak(refusal, func: func, hasAuthor: hasAuthor, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 		remat(v, _) then return v
 		spill(v, _) then return v
 	end 'act'
@@ -3684,7 +3718,7 @@ end 'choiceFound'
 //     therefore not DEAD, it is UNREACHED-BY-TODAY'S-OPS — a statement about the current op set, not
 //     about this code. It costs one compare on the panic path and is the only thing standing between
 //     a future op's clobber mask and a false E5001 against a program that fits the machine.
-function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
+function noVictimAtPeak(refusal RegAllocRefusalSite, func IrFunction, hasAuthor bool, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws RegAllocRefusal
 	if peak.clobberOnly 'splitterBug'
 		if peak.witness == 0 'confinedToNothing'
 			panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow at a peak whose witness is EMPTY — {peak.pressure} {peak.witnessClass.name} value(s) allowed NO register at all, against a full pool of {classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)} — and `chooseVictim` refused every one of them. With an empty witness the usual counting argument gives nothing (the tight set need only outnumber ZERO), so a tight set of two values that ONE op reads leaves nothing to choose. Every value confined to ∅ should be an ORIGINAL, relieved at the op that confines it, because a split must never MINT one: look first at the run-break (`markRunStarts` / `opStrandsClass`), which exists to stop a reload being born with nowhere to live. It must never surface as E5001: this program fits the machine.")
@@ -3700,11 +3734,17 @@ function noVictimAtPeak(project Project, module TargetModule, func IrFunction, f
 	// iteration. So arriving here with no victim is a splitter bug, and reporting it as user register pressure
 	// is not an option that exists: the message names a source line the function does not have, and
 	// `defRangeOf` panics building it (RULE 3) rather than emitting one.
-	if func.sourceFilePath.isEmpty() 'emittedByTheCompiler'
+	if not hasAuthor 'emittedByTheCompiler'
 		panic("noVictimAtPeak: '{String.from(func.name)}' is a function the COMPILER emitted — it has no source and so no author — yet `chooseVictim` refused every one of the {peak.pressure} {peak.witnessClass.name} value(s) at its FULL-POOL peak, under the forced bracket `relievePressure` retries such a function with. That bracket is total over the values a function defines: each has a store anchor (an op def or a phi block entry), and reloading every use makes it dead across the peak whatever `killsValueAtPeak` says. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `isSpillable` — look first at `storeFitsPool`, the one gate that can still refuse under a forced placement. It must never surface as E5001: there is nobody to address that error to, and no source span to anchor it at.")
 	end 'emittedByTheCompiler'
 
-	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+	// ⭐ **THE REFUSAL IS RECORDED AND THROWN, NEVER RENDERED HERE.** E5001 names a source span per
+	// blocking value, which only `project.opRanges` / `valueOrigins` can supply — and this runs on a pool
+	// worker, which has no `Project` and may not reach one. The site carries the two things no later
+	// frame can rebuild (this driver's liveness and lineage, and the peak the overflow was measured at)
+	// to whoever holds a `Project`; see `RegAllocRefusalSite`.
+	refusal.refused = RefusedAllocation.at(liveness, lineage: lineage, peak: peak)
+	throw RegAllocRefusal.hotOverflow
 end 'noVictimAtPeak'
 
 // `computeLivenessOn`, attributed to the LIVENESS phase rather than to SPLITTING.
@@ -3715,17 +3755,18 @@ end 'noVictimAtPeak'
 // self-compile with ZERO sub-phase attribution" failure the design set out to avoid. On a large
 // function liveness, not splitting, is the dominant cost, and the numbers said the opposite.
 //
-// It takes `project`, not `stats`, because the probe records into BOTH the timing and the memory
-// table and only Project holds both.
+// It takes `costs`, not `counters`, because the probe records all five quantities and only that value
+// holds all five. It is the FUNCTION's own cost column, not the compile's: the core has no `Project`
+// (see `RegAllocCosts`), and the driver folds one function's column home when its result lands.
 //
 // The driver now runs exactly ONE of these per function, so what this phase reports is a single
 // whole-function build. The per-split REPAIR of that build (`refreshAfterSplit`) is billed to
 // `splitting`, which is where it belongs: it is proportional to what the split changed, not to the
 // function, and it is the splitter's own bookkeeping.
-function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile, opFacts OpVariantFacts, project Project) returns LivenessResult
-	let probe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.liveness)
+function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile, opFacts OpVariantFacts, costs RegAllocCosts) returns LivenessResult
+	let probe = PhaseProbe.beginCounters()
 	let liveness = computeLivenessOn(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts)
-	recordRegAllocPhase(project, phase: RegAllocPhase.liveness, probe: probe)
+	costs.record(RegAllocPhase.liveness, probe: probe)
 	return liveness
 end 'timedLiveness'
 
@@ -5226,7 +5267,7 @@ end 'markBlocksReachableFromPeak'
 // Nothing below MOVES an op: the insertions are logged and spliced in afterwards (see `SplitEdits`), so
 // every position this reads — including each use record's own, which is half of its sequence number —
 // is stated in the block's pre-split layout throughout.
-function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, liveness LivenessResult, valueId ValueId, anchor SplitAnchor, scope SplitScope, slot SpillSlot, pool RegMask, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch) returns ValueId
+function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, liveness LivenessResult, valueId ValueId, anchor SplitAnchor, scope SplitScope, slot SpillSlot, pool RegMask, nextValueId ValueId, counters RegAllocCounters, lineage SplitLineage, scratch SplitScratch) returns ValueId
 	let peakSeq = anchor.seq
 	let placement = anchor.placement
 	let useSites = index.useCount(valueId)
@@ -5320,10 +5361,10 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, livenes
 		end 'eachUse'
 	end 'hasUses'
 
-	stats.valuesSplit = stats.valuesSplit + 1
-	stats.reloadsInserted = stats.reloadsInserted + reloadCount
+	counters.valuesSplit = counters.valuesSplit + 1
+	counters.reloadsInserted = counters.reloadsInserted + reloadCount
 	match placement 'countForced'
-		forced then stats.forcedSpills = stats.forcedSpills + 1
+		forced then counters.forcedSpills = counters.forcedSpills + 1
 		cold then break 'countForced'
 	end 'countForced'
 	return freshId
@@ -5720,7 +5761,7 @@ end 'spliceOp'
 // `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
 // across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
 // exactly when nothing reads it any more.
-function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
+function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, counters RegAllocCounters, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 	// The immediate AND which ISA's const op the original def is, read ONCE: the re-emit at each use
 	// must be the SAME KIND (x64 `mov`, arm64 `movz`/`movk`) so it is byte-identical to what ISel wrote.
@@ -5788,7 +5829,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 		panic("rematerializeConstant: value {valueId} was chosen at the peak (sequence {peakSeq}) but this split rewrote NO use of it, so nothing was re-emitted and the peak's pressure is unchanged — the next iteration would re-pick it forever. An `afterPeakUses` remat must not be chosen for a value whose only uses precede the peak (it is live there only around a back edge — that is what `isRematVictim`'s killsValueAtPeak gate refuses, and what the `everyUse` scope is for), and an `everyUse` remat must not be chosen for a value with no uses at all (it would not be live here).")
 	end 'relievedNothing'
 
-	stats.rematerialized = stats.rematerialized + 1
+	counters.rematerialized = counters.rematerialized + 1
 	return freshId
 end 'rematerializeConstant'
 

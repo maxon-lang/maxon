@@ -46,10 +46,18 @@ export type SourcePosition
 	// A function the COMPILER built. The empty path is the discriminator the two readers above turn on, so
 	// this is a positive statement of provenance and not a default that fell through: a caller reaches it by
 	// naming it, and a reader grepping `synthesized` finds every site that claims it.
+	// ⚠ **`FilePath.empty()` AND NOT `FilePath from ""`, AND THE REASON IS REACHABILITY.** The full
+	// constructor resolves a file URL, which asks a `CharacterSet` — a `Set`, dispatching `hash` through a
+	// witness slot. This door is on the register allocator's POOL WORKER path (`createFromStd` builds the
+	// function a `RegAllocUnit` is rebuilt into), and a message that dispatches somewhere the compiler
+	// cannot name makes every address-taken function in the program message-reachable (E3143's widening) —
+	// which refused the whole pool over a module `var` in the query engine that no allocator code goes
+	// near. The two constructions answer the identical value; see `FilePath.empty`.
 	export static function synthesized() returns SourcePosition
-		return Self{filePath: FilePath from "", line: 0, column: 0}
+		return Self{filePath: FilePath.empty(), line: 0, column: 0}
 	end 'synthesized'
 end 'SourcePosition'
+
 
 // Sum-typed encoding of an optional `throws E` clause. `none` = non-throwing;
 // `throwing(name)` carries the bare error-enum name. Replaces a `""`-sentinel
@@ -680,6 +688,15 @@ export type IrFunction
 	// `needsGreenThreadStackGuard` defaults to false because most callers here install a runtime primitive
 	// whose frame and nesting the runtime itself bounds. The per-type CASCADES come through this same door and
 	// do not — see the field.
+	//
+	// ⛔⛔ **ITS FOUR MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
+	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the register allocator's POOL WORKER path:
+	// `RegAllocUnit` rebuilds one function per message, on whichever green thread the scheduler picked.
+	// Storing a module-level record into a fresh one RETAINS it, and this language's reference counting is a
+	// plain load/add/store precisely because the language guarantees one green thread per box — so sixteen
+	// workers retaining and releasing ONE singleton is the lost update that guarantee exists to make
+	// impossible. Four small empties per call, on a door the parser never takes (`create` is the parser's,
+	// and it keeps the singletons for its thousands of functions).
 	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		let declaredAt = SourcePosition.synthesized()
 		return Self{
@@ -700,7 +717,7 @@ export type IrFunction
 			valueClosureEnv: ValueIdArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
-			valueExistentialInstances: sharedEmptyExistentialInstanceMap,
+			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -714,10 +731,10 @@ export type IrFunction
 			reassignedParamMask: 0,
 			storageWrittenParamMask: 0,
 			writesThroughParamMask: 0,
-			immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
+			immutableGlobalAliasValues: GlobalAliasValueSet.create(),
 			assignsIntoAnExistingAggregate: false,
-			borrowFacts: sharedEmptyBorrowFacts,
-			paramGuards: sharedEmptyParamGuards
+			borrowFacts: BorrowFacts.create(),
+			paramGuards: RangeCheckParamGuardArray.create()
 		}
 	end 'createFromStd'
 

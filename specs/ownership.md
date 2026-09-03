@@ -1300,3 +1300,172 @@ end 'main'
 ```maxoncstderr
 error E4014: specs/fragments/ownership/cycle-mutual-recursion.test:2:6: type 'A' contains a reference cycle (via A → b: B → a: A); recursive type references are not allowed
 ```
+
+<!-- test: a-parameter-reassigned-then-consumed-releases-each-value-once -->
+⛔⛔ **A PARAMETER THE CALLEE REASSIGNS IS THE CALLER'S CELL, AND A CELL IS NEVER CONSUMED.** Both facts
+hold of `p` below — the rebind makes it by-reference, the field store makes it consumed — and they decide
+opposite things about who owns what. By-reference wins, because the cell outlives the frame: the caller
+reads what the callee wrote (`s` is `"replaced"` here, so the sum is `8 + 8`) and still drops it. So the
+callee's field store takes its OWN reference off a borrow, the caller transfers nothing at the call, and
+`"outer"` is released exactly once by the rebind that displaced it.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String) returns Wrap
+		p = "replaced"
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "outer"
+	let w = Wrap.make(s)
+	return (w.v.count() + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: a-parameter-reassigned-from-another-parameter-then-consumed -->
+The rebind's source is another PARAMETER, so three names end on one record — the cell, the field and the
+caller's `t` — and each owes exactly one release. `"second"` is 6 bytes and all three names spell it.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String, q String) returns Wrap
+		p = q
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "outer"
+	let t = "second"
+	let w = Wrap.make(s, q: t)
+	return (w.v.count() + s.count() + t.count()) as ExitCode
+end 'main'
+```
+```exitcode
+18
+```
+
+<!-- test: a-parameter-reassigned-in-a-loop-then-consumed -->
+The rebind runs N times, so N-1 intermediate records are displaced and released before the consume ever
+runs — the accounting cannot be settled once at the store's TEXT. `"x"` grows to `"x012"`, which the
+caller sees too.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String) returns Wrap
+		for i in 0 upto 3 'grow'
+			p = "{p}{i}"
+		end 'grow'
+
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "x"
+	let w = Wrap.make(s)
+	return (w.v.count() + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: a-caller-may-rebind-what-a-consuming-callee-wrote-through-its-cell -->
+⭐ **THE ARGUMENT WAS NOT MOVED, so reading it after the call is not E3102 and rebinding it is an ordinary
+`var` rebind.** The caller still owns the cell's occupant, so the rebind below is what releases
+`"replaced"` — and `w.v`'s own reference is why it is still there to be counted afterwards.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String) returns Wrap
+		p = "replaced"
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "outer"
+	let w = Wrap.make(s)
+	s = "{s}-again"
+	return (w.v.count() + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+22
+```
+
+<!-- test: a-handler-binder-takes-a-parameters-name -->
+A `try … otherwise (e)` handler binder is the fourth keyword that can stand in front of a binder list's
+`(`, and it shadows for its handler BLOCK. `boom` always throws, so the store that runs is the handler's:
+it moves the caught error into `why` and the parameter reaches no consume door at all.
+```maxon
+enum Fail implements Error
+	nope
+end 'Fail'
+
+function boom() throws Fail
+	throw Fail.nope
+end 'boom'
+
+type Wrap
+	export var v as String
+	export var why as Fail
+
+	export static function make(p String) returns Wrap
+		try boom() otherwise (p) 'caught'
+			return Wrap{v: "handled", why: p}
+		end 'caught'
+
+		return Wrap{v: "unreached", why: Fail.nope}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.make("the argument")
+	return w.v.count() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-closure-parameters-shadow-ends-at-its-line -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⭐ **A CLOSURE'S PARAMETERS BIND FOR THE ONE EXPRESSION AFTER `gives`, so the shadow is gone at the next
+newline.** `p` on the last line below is the promise parameter again, and its `await` is what enrols this
+frame the promise's owner. A shadow that outlived its line would leave nothing enrolled and
+`requireConsumedPromiseIsOwned` refuses the body at that very `await` (E3141) — which is the loud half of
+what a line column that never cleared would cost; the quiet half is a promise nobody reclaims.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Runtime.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise) returns Integer
+	let bump = function(p Integer) gives p + 1
+	let extra = bump(4)
+	return (await p) + extra
+end 'finish'
+
+function main() returns ExitCode
+	let outer = async work(1)
+	return finish(outer) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```

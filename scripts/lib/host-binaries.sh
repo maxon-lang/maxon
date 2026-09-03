@@ -32,5 +32,10 @@ esac
 # path this returns can tell them apart by looking at the tree.
 maxon_bootstrap_path() { printf '%s/bin/maxon%s' "${1:-.}" "$MAXON_EXE_EXT"; }
 
-# The shv2 compiler in <tree>. Also gitignored, and built BY the bootstrap.
+# The shv2 compiler in <tree> — the one everything here runs. Gitignored, and it is a STAGE-2 binary:
+# shv2 compiled by shv2. `scripts/build-shv2.sh` produces it.
 maxon_shv2_path() { printf '%s/maxon-shv2/.maxon/maxon-shv2%s' "${1:-.}" "$MAXON_EXE_EXT"; }
+
+# The bootstrap-emitted shv2 in <tree>. Its only job is to compile the binary above, so nothing else
+# should reach for it — except `self-host-ab.sh`, whose whole question is the gap between the two.
+maxon_shv2_seed_path() { printf '%s/maxon-shv2/.maxon/maxon-shv2-seed%s' "${1:-.}" "$MAXON_EXE_EXT"; }

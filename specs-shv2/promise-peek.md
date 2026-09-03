@@ -165,6 +165,60 @@ end 'main'
 7
 ```
 
+<!-- test: promise-peek.a-peek-through-a-function-leaves-the-promise-alone -->
+<!-- targets: x64-windows, arm64-linux -->
+⭐⭐ **THE PEEK BEHIND A FUNCTION, WHICH IS THE ONLY SHAPE THE HARNESS ACTUALLY WRITES.** Every case above
+peeks inline in `main`; `SpecWorkerPool.drainHasAnswered` does not — it takes the promise as a BY-VALUE
+PARAMETER and reads `.inner` out of it, which is also the shape this file's own prose measures
+(`function peek(p IntPromise) returns Integer`).
+
+⛔⛔ **A PROMISE PARAMETER USED TO BE OWNED BY THE CALLEE BY TYPE, SO EVERY SUCH PEEK CANCELLED THE
+CALLER'S THREAD.** The callee's scope exit ran `__gt_promise_drop`, the reclaim took the green thread back
+while the caller went on naming it, and the promise then never completed — so `before` and `after` both
+read 0 and the poll spun to its bound. It was invisible to every case here because none of them passed a
+promise anywhere. A callee OWNS a promise exactly when it CONSUMES it, which is what
+`the-handle-survives-a-field-chain` below pins from the other side.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function peek(p IntPromise) returns Integer
+	return __Builtins.gtIsComplete(p.inner)
+end 'peek'
+
+function main() returns ExitCode
+	let maxSpins = 100
+	let p = async makeValue()
+	let before = peek(p)
+	var spins = 0
+	var after = 0
+	while spins < maxSpins and after == 0 'drive'
+		Runtime.yield()
+		after = peek(p)
+		spins = spins + 1
+	end 'drive'
+	var score = 0
+	if before == 0 'notCompleteOnArrival'
+		score = score + 1
+	end 'notCompleteOnArrival'
+	if after == 1 'completeAfterTheDrive'
+		score = score + 2
+	end 'completeAfterTheDrive'
+	if await p == 42 'stillAwaitable'
+		score = score + 4
+	end 'stillAwaitable'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: promise-peek.two-promises-name-two-threads -->
 <!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
 `inner` distinguishes green threads: two spawns are two handles, and neither is null. This is the

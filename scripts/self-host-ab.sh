@@ -8,7 +8,8 @@
 # differently-emitted binaries isolates the codegen.
 #
 # What it does, in order:
-#   1. stage-1 = the tree's `maxon-shv2` (bootstrap-built). Builds stage-2 WITH stage-1, timed.
+#   1. stage-1 = the SEED, `maxon-shv2/.maxon/maxon-shv2-seed` (the bootstrap's product — the tree's
+#      everyday binary is stage-2, so stage-1 is not it). Builds stage-2 WITH stage-1, timed.
 #   2. Builds stage-3 WITH stage-2, timed, and `cmp`s it against stage-2 — the fixpoint gate. A
 #      difference here is a MISCOMPILE, and the rest of the reading would be about a broken binary.
 #   3. Runs `scale-test --repeat=3 --result-json` on stage-1 and stage-2, INTERLEAVED
@@ -79,13 +80,15 @@ fi
 
 out=temp/selfhost
 mkdir -p "$out"
-stage1="$(maxon_shv2_path .)"
+# The SEED, never the tree binary: the tree binary is already stage-2, so using it would compare a
+# stage-3 against a stage-2 and measure nothing (the fixpoint says they are the same bytes).
+stage1="$(maxon_shv2_seed_path .)"
 # `-o` is given WITHOUT the extension: the compiler appends the target's own.
 stage2="$out/stage2$MAXON_EXE_EXT"
 stage3="$out/stage3$MAXON_EXE_EXT"
 
 if [[ ! -x "$stage1" ]]; then
-	echo "self-host-ab.sh: no stage-1 compiler at $stage1 — build it first (build target=shv2)" >&2
+	echo "self-host-ab.sh: no seed compiler at $stage1 — run scripts/build-shv2.sh, which produces it" >&2
 	exit 1
 fi
 

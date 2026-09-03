@@ -1,0 +1,317 @@
+// RegAllocPool — THE REGISTER ALLOCATOR ON A POOL OF WORKER SERVICES, one per processor.
+//
+// ⛔ **THE WHOLE FILE IS BEHIND `#if compiler(shv2)`, AND IT HAS TO BE.** `spawn` and the synthesized
+// `<Service>.<method>.errors` are shv2's own; a binary the BOOTSTRAP built cannot carry them, and its
+// one job is to compile the compiler that can. `RegisterAllocator`'s `#else` arm is the serial loop that
+// seed runs. ⚠ A run under `MAXON_MAX_PROCS=1` does NOT take that arm — it is THIS pool with one
+// processor in it, which is what makes the pinned and the default lane the same code path and their
+// outputs comparable at all.
+#if compiler(shv2)
+
+// ⭐⭐ **WHY THIS PASS AND NOT ANOTHER.** MEASURED on a stage-2 self-compile: 59.7 s total, of which
+// `regalloc` is 42.4 s — 71% — and `regalloc:splitting` alone is 39.6 s. Nothing else in the compiler is
+// close. It is also the one big pass that is PER FUNCTION and shares nothing between functions: 8,478
+// functions, the ten largest holding 4% of the ops, so the work divides almost perfectly.
+//
+// ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker is
+// handed a `RegAllocUnit` nobody else can reach and hands back a `RegAllocResult` nobody else can reach.
+// Nothing is shared, so nothing is locked, and the plain (non-atomic) reference counting the whole
+// language rests on stays sound. `RegAllocUnit`'s header owns that argument.
+//
+// ⭐⭐ **AND THE OUTPUT DOES NOT DEPEND ON THE POOL.** Three things make that structural rather than
+// lucky:
+//
+//   * **The serial path runs the SAME extract → allocate → splice.** One processor is this pool with one
+//     worker in it, so the arithmetic on every function is the same arithmetic at every processor count.
+//   * **Splicing is order-independent.** A result writes this function's own blocks and recycles this
+//     function's own op slots; the only shared thing it touches is the TAIL of `module.ops`, and an op
+//     INDEX reaches no emitted byte — every consumer walks `blockRefs → opRefs → ops`
+//     (`X64Backend.emitFunctionChunk`), and `IrBlock`'s header states that nothing walks the flat array.
+//   * **Everything that is NOT order-independent is done in FUNCTION-INDEX ORDER on this thread.**
+//     `foldFunctionAllocation` is: the per-function trace event carries a CUMULATIVE counter and
+//     `RegAllocStats.recordPressure` keeps the FIRST function to reach a maximum, so folding in arrival
+//     order would make a debug report a function of the machine. It is folded after the drain instead.
+//
+// ⚠ **THE THREE THINGS A WORKER STRUCTURALLY CANNOT DO** are what shaped the split, and each is a rule
+// with teeth rather than a preference. It may not touch a module `var` — E3143, because a green thread
+// runs on whichever OS thread the scheduler gives it — which rules out the logger, the trace-span stack
+// and every `Project` table. It may not await — E3139 refuses a service that blocks on another, and this
+// one never sends. And it may not be handed anything a second frame still owns — E3138 at the send, exit
+// 96 at run time — which is why a unit is built inside the argument expression.
+
+// How many jobs are kept in flight PER WORKER.
+//
+// ⚠ **ONE IS TOO FEW, AND NOT AS A TUNING GUESS: with one, a worker is idle from the instant it posts a
+// reply until the driver has selected it, awaited it, SPLICED it — which walks the function's whole op
+// list — and built the next unit.** That splice is main-thread work proportional to the very function
+// the worker just finished, so at one job in flight the pool's throughput is bounded by the main
+// thread's serial half. Two means the next job is already in the worker's mailbox when it finishes one.
+//
+// More than two buys nothing and costs memory: a unit in flight is a full copy of one function's ops, so
+// the queue depth IS the pool's peak memory over the module.
+let JobsInFlightPerWorker = 2
+
+// A reply cell carrying one allocated function. `RegAllocWorker.allocate.errors` is the synthesized
+// fusion of `ServiceError` (the service can be gone) with what the message itself throws — see
+// `specs-shv2/services.md`; a promise declared over the bare `ServiceError` is E3098 here, because it
+// would erase the refusal.
+typealias RegAllocReply = Promise with (RegAllocResult, RegAllocWorker.allocate.errors)
+typealias RegAllocReplyArray = Array with RegAllocReply
+typealias RegAllocWorkerHandleArray = Array with RegAllocWorker.handle
+
+// The per-function landing slots the drain fills and the fold reads, in index order.
+typealias RegAllocCountersArray = Array with RegAllocCounters
+typealias RegAllocFactsArray = Array with RegAllocFacts
+typealias RegAllocCostsArray = Array with RegAllocCosts
+
+// A position in the pool's own arrays — a worker slot, an in-flight reply, a job in the dispatch order.
+typealias PoolSlot = int(0 to u64.max)
+
+// How many workers a pool holds, or how many functions it has to allocate. NARROWED to exclude zero,
+// which is what lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a
+// guard that has already answered for the empty module, and a range is how that guard is carried to the
+// arithmetic instead of being remembered at it.
+typealias PoolSize = int(1 to u32.max)
+
+// How many ops one function holds, and the packed longest-first sort key built from it.
+typealias FunctionOpTally = int(0 to u64.max)
+typealias FunctionOpTallyArray = Array with FunctionOpTally
+
+// ⭐⭐ **THE WORKER. Its whole state is the four per-ISA facts the allocator runs on**, derived once at
+// `spawn` from the two enums it is handed and never re-derived. `OpVariantFacts` especially: every fact
+// in it is a property of the DIALECT (which registers a `callDirect` clobbers, whether a `loadRegSlot`
+// touches a spill slot), so its natural lifetime is the whole compile — rebuilt per message it would
+// re-derive the ~30 cases each function's ops name and pay the column growth to hold them, on every
+// function the pool sees.
+//
+// ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`.** A `spawn`'s factory arguments are MOVED, and the
+// driver keeps its own `target` for the rest of the compile — so passing the record would be handing a
+// box to a second green thread while this one still holds it, which is E3138 at best and exit 96 at
+// worst. Two enums are scalars and copy.
+//
+// ⚠ **AND THE FOUR IT DERIVES ARE THE DRIVER'S OWN, NOT A SECOND OPINION OF THEM.** `Target` has exactly
+// those two fields, and each of the four comes from the same pure function the driver called — so the
+// reconstruction is exact, not approximate. That matters because the driver's copies are what a REFUSAL
+// is rendered against (`refuseForRegisterPressure`): a pool colouring against one pool while E5001
+// measured a deficit against another would be a diagnostic about a machine nobody compiled for.
+type RegAllocWorker
+	var pool as RegMask
+	var callerSaved as RegMask
+	var file as RegisterFile
+	var opFacts as OpVariantFacts
+
+	static function create(cpu CpuArch, os Os) returns Self
+		let target = Target.create(cpu, os: os)
+		return Self{pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), opFacts: OpVariantFacts.create()}
+	end 'create'
+
+	// The message. It never awaits and never sends, which is what makes the blocking graph E3139 checks
+	// trivially acyclic: a pool worker is a leaf.
+	export function allocate(unit RegAllocUnit) returns RegAllocResult throws RegAllocRefusal
+		return try RegAllocResult.byAllocating(unit, pool: self.pool, callerSaved: self.callerSaved, file: self.file, opFacts: self.opFacts)
+	end 'allocate'
+end 'RegAllocWorker'
+
+// ⭐⭐ **ALLOCATE EVERY FUNCTION ON A POOL OF `min(P, F)` WORKERS.**
+//
+// P is the SCHEDULER's resolved processor count, not the machine's: `MAXON_MAX_PROCS=1` resolves it to
+// one and the pool is then one worker, which is the whole of what pinning does here. F is the function
+// count, because a worker with no function to allocate is a mailbox and a green thread bought for
+// nothing.
+module function allocateOnAWorkerPool(module TargetModule, target Target, project Project, valueClasses ValueClassColumns, pool RegMask, callerSaved RegMask, file RegisterFile, opFacts OpVariantFacts, stats RegAllocStats) throws CompileError
+	let funcCount = module.funcCount()
+	let processors = __Builtins.schedProcessorCount()
+	let workerCount = processors if processors < funcCount else funcCount
+	// The only evidence that the allocator ran in PARALLEL rather than merely correctly: both
+	// byte-identity gates pass on a pool of one, so nothing else can tell a pool of one from a pool of
+	// sixteen. `tests/parallel-compile/` pins this line.
+	logDebug(LogCategory.codegen, message: function() gives "regalloc: {workerCount} worker(s) over {processors} processor(s), {funcCount} function(s)")
+
+	if funcCount == 0 'nothingToAllocate'
+		return
+	end 'nothingToAllocate'
+
+	// ⛔ **THE FLOOR IS ASKED, NOT ASSUMED.** `min(P, F)` is the pool size, so a resolved P of zero would
+	// make an EMPTY pool — and an empty pool allocates nothing, which is a program emitted with virtual
+	// registers still in it rather than a diagnostic. The scheduler clamps to one; this is where that
+	// promise is held to, because the alternative failure is silent.
+	if processors < 1 'theSchedulerResolvedNoProcessor'
+		panic("allocateOnAWorkerPool: the scheduler resolved {processors} processor(s), so the pool would be empty and no function would be allocated at all")
+	end 'theSchedulerResolvedNoProcessor'
+
+	let poolSize = workerCount as PoolSize
+
+	var workers = RegAllocWorkerHandleArray.create()
+	for _ in 0 upto workerCount 'eachWorker'
+		workers.push(spawn RegAllocWorker.create(target.cpu, os: target.os))
+	end 'eachWorker'
+
+	var counters = RegAllocCountersArray.create()
+	var facts = RegAllocFactsArray.create()
+	var costs = RegAllocCostsArray.create()
+	for _ in 0 upto funcCount 'eachFunction'
+		counters.push(RegAllocCounters.create())
+		facts.push(RegAllocFacts.create())
+		costs.push(RegAllocCosts.create())
+	end 'eachFunction'
+
+	// ⭐ **WHAT THE SCHEDULER DID WHILE THE POOL RAN.** A pool of W workers over P processors is only
+	// parallel if the runtime actually SPREADS it, and a work-STEAL is the one event that says an idle
+	// processor found a runnable green thread on another's queue. Zero steals at sixteen processors would
+	// mean the whole pool ran on the M that dispatched it — a correct compile at one processor's speed,
+	// which every other reading here would report as success.
+	let stealsBefore = __Builtins.schedStealCount()
+	let refused = drainThePool(module, valueClasses: valueClasses, workers: workers, workerCount: poolSize, counters: counters, facts: facts, costs: costs)
+	let stealsAfter = __Builtins.schedStealCount()
+	logDebug(LogCategory.codegen, message: function() gives "regalloc pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
+
+	// ⛔ **EVERY HANDLE GOES BEFORE THIS FRAME DOES.** Dropping the last handle to a service closes its
+	// mailbox, which is what lets the worker's green thread finish; a handle still held at process exit
+	// is a service that never ends and an exit that never comes.
+	workers.clear()
+
+	if refused < funcCount 'aFunctionDidNotFitTheMachine'
+		var refusedFunc = try module.functions.get(refused) otherwise panic("allocateOnAWorkerPool: functions.get OOB at the refused index {refused}")
+		try refuseForRegisterPressure(project, module: module, func: refusedFunc, funcIndex: refused, pool: pool, callerSaved: callerSaved, file: file, valueClass: classColumnFor(valueClasses, module: module, funcIndex: refused), opFacts: opFacts)
+	end 'aFunctionDidNotFitTheMachine'
+
+	for funcIndex in 0 upto funcCount 'foldInIndexOrder'
+		let func = try module.functions.get(funcIndex) otherwise panic("allocateOnAWorkerPool: functions.get OOB at {funcIndex}")
+		let functionCounters = try counters.get(funcIndex) otherwise panic("allocateOnAWorkerPool: counters.get OOB at {funcIndex}")
+		let functionCosts = try costs.get(funcIndex) otherwise panic("allocateOnAWorkerPool: costs.get OOB at {funcIndex}")
+		let functionFacts = try facts.get(funcIndex) otherwise panic("allocateOnAWorkerPool: facts.get OOB at {funcIndex}")
+		foldFunctionAllocation(project, stats: stats, func: func, counters: functionCounters, costs: functionCosts, facts: functionFacts)
+	end 'foldInIndexOrder'
+end 'allocateOnAWorkerPool'
+
+// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.**
+//
+// Answers the index of the LOWEST-NUMBERED function that refused, or the function count when none did —
+// which is what makes the refusal the same one a serial allocation would have reported, since a serial
+// one stops at the first refusing function in index order and a pool reaches them in whatever order.
+//
+// ⛔ **A REFUSAL DOES NOT END THE LOOP.** Every promise must be awaited (an un-awaited one is the
+// green-thread exit gate's own error, exit 75) and every handle released, so the compile is failed after
+// the drain and never inside it.
+//
+// ⚠ **`awaitAny` IS WHAT KEEPS THE POOL BUSY.** Awaiting the promises in dispatch order would idle every
+// worker that finished early behind whichever job is at the head — and the head is, by the longest-first
+// rule below, the biggest job in the module.
+function drainThePool(module TargetModule, valueClasses ValueClassColumns, workers RegAllocWorkerHandleArray, workerCount PoolSize, counters RegAllocCountersArray, facts RegAllocFactsArray, costs RegAllocCostsArray) returns FuncIndex
+	let funcCount = module.funcCount() as PoolSize
+	let order = functionsLongestFirst(module, funcCount: funcCount)
+	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
+	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
+	var refused = module.funcCount()
+
+	var replies = RegAllocReplyArray.create()
+	var replyJob = FuncIndexArray.create()
+	var replyWorker = FuncIndexArray.create()
+	var dispatched = 0 as PoolSlot
+
+	let pipeline = workerCount * JobsInFlightPerWorker
+	let inFlight = pipeline if pipeline < funcCount else funcCount
+	while dispatched < inFlight 'fillThePipeline'
+		let workerSlot = dispatched - (dispatched / workerCount) * workerCount
+		let job = try order.get(dispatched) otherwise panic("drainThePool: the dispatch order holds {order.count()} job(s) and slot {dispatched} is past the end")
+		dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: workerSlot, funcIndex: job, replies: replies, replyJob: replyJob, replyWorker: replyWorker)
+		dispatched = dispatched + 1
+	end 'fillThePipeline'
+
+	while replies.count() > 0 'serveWhoeverFinishedFirst'
+		let ready = __Builtins.awaitAny(replies)
+		let funcIndex = try replyJob.remove(ready) otherwise panic("drainThePool: replyJob.remove({ready}) — the three in-flight columns are pushed and removed together, so an index in one is an index in all three")
+		let freedWorker = try replyWorker.remove(ready) otherwise panic("drainThePool: replyWorker.remove({ready}) — the three in-flight columns are pushed and removed together")
+		let reply = try replies.remove(ready) otherwise panic("drainThePool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
+
+		if let result = try await reply 'allocated'
+			var func = try module.functions.get(funcIndex) otherwise panic("drainThePool: functions.get OOB at {funcIndex}")
+			spliceRegAllocResult(module, func: func, result: result)
+			try counters.set(funcIndex, value: result.counters) otherwise panic("drainThePool: counters.set OOB at {funcIndex}")
+			try facts.set(funcIndex, value: result.facts) otherwise panic("drainThePool: facts.set OOB at {funcIndex}")
+			try costs.set(funcIndex, value: result.costs) otherwise panic("drainThePool: costs.set OOB at {funcIndex}")
+		end 'allocated' else (e) 'notAllocated'
+			match e 'why'
+				// The worker's mailbox closed under a job in flight. Nothing here drops a handle before
+				// the drain has finished, so it means the worker's green thread DIED — a panic inside the
+				// allocator, whose message is already on stderr.
+				stopped then panic("drainThePool: the worker allocating function {funcIndex} is gone. This driver drops no handle until every reply has landed, so its green thread ended on its own — look above for the panic it printed.")
+				hotOverflow then refused = funcIndex if funcIndex < refused else refused
+			end 'why'
+		end 'notAllocated'
+
+		if dispatched < funcCount 'handTheFreedWorkerTheNextJob'
+			let job = try order.get(dispatched) otherwise panic("drainThePool: the dispatch order holds {order.count()} job(s) and slot {dispatched} is past the end")
+			dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: freedWorker, funcIndex: job, replies: replies, replyJob: replyJob, replyWorker: replyWorker)
+			dispatched = dispatched + 1
+		end 'handTheFreedWorkerTheNextJob'
+	end 'serveWhoeverFinishedFirst'
+
+	return refused
+end 'drainThePool'
+
+// Send ONE function to ONE worker.
+//
+// ⭐ **THE UNIT IS BUILT INSIDE THE ARGUMENT AND STORED NOWHERE**, which is E3138's rule and not a
+// style: a value this frame has taken a second reference to cannot be proven sole at the send, and the
+// only shape the check admits is a call whose every `return` is a record literal (see
+// `RegAllocUnit.extract`).
+function dispatchOneJob(module TargetModule, valueClasses ValueClassColumns, workers RegAllocWorkerHandleArray, workerSlot PoolSlot, funcIndex FuncIndex, replies RegAllocReplyArray, replyJob FuncIndexArray, replyWorker FuncIndexArray)
+	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneJob: workers.get OOB at {workerSlot} below count {workers.count()}")
+	let func = try module.functions.get(funcIndex) otherwise panic("dispatchOneJob: functions.get OOB at {funcIndex}")
+	replies.push(worker.allocate(RegAllocUnit.extract(module, func: func, valueClass: classColumnFor(valueClasses, module: module, funcIndex: funcIndex))))
+	replyJob.push(funcIndex)
+	replyWorker.push(workerSlot)
+end 'dispatchOneJob'
+
+// ⭐⭐ **THE DISPATCH ORDER: LONGEST JOB FIRST (LPT).**
+//
+// A pool that takes jobs in declaration order finishes when its unluckiest worker finishes, and the
+// worst case is the biggest function starting LAST: it then runs alone while every other worker idles.
+// Starting the longest job first bounds that, and the module's shape here is the friendly one — 8,478
+// functions with the ten largest holding 4% of the ops — so the tail is small work that fills the gaps
+// behind the big jobs.
+//
+// ⚠ **IT IS A THROUGHPUT HEURISTIC AND CANNOT REACH THE OUTPUT.** The emitted code is a function of the
+// FUNCTION order, which this does not change: `foldFunctionAllocation` runs in index order and splicing
+// is order-independent (see this file's header). A different order here is a different wall time and the
+// same bytes.
+//
+// The key packs (op count, function index) into ONE integer, so ordering is a plain ascending sort of
+// scalars with no comparator closure to carry: `opCount * funcCount + funcIndex` is injective for
+// `funcIndex < funcCount`, and it is bounded by the module's total op count times its function count.
+// Read back DESCENDING, which is what makes it longest-first.
+function functionsLongestFirst(module TargetModule, funcCount PoolSize) returns FuncIndexArray
+	var keys = FunctionOpTallyArray.create()
+	for funcIndex in 0 upto funcCount 'eachFunc'
+		let func = try module.functions.get(funcIndex) otherwise panic("functionsLongestFirst: functions.get OOB at {funcIndex}")
+		keys.push(liveOpTallyOf(module, func: func) * funcCount + funcIndex)
+	end 'eachFunc'
+	keys.sort()
+
+	var order = FuncIndexArray.create()
+	for k in 0 upto keys.count() 'largestFirst'
+		let key = try keys.get(keys.count() - 1 - k) otherwise panic("functionsLongestFirst: keys.get OOB walking back from {keys.count()}")
+		order.push(key - (key / funcCount) * funcCount)
+	end 'largestFirst'
+
+	return order
+end 'functionsLongestFirst'
+
+// How many ops one function holds. Counted rather than collected: `IrModule.liveOpIndices` answers the
+// same number and allocates an array per function to do it, and this runs on every function of every
+// compile.
+function liveOpTallyOf(module TargetModule, func IrFunction) returns FunctionOpTally
+	var tally = 0 as FunctionOpTally
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("liveOpTallyOf: blockRef {blockRef} is not in module.blocks")
+		tally = tally + block.opRefs.count()
+		if block.hasTerminatorOp() 'hasTerminator'
+			tally = tally + 1
+		end 'hasTerminator'
+	end 'eachBlock'
+
+	return tally
+end 'liveOpTallyOf'
+
+#endif

@@ -289,6 +289,25 @@ export let MmCounterRawAllocTotalName = b"__mm_counter_raw_alloc_total"
 export let MmCounterRawAllocLiveName = b"__mm_counter_raw_alloc_live"
 export let MmCounterRawAllocBytesName = b"__mm_counter_raw_alloc_bytes"
 
+// ⭐⭐⭐ **THE THREE PER-THREAD COLUMNS — the same six words' worth of question asked of ONE GREEN THREAD.**
+// The six above are process-wide, which is exact while one thread allocates and worthless the moment a pool
+// does: a bracket opened inside a worker counts every other worker's traffic. `GtRuntime.GtOffThreadAllocs`
+// carries the measurement that forced them and the ownership argument that lets them be stepped unlocked.
+//
+// ⚠ **THEY SUM BOTH LAYERS, where the six above are per-layer**, because `PhaseProbe` adds tracked and raw
+// before it reports any figure — so a per-layer split here would be two more names and two more reads for a
+// distinction no caller of these makes.
+//
+// ⚠ **`frees` IS COUNTED, NOT DERIVED**, which is the one place the two families' shapes differ: `Δtotal −
+// Δlive` needs a LIVE column, and a live count per green thread would be meaningless (a thread does not own
+// the boxes it allocated, and it may exit with them alive and in use).
+//
+// They wear the `__mm_counter_` prefix for their siblings' reason: it is what turns on the allocation-path
+// maintenance those columns oblige, and what makes a program that reads one carry the allocator it reads.
+export let MmCounterThreadAllocsName = b"__mm_counter_thread_allocs"
+export let MmCounterThreadFreesName = b"__mm_counter_thread_frees"
+export let MmCounterThreadAllocBytesName = b"__mm_counter_thread_alloc_bytes"
+
 // ⭐ **DOES THIS CALLEE READ THE ALLOCATOR'S TRAFFIC COUNTERS?** The `__mm_counter_`-only test — a strict
 // refinement of `isRuntimeCallee` above it, and the thing `RuntimeUsage.usesMmCounters` reads. A PREFIX
 // rather than six name compares for `isProcessRuntimeCallee`'s reason: a seventh column added later is
@@ -636,7 +655,7 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 
 	buildMmAlloc(module, usage: usage)
 	buildMmDecref(module)
-	buildMmFree(module, multiM: usage.usesGt)
+	buildMmFree(module, multiM: usage.usesGt, perThread: usage.usesMmCounters and usage.usesGt)
 	buildMmLeakCheck(module, usage: usage)
 	if usage.usesIncref or usage.usesManagedMemory 'incref'
 		buildMmIncref(module)
@@ -674,8 +693,8 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	// mirror reason: it exists to debit a column, so a build with no column has nothing for it to do and
 	// `rawSlabFreeCallee` sends its callers straight to `__slab_free`.
 	if usage.usesMmCounters 'trafficCounters'
-		buildMmCounterAccessors(module)
-		buildMmRawFree(module, multiM: usage.usesGt)
+		buildMmCounterAccessors(module, usesGt: usage.usesGt)
+		buildMmRawFree(module, multiM: usage.usesGt, perThread: usage.usesGt)
 	end 'trafficCounters'
 end 'installMmRuntime'
 
@@ -1453,17 +1472,22 @@ end 'closeWordTailSplit'
 // columns (`Δtotal − Δlive`), and a byte volume answers "how much did this phase move", which a
 // subtraction would destroy. A live BYTE figure would need the freed region's size, which the free door is
 // not handed and the slot's class would only approximate.
-export function emitRawTrafficCredit(module StdModule, block IrBlock, bytes ValueId, multiM bool, ids ValueMinter)
+// ⚠ **IT TERMINATES `block` AND ANSWERS THE BLOCK TO CONTINUE IN**, because the per-thread columns are a
+// branch (see `emitThreadTrafficStep`) where the process-wide ones are three adds. `perThread` is the
+// green-thread bit rather than the counter bit: the counters are already on wherever this is called from.
+export function emitRawTrafficCredit(module StdModule, func IrFunction, block IrBlock, bytes ValueId, multiM bool, perThread bool, ids ValueMinter) returns IrBlock
 	let credit = emitConst(module, block: block, value: OneMore, ids: ids)
 	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocCountLabel, delta: credit, multiM: multiM, ids: ids)
 	_ = emitGlobalAccumulate(module, block: block, label: MmRawLiveCountLabel, delta: credit, multiM: multiM, ids: ids)
 	_ = emitGlobalAccumulate(module, block: block, label: MmRawAllocBytesLabel, delta: bytes, multiM: multiM, ids: ids)
+
+	return emitThreadAllocCredit(module, func: func, cur: block, credit: credit, bytes: bytes, perThread: perThread, ids: ids)
 end 'emitRawTrafficCredit'
 
 // `__mm_raw_free(ptr)` — debit the raw live column, then hand the region to the slab. Built only in a
 // counted build (see `MmRawFreeName`); `rawSlabFreeCallee` is what routes callers to `__slab_free`
 // otherwise, so an uncounted build carries exactly one free door, as it always has.
-function buildMmRawFree(module StdModule, multiM bool)
+function buildMmRawFree(module StdModule, multiM bool, perThread bool)
 	var func = IrFunction.createFromStd(MmRawFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1473,11 +1497,39 @@ function buildMmRawFree(module StdModule, multiM bool)
 
 	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
 	_ = emitGlobalAccumulate(module, block: entry, label: MmRawLiveCountLabel, delta: debit, multiM: multiM, ids: ids)
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(ptr)))
-	module.setTerminator(entry, op: StdOp.retVoid)
+	var out = emitThreadFreeCredit(module, func: func, cur: entry, perThread: perThread, ids: ids)
+	module.appendOp(out, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(ptr)))
+	module.setTerminator(out, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMmRawFree'
+
+// ⭐ **ONE FREE, ON THE THREAD THAT PERFORMED IT — `emitThreadAllocCredit`'s twin, and the ONE spelling
+// both free doors take.** The two doors debit different process-wide columns (a tracked live count, a raw
+// one) but the per-thread question is the same at both, so it is stated once. It terminates `cur` and
+// answers the block to continue in.
+function emitThreadFreeCredit(module StdModule, func IrFunction, cur IrBlock, perThread bool, ids ValueMinter) returns IrBlock
+	if not perThread 'noGreenThreads'
+		return cur
+	end 'noGreenThreads'
+
+	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
+	let oneFree = emitConst(module, block: cur, value: OneMore, ids: ids)
+	return emitThreadTrafficStep(module, func: func, cur: cur, allocsDelta: nothing, freesDelta: oneFree, bytesDelta: nothing, ids: ids)
+end 'emitThreadFreeCredit'
+
+// ⭐ **ONE ALLOCATION OF `bytes` BYTES, ON THE THREAD THAT PERFORMED IT — the ONE spelling both alloc doors
+// take.** `credit` is the caller's own `OneMore`, already emitted for the process-wide columns: minting a
+// second one here would add an op to every counted allocation site for a value that is already in hand. It
+// terminates `cur` and answers the block to continue in.
+function emitThreadAllocCredit(module StdModule, func IrFunction, cur IrBlock, credit ValueId, bytes ValueId, perThread bool, ids ValueMinter) returns IrBlock
+	if not perThread 'noGreenThreads'
+		return cur
+	end 'noGreenThreads'
+
+	let noFrees = emitConst(module, block: cur, value: 0, ids: ids)
+	return emitThreadTrafficStep(module, func: func, cur: cur, allocsDelta: credit, freesDelta: noFrees, bytesDelta: bytes, ids: ids)
+end 'emitThreadAllocCredit'
 
 // `__mm_alloc(size, destructor) -> ptr` — a managed box: a header plus `size` bytes of payload.
 //
@@ -1577,6 +1629,9 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	if usage.usesMmCounters 'trackedColumns'
 		_ = emitGlobalAccumulate(module, block: block, label: MmAllocTotalLabel, delta: credit, multiM: usage.usesGt, ids: ids)
 		_ = emitGlobalAccumulate(module, block: block, label: MmAllocBytesLabel, delta: size, multiM: usage.usesGt, ids: ids)
+
+		// The same credit on the CALLING GREEN THREAD's own columns. It BRANCHES, so it moves the cursor.
+		block = emitThreadAllocCredit(module, func: func, cur: block, credit: credit, bytes: size, perThread: usage.usesGt, ids: ids)
 	end 'trackedColumns'
 
 	let payload = ids.mint()
@@ -2110,7 +2165,7 @@ end 'emitBoxAllocationBase'
 // before the poison is the local change. It is NOT written now — every struct at this rung is trivially
 // owned, so the pointer is always 0 and the call would be emitted-but-never-taken, the `mintPhi` failure
 // exactly.
-function buildMmFree(module StdModule, multiM bool)
+function buildMmFree(module StdModule, multiM bool, perThread bool)
 	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -2134,6 +2189,7 @@ function buildMmFree(module StdModule, multiM bool)
 	// nothing.
 	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
 	_ = emitGlobalAccumulate(module, block: entry, label: MmAllocCountLabel, delta: debit, multiM: multiM, ids: ids)
+	entry = emitThreadFreeCredit(module, func: func, cur: entry, perThread: perThread, ids: ids)
 
 	// The payload size the alloc recorded in the header; the range to poison is exactly `[ptr, ptr + size)`.
 	// The fill itself is the shared `StdOp.memFill` (the slab's recycled-slot zeroer and the array
@@ -2179,14 +2235,163 @@ end 'buildMmFree'
 // answer anything. Six bits would be six declarations to save about thirty instructions in the one build
 // that already asked for the counters, while the cost this family actually has — the MAINTENANCE on the
 // allocation path — is gated by the bit that is here.
-function buildMmCounterAccessors(module StdModule)
+function buildMmCounterAccessors(module StdModule, usesGt bool)
 	buildGlobalReader(module, name: MmCounterAllocTotalName, label: MmAllocTotalLabel)
 	buildGlobalReader(module, name: MmCounterAllocLiveName, label: MmAllocCountLabel)
 	buildGlobalReader(module, name: MmCounterAllocBytesName, label: MmAllocBytesLabel)
 	buildGlobalReader(module, name: MmCounterRawAllocTotalName, label: MmRawAllocCountLabel)
 	buildGlobalReader(module, name: MmCounterRawAllocLiveName, label: MmRawLiveCountLabel)
 	buildGlobalReader(module, name: MmCounterRawAllocBytesName, label: MmRawAllocBytesLabel)
+
+	buildThreadCounterReader(module, name: MmCounterThreadAllocsName, offset: GtOffThreadAllocs, usesGt: usesGt, column: ThreadColumn.allocs)
+	buildThreadCounterReader(module, name: MmCounterThreadFreesName, offset: GtOffThreadFrees, usesGt: usesGt, column: ThreadColumn.frees)
+	buildThreadCounterReader(module, name: MmCounterThreadAllocBytesName, offset: GtOffThreadAllocBytes, usesGt: usesGt, column: ThreadColumn.bytes)
 end 'buildMmCounterAccessors'
+
+// ⭐⭐ **WHICH PER-THREAD COLUMN A READER ANSWERS — and it exists for the SINGLE-THREADED arm, not for the
+// green-thread one.** With green threads the answer is one field load and the offset says everything; with
+// none, there is no green thread to read and the honest answer is the process's own traffic, which is a
+// DIFFERENT expression per column (a sum of two words for `allocs` and `bytes`, a difference of two sums for
+// `frees`). The offset cannot say that, so the column does.
+union ThreadColumn
+	allocs
+	frees
+	bytes
+end 'ThreadColumn'
+
+// ⭐⭐ **`__mm_counter_thread_*()` — WHAT THE CALLING GREEN THREAD HAS ALLOCATED OR FREED.**
+//
+// **WITH GREEN THREADS** it walks TLS to the M, to its running GT, to that GT's OWNER, and answers the
+// owner's field. The owner and not the running GT, because a coroutine is its owner's work: `async` frames
+// are driven by their owner's chain of drivers on their owner's M, so billing them to the coroutine would
+// put a bracket's own allocations outside the bracket. A thread that has none of the three yet — no
+// scheduler, no M, no running GT — answers 0, which is the true count for a process that has not allocated
+// on one.
+//
+// **WITHOUT THEM** there is exactly one thread of execution, so *"what has the calling thread allocated"* is
+// *"what has this process allocated"*, and the reader answers the same words the six global readers do. That
+// is an ANSWER rather than a fallback: single-threaded, the two questions are the same question, and a 0
+// here would be a sentinel for "not applicable" in a family whose whole contract is that it reports numbers.
+function buildThreadCounterReader(module StdModule, name ByteArray, offset ByteOffset, usesGt bool, column ThreadColumn)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	if not usesGt 'oneThreadOfExecution'
+		let processWide = emitProcessWideColumn(module, block: entry, column: column, ids: ids)
+		module.setTerminator(entry, op: StdOp.ret(processWide))
+		module.functions.push(func)
+		return
+	end 'oneThreadOfExecution'
+
+	var haveThread = module.addBlock(func, label: b"havethread")
+	var answer = module.addBlock(func, label: b"answer")
+	let count = ids.mint()
+	answer.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
+
+	let thread = ids.mint()
+	var ready = emitCurrentThreadOrZero(module, func: func, cur: entry, threadId: thread, ids: ids)
+	let zero = emitConst(module, block: ready, value: 0, ids: ids)
+	let noThread = emitCmp(module, block: ready, a: thread, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(ready, op: StdOp.condBranch(noThread, thenBlockId: answer.id, elseBlockId: haveThread.id))
+	ready.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(zero)))
+
+	let field = emitLoadField(module, block: haveThread, record: thread, offset: offset, ids: ids)
+	module.setTerminator(haveThread, op: StdOp.branch(answer.id))
+	haveThread.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(field)))
+
+	module.setTerminator(answer, op: StdOp.ret(count))
+	module.functions.push(func)
+end 'buildThreadCounterReader'
+
+// The single-threaded arm's answer, per column — see `buildThreadCounterReader` for why the two arms differ
+// in shape and why this one is an answer rather than a stand-in. Both layers, exactly as the per-thread
+// columns sum both.
+function emitProcessWideColumn(module StdModule, block IrBlock, column ThreadColumn, ids ValueMinter) returns ValueId
+	match column 'which'
+		allocs then return emitLayerSum(module, block: block, tracked: MmAllocTotalLabel, raw: MmRawAllocCountLabel, ids: ids)
+		bytes then return emitLayerSum(module, block: block, tracked: MmAllocBytesLabel, raw: MmRawAllocBytesLabel, ids: ids)
+		frees then break 'which'
+	end 'which'
+
+	// `freed = total - live`, per layer and then summed — the identity the global family rests on.
+	let total = emitLayerSum(module, block: block, tracked: MmAllocTotalLabel, raw: MmRawAllocCountLabel, ids: ids)
+	let live = emitLayerSum(module, block: block, tracked: MmAllocCountLabel, raw: MmRawLiveCountLabel, ids: ids)
+	return emitBin(module, block: block, a: total, b: live, opcode: StdBinOpcode.sub, ids: ids)
+end 'emitProcessWideColumn'
+
+function emitLayerSum(module StdModule, block IrBlock, tracked ByteArray, raw ByteArray, ids ValueMinter) returns ValueId
+	let trackedWord = emitLoadGlobalWord(module, block: block, label: tracked, ids: ids)
+	let rawWord = emitLoadGlobalWord(module, block: block, label: raw, ids: ids)
+	return emitBin(module, block: block, a: trackedWord, b: rawWord, opcode: StdBinOpcode.add, ids: ids)
+end 'emitLayerSum'
+
+// ⭐⭐ **THE GREEN THREAD THE CALLER'S ALLOCATIONS BELONG TO, or 0 when there is none yet.** It terminates
+// `cur` and returns the block to continue in, whose single block argument is the answer — the shape every
+// branching emit helper in this runtime uses, because the Std tier has no select.
+//
+// ⚠ **THE OWNER, NOT THE RUNNING GT** — see `buildThreadCounterReader`. A null running GT answers 0 rather
+// than reading `owner` through it: an M exists with no GT for the few instructions of its own bring-up, and
+// the IOCP completion thread has one for its whole life.
+function emitCurrentThreadOrZero(module StdModule, func IrFunction, cur IrBlock, threadId ValueId, ids ValueMinter) returns IrBlock
+	var haveOffset = module.addBlock(func, label: b"thoffset")
+	var haveMachine = module.addBlock(func, label: b"thmachine")
+	var haveGt = module.addBlock(func, label: b"thgt")
+	var merge = module.addBlock(func, label: b"thmerge")
+	merge.blockArgs.push(IrBlockArg.create(threadId, argType: StdType.i64))
+
+	var noThread = ParsedIntArray.create()
+	noThread.push(0)
+	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: merge, bailValues: noThread, ids: ids)
+
+	let gt = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
+	let machineZero = emitConst(module, block: haveMachine, value: 0, ids: ids)
+	let idle = emitCmp(module, block: haveMachine, a: gt, b: machineZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveMachine, op: StdOp.condBranch(idle, thenBlockId: merge.id, elseBlockId: haveGt.id))
+	haveMachine.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(machineZero)))
+
+	let owner = emitLoadField(module, block: haveGt, record: gt, offset: GtOffOwner, ids: ids)
+	module.setTerminator(haveGt, op: StdOp.branch(merge.id))
+	haveGt.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(owner)))
+
+	return merge
+end 'emitCurrentThreadOrZero'
+
+// ⭐⭐⭐ **STEP THE CALLING GREEN THREAD'S TRAFFIC COLUMNS — the per-thread twin of the
+// `emitGlobalAccumulate` calls beside it, and the ONE place the walk is spelled.**
+//
+// A column a site does not move takes a ZERO delta rather than a second, shorter emitter: the walk is what
+// costs, and two entry points would be two places for "which columns does an allocation move" to be stated.
+// The adds themselves land on a word this walk has already brought into cache.
+//
+// ⚠ **UNLOCKED AND NON-ATOMIC ON PURPOSE** — `GtRuntime.GtOffThreadAllocs` carries the ownership argument:
+// the only party that can step these words is the one green thread they belong to.
+//
+// It terminates `cur` and returns the block to continue in.
+function emitThreadTrafficStep(module StdModule, func IrFunction, cur IrBlock, allocsDelta ValueId, freesDelta ValueId, bytesDelta ValueId, ids ValueMinter) returns IrBlock
+	var step = module.addBlock(func, label: b"thstep")
+	let done = module.addBlock(func, label: b"thdone")
+
+	let thread = ids.mint()
+	var ready = emitCurrentThreadOrZero(module, func: func, cur: cur, threadId: thread, ids: ids)
+	let zero = emitConst(module, block: ready, value: 0, ids: ids)
+	let noThread = emitCmp(module, block: ready, a: thread, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(ready, op: StdOp.condBranch(noThread, thenBlockId: done.id, elseBlockId: step.id))
+
+	emitThreadColumnStep(module, block: step, thread: thread, offset: GtOffThreadAllocs, delta: allocsDelta, ids: ids)
+	emitThreadColumnStep(module, block: step, thread: thread, offset: GtOffThreadFrees, delta: freesDelta, ids: ids)
+	emitThreadColumnStep(module, block: step, thread: thread, offset: GtOffThreadAllocBytes, delta: bytesDelta, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(done.id))
+
+	return done
+end 'emitThreadTrafficStep'
+
+function emitThreadColumnStep(module StdModule, block IrBlock, thread ValueId, offset ByteOffset, delta ValueId, ids ValueMinter)
+	let before = emitLoadField(module, block: block, record: thread, offset: offset, ids: ids)
+	let after = emitBin(module, block: block, a: before, b: delta, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: thread, offset: offset, value: after)
+end 'emitThreadColumnStep'
 
 // `name() -> i64` — the i64 held in one `.data` word. The read is deliberately RACY against a concurrently
 // allocating thread, exactly as asking a running program how much memory it has allocated is: a caller that

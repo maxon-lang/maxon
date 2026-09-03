@@ -4512,16 +4512,38 @@ end 'managedFieldDropCallee'
 // a bare `__mm_incref` stepped only the box. That asymmetry is the bug; a refcount-checked close is not one.
 // A future aggregate whose drop releases more than the box owes an arm here, and it earns one by having that
 // shape — not by owning an OS handle.
-export function managedNameRetainCallee(signatures ProgramSignatures, declaredName ByteArray) returns ByteArray
+export function managedNameRetainCallee(signatures ProgramSignatures, declaredName ByteArray, result RetainResult) returns ByteArray
 	return match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
 		// Kept apart from `userDeclared` below though the callee is the same: these three answer it because
 		// their destruct is refcount-checked, that one because a plain box is a plain box. Same answer, two
 		// different reasons, and the day either reason changes only one arm should move.
-		managedFile to managedSocket gives MmIncrefName
+		managedFile to managedSocket gives plainBoxRetainCallee(result)
+		// ONE entry for both shapes: it hands the box back (`MailboxRuntime.buildMboxHandleRetainBox`), so a
+		// caller wanting a fresh name uses the result and a caller retaining in place ignores it.
 		serviceHandle gives MboxHandleRetainBoxName
-		userDeclared gives MmIncrefName
+		userDeclared gives plainBoxRetainCallee(result)
 	end 'compilerOwned'
 end 'managedNameRetainCallee'
+
+// ⭐⭐ **THE TWO SHAPES A RETAIN IS ASKED FOR, AND WHY THE SHAPE IS AN ARGUMENT RATHER THAN A SECOND
+// SELECTOR.** A retain is needed either for EFFECT — the caller already holds the box's ValueId — or for a
+// FRESH SSA NAME of the same box, which is what a borrow promoted to an owned binding needs
+// (`Parser.retainBorrowedAggregate`). Which FAMILY of entries a value takes is one decision; which shape it
+// is wanted in is another, and splitting them into two selectors is how the returning door came to spell
+// `__mm_retain` unconditionally and free a live mailbox out from under an array's handle (W232's defect, one
+// door over).
+export enum RetainResult
+	discarded
+	freshName
+end 'RetainResult'
+
+// A plain managed box has one entry per shape, because `__mm_incref` returns nothing.
+export function plainBoxRetainCallee(result RetainResult) returns ByteArray
+	return match result 'shape'
+		discarded gives MmIncrefName
+		freshName gives MmRetainName
+	end 'shape'
+end 'plainBoxRetainCallee'
 
 function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteArray) returns ByteArray
 	// ⭐⭐ **A COMPILER-OWNED AGGREGATE TAKES A COMPILER-OWNED DROP, AND IS ASKED BEFORE THE DECLARED-STRUCT
@@ -23003,9 +23025,39 @@ export type ProgramSignatures
 	function promiseResultArgFor(returnType MaxonReturnType) returns MaxonType
 		return match returnType 'r'
 			void gives MaxonType.named(self.typeNames.intern(PromiseVoidResultName))
-			value(inner) gives inner
+			value(inner) gives promiseAggregateArgAsName(inner)
 		end 'r'
 	end 'promiseResultArgFor'
+
+	// ⛔⛔ **A DECLARED-TYPE RESULT CROSSES INTO THE INSTANCE AS A `named` LEAF, AND THAT IS THE WHOLE OF
+	// WHAT MAKES THE TWO ROADS ONE INSTANCE (E3006).**
+	//
+	// `internPromiseInstanceForCallee`'s header rests the storage rule on the gid a `spawn` or a send gets
+	// being the SAME gid an author's `typealias P = Promise with (T, E)` resolves to — and `intern`'s key is
+	// the argument's whole `MaxonType`, TAG INCLUDED, not just its name id. A declared `returns Payload`
+	// arrives from `returnTypes` tagged `structRef`; the same `Payload` written as a type ARGUMENT arrives
+	// from the alias sweep tagged `named`. Two tags, ONE name id, and `mangleTypeArg` renders both as
+	// `Payload` — so the two roads interned two instances that compile to one symbol, which is exactly the
+	// pair collision `checkTypeSymbolNamespace` reports.
+	//
+	// ⚠ **MEASURED: it made every record-valued reply unstorable.** `typealias R = Promise with (Payload,
+	// ServiceError)` beside a `spawn` was `error E3006: duplicate definition of
+	// 'Promise_Payload_ServiceError' — the generic instantiations `Promise with (Payload, ServiceError)` and
+	// `Promise with (Payload, ServiceError)` compile to that same name` — one sentence naming one type
+	// twice, on a program with one of each. A SCALAR result never showed it: an `Integer` argument carries no
+	// name and so no second tag, which is why the whole committed `Promise with (Integer, …)` family is green
+	// over it.
+	//
+	// ⭐ **THE NAME SIDE IS UNCHANGED, so nothing emitted moves.** `mangleTypeArg` already answers with the
+	// name for both tags (`tagMayNameAggregate`), so this re-tagging cannot rename a symbol, a descriptor or
+	// a golden — it only stops one type being interned twice.
+	function promiseAggregateArgAsName(inner MaxonType) returns MaxonType
+		if not tagIsStructRef(maxonTypeTag(inner)) 'namesNoDeclaredType'
+			return inner
+		end 'namesNoDeclaredType'
+
+		return MaxonType.named(typeNameIdOf(inner))
+	end 'promiseAggregateArgAsName'
 
 	export function internSynthesizedByteInstance() returns GenericInstanceId
 		var args = MaxonTypeArray.create()

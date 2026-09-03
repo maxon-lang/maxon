@@ -52,6 +52,14 @@ export typealias TokenIndexArray = Array with TokenIndex
 // range: nesting is unbounded.
 typealias BlockDepth = int(0 to u64.max)
 
+// ⭐ **WHERE A PARAMETER'S NAME STOPPED DENOTING THE PARAMETER — the `BlockDepth` of the local that rebound
+// it, PLUS ONE.** Zero is "still the parameter", which is what a column grown at the fact starts every slot
+// at, so the offset is what tells a rebinding at the body's own depth 0 from no rebinding at all.
+typealias ParamShadowDepth = int(0 to u64.max)
+
+// One `ParamShadowDepth` per parameter of the body `Parser.scanBodyFacts` is walking.
+typealias ParamShadowColumn = Array with ParamShadowDepth
+
 // How many `[` are open around a token — the depth at which a NEWLINE is layout rather than the end of a
 // top-level initializer (see `initializerEndIndex`). A separate alias from `BlockDepth` because it counts a
 // different thing: an array literal opens no block, and a block keyword opens no bracket.
@@ -2272,14 +2280,12 @@ let sharedEmptyWitnessSlots = WitnessSlotsByInterfaceMap.create()
 // whole compile — the discipline every `sharedEmpty*` here states.
 let sharedEmptyRequirementSlots = CollectedInterfaceMethodArray.create()
 
-// The module-level shared empty CALL-ALIGNED parameter-name list the declaration sweep leaves in hand for a
-// declaration it does not walk the parameters of — a NON-GENERIC instance method, which needs neither the
-// consume scan (its direct field stores are the callee-side refusal's business, `detectFieldStores: false`)
-// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanBodyFacts` skips its
-// whole parameter half on an empty list (`scansParams`), which is exactly the "not walked" behaviour, so the
-// one shared array is what makes that single call site able to serve every declaration shape. Never mutated;
-// ONE allocation for the whole compile, the discipline every `sharedEmpty*` here states.
-let sharedEmptyScannedParamNames = ByteArrayArray.create()
+// ⭐ **WHERE `<receiver> . cancel ( )`'s RECEIVER AND ITS QUALIFIER SIT, counted back from the method-name
+// token the sweep stands on** (`Parser.promiseConsumeDoorParamAt`). The qualifier is the token that would
+// make the receiver a member rather than a bare name, and being the further of the two it is the index
+// floor that keeps both reads inside the token array.
+let PromiseCancelReceiverBack = 2 as TokenIndex
+let PromiseCancelQualifierBack = 3 as TokenIndex
 
 // ⭐ THE ONE "the sweep did not read this parameter's type" value, shared — see `Parser.sweptParamTypeAt`.
 // A payload-free `MaxonType` case is still a heap object in Maxon, and this is pushed once per parameter of
@@ -5353,6 +5359,19 @@ let BuiltinsMmRawAllocTotalName = b"__Builtins.mmRawAllocTotal"
 let BuiltinsMmRawAllocLiveName = b"__Builtins.mmRawAllocLive"
 let BuiltinsMmRawAllocBytesName = b"__Builtins.mmRawAllocBytes"
 
+// ⭐⭐ **THE THREE PER-THREAD COLUMNS — the six above asked of ONE GREEN THREAD.** The process-wide six are
+// exact while one thread allocates and worthless the moment a pool does: a bracket opened inside a worker
+// counts every other worker's traffic, which is what made `PhaseProbe`'s register-allocator sub-phase rows
+// fiction at sixteen processors. `MmRuntime.MmCounterThreadAllocsName` owns what each answers and what a
+// single-threaded program gets; this file only routes the names.
+//
+// ⚠ **NEITHER REFERENCE DECLARES THEM.** The bootstrap counts memory process-wide only, and the pool that
+// needs the distinction is `#if compiler(shv2)` — so the surface is invented here on the
+// argumentless-integer shape the six already have.
+let BuiltinsThreadAllocTotalName = b"__Builtins.threadAllocTotal"
+let BuiltinsThreadFreeTotalName = b"__Builtins.threadFreeTotal"
+let BuiltinsThreadAllocBytesName = b"__Builtins.threadAllocBytes"
+
 // ⭐⭐ **`__Builtins.scavengeMemory()` — THE ALLOCATOR'S RECLAMATION DOOR (S6).** It hands every idle span's
 // pages back to the operating system and ANSWERS THE BYTE COUNT, which is why it takes the
 // argumentless-INTEGER door beside the counters rather than the void one: the number is the only thing a
@@ -5428,8 +5447,10 @@ let SubpHandleArity = 1 as ParamCount
 // carry the identical FIVE (the bootstrap's `BuiltinOps1` table, 2-Parser.cs:873; v1's
 // `isMathIntrinsicName`, TypeResolution.maxon:11613).
 //
-// ⚠ Like `trunc`, each name is RESERVED wherever a call is parsed: a user `function sqrt` is shadowed by
-// this and never linked, undiagnosed. v1 has the identical property for the identical set.
+// ⚠ Like `trunc`, each name is the compiler's ONLY while no file declares one: a user `function sqrt` takes
+// the name back and its call is linked (`parseCallNamed`'s `shadowedByADeclaration`). v1 and the bootstrap
+// both keep the reservation unconditional, which makes the declaration unreachable with no diagnostic
+// anywhere — a divergence, and the reason for it is that a shadowed declaration has no other symptom.
 let FloorBuiltinName = b"floor"
 let CeilBuiltinName = b"ceil"
 let RoundBuiltinName = b"round"
@@ -5448,10 +5469,9 @@ let AbsBuiltinName = b"abs"
 // comparison is false on unordered whichever direction it points, so both settle NaN and signed zero
 // by the same clause. The reasoning is stated ONCE, in `StdBinOpcode`'s `min`/`max` header.
 //
-// ⚠ Like every bare builtin, each name is RESERVED wherever a call is parsed: a user `function min`
-// is shadowed by this and never linked, undiagnosed. v1 and the bootstrap have the identical property
-// for the identical set, and `stdlib/`, `specs/` and `specs-shv2/` declare no `min` or `max` for
-// either to shadow.
+// ⚠ Like every bare builtin, each name is the compiler's only while no file declares one — see the arity-1
+// siblings above for the rule and for where shv2 departs from both reference compilers on it. `stdlib/`,
+// `specs/` and `specs-shv2/` declare no `min` or `max`, so nothing in the tree exercises the departure here.
 let MinBuiltinName = b"min"
 let MaxBuiltinName = b"max"
 
@@ -6106,7 +6126,20 @@ end 'isBuiltinsIntrinsicCallee'
 // notice — no signature exists for one to read. Refusing the label is what makes the positional order the
 // only order. The positional spelling is the one BOTH compilers accept, it is what `Logger`/`PhaseProbe`
 // write, and `specs-shv2/debugstream-log-events.md` pins the refusal so the divergence stays deliberate.
-function argLabelRuleForCallee(callee ByteArray) returns ArgLabelRule
+//
+// ⭐ **A DECLARATION TAKES THE NAME BACK, WHICH IS WHY THIS ASKS `shadowedByADeclaration`.** A bare-name
+// builtin owns its spelling only while no file declares one; once a file does, the call binds to that
+// declaration and must meet the ORDINARY label rule, because the declaration has real parameters for a
+// label to name. The two other families can never be shadowed — a `__Builtins.` / `__DebugStream.`
+// callee is qualified, and no file can declare that name — so the term costs them nothing. It is one
+// question asked once in `parseCallNamed` and threaded to both halves: the label rule fires while the
+// arguments are parsed and the emit is chosen after, and a builtin that answered one way here and the
+// other way there would slot a user's arguments under the compiler's rule.
+function argLabelRuleForCallee(callee ByteArray, shadowedByADeclaration bool) returns ArgLabelRule
+	if shadowedByADeclaration 'aFileOwnsThisName'
+		return ArgLabelRule.ordinary
+	end 'aFileOwnsThisName'
+
 	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) or isDebugStreamCallee(callee) else ArgLabelRule.ordinary
 end 'argLabelRuleForCallee'
 
@@ -11908,8 +11941,8 @@ end 'calleesOf'
 
 // An instance method's SOURCE parameter names with the receiver prepended — the call-aligned list every
 // by-name sweep fact is indexed by, so `bits[i]` / `direct[i]` name the same slot a receiver-prepending call
-// site does. Shared by the two callers that need the alignment for different facts (`callAlignedInstanceParams`
-// for the consume/feed columns, `byRefScanParamNames` for the by-reference ones), because an alignment written
+// site does. Shared by the two callers that need the alignment (`callAlignedInstanceParams` for the
+// transitive array-feed scan, `sweptParamNamesFor` for the declaration sweep), because an alignment written
 // twice is two chances to disagree about where `self` sits.
 function callAlignedFrom(sourceNames ByteArrayArray) returns ByteArrayArray
 	var paramNames = ByteArrayArray.create()
@@ -11919,6 +11952,29 @@ function callAlignedFrom(sourceNames ByteArrayArray) returns ByteArrayArray
 	end 'eachSource'
 	return paramNames
 end 'callAlignedFrom'
+
+// ⭐⭐ **THE ONE PARAMETER-NAME LIST THE DECLARATION SWEEP WALKS A BODY WITH — call-aligned, and the same for
+// every declaration shape.** A receiver-less declaration's SOURCE names already are its call-aligned ones; an
+// instance method's need `self` at slot 0 whether or not its type is generic. Both facts the sweep reads off
+// a body's parameters — what it CONSUMES and what it takes BY REFERENCE — are therefore indexed in one space,
+// which is what stops them disagreeing about where `self` sits.
+//
+// ⛔⛔ **AN INSTANCE METHOD'S PARAMETERS ARE ON IT TOO, AND A PROMISE IS WHY.** A method that awaits the
+// promise it is handed owns it, so the caller must move it in — and that ownership is settled from this list
+// BEFORE the body is parsed, so a list stopping at the receiver-less shapes refuses the program at its own
+// `await` (`requireConsumedPromiseIsOwned`, E3141) while the identical free function compiles. The other
+// consume door is indifferent either way: a direct `Self{f: p}` store in an instance method is co-ownership
+// rather than a move, which is what `detectFieldStores: false` says at the call site.
+//
+// A method with no user parameters keeps the empty list rather than `self` alone: no source token can spell
+// `__self`, so the entry would buy only the walk's own bracket bookkeeping.
+function sweptParamNamesFor(sourceParamNames ByteArrayArray, takesReceiver bool) returns ByteArrayArray
+	if not takesReceiver or sourceParamNames.count() == 0 'alreadyCallAligned'
+		return sourceParamNames
+	end 'alreadyCallAligned'
+
+	return callAlignedFrom(sourceParamNames)
+end 'sweptParamNamesFor'
 
 // ⭐⭐ **WHERE THE VALUE `noteReturnedGlobalOrForward` IS READING ENDS — THE ONLY THING ITS TWO DOORS DIFFER
 // IN.** The recogniser's whole rule is "the statement must be NOTHING BUT the shape", so every arm of it asks
@@ -15022,12 +15078,9 @@ export type Parser
 		// holding the two readings in agreement about where `self` sits — which is the alignment
 		// `callAlignedInstanceParams` exists to state once.
 		// ⭐⭐ **ONE WALK OF THE PARAMETER LIST FOR EVERY DECLARATION SHAPE, and it used to be up to two.** The
-		// three shapes below want three different things out of it — a receiver-less declaration's SOURCE names
-		// ARE its call-aligned ones, a generic type's instance method needs `__self` prepended, and a
-		// NON-generic instance method wanted no names at all — and each used to reach the walk (or not) by its
-		// own route, with `byRefScanParamNames` walking a second time for the shape the first route skipped.
-		// The overload surface needs the source list for ALL THREE (a call site scores an overload set on its
-		// declared parameter types), so the walk happens once and every consumer is derived from it.
+		// two consumers want two different things out of it: the overload surface needs the SOURCE list (a call
+		// site scores an overload set on its declared parameter types), and the body sweep needs the
+		// CALL-ALIGNED one (`sweptParamNamesFor`). So the walk happens once and both are derived from it.
 		//
 		// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses` list);
 		// a top-level function and a non-generic type's method have none. Off the generic path the flags stay
@@ -15043,17 +15096,7 @@ export type Parser
 		end 'genericScope'
 		var sweptParamTypes = MaxonTypeArray.create()
 		let sourceParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: inGenericScope, typesOut: sweptParamTypes, collectTypes: true)
-		// ⚠ **A NON-GENERIC INSTANCE METHOD IS LEFT WITH THE SHARED EMPTY LIST ON PURPOSE** — the consume scan
-		// declines to read it (a direct `Self{f: p}` store there is left to the callee-side borrowed-value
-		// refusal; see `scanBodyFacts`' call below), and this empty list is how it declines.
-		var scannedParamNames = sharedEmptyScannedParamNames
-		if not takesReceiver 'receiverless'
-			scannedParamNames = sourceParamNames
-		end 'receiverless' else 'instanceMethod'
-			if inGenericScope 'genericInstanceMethod'
-				scannedParamNames = callAlignedFrom(sourceParamNames)
-			end 'genericInstanceMethod'
-		end 'instanceMethod'
+		let scannedParamNames = sweptParamNamesFor(sourceParamNames, takesReceiver: takesReceiver)
 		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, returnAliasName: returnAliasName))
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
@@ -15150,39 +15193,13 @@ export type Parser
 		// the `Self` it returns feeds just as durably, so `scanBodyFacts` probes for them whichever kind of
 		// declaration it was handed.
 		//
-		// ⚠ **ONE CALL, NOT A BRANCH, AND THE NON-GENERIC INSTANCE METHOD IS COVERED BY ITS EMPTY NAME LIST
-		// RATHER THAN BY A GATE.** `scanBodyFacts` returns immediately on an empty `paramNames`, and that is
-		// exactly the declaration shape the walk above declines to read — so the two spellings of "do not scan
-		// this one" have become one.
-		//
-		// ⭐⭐ **AND PBR-2's BY-REFERENCE COLUMNS COME OUT OF THE SAME WALK, OFF A SECOND NAME LIST.** They must
-		// be read for an INSTANCE method too — a method that forwards a parameter into a reassigning one is as
-		// much a forwarder as a free function is, and three of `specs/pass-by-reference.md`'s transitive cases
-		// are exactly that program — whereas the consume half deliberately declines to read one. Hence two
-		// lists into one walk rather than a second walk of the same tokens.
-		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, sourceParamNames: sourceParamNames, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
+		// ⭐⭐ **PBR-2's BY-REFERENCE COLUMNS COME OUT OF THE SAME WALK, OFF THE SAME NAME LIST.** A method that
+		// forwards a parameter into a reassigning one is as much a forwarder as a free function is (three of
+		// `specs/pass-by-reference.md`'s transitive cases are exactly that program), and a method that awaits
+		// the promise it is handed owns it as much as a free function does — so both halves read every
+		// declaration, through one call and one list.
+		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
 	end 'recordScannedSignature'
-
-	// ⭐ **THE CALL-ALIGNED PARAMETER NAMES PBR-2's SCAN IS INDEXED BY.** For everything the consume scan
-	// already reads names for — a receiver-less declaration, a generic type's method — that list IS the
-	// call-aligned one and is handed straight back, so the common declaration costs nothing extra.
-	//
-	// The one shape that needs aligning here is a NON-GENERIC INSTANCE METHOD, which the consume scan skips
-	// (see there) and which therefore arrives with the shared EMPTY list. Its SOURCE names come from the one
-	// parameter-list walk `recordScannedSignature` makes for every shape — this used to re-walk the list for
-	// itself — and a method with no user parameters is left with an empty list, which ends the walk at
-	// `scanBodyFacts`' own guard rather than pushing `__self` alone through it.
-	function byRefScanParamNames(scannedParamNames ByteArrayArray, sourceParamNames ByteArrayArray, takesReceiver bool) returns ByteArrayArray
-		if not takesReceiver or scannedParamNames.count() != 0 'alreadyCallAligned'
-			return scannedParamNames
-		end 'alreadyCallAligned'
-
-		if sourceParamNames.count() == 0 'nothingToForward'
-			return sourceParamNames
-		end 'nothingToForward'
-
-		return callAlignedFrom(sourceParamNames)
-	end 'byRefScanParamNames'
 
 	// ⭐ **THE DECLARATION'S OPAQUE-PARAMETER RECORD, OR THE SHARED "NONE" (ARRR)** — see `OpaqueParamInfo`
 	// for what a call site does with it. An info is built only when at least one parameter genuinely names a
@@ -15436,28 +15453,43 @@ export type Parser
 	// the reason the walk exists at all — it already stands on every token of the body carrying the bracket
 	// and block-depth state a second walk would have to rebuild — so the name says "this body's facts" and the
 	// list of them is the paragraphs below.
-	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, detectFieldStores bool, takesReceiver bool)
-		// ⚠ **TWO NAME LISTS, AND THEY ARE NOT THE SAME LIST.** The CONSUME half reads `paramNames`, which the
-		// caller leaves EMPTY for a non-generic instance method (a direct `Self{f: p}` store there is left to the
-		// callee-side borrowed-value refusal — see the call site). The BY-REFERENCE half reads `byRefParamNames`,
-		// which is call-aligned and filled for every declaration, because an instance method that forwards a
-		// parameter into a reassigning one is exactly as much a forwarder as a free function is
-		// (`pass-by-reference.transitive-reassign-through-sibling-methods` is that program). So the parameter
-		// half runs when EITHER has something to look for — that disjunction is `scansParams` below.
-		// ⭐ **THE WALK IS UNCONDITIONAL SINCE W117, BUT THE PARAMETER PROBES ARE NOT — THE OLD GUARD BECAME A
-		// SCOPE RATHER THAN A `return`.** It used to return here whenever neither name list had anything to look
-		// for; W117's question — does this body RETURN a `let` global's record? — has nothing to do with
-		// parameters, and the functions that ask it most are exactly the receiverless zero-parameter accessors
-		// that guard skipped (`Box.get()`, `CharacterSet.whitespaces()`). So the walk widened and the guard
-		// stayed, one level in: with BOTH lists empty every parameter probe below is provably inert (each is
-		// gated on an index below a count of zero, and the bracket stacks exist only to feed those probes), so a
-		// zero-parameter body pays the token walk and the return scan and nothing else. ⚠ Do not fold
-		// `scansParams` into the probes individually — it is the pre-W117 guard, and keeping it whole is what
-		// makes "what this widening costs" one predicate rather than five.
-		let scansParams = paramNames.count() > 0 or byRefParamNames.count() > 0
+	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, detectFieldStores bool, takesReceiver bool)
+		// ⚠ **ONE CALL-ALIGNED NAME LIST, READ BY BOTH HALVES** (`sweptParamNamesFor` builds it). The consume
+		// half and the by-reference half ask the same question of the same tokens — which parameter does this
+		// name denote — and every declaration shape owes both answers: an instance method forwards a parameter
+		// into a reassigning one exactly as a free function does
+		// (`pass-by-reference.transitive-reassign-through-sibling-methods` is that program), and it owns the
+		// promise it awaits exactly as a free function does.
+		// ⭐ **THE WALK IS UNCONDITIONAL; THE PARAMETER PROBES ARE A SCOPE INSIDE IT.** W117's question — does
+		// this body RETURN a `let` global's record? — has nothing to do with parameters, and the functions that
+		// ask it most are the receiverless zero-parameter accessors (`Box.get()`,
+		// `CharacterSet.whitespaces()`), so the walk must reach a body with no parameters at all. With the list
+		// empty every parameter probe below is provably inert — each is gated on an index below a count of
+		// zero, and the bracket stacks exist only to feed those probes — so such a body pays the token walk and
+		// the return scan and nothing else. ⚠ Do not fold `scansParams` into the probes individually: keeping
+		// it whole is what makes "what the parameter half costs" one predicate rather than five.
+		let scansParams = paramNames.count() > 0
 		// ⭐ **THE THREE PER-PARAMETER BIT COLUMNS START EMPTY AND ARE GROWN AT THE FACT** — see `setParamBit`,
 		// which carries both halves of why they are no longer pre-filled from a shared module-level empty.
 		var consumed = BoolArray.create()
+		// ⛔⛔ **WHICH PARAMETER NAMES DENOTE SOMETHING ELSE WHERE THE WALK IS STANDING.** A local that rebinds
+		// a parameter's name takes the name with it, and EVERY fact read off a name has to stop there: a
+		// consume attributed past the rebinding makes the caller move its argument in while the callee
+		// releases the local instead, which LEAKS the argument (exit 101, no diagnostic anywhere), and a WRITE
+		// attributed past it puts a by-reference cell under a parameter nothing writes — which refuses a `let`
+		// argument at the call site (E3019) on a program that is legal.
+		//
+		// ⭐ **TWO COLUMNS, BECAUSE THE LANGUAGE HAS TWO BINDING SCOPES AND THEY EXPIRE ON DIFFERENT EVENTS.**
+		// `let`/`var`/`for` and the destructuring forms bind for the rest of their BLOCK, so they expire when
+		// the walk's depth comes back down. A match arm's payload (`success(v) then …`) and a closure's
+		// parameters (`function(n T) gives …`) bind for a single expression, which is a LINE, so they expire
+		// at the next newline. Recording the second kind in the first would leave an arm's payload shadowing
+		// its SIBLING arms — and there the over-reach is a write the caller never sees, silently, where every
+		// error in the other direction is a loud refusal.
+		//
+		// Both are grown at the first rebinding, so a body that shadows nothing carries two empty records.
+		var shadowedInBlock = ParamShadowColumn.create()
+		var shadowedOnLine = BoolArray.create()
 		// The two by-reference columns — see `SignatureIndex.ParamReassignInfo` for what each means and why the
 		// sweep records them separately instead of combining them here.
 		var reassignedDirect = BoolArray.create()
@@ -15574,24 +15606,34 @@ export type Parser
 			end 'returnStatement'
 
 			if scansParams 'aBodyWithParametersToWatch'
+				// ⛔⛔ **A LOCAL THAT REBINDS A PARAMETER'S NAME ENDS THE PARAMETER'S CLAIM ON IT.** Read BEFORE
+				// the bracket stacks move, so a `)` can still find its own opener — which is the only way a
+				// match arm's payload is told from the call it is spelled identically to.
+				self.noteParameterRebindingsAt(q, paramNames: paramNames, openBrackets: openBrackets, braceStack: braceStack, depth: blockDepth, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine)
+
+				if kind == TokenKind.newline 'aLineEnded'
+					clearParamBits(shadowedOnLine)
+				end 'aLineEnded'
+
 				self.trackBracketAt(q, braceStack: braceStack, openBrackets: openBrackets)
 
 				// ⭐⭐ **PBR-2's SEED: `p =` AT STATEMENT POSITION.** Asked through `assignsAt` — the SAME predicate the
 				// loop-phi scan decides a loop's carried vars by — so "what does a rebind look like in tokens" has one
 				// answer in this compiler. A write form taught to one is taught to both.
 				//
-				// ⚠ It still over-detects a `let cur = …` that SHADOWS a parameter, which is safe in the only
-				// direction that matters: the consequence is a parameter passed by reference that did not have to
-				// be — wasteful, never wrong, because a cell is a legal way to hold any value and both ends read
-				// this one column. The FIELD-store shape (`p.x = 5` where a parameter is named `x`) is excluded
-				// exactly, by `rebindsANameAt`; see there for the golden it moved.
+				// ⚠ **A WRITE TO A NAME A LOCAL HAS TAKEN IS NOT A WRITE TO THE PARAMETER**, so this asks the
+				// scope columns exactly as the consume doors do. Marking `let cur = …` here instead puts a
+				// by-reference cell under a parameter nothing writes, and that cell refuses a `let` argument at
+				// every call site (E3019 *cannot pass … to function that mutates parameter*) on a legal program.
+				// The FIELD-store shape (`p.x = 5` where a parameter is named `x`) is excluded exactly, by
+				// `rebindsANameAt`; see there for the golden it moved.
 				// ⭐ **AND THE TUPLE-ASSIGNMENT SPELLING OF THE SAME WRITE** (`(p, _) = f()`), which carries no `=`
 				// of its own and so is invisible to the shape above. Without it a by-reference parameter could be
 				// rebound by `p = f()` and not by `(p, _) = f()` — one operation, two answers decided by spelling.
 				// See `tupleAssignRebindsANameAt` for why the enclosing `(` is free here.
 				if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
-					let target = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
-					if target < byRefParamNames.count() 'ofOwnParameter'
+					let target = self.paramIndexIn(paramNames, name: self.tokenAt(q).value)
+					if target < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: target) 'ofOwnParameter'
 						setParamBit(reassignedDirect, index: target)
 						statesByRef = true
 					end 'ofOwnParameter'
@@ -15601,17 +15643,28 @@ export type Parser
 				// the callee's NAME are recorded together; whether the edge is LIVE is settled whole-program by
 				// `ProgramSignatures.closeByRefForwarding`, which is the only party that can see what the callee does.
 				if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
-					let forwarded = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
-					if forwarded < byRefParamNames.count() 'ofOwnParameter'
+					let forwarded = self.paramIndexIn(paramNames, name: self.tokenAt(q).value)
+					if forwarded < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: forwarded) 'ofOwnParameter'
 						setParamBit(reassignedForwarded, index: forwarded)
 						noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
 						statesByRef = true
 					end 'ofOwnParameter'
 				end 'handedOn'
 
+				// ⭐⭐ **A PROMISE CONSUME DOOR IS A CONSUME, exactly as a durable store is.** `await p` and
+				// `p.cancel()` hand the parameter's green thread back to the runtime, so the frame that spells
+				// either one is its owner and the caller must move it in. Ungated by `detectFieldStores`,
+				// which excludes an instance method's `Self{f: p}` store on the grounds that such a store is
+				// not a consume — a door is one wherever it is written.
+				let promiseDoorParam = self.promiseConsumeDoorParamAt(q, paramNames: paramNames)
+				if promiseDoorParam < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: promiseDoorParam) 'consumedThroughAPromiseDoor'
+					setParamBit(consumed, index: promiseDoorParam)
+					any = true
+				end 'consumedThroughAPromiseDoor'
+
 				if detectFieldStores and kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
 					let idx = self.consumedParamAfterColon(q, paramNames: paramNames)
-					if idx < paramNames.count() 'isParam'
+					if idx < paramNames.count() and paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: idx) 'isParam'
 						let feedPos = self.paramTypeParamPositionAt(typeParamPositions, index: idx)
 						if feedPos < self.enclosingTypeParams.count() 'typeParamField'
 							// ⭐ **A TYPE-PARAMETER-typed store is a FEED, not a plain consume (P1.6-A/B2).**
@@ -15666,16 +15719,23 @@ export type Parser
 				// `enclosingTypeParams` is empty) — so the whole probe is skipped for every function on a
 				// generics-free program, which the `self`-headed predecessor paid for at every `self` token.
 				if genericScope 'maybeOpaqueFeed'
-					if self.markOpaqueContainerMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedContainer'
+					if self.markOpaqueContainerMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine) 'fedContainer'
 						any = true
 					end 'fedContainer'
-					if kind == TokenKind.self and self.markOpaqueFieldReassignFeed(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedField'
+					if kind == TokenKind.self and self.markOpaqueFieldReassignFeed(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine) 'fedField'
 						any = true
 					end 'fedField'
 				end 'maybeOpaqueFeed'
 			end 'aBodyWithParametersToWatch'
 
-			blockDepth = self.blockDepthAfter(q, depth: blockDepth)
+			// A rebinding lives only as long as the block that made it, so the depth coming DOWN is what hands
+			// each name back to its parameter. Asked once per closing `end` rather than once per token, and free
+			// on every body whose column is empty.
+			let nextDepth = self.blockDepthAfter(q, depth: blockDepth)
+			if nextDepth < blockDepth 'aBlockClosed'
+				endParamShadowsDeeperThan(shadowedInBlock, depth: nextDepth)
+			end 'aBlockClosed'
+			blockDepth = nextDepth
 
 			q = q + 1
 		end 'walk'
@@ -15741,7 +15801,7 @@ export type Parser
 		// does — which is every function in every program written before PBR-2, so the whole-program map stays
 		// empty and `programTakesAParamByRef` answers false after one `count()`.
 		if statesByRef 'takesOrForwardsAByRefParam'
-			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, forwardCalls: forwardCalls, bareName: funcBareName, callability: self.declarationCallability()), takesReceiver: takesReceiver))
+			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(paramNames, direct: reassignedDirect, forwarded: reassignedForwarded, forwardCalls: forwardCalls, bareName: funcBareName, callability: self.declarationCallability()), takesReceiver: takesReceiver))
 		end 'takesOrForwardsAByRefParam'
 
 		// ⚡ **NOTHING IS BUILT FOR A BODY THAT STATES NOTHING** — the predicate is asked of the raw COLUMNS,
@@ -15759,7 +15819,7 @@ export type Parser
 			// SECOND O(tokens) walk of the body plus two arrays, per such body. It stands because the
 			// alternative — carrying the names bound so far through the first walk — costs a per-body set and
 			// an insert per binder, which is more than one allocation-free re-walk.
-			let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, bodyStart: bodyStart, paramNames: byRefParamNames) if returnedNames.count() > 0 else returnedNames
+			let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, bodyStart: bodyStart, paramNames: paramNames) if returnedNames.count() > 0 else returnedNames
 			// Asked a second time because the FILTER can empty the name column: a body whose only `return` named
 			// a local of its own states nothing after all, and must not reach the map.
 			if GlobalAliasReturnInfo.statesAnything(unshadowed, returnCalls: returnCalls) 'mayHandBackAGlobalsRecord'
@@ -16054,7 +16114,7 @@ export type Parser
 	// `let` GLOBAL'S RECORD TO A NAME THIS SWEEP THEN WRITES.** `initialBitColumn` returned the module-level
 	// shared empty when the count was zero and a fresh array otherwise — so whether its result could be written
 	// depended on an ARGUMENT, and the only thing making that safe was the caller's own `target <
-	// byRefParamNames.count()` gate: an invariant no analysis can see and nothing but a comment held. W117 —
+	// paramNames.count()` gate: an invariant no analysis can see and nothing but a comment held. W117 —
 	// shv2's rule that a value which may alias a `let` global's record may not be written through — refused the
 	// write on this compiler's own source (`E3019 cannot pass 'reassignedDirect' to function that mutates
 	// parameter 'self'`), and it was right to: the laundering was real, and only the gate made it harmless.
@@ -16088,6 +16148,66 @@ export type Parser
 
 		try column.set(index, value: feed) otherwise panic("setParamFeed: column.set OOB at {index} despite the growth above reaching it")
 	end 'setParamFeed'
+
+	// ⭐ **THE NAME AT `namePos` IS BOUND HERE FOR THE REST OF ITS BLOCK — so if it is a parameter's, the
+	// parameter's claim on it ends at this depth.** `setParamBit`'s twin for the block-scoped column, with the
+	// name lookup folded in because every caller stands on a token rather than on an index.
+	//
+	// The FIRST rebinding wins: an inner block that rebinds a name an outer one already took must not shorten
+	// the outer one's reach when the inner block closes.
+	function noteParameterShadowedInBlock(namePos TokenIndex, paramNames ByteArrayArray, depth BlockDepth, shadowedInBlock ParamShadowColumn)
+		let index = self.paramIndexIn(paramNames, name: self.tokenAt(namePos).value)
+		if index >= paramNames.count() 'namesNoParameter'
+			return
+		end 'namesNoParameter'
+
+		while shadowedInBlock.count() <= index 'reach'
+			shadowedInBlock.push(0)
+		end 'reach'
+
+		if (try shadowedInBlock.get(index) otherwise panic("noteParameterShadowedInBlock: get({index}) OOB despite the growth above reaching it")) != 0 'alreadyRebound'
+			return
+		end 'alreadyRebound'
+
+		try shadowedInBlock.set(index, value: depth + 1) otherwise panic("noteParameterShadowedInBlock: set({index}) OOB despite the growth above reaching it")
+	end 'noteParameterShadowedInBlock'
+
+	// The LINE-scoped twin — a match arm's payload and a closure's parameter, which bind for one expression.
+	// A plain bit, because a line has no depth to remember and the whole column is cleared at the newline.
+	function noteParameterShadowedOnLine(namePos TokenIndex, paramNames ByteArrayArray, shadowedOnLine BoolArray)
+		let index = self.paramIndexIn(paramNames, name: self.tokenAt(namePos).value)
+		if index < paramNames.count() 'ofOwnParameter'
+			setParamBit(shadowedOnLine, index: index)
+		end 'ofOwnParameter'
+	end 'noteParameterShadowedOnLine'
+
+	// ⭐ **A BLOCK HAS CLOSED, so every rebinding made inside it is out of scope and its parameter has its
+	// name back.** The stored depth is the rebinding's own PLUS ONE, so a rebinding at depth `d` survives
+	// exactly while the walk stands at `d` or deeper.
+	function endParamShadowsDeeperThan(shadowedInBlock ParamShadowColumn, depth BlockDepth)
+		for i in 0 upto shadowedInBlock.count() 'eachParam'
+			if (try shadowedInBlock.get(i) otherwise panic("endParamShadowsDeeperThan: get({i}) OOB below its own count")) <= depth + 1 'stillInScope'
+				continue
+			end 'stillInScope'
+
+			try shadowedInBlock.set(i, value: 0) otherwise panic("endParamShadowsDeeperThan: set({i}) OOB below its own count")
+		end 'eachParam'
+	end 'endParamShadowsDeeperThan'
+
+	// The line-scoped column's expiry, spent at every newline the walk crosses. A body that binds nothing
+	// pays one `count()` per line.
+	function clearParamBits(column BoolArray)
+		for i in 0 upto column.count() 'eachParam'
+			try column.set(i, value: false) otherwise panic("clearParamBits: set({i}) OOB below its own count")
+		end 'eachParam'
+	end 'clearParamBits'
+
+	// ⭐ **DOES THIS PARAMETER'S NAME STILL DENOTE THE PARAMETER WHERE THE WALK IS STANDING?** A position past
+	// either column reads as "yes", exactly as `ParamConsumeInfo.isConsumed` reads a short `bits` as "not
+	// consumed" — both are grown at the first rebinding, and most bodies make none.
+	function paramNameStillDenotesTheParameter(shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray, index ParamCount) returns bool
+		return (try shadowedInBlock.get(index) otherwise 0) == 0 and not (try shadowedOnLine.get(index) otherwise false)
+	end 'paramNameStillDenotesTheParameter'
 
 	// ⭐ `setParamFeed`'s READER twin for a bare feed column — does position `index` carry a feed? A position past
 	// the end carries none, which is the same "absence is the answer" default `ParamConsumeInfo.typeParamFeedOf`
@@ -17793,6 +17913,150 @@ export type Parser
 		return paramNames.count()
 	end 'consumedParamAfterColon'
 
+	// ⛔⛔ **THE DOORS A BODY HAS FOR TAKING A PARAMETER'S NAME AWAY FROM THE PARAMETER.** A door left out
+	// leaves the sweep attributing a later consume to a name that no longer denotes the parameter, the caller
+	// moves its argument in on that word, and the callee releases the local it really named — a leaked
+	// argument, exit 101, with no diagnostic anywhere. The doors recognised are
+	//
+	//   • `let p = …` / `var p = …`, the `if let p = try …` form included;
+	//   • `for p in …`, whose `for` has already opened the loop's block, so the rebinding is the loop's;
+	//   • a BINDER LIST — `let (a, b) = …`, `var (a, b) = …`, `for (k, v) in …`, `try … otherwise (e) …` —
+	//     recognised by the keyword in FRONT of the `(` (`binderListIsOpen`), never by the names inside it;
+	//   • a MATCH ARM's payload (`success(v) then`) and a CLOSURE's parameters (`function(n T) gives …`),
+	//     both read at their `)` by `notePatternRebindings`, and both LINE-scoped rather than block-scoped.
+	//
+	// ⚠ **ONE CATCH BINDER IS NOT ON THAT LIST AND MUST NOT BE ADDED BARE: `end '<label>' else (e) '<label>'`.**
+	// `otherwise (` is unambiguous — the grammar reads it as the handler form and demands the block label —
+	// but `else (` is also the TERNARY's parenthesised alternative (`a if c else (b + 1)`), so a bare `else`
+	// arm in `binderListIsOpen` would mark `b` rebound and drop a real consume of it. The gap is narrow rather
+	// than latent: a catch binder is typed as the callee's error enum, so it reaches no consume door with an
+	// observable effect — `await`/`cancel` need a `Promise`, a type-parameter feed needs a generic, and a
+	// by-reference forward is refused because the binder is immutable. Closing it needs a discriminator that
+	// tells the two `else (` apart (the handler's is preceded by the `end` label), not a fourth keyword.
+	//
+	// ⚠ **THE MISSED DIRECTION IS THE COSTLY ONE HERE, WHICH IS THE OPPOSITE OF `kindBindsTheNameAfterIt`'s.**
+	// That predicate may admit a plain call argument, because a spurious binding there only drops a
+	// returned-name seed. A spurious binding HERE drops a consume, which is a clean E2015/E3141 refusal, while
+	// a missed one is the leak above. So this names the shapes instead of being generous: `validate(p)` ahead
+	// of a `Self{f: p}` is a call, and reading it as a binder would refuse a program that compiles.
+	function noteParameterRebindingsAt(q TokenIndex, paramNames ByteArrayArray, openBrackets TokenIndexArray, braceStack BoolArray, depth BlockDepth, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray)
+		if self.kindAt(q) == TokenKind.rightParen 'closesAListOfSomeKind'
+			self.notePatternRebindings(q, paramNames: paramNames, openBrackets: openBrackets, braceStack: braceStack, shadowedOnLine: shadowedOnLine)
+			return
+		end 'closesAListOfSomeKind'
+
+		if q == 0 or not tokenCanBeAName(self.tokenAt(q)) 'notANamePosition'
+			return
+		end 'notANamePosition'
+
+		let prev = self.kindAt((q - 1) as TokenIndex)
+		if prev == TokenKind.let or prev == TokenKind.var or prev == TokenKind.for 'aDeclarationKeyword'
+			self.noteParameterShadowedInBlock(q, paramNames: paramNames, depth: depth, shadowedInBlock: shadowedInBlock)
+			return
+		end 'aDeclarationKeyword'
+
+		if (prev == TokenKind.leftParen or prev == TokenKind.comma) and self.binderListIsOpen(openBrackets, braceStack: braceStack) 'aBinderList'
+			self.noteParameterShadowedInBlock(q, paramNames: paramNames, depth: depth, shadowedInBlock: shadowedInBlock)
+		end 'aBinderList'
+	end 'noteParameterRebindingsAt'
+
+	// Is the innermost open bracket a BINDER LIST's `(` — the destructuring and handler forms, whose keyword
+	// sits in front of the paren? A `{` innermost is a struct literal, and a `(` with anything else in front
+	// of it is a call, whose arguments bind nothing.
+	function binderListIsOpen(openBrackets TokenIndexArray, braceStack BoolArray) returns bool
+		if openBrackets.count() == 0 or self.braceStackInnermostIsBrace(braceStack) 'noOpenParen'
+			return false
+		end 'noOpenParen'
+
+		let opener = try openBrackets.get(openBrackets.count() - 1) otherwise panic("binderListIsOpen: openBrackets.get OOB on a stack whose count was just read as non-zero")
+		if opener == 0 'nothingInFrontOfIt'
+			return false
+		end 'nothingInFrontOfIt'
+
+		let before = self.kindAt((opener - 1) as TokenIndex)
+		return before == TokenKind.let or before == TokenKind.var or before == TokenKind.for or before == TokenKind.otherwise
+	end 'binderListIsOpen'
+
+	// ⭐ **A MATCH ARM'S PAYLOAD AND A CLOSURE'S PARAMETERS, read at the `)` that closes them.** Both spell
+	// their binders exactly as a call spells its arguments, and the token that tells them apart sits PAST the
+	// close: an arm continues `then` or `gives`, a closure `gives`. The grammar puts neither word there for
+	// anything else, so a call's arguments cannot reach this.
+	//
+	// Both bind for ONE expression, and both spell it on one line — an arm is `pattern then <statement>`, a
+	// closure `function(…) gives <expr>` — so these go in the LINE-scoped column. A `match`'s own block depth
+	// would carry an arm's payload across its sibling arms, where it would suppress a write to the parameter
+	// that those arms really do make.
+	function notePatternRebindings(closePos TokenIndex, paramNames ByteArrayArray, openBrackets TokenIndexArray, braceStack BoolArray, shadowedOnLine BoolArray)
+		let after = self.kindAt(closePos + 1)
+		if after != TokenKind.then and after != TokenKind.gives 'neitherAnArmNorAClosure'
+			return
+		end 'neitherAnArmNorAClosure'
+
+		if openBrackets.count() == 0 or self.braceStackInnermostIsBrace(braceStack) 'noOpenParenToClose'
+			return
+		end 'noOpenParenToClose'
+
+		var p = ((try openBrackets.get(openBrackets.count() - 1) otherwise panic("notePatternRebindings: openBrackets.get OOB on a stack whose count was just read as non-zero")) + 1) as TokenIndex
+		while p < closePos 'eachBinderPosition'
+			let prev = self.kindAt((p - 1) as TokenIndex)
+			if (prev == TokenKind.leftParen or prev == TokenKind.comma) and tokenCanBeAName(self.tokenAt(p)) 'aBinder'
+				self.noteParameterShadowedOnLine(p, paramNames: paramNames, shadowedOnLine: shadowedOnLine)
+			end 'aBinder'
+
+			p = p + 1
+		end 'eachBinderPosition'
+	end 'notePatternRebindings'
+
+	// ⭐⭐ **THE PARAMETER A PROMISE CONSUME DOOR RECLAIMS AT `q`**, or `paramNames.count()` when the
+	// token opens no such door. `PromiseConsume`'s two arms ARE the list — `await p` takes the thread's
+	// result, `p.cancel()` takes nothing — and both reach `consumePromiseThread`, which hands the green
+	// thread back to the runtime. A frame that does that OWNS the promise, so the parameter is a consume
+	// exactly as a durable store is.
+	//
+	// ⚠ **IT HAS TO BE SWEPT, BECAUSE THE OWNERSHIP IS DECIDED BEFORE THE BODY IS PARSED.**
+	// `bindParameters` asks `paramIsConsumed` to enrol a promise parameter owned, and a body that awaits one
+	// nothing enrolled meets `requireConsumedPromiseIsOwned`'s refusal (E3141) at its own `await` — while
+	// before that refusal existed the same program compiled and aborted **75** at run time, the callee having
+	// reclaimed a thread the caller still named. The caller side needs nothing from this: a promise argument
+	// is moved at EVERY position by type (`transferConsumedArgs`), so a later read of the source is already
+	// E3102/E3142.
+	function promiseConsumeDoorParamAt(q TokenIndex, paramNames ByteArrayArray) returns ParamCount
+		if self.kindAt(q) == TokenKind.await 'awaitDoor'
+			// The target must be JUST the name: `await p.inner`, `await f(p)` and `await ps[i]` all READ
+			// through the parameter rather than moving it, and each is excluded by the token that follows.
+			let after = self.kindAt(q + 2)
+			if after == TokenKind.dot or after == TokenKind.leftParen or after == TokenKind.leftBracket 'headsALargerExpression'
+				return paramNames.count()
+			end 'headsALargerExpression'
+
+			return self.bareParamReferenceAt((q + 1) as TokenIndex, paramNames: paramNames)
+		end 'awaitDoor'
+
+		// `<receiver> . cancel ( )`, whose receiver is the token two before the method name. The empty
+		// argument list pins the shape; `tokenCanBeAName` at the receiver rejects a chain
+		// (`xs.get(0).cancel()` stands on a `)`), and the `.` test rejects a qualified one (`self.p.cancel()`),
+		// neither of which names a parameter slot. The index floor keeps both probes inside the token array.
+		if q >= PromiseCancelQualifierBack and self.isDotMethodCallHeadAt(q) and self.tokenAt(q).value.equals(PromiseCancelMethodName) and self.kindAt(q + 2) == TokenKind.rightParen and self.kindAt((q - PromiseCancelQualifierBack) as TokenIndex) != TokenKind.dot 'cancelDoor'
+			return self.bareParamReferenceAt((q - PromiseCancelReceiverBack) as TokenIndex, paramNames: paramNames)
+		end 'cancelDoor'
+
+		return paramNames.count()
+	end 'promiseConsumeDoorParamAt'
+
+	// The parameter the token at `p` names when it is a BARE reference to one, or `paramNames.count()`
+	// otherwise. A parameter's name may be a KEYWORD (D8), so the reference to it is read through
+	// `tokenCanBeAName` — `consumedParamAfterColon`'s rule, and for its measured reason. Whether the
+	// reference stands alone is each door's own question, because the two doors bound their operand
+	// differently: `await`'s target ends the expression, `cancel`'s receiver is followed by the `.` that
+	// makes the call.
+	function bareParamReferenceAt(p TokenIndex, paramNames ByteArrayArray) returns ParamCount
+		if not tokenCanBeAName(self.tokenAt(p)) 'notAName'
+			return paramNames.count()
+		end 'notAName'
+
+		return self.paramIndexIn(paramNames, name: self.tokenAt(p).value)
+	end 'bareParamReferenceAt'
+
 	// The index of `name` in `paramNames`, or `paramNames.count()` when absent — the linear-scan door the
 	// consume scan maps a value token back to a parameter position through.
 	function paramIndexIn(paramNames ByteArrayArray, name ByteArray) returns ParamCount
@@ -17832,7 +18096,7 @@ export type Parser
 	// `__drop_type_param`, which needs a layout descriptor a straight-line body reserves none of. That
 	// disagreement is caught and REFUSED once the body is emitted (`requireDescriptorForOpaqueDrops`); it is not
 	// swallowed here, because nothing at sweep time can resolve the receiver's type.
-	function markOpaqueContainerMutatorFeeds(mutatorPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray) returns bool
+	function markOpaqueContainerMutatorFeeds(mutatorPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
 		if not self.isDotMethodCallHeadAt(mutatorPos) or not tokenCanBeAName(self.tokenAt(mutatorPos)) 'notMethodCall'
 			return false
 		end 'notMethodCall'
@@ -17842,6 +18106,11 @@ export type Parser
 
 		var any = false
 		for arg in self.bareTypeParamArgsIn((mutatorPos + 2) as TokenIndex, paramNames: paramNames, typeParamPositions: typeParamPositions) 'eachArg'
+			// A feed is a consume, so it stops at a rebinding of the name exactly as the two direct doors do.
+			if not paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: arg.paramIndex) 'aLocalOfThatNameNow'
+				continue
+			end 'aLocalOfThatNameNow'
+
 			setParamFeed(feeds, index: arg.paramIndex, feed: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: arg.paramIndex), sink: FeedSink.calleeStorage))
 			any = true
 		end 'eachArg'
@@ -17893,7 +18162,7 @@ export type Parser
 	// this the caller would BORROW the managed argument the box then destroys — a double-free (`0xC0000005`), the
 	// field-store twin of the array-feed hole `recordTransitiveArrayFeeds` closes. The head test recognises
 	// `self . <field> = <param>` where the RHS is a bare type-parameter parameter.
-	function markOpaqueFieldReassignFeed(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray) returns bool
+	function markOpaqueFieldReassignFeed(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray) returns bool
 		// The field's opacity is NOT queried here: this runs in the SWEEP, before the struct layouts are merged
 		// into `self.signatures` (exactly why `markOpaqueContainerMutatorFeeds` is purely token-based too). It need
 		// not be — a type-parameter argument can be assigned ONLY to a type-parameter (opaque) field, so a bare
@@ -17917,6 +18186,10 @@ export type Parser
 		if idx >= paramNames.count() or not self.paramIsTypeParamTyped(typeParamPositions, index: idx) 'notTypeParamArg'
 			return false
 		end 'notTypeParamArg'
+		// A feed is a consume, so it stops at a rebinding of the name exactly as the two direct doors do.
+		if not paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: idx) 'aLocalOfThatNameNow'
+			return false
+		end 'aLocalOfThatNameNow'
 		setParamFeed(feeds, index: idx, feed: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: idx), sink: FeedSink.calleeStorage))
 		return true
 	end 'markOpaqueFieldReassignFeed'
@@ -18052,20 +18325,35 @@ export type Parser
 	function scanOneMethodFeedSignals(startPos TokenIndex, funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, takesReceiver bool) returns MethodFeedScan
 		var directFeeds = TypeParamFeedArray.create()
 		var edges = ForwardFeedEdgeArray.create()
+		// ⛔ **THE REBINDING COLUMNS AND THE BRACKET STACKS THEY ARE READ WITH — the same mechanism
+		// `scanBodyFacts` keeps, through the same routine.** A feed IS a consume, so a name a local has taken
+		// must stop feeding here for the reason it stops there: the concrete call site would move an argument
+		// in that this body never stores. The two walks share `noteParameterRebindingsAt` so a door taught to
+		// one is taught to both.
+		var braceStack = BoolArray.create()
+		var openBrackets = TokenIndexArray.create()
+		var shadowedInBlock = ParamShadowColumn.create()
+		var shadowedOnLine = BoolArray.create()
 		var depth = 1 as BlockDepth
 		var q = startPos
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			let kind = self.kindAt(q)
+			self.noteParameterRebindingsAt(q, paramNames: paramNames, openBrackets: openBrackets, braceStack: braceStack, depth: depth, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine)
+			if kind == TokenKind.newline 'aLineEnded'
+				clearParamBits(shadowedOnLine)
+			end 'aLineEnded'
+
+			self.trackBracketAt(q, braceStack: braceStack, openBrackets: openBrackets)
 			// `<receiver>.push/set/insert(param)` is a DIRECT feed wherever its receiver lives (W10) — probed at
 			// every token, exactly as `scanBodyFacts` probes it, so the two seedings cannot disagree about what a
 			// direct feed is.
-			_ = self.markOpaqueContainerMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds)
+			_ = self.markOpaqueContainerMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine)
 			if kind == TokenKind.self 'selfToken'
 				// `self.<opaqueField> = param` (P1.7 Finding A) is a DIRECT feed too — seeded here so the transitive
 				// closure marks a forwarder INTO a field-reassigning sibling as consuming its own argument.
-				_ = self.markOpaqueFieldReassignFeed(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds)
+				_ = self.markOpaqueFieldReassignFeed(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine)
 				if self.isSelfMethodCallAt(q) 'selfCall'
-					self.collectForwardFeedEdges(q + 4, calleeName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 2).value), paramNames: paramNames, typeParamPositions: typeParamPositions, edges: edges)
+					self.collectForwardFeedEdges(q + 4, calleeName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 2).value), paramNames: paramNames, typeParamPositions: typeParamPositions, edges: edges, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine)
 				end 'selfCall'
 			end 'selfToken' else 'notSelf'
 				// A BARE sibling call `N(param)` (#65) lowers to `self.N(param)`, so it forwards exactly as an explicit
@@ -18074,7 +18362,7 @@ export type Parser
 				// A sibling's name may be a KEYWORD (D8), read through `tokenCanBeAName` minus the block-structure
 				// kinds — the twin of the descriptor scan's bare-call test, for the reason given there.
 				if tokenCanBeAName(self.tokenAt(q)) and not kindSpellsBlockStructure(kind) and self.isBareCallAt(q) 'bareCall'
-					self.collectForwardFeedEdges(q + 2, calleeName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q).value), paramNames: paramNames, typeParamPositions: typeParamPositions, edges: edges)
+					self.collectForwardFeedEdges(q + 2, calleeName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q).value), paramNames: paramNames, typeParamPositions: typeParamPositions, edges: edges, shadowedInBlock: shadowedInBlock, shadowedOnLine: shadowedOnLine)
 				end 'bareCall'
 			end 'notSelf'
 
@@ -18083,6 +18371,7 @@ export type Parser
 			end 'opensBlock' else 'notOpener'
 				if self.closesBlockAt(q) 'closes'
 					depth = depth - 1
+					endParamShadowsDeeperThan(shadowedInBlock, depth: depth)
 					if depth == 0 'methodEnd'
 						return MethodFeedScan.create(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, directFeeds: directFeeds, edges: edges, takesReceiver: takesReceiver, endPos: (q + 1) as TokenIndex)
 					end 'methodEnd'
@@ -18101,8 +18390,13 @@ export type Parser
 	// parameter position. A non-parameter argument, an index expression, or a `.`-chain hop is not a bare forward and
 	// is skipped; a plain-typed caller parameter cannot BE a feed, so it is skipped too — which is exactly what
 	// `bareTypeParamArgsIn` answers, and the reason the walk lives there rather than here.
-	function collectForwardFeedEdges(argsStart TokenIndex, calleeName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, edges ForwardFeedEdgeArray)
+	function collectForwardFeedEdges(argsStart TokenIndex, calleeName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, edges ForwardFeedEdgeArray, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray)
 		for arg in self.bareTypeParamArgsIn(argsStart, paramNames: paramNames, typeParamPositions: typeParamPositions) 'eachArg'
+			// A forwarded name a local has taken forwards the LOCAL, exactly as at the direct feed doors.
+			if not paramNameStillDenotesTheParameter(shadowedInBlock, shadowedOnLine: shadowedOnLine, index: arg.paramIndex) 'aLocalOfThatNameNow'
+				continue
+			end 'aLocalOfThatNameNow'
+
 			edges.push(ForwardFeedEdge.create(arg.paramIndex, calleeName: calleeName, argLabel: self.argLabelBefore(arg.valuePos)))
 		end 'eachArg'
 	end 'collectForwardFeedEdges'
@@ -27792,16 +28086,25 @@ export type Parser
 				self.ownedBindings.push(binding)
 			end 'consumedManaged'
 
-			// ⭐⭐ **A PROMISE PARAMETER IS OWNED BY THE CALLEE, BY TYPE, WITHOUT ASKING `paramIsConsumed`**
-			// (`W217`). Passing a promise is always a MOVE — `transferConsumedArgs` says so at the other end —
-			// because a green thread has exactly one owner and the caller has just stopped naming it. So the
-			// callee owns it on arrival however the body happens to use it, where the managed arm above must
-			// first ask whether the body consumes its argument.
+			// ⭐⭐ **A PROMISE PARAMETER IS OWNED BY THE CALLEE EXACTLY WHEN THE CALLEE CONSUMES IT** — the same
+			// question the managed arm above asks, and it has to be asked here too. A green thread has one
+			// owner, so a body that MOVES its argument on (into a field, into a container, through `await` or
+			// `cancel`) takes ownership and must drop it if some path does not; a body that only LOOKS at it
+			// leaves it with the caller, which still names it.
 			//
-			// ⭐ **IT IS ALSO WHAT MAKES "UNOWNED AND SLOTLESS" MEAN BORROWED.** With parameters enrolled, the
-			// only promises that carry neither an ownership mark nor a container slot are ones no frame took
-			// responsibility for — which is what `requireConsumedPromiseIsOwned` refuses.
-			if not paramIsByRef and self.valueIsPromise(i as ValueId) 'aPromiseParameter'
+			// ⛔⛔ **OWNING IT UNCONDITIONALLY CANCELLED THE CALLER'S THREAD ON EVERY CALL, SILENTLY.** `emitScopeDrops`
+			// then ran `__gt_promise_drop` at the callee's exit while the caller — and any container it was read
+			// out of — went on naming the reclaimed thread, so the promise never completed and every later peek
+			// answered "not yet" forever. The non-consuming peek is not an edge case: it is the shape
+			// `promise-peek.md` is about (*"the peek is a QUESTION, never a step"*), it is what
+			// `SpecWorkerPool.drainHasAnswered` is, and it is why a stage-2 binary could not run its own suite.
+			// The transfer half of the rule holds where it is true: a CONSUMING callee's argument is moved, the
+			// call site vacates the source, and a later use of it is E3102.
+			//
+			// ⭐ **"UNOWNED AND SLOTLESS MEANS BORROWED" IS UNCHANGED** — a borrowed promise is exactly what
+			// `requireConsumedPromiseIsOwned` refuses to let a consume door reclaim, which is the refusal a
+			// non-consuming parameter should meet if a body tries to `await` one it was only lent.
+			if not paramIsByRef and self.signatures.paramIsConsumed(funcName, index: i) and self.valueIsPromise(i as ValueId) 'aPromiseParameter'
 				self.markValuePromise(i as ValueId)
 				self.ownedBindings.push(binding)
 			end 'aPromiseParameter'
@@ -36896,23 +37199,27 @@ export type Parser
 	end 'emitRuntimeCallInto'
 
 	// ⭐⭐⭐ **WHICH RUNTIME ENTRY TAKES A SECOND OWNER OF THIS VALUE — the retain side of
-	// `SignatureIndex.managedNameDropCallee`, and it did not exist until W232.** Almost every managed value
-	// answers `__mm_incref`, which is why the door below spelled that name directly for so long; a
+	// `SignatureIndex.managedNameDropCallee`.** Almost every managed value answers the plain box incref; a
 	// `<T>.handle` does not, because its box stands for a share of a mailbox's `handles`/`refs` pair that its
-	// DROP steps down. A retain that only increfed the box left one share owned by two references, and the
-	// second release freed a live mailbox — exit 89, or a segfault above one processor.
+	// DROP steps down. A retain that only increfs the box leaves one share owned by two references, and the
+	// second release frees a live mailbox — exit 89, or a segfault above one processor.
+	//
+	// ⛔ **BOTH RETAIN DOORS ASK THIS, and `result` is which shape they need** — `emitIncref` retains for
+	// effect, `emitRetainCall` needs a fresh SSA name for the same box. The returning door spelled
+	// `__mm_retain` directly, which is how `arr.get(i)` on a handle array freed a live mailbox
+	// (`specs-shv2/services.md`, `a-handle-read-out-of-an-array-survives-a-second-send`).
 	//
 	// ⚠ **THE TAG IS TESTED FIRST AND IT IS NOT A MICRO-OPTIMIZATION.** `valueNameId` is only meaningful for
 	// a value that HAS a declared nominal type; asking it of an integer or a String would be reading a field
 	// that means nothing there. Every handle value is `structRef`-tagged with its companion's name (that is
 	// what `emitOwnedRuntimeResult` stamps at the spawn and at the clone), so the guard costs one dense array
 	// read on the overwhelmingly common path and is exact on the one that matters.
-	function retainCalleeForValue(value ValueId) returns ByteArray
+	function retainCalleeForValue(value ValueId, result RetainResult) returns ByteArray
 		if self.tagOf(value) != ValueTypeTag.structRef 'notNominal'
-			return MmIncrefName
+			return plainBoxRetainCallee(result)
 		end 'notNominal'
 
-		return managedNameRetainCallee(self.signatures, declaredName: self.internedName(self.valueNameId(value)))
+		return managedNameRetainCallee(self.signatures, declaredName: self.internedName(self.valueNameId(value)), result: result)
 	end 'retainCalleeForValue'
 
 	// ⭐ **EMIT A VOID `__mm_incref` OF `value`** — the one spelling of "take a second owner of this box,
@@ -36925,7 +37232,7 @@ export type Parser
 	// (`retainBorrowedAggregate`) for when a FRESH SSA name is needed; this void form is for when the box is
 	// increfed in place and the caller already holds the ValueId it means.
 	function emitIncref(value ValueId, range SourceRange)
-		self.emitOwnershipRuntimeCall(self.retainCalleeForValue(value), args: singletonArgs(value), range: range)
+		self.emitOwnershipRuntimeCall(self.retainCalleeForValue(value, result: RetainResult.discarded), args: singletonArgs(value), range: range)
 		// ⭐ **AND THE OP IS THE FACT: after this line `value`'s allocation has two owners.** The mark rides
 		// here rather than at the named doors above because that is what makes it unforgettable — see
 		// `markValueCoOwnsHeap`. It matters even for a value that was FRESH: `writeBackPayload` increfs a
@@ -38113,8 +38420,9 @@ export type Parser
 
 	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because a
 	// CONCRETE type's protocol is a compile-time fact and a conformer's is not (P1.7a-existentials slice 2).**
-	// `__mm_retain` is the answer for exactly one shape: a heap aggregate whose alias is observable. A
-	// conformer may be neither — `int`/`bool` conform intrinsically and are held at an interface as their RAW
+	// A concrete value's entry is `retainCalleeForValue`'s, which is the plain box retain for almost
+	// everything and the mailbox pair for a `<T>.handle`. A conformer may be neither — `int`/`bool` conform
+	// intrinsically and are held at an interface as their RAW
 	// VALUE (which is what makes them representable there where a `float` is not, E3121), and a `String`
 	// literal is an IMMORTAL `.rdata` record that must be COPIED rather than increfed. So the existential arm
 	// dispatches through the witness's `retainFunc@16` — `__retain_existential(witness, value)` — which is the
@@ -38124,8 +38432,8 @@ export type Parser
 	// `7`, writing through `<the integer> - 24 + 16` where the program answers 11; and a hardcoded incref
 	// under the gate on `widen("abc")`, writing into read-only `.rdata`.
 	//
-	// ⚠ Both entries return a value the caller must USE — but only `__mm_retain` is guaranteed to hand back
-	// what it was given, so a caller may never substitute the source for the result.
+	// ⚠ Both entries return a value the caller must USE — but only the concrete arm is guaranteed to hand
+	// back what it was given, so a caller may never substitute the source for the result.
 	function emitRetainCall(source ValueId, range SourceRange) returns ValueId
 		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
 			return self.emitRetainExistentialCall(source, range: range)
@@ -38134,7 +38442,7 @@ export type Parser
 		// `__mm_retain` gives `source`'s box a second owner exactly as `__mm_incref` does, so the source is
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(source)
-		return self.emitRuntimeCall(MmRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		return self.emitRuntimeCall(self.retainCalleeForValue(source, result: RetainResult.freshName), args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 	end 'emitRetainCall'
 
 	// ⭐ **THE ONE `__retain_existential` CALL**, so its argument ORDER — the witness first, matching
@@ -75089,66 +75397,89 @@ export type Parser
 		// door that asks which label regime the callee takes. The question is asked HERE, from the name
 		// alone, because the builtin check below runs only AFTER the arguments are parsed — and the label
 		// rule fires during that parse. See `argLabelRuleForCallee`.
-		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee), receiverSubjectName: receiverArgSubjectName(receiver))
+		// ⭐⭐ **A BARE-NAME BUILTIN IS THE COMPILER'S ONLY WHILE NO FILE DECLARES THAT NAME.** Asked here,
+		// once, because both halves below read it and they must not disagree: the LABEL RULE fires inside
+		// `parseCallArgs`, and the EMIT is chosen after the arguments are parsed. `declaresCallee` is the
+		// whole-program declaration index's `bool` door — allocation-free, and already on this per-call path
+		// for the reserved-callee question.
+		let shadowedByADeclaration = self.signatures.declaresCallee(callee)
+
+		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee, shadowedByADeclaration: shadowedByADeclaration), receiverSubjectName: receiverArgSubjectName(receiver))
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
-		// A BUILTIN is recognized by name, AFTER its arguments are parsed — so it takes the
-		// ordinary call syntax and the ordinary argument rules, and only the emit differs. The
-		// check sits here rather than in `emitCall` because a builtin emits no `MaxonOp.call` at
-		// all: it has no signature to slot arguments against and no symbol to link.
-		//
-		// A QUALIFIED callee can never match: `Point.trunc` is not `trunc`, so a type may declare a
-		// static method of that name and it is linked, not shadowed. The reservation the builtin
-		// does impose — a free `function trunc` is unreachable — is unchanged and still undiagnosed
-		// (see `emitTrunc`).
-		//
-		// ⭐⭐ **THE MATH INTRINSICS ENTER THROUGH THEIR ROSTER, NOT THROUGH SEVEN `equals` OF THEIR OWN.**
-		// `calleeTakesPositionalArgsOnly` is the ONE list of that family, and gating the emit on it is what
-		// makes the list and the emit impossible to disagree — see `emitPositionalMathBuiltin` for the two
-		// directions this closes and for the `max` tick that would otherwise have paid for it.
-		if calleeTakesPositionalArgsOnly(callee) 'mathBuiltin'
-			return try self.emitPositionalMathBuiltin(args, callee: callee, calleeTok: anchor)
-		end 'mathBuiltin'
+		// ⭐⭐ **THE BARE-NAME BUILTINS, AND THEY ARE ONLY REACHED WHEN NO FILE DECLARES THE NAME.** A bare
+		// builtin has no declaration, so nothing downstream could ever notice that a user's `function round`
+		// was never linked: the call emitted a machine instruction and the declaration sat unreachable, with
+		// no diagnostic anywhere. The declaration wins, and the whole run is gated on that one question
+		// rather than each arm asking it — nine copies of one rule is how an arm added later would keep the
+		// old answer. A QUALIFIED callee reaches none of these anyway (`Point.trunc` is not `trunc`), so a
+		// static method of the name was always linked.
+		if not shadowedByADeclaration 'noFileOwnsThisName'
+			// A BUILTIN is recognized by name, AFTER its arguments are parsed — so it takes the
+			// ordinary call syntax and the ordinary argument rules, and only the emit differs. The
+			// check sits here rather than in `emitCall` because a builtin emits no `MaxonOp.call` at
+			// all: it has no signature to slot arguments against and no symbol to link.
+			//
+			// ⭐⭐ **THE MATH INTRINSICS ENTER THROUGH THEIR ROSTER, NOT THROUGH SEVEN `equals` OF THEIR OWN.**
+			// `calleeTakesPositionalArgsOnly` is the ONE list of that family, and gating the emit on it is what
+			// makes the list and the emit impossible to disagree — see `emitPositionalMathBuiltin` for the two
+			// directions this closes and for the `max` tick that would otherwise have paid for it.
+			if calleeTakesPositionalArgsOnly(callee) 'mathBuiltin'
+				// ⭐ **A DISCARDED MATH INTRINSIC IS DEAD CODE THE PARSER CAN PROVE, so it earns E3064 here rather
+				// than through the whole-program effect summary.** Every member of this roster IS a machine
+				// instruction over its arguments — no memory is read, none is written, nothing is called — so a
+				// statement that takes none of the answer has no other reason to run, and no call graph has to be
+				// walked to say so. The site still travels as a `PendingDiscardedResult` because the DIAGNOSTIC is
+				// `SemanticCheck.checkDiscardedResults`'s and must stay one sentence in one place; what the site
+				// carries is that its purity is already settled. (The bare-call door for DECLARED callees is a
+				// different question and stands shelved in `specs-shv2/discarded-results.md`.)
+				if not resultUsed 'nobodyTookTheAnswer'
+					self.artifact.recordDiscardedResult(PendingDiscardedResult.createForIntrinsic(callee, line: anchor.line, column: anchor.column, filePath: self.filePath))
+				end 'nobodyTookTheAnswer'
 
-		// `spawnReadLine(cmd)` — the IOCP overlapped-read PROBE (P1.5 slice 1a-ii): `__gt_io_read` spawns the
-		// command with stdout → a fresh overlapped pipe, issues a YIELDING overlapped read and returns the byte
-		// count. NON-throwing (a plain integer, not the dual-register error ABI), so a bare call needs no `try`.
-		if callee.equals(SpawnReadLineBuiltinName) 'spawnReadLineBuiltin'
-			return try self.emitCommandLineRuntimeCall(args, runtimeName: IoReadName, builtinName: SpawnReadLineBuiltinName, arity: SpawnReadLineArity, calleeTok: anchor)
-		end 'spawnReadLineBuiltin'
+				return try self.emitPositionalMathBuiltin(args, callee: callee, calleeTok: anchor)
+			end 'mathBuiltin'
 
-		// The seven streaming subprocess builtins (P1.5 slice 1b). Each is recognized by name after its arguments
-		// are parsed, exactly like `spawnReadLine`, and routes to a `__gt_subp_*` runtime entry.
-		// `subpSpawn(cmd)` — `__gt_subp_spawn` creates three pipes, spawns the child and returns a
-		// non-negative handle (or -1), which the six `subp*` handle doors below take as their argument.
-		if callee.equals(SubpSpawnBuiltinName) 'subpSpawnBuiltin'
-			return try self.emitCommandLineRuntimeCall(args, runtimeName: SubpSpawnName, builtinName: SubpSpawnBuiltinName, arity: SubpSpawnArity, calleeTok: anchor)
-		end 'subpSpawnBuiltin'
+			// `spawnReadLine(cmd)` — the IOCP overlapped-read PROBE (P1.5 slice 1a-ii): `__gt_io_read` spawns the
+			// command with stdout → a fresh overlapped pipe, issues a YIELDING overlapped read and returns the byte
+			// count. NON-throwing (a plain integer, not the dual-register error ABI), so a bare call needs no `try`.
+			if callee.equals(SpawnReadLineBuiltinName) 'spawnReadLineBuiltin'
+				return try self.emitCommandLineRuntimeCall(args, runtimeName: IoReadName, builtinName: SpawnReadLineBuiltinName, arity: SpawnReadLineArity, calleeTok: anchor)
+			end 'spawnReadLineBuiltin'
 
-		if callee.equals(SubpReadLineBuiltinName) 'subpReadLineBuiltin'
-			return try self.emitSubpReadLine(args, runtimeName: SubpReadLineName, builtinName: SubpReadLineBuiltinName, calleeTok: anchor)
-		end 'subpReadLineBuiltin'
+			// The seven streaming subprocess builtins (P1.5 slice 1b). Each is recognized by name after its arguments
+			// are parsed, exactly like `spawnReadLine`, and routes to a `__gt_subp_*` runtime entry.
+			// `subpSpawn(cmd)` — `__gt_subp_spawn` creates three pipes, spawns the child and returns a
+			// non-negative handle (or -1), which the six `subp*` handle doors below take as their argument.
+			if callee.equals(SubpSpawnBuiltinName) 'subpSpawnBuiltin'
+				return try self.emitCommandLineRuntimeCall(args, runtimeName: SubpSpawnName, builtinName: SubpSpawnBuiltinName, arity: SubpSpawnArity, calleeTok: anchor)
+			end 'subpSpawnBuiltin'
 
-		if callee.equals(SubpReadErrLineBuiltinName) 'subpReadErrLineBuiltin'
-			return try self.emitSubpReadLine(args, runtimeName: SubpReadErrLineName, builtinName: SubpReadErrLineBuiltinName, calleeTok: anchor)
-		end 'subpReadErrLineBuiltin'
+			if callee.equals(SubpReadLineBuiltinName) 'subpReadLineBuiltin'
+				return try self.emitSubpReadLine(args, runtimeName: SubpReadLineName, builtinName: SubpReadLineBuiltinName, calleeTok: anchor)
+			end 'subpReadLineBuiltin'
 
-		if callee.equals(SubpWriteLineBuiltinName) 'subpWriteLineBuiltin'
-			return try self.emitSubpWriteLine(args, calleeTok: anchor)
-		end 'subpWriteLineBuiltin'
+			if callee.equals(SubpReadErrLineBuiltinName) 'subpReadErrLineBuiltin'
+				return try self.emitSubpReadLine(args, runtimeName: SubpReadErrLineName, builtinName: SubpReadErrLineBuiltinName, calleeTok: anchor)
+			end 'subpReadErrLineBuiltin'
 
-		if callee.equals(SubpCloseStdinBuiltinName) 'subpCloseStdinBuiltin'
-			return try self.emitSubpHandleOp(args, runtimeName: SubpCloseStdinName, builtinName: SubpCloseStdinBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
-		end 'subpCloseStdinBuiltin'
+			if callee.equals(SubpWriteLineBuiltinName) 'subpWriteLineBuiltin'
+				return try self.emitSubpWriteLine(args, calleeTok: anchor)
+			end 'subpWriteLineBuiltin'
 
-		if callee.equals(SubpWaitBuiltinName) 'subpWaitBuiltin'
-			return try self.emitSubpHandleOp(args, runtimeName: SubpWaitName, builtinName: SubpWaitBuiltinName, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
-		end 'subpWaitBuiltin'
+			if callee.equals(SubpCloseStdinBuiltinName) 'subpCloseStdinBuiltin'
+				return try self.emitSubpHandleOp(args, runtimeName: SubpCloseStdinName, builtinName: SubpCloseStdinBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subpCloseStdinBuiltin'
 
-		if callee.equals(SubpReleaseBuiltinName) 'subpReleaseBuiltin'
-			return try self.emitSubpHandleOp(args, runtimeName: SubpReleaseName, builtinName: SubpReleaseBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
-		end 'subpReleaseBuiltin'
+			if callee.equals(SubpWaitBuiltinName) 'subpWaitBuiltin'
+				return try self.emitSubpHandleOp(args, runtimeName: SubpWaitName, builtinName: SubpWaitBuiltinName, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subpWaitBuiltin'
+
+			if callee.equals(SubpReleaseBuiltinName) 'subpReleaseBuiltin'
+				return try self.emitSubpHandleOp(args, runtimeName: SubpReleaseName, builtinName: SubpReleaseBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subpReleaseBuiltin'
+		end 'noFileOwnsThisName'
 
 		// ⚠ **THE MATH-INTRINSIC DISPATCH NO LONGER STANDS HERE, AND THIS PARAGRAPH IS KEPT FOR ITS
 		// MEASUREMENT.** It used to be a run of `if callee.equals(…)` rows at this point, one per
@@ -75407,6 +75738,20 @@ export type Parser
 			if callee.equals(BuiltinsMmRawAllocBytesName) 'mmRawAllocBytes'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocBytesName, runtimeName: MmCounterRawAllocBytesName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmRawAllocBytes'
+
+			// ⭐ **THE THREE PER-THREAD COLUMNS**, on the six's own door and for the six's own reason. They
+			// sum both allocator layers where the six are per-layer, so there are three of them and not six.
+			if callee.equals(BuiltinsThreadAllocTotalName) 'threadAllocTotal'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsThreadAllocTotalName, runtimeName: MmCounterThreadAllocsName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'threadAllocTotal'
+
+			if callee.equals(BuiltinsThreadFreeTotalName) 'threadFreeTotal'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsThreadFreeTotalName, runtimeName: MmCounterThreadFreesName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'threadFreeTotal'
+
+			if callee.equals(BuiltinsThreadAllocBytesName) 'threadAllocBytes'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsThreadAllocBytesName, runtimeName: MmCounterThreadAllocBytesName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'threadAllocBytes'
 
 			// ⭐ **THE SCAVENGER**, beside the counters because it reads the same surface from the other end:
 			// they report what the allocator TOOK, this returns what it GAVE BACK. Same door again — an `int`
@@ -75671,9 +76016,6 @@ export type Parser
 	// LowerMaxonToStd.maxon:7778). It is also what keeps `fpToSi` from ever naming an int → int
 	// conversion, which `lowerUnaryOp` panics on.
 	//
-	// ⚠ The name is RESERVED wherever a call is parsed: a user function called `trunc` is
-	// shadowed by this and never linked. v1 has the same property for its whole math-intrinsic
-	// set, and the same absence of a diagnostic for it.
 	function emitTrunc(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
 		let operand = try self.numericBuiltinOperand(args, name: TruncBuiltinName, calleeTok: calleeTok)
 
@@ -78395,7 +78737,7 @@ export type Parser
 	function applyCallerConsume(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
 		match self.signatures.consumeOf(callee) 'c'
 			borrowsAll then break 'c'
-			consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
+			consumes(info) then try self.transferConsumedArgs(info, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 		end 'c'
 	end 'applyCallerConsume'
 
@@ -78408,7 +78750,7 @@ export type Parser
 	// door reachable from here at all. A malformed call
 	// (an arity mismatch, an unknown label) leaves the position `>= paramNames.count()`, which `isConsumed`
 	// answers false, so it is left untouched here and reported by SemanticCheck against the real registry.
-	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
+	function transferConsumedArgs(info ParamConsumeInfo, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
 		// An OPAQUE `T` value consumed at TWO argument positions of a single call inherits ONE reference twice and
 		// so would be dropped twice — a double-free — the call analog of the struct-literal
 		// `rejectDoubleOwningStore` (`Self{a: v, b: v}`), asking that door's own gate. Track each such value at a
@@ -78424,6 +78766,17 @@ export type Parser
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
 			let position = argSlotPosition(info.paramNames, argIndex: i, label: label)
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
+			// ⭐⭐ **A BY-REFERENCE POSITION IS NEVER CONSUMED, AND THIS IS THE CALLER-SIDE HALF OF THE RULE
+			// `bindParameters` STATES AT THE OTHER END.** The value at such a position is the ADDRESS of a cell
+			// this frame owns — the callee writes THROUGH it and the caller reads what it holds long after the
+			// call — so there is nothing here to move and nothing to co-own. Transferring anyway retains the CELL
+			// (the only pointer in hand), which this frame decrefs exactly once at scope exit: one reference
+			// nobody ever releases, MEASURED as **exit 101** on `make(p String)` doing `p = "x"` then
+			// `Wrap{v: p}`. The callee's own field store already takes the reference the field owes, because a
+			// cell read is a BORROW there whatever the consume bits say.
+			if self.signatures.programTakesAParamByRef() and self.signatures.paramIsByRef(callee, index: position) 'theCallersOwnCell'
+				continue
+			end 'theCallersOwnCell'
 			// ⭐⭐ **A PROMISE ARGUMENT IS A MOVE, BY TYPE, AT EVERY POSITION — CONSUMING OR NOT** (`W231`). A
 			// green thread has exactly one owner, so handing one to a callee is never a borrow: the callee
 			// either awaits it, stores it, or drops it at its own scope exit, and this frame must stop naming

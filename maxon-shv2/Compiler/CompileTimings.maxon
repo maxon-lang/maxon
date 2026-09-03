@@ -15,6 +15,20 @@
 // (x2 linear vs x4 quadratic) with a 100% margin. A move inside that band is not a
 // datapoint. Allocations remain the column where any movement at all is real.
 //
+// ⚠⚠ **A PARALLEL PHASE'S SUB-PHASE ROWS ARE A SUM OVER WORKERS AND CAN EXCEED ITS OWN WALL.** `regalloc`
+// allocates every function on a pool of worker services (`RegAllocPool`), each measuring its own brackets
+// on its own green thread, and those figures are summed into the `regalloc` sub-phase rows. So on a
+// sixteen-processor box the breakdown reads several times the phase above it: that is the pool's work,
+// not a double count, and the multiple is the parallelism. The row under the breakdown says which reading
+// it is (see `RegAllocRemainder`). Every SERIAL row in the table is unaffected, and so is the `regalloc`
+// PHASE row itself — it is bracketed on the main thread and stays exact in every column.
+//
+// ⚠ **THE SUB-PHASES' MEMORY COLUMNS ARE NOT THE SAME KIND OF SUM.** They read the CALLING GREEN THREAD's
+// allocator counters (`__Builtins.threadAllocTotal` and its two siblings), so each bracket counts what its
+// own worker allocated and the total over workers is the figure a one-processor run reports — where the
+// time columns sum to a wall-clock multiple. `RegAllocCosts` carries the argument, and the measurement from
+// the rung where these columns were process-wide and therefore fiction.
+//
 // WHY THIS EXISTS, and why the phases must be DISJOINT:
 //
 // v1 carried "the register allocator is 74% of self-compile" for months with ZERO
@@ -476,11 +490,29 @@ export type CompileTimings
 	end 'unattributedCost'
 end 'CompileTimings'
 
-// Cost inside the `regalloc` phase that none of its sub-phases claimed: the driver loop
-// itself. Same disjointness contract as `CompileTimings.unattributedCost`, enforced the
-// same way — the sub-phases are intervals INSIDE the regalloc wall, so exceeding it means
-// a sub-phase timer overlaps another.
-function regAllocUnattributedCost(timings CompileTimings) returns PhaseCost
+// WHAT THE ALLOCATOR'S SUB-PHASES LEAVE OVER - or, on a POOL, what they overlap by.
+//
+// The sub-phases are disjoint intervals of ONE function's allocation, and `regalloc` allocates every
+// function on a pool of worker services (`RegAllocPool`), so several of them run inside one wall. Their
+// SUM is therefore the pool's work and is not bounded by the phase's wall at all: at sixteen workers it
+// is expected to be several times it, and reading that multiple IS the parallelism the pass bought.
+//
+// ⛔ **SO NO OVERLAP CHECK CAN STAND HERE: A SUM ABOVE THE WALL IS THE NORMAL READING.** The defect
+// worth refusing is `splitting` silently containing `liveness` - the failure this whole file exists to
+// prevent - and it is refused at the site that CREATES it rather than a report away from it:
+// `RegAllocCosts.recordExcluding` takes liveness back out of the splitter's bracket through
+// `PhaseDelta.minus`, whose non-negative components trap on exactly that overlap. One fact, checked
+// once, where it is still answerable.
+union RegAllocRemainder
+	// The phase's wall minus what its sub-phases claimed: the driver loop's own cost. What a pool of one
+	// leaves, which is every compile at `MAXON_MAX_PROCS=1` and every one a bootstrap-built compiler runs.
+	unattributed(cost PhaseCost)
+	// What the sub-phases claimed BEYOND the phase's wall: work the pool did at the same time as other
+	// work. Read as a multiple of the wall it is the allocator's realised parallelism.
+	concurrent(cost PhaseCost)
+end 'RegAllocRemainder'
+
+function regAllocRemainder(timings CompileTimings) returns RegAllocRemainder
 	let wall = timings.costOf(CompilePhase.regalloc)
 
 	var claimed = PhaseCost.zero()
@@ -488,16 +520,29 @@ function regAllocUnattributedCost(timings CompileTimings) returns PhaseCost
 		claimed = claimed.plus(timings.regAlloc.costOf(sub))
 	end 'eachSub'
 
-	if claimed.nanos > wall.nanos 'overlapNanos'
-		panic("CompileTimings: the register allocator's sub-phases sum to {claimed.nanos} ns but the regalloc phase took {wall.nanos} ns — two sub-phase timers OVERLAP (see RegisterAllocator.allocateFunction, which subtracts liveness out of the splitter's wall precisely to keep them disjoint).")
-	end 'overlapNanos'
+	if claimed.nanos > wall.nanos or claimed.cpuTicks > wall.cpuTicks 'thePoolRanSeveralAtOnce'
+		return RegAllocRemainder.concurrent(costGap(claimed, under: wall))
+	end 'thePoolRanSeveralAtOnce'
 
-	if claimed.cpuTicks > wall.cpuTicks 'overlapCpu'
-		panic("CompileTimings: the register allocator's sub-phases sum to {claimed.cpuTicks} CPU ticks but the regalloc phase used {wall.cpuTicks} — two sub-phase timers OVERLAP (see RegisterAllocator.allocateFunction).")
-	end 'overlapCpu'
+	return RegAllocRemainder.unattributed(wall.minus(claimed))
+end 'regAllocRemainder'
 
-	return wall.minus(claimed)
-end 'regAllocUnattributedCost'
+// `over` minus `under`, componentwise, floored at zero. The floor is not a rounding convenience: a pool
+// exceeds its phase in ONE column and not the other - the driver sleeps through most of the phase, so
+// its CPU is small where its wall is large - and `PhaseCost.minus` traps rather than wrapping.
+function costGap(over PhaseCost, under PhaseCost) returns PhaseCost
+	let nanos = over.nanos - under.nanos if over.nanos > under.nanos else 0
+	let cpuTicks = over.cpuTicks - under.cpuTicks if over.cpuTicks > under.cpuTicks else 0
+	return PhaseCost.create(nanos, cpuTicks: cpuTicks)
+end 'costGap'
+
+// The one row the remainder renders as, labelled for what it actually is.
+function regAllocRemainderRow(timings CompileTimings, total PhaseCost) returns String
+	return match regAllocRemainder(timings) 'remainder'
+		unattributed(cost) gives timingRow("{SubPhaseIndent}(unattributed)", cost: cost, total: total)
+		concurrent(cost) gives timingRow("{SubPhaseIndent}(concurrent)", cost: cost, total: total)
+	end 'remainder'
+end 'regAllocRemainderRow'
 
 // The whole-compile attribution table: every phase with its ms, its share of the wall
 // total and its share of the CPU total, the allocator's sub-phases nested under
@@ -543,7 +588,7 @@ function regAllocBreakdown(timings CompileTimings, total PhaseCost) returns Stri
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(timingRow("{SubPhaseIndent}{sub.name}", cost: timings.regAlloc.costOf(sub), total: total))
 	end 'eachSub'
-	msg.append(timingRow("{SubPhaseIndent}(unattributed)", cost: regAllocUnattributedCost(timings), total: total))
+	msg.append(regAllocRemainderRow(timings, total: total))
 	return msg.build()
 end 'regAllocBreakdown'
 

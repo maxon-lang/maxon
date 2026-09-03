@@ -226,10 +226,10 @@ end 'buildToolDescriptor'
 // -----------------------------------------------------------------------------
 // build
 // -----------------------------------------------------------------------------
-let BuildDescription = "Build a Maxon compiler. Target is csharp (the bootstrap, via dotnet build) or shv2 (built by the bootstrap). One compiler per call."
+let BuildDescription = "Build a Maxon compiler. Target is csharp (the bootstrap, via dotnet build) or shv2 (the bootstrap builds a SEED, and the seed compiles the tree's binary, so the everyday shv2 is shv2-emitted). One compiler per call."
 
 function schemaFieldsForBuild(doc JsonDoc) returns SchemaFieldArray
-	let targetSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build. One per call: csharp is built by `dotnet build`; shv2 is built BY the csharp bootstrap, so build csharp first if it is stale.")
+	let targetSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build. One per call: csharp is built by `dotnet build`; shv2 runs `scripts/build-shv2.sh`, which has the bootstrap compile a SEED and the seed compile the tree's binary — so build csharp first if it is stale, and expect two compiles (~4 min).")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("target", schemaId: targetSchema, required: true))
 	return fields

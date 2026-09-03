@@ -1,0 +1,196 @@
+// Test: a-destructuring-binder-takes-a-parameters-name
+typealias Tally = int(0 to 1000)
+
+function pairOf() returns (String, String)
+	return ("first", "second")
+end 'pairOf'
+
+type Wrap
+	export var v as String
+	export var n as Tally
+
+	export static function make(p String) returns Wrap
+		let (p, q) = pairOf()
+		return Wrap{v: p, n: q.count()}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.make("the argument")
+	return (w.v.count() + w.n) as ExitCode
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @pairOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "first"
+    x64.leaRegRdata r12, [rip + __str_rec_4]  ; "second"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Wrap.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.callDirect pairOf
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r15, r13, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r15
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect String.count
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at a-destructuring-binder-takes-a-parameters-name.test:14: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct___Tuple2.String.String
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "the argument"
+    x64.callDirect Wrap.make
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect String.count
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.leaRegRegReg r12, r8, rax
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at a-destructuring-binder-takes-a-parameters-name.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Wrap
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

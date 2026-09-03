@@ -112,3 +112,30 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: round.a-declaration-takes-the-name-back -->
+⭐⭐ **A FILE THAT DECLARES `round` OWNS THE NAME.** The eight bare math intrinsics have no declaration of
+their own, so nothing downstream can notice that a user's `function round` was never linked: the call
+emitted the machine instruction, the declaration sat unreachable, and there was no diagnostic anywhere.
+The declaration wins, and every bare-name builtin follows the same rule from one gate in
+`Parser.parseCallNamed` — the ordinary argument-label rule comes back with it, since a declaration has
+real parameters for a label to name.
+
+⚠ **BOTH REFERENCE COMPILERS RESERVE THE NAME UNCONDITIONALLY** and leave the shadowed declaration
+unreachable and undiagnosed; this is a deliberate divergence, taken because a shadowed declaration has no
+other symptom. A QUALIFIED callee was never affected — `Point.round` is not `round` — and nothing in
+`stdlib/`, `specs/` or `specs-shv2/` declares one of the eight, so no working program moves.
+```maxon
+typealias Tally = int(0 to 1000)
+
+function round(n Tally) returns Tally
+	return n + 1
+end 'round'
+
+function main() returns ExitCode
+	return round(10)
+end 'main'
+```
+```exitcode
+11
+```

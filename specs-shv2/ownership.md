@@ -1300,3 +1300,265 @@ end 'main'
 ```maxoncstderr
 error E4014: specs/fragments/ownership/cycle-mutual-recursion.test:2:6: type 'A' contains a reference cycle (via A → b: B → a: A); recursive type references are not allowed
 ```
+
+<!-- test: local-shadowing-a-consumed-parameter -->
+⛔⛔ **A LOCAL THAT REBINDS A PARAMETER'S NAME TAKES THE NAME WITH IT, AND THE CONSUME ANALYSIS STOPS
+THERE.** The store below moves the LOCAL into the field; the parameter is never moved anywhere, so the
+caller keeps it and drops it at its own scope exit. Reading the store as a consume OF THE PARAMETER is a
+leak in both directions at once — the caller vacates its binding at the call and the callee releases the
+local instead — and the argument's allocation outlives the program (exit **101**, no diagnostic anywhere).
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String) returns Wrap
+		let p = "local value"
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.make("the argument")
+	return w.v.count() as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: local-shadowing-a-parameter-ends-with-its-block -->
+The SCOPE half of the rule above, and the reason a rebinding cannot simply end the parameter's claim for
+the rest of the body: the loop variable below shadows `p` only inside the loop, so the store after it
+names the parameter again and IS a consume of it. A rule that let the rebinding reach the whole body would
+refuse this program at the store instead (E2015), the callee never having been enrolled its owner.
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Wrap
+	export var v as String
+	export var mark as Tally
+
+	export static function make(p String) returns Wrap
+		var mark = 0
+		for p in 0 upto 2 'digits'
+			mark = mark + p
+		end 'digits'
+
+		return Wrap{v: p, mark: mark}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.make("outer")
+	return (w.v.count() + w.mark) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: a-destructuring-binder-takes-a-parameters-name -->
+⭐ **A BINDER LIST TAKES THE NAME EXACTLY AS `let p = …` DOES, AND ITS KEYWORD STANDS IN FRONT OF THE `(`
+RATHER THAN IN FRONT OF EACH NAME.** That predecessor is the whole difference between the destructure
+below and a CALL, whose arguments bind nothing — so the rule is read off the paren and never off the names
+inside it. The store moves the LOCAL `p` into the field; the parameter is never moved anywhere, and the
+caller drops `"the argument"` itself.
+```maxon
+typealias Tally = int(0 to 1000)
+
+function pairOf() returns (String, String)
+	return ("first", "second")
+end 'pairOf'
+
+type Wrap
+	export var v as String
+	export var n as Tally
+
+	export static function make(p String) returns Wrap
+		let (p, q) = pairOf()
+		return Wrap{v: p, n: q.count()}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.make("the argument")
+	return (w.v.count() + w.n) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: a-handler-binder-takes-a-parameters-name -->
+A `try … otherwise (e)` handler binder is the fourth keyword that can stand in front of a binder list's
+`(`, and it shadows for its handler BLOCK. `boom` always throws, so the store that runs is the handler's:
+it moves the caught error into `why` and the parameter reaches no consume door at all.
+```maxon
+enum Fail implements Error
+	nope
+end 'Fail'
+
+function boom() throws Fail
+	throw Fail.nope
+end 'boom'
+
+type Wrap
+	export var v as String
+	export var why as Fail
+
+	export static function make(p String) returns Wrap
+		try boom() otherwise (p) 'caught'
+			return Wrap{v: "handled", why: p}
+		end 'caught'
+
+		return Wrap{v: "unreached", why: Fail.nope}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.make("the argument")
+	return w.v.count() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-match-arm-payload-binds-for-its-line-only -->
+⛔⛔ **AN ARM'S PAYLOAD BINDS FOR ONE LINE, NOT FOR THE `match`'s BLOCK.** `filled(p)` takes the name on
+its own line and gives it back at the newline; the SIBLING arm's `p = "replaced"` is therefore a write to
+the PARAMETER, which is what makes `p` by-reference and what the caller reads back out of `s`. A payload
+carried at the match's own depth would still be shadowing that write, and the compiler refuses the program
+at it — *cannot assign to immutable variable* — rather than dropping it silently.
+```maxon
+union Slot
+	filled(text String)
+	empty
+end 'Slot'
+
+type Wrap
+	export var v as String
+
+	export static function make(p String, s Slot) returns Wrap
+		match s 'choose'
+			filled(p) then return Wrap{v: p}
+			empty then p = "replaced"
+		end 'choose'
+
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "outer"
+	let a = Wrap.make(s, s: Slot.filled("inner"))
+	let b = Wrap.make(s, s: Slot.empty)
+	return (a.v.count() + b.v.count() + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: a-parameter-reassigned-then-consumed-releases-each-value-once -->
+⛔⛔ **A PARAMETER THE CALLEE REASSIGNS IS THE CALLER'S CELL, AND A CELL IS NEVER CONSUMED.** Both facts
+hold of `p` below — the rebind makes it by-reference, the field store makes it consumed — and they decide
+opposite things about who owns what. By-reference wins, because the cell outlives the frame: the caller
+reads what the callee wrote (`s` is `"replaced"` here, so the sum is `8 + 8`) and still drops it. So the
+callee's field store takes its OWN reference off a borrow, the caller transfers nothing at the call, and
+`"outer"` is released exactly once by the rebind that displaced it.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String) returns Wrap
+		p = "replaced"
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "outer"
+	let w = Wrap.make(s)
+	return (w.v.count() + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: a-parameter-reassigned-from-another-parameter-then-consumed -->
+The rebind's source is another PARAMETER, so three names end on one record — the cell, the field and the
+caller's `t` — and each owes exactly one release. `"second"` is 6 bytes and all three names spell it.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String, q String) returns Wrap
+		p = q
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "outer"
+	let t = "second"
+	let w = Wrap.make(s, q: t)
+	return (w.v.count() + s.count() + t.count()) as ExitCode
+end 'main'
+```
+```exitcode
+18
+```
+
+<!-- test: a-parameter-reassigned-in-a-loop-then-consumed -->
+The rebind runs N times, so N-1 intermediate records are displaced and released before the consume ever
+runs — the accounting cannot be settled once at the store's TEXT. `"x"` grows to `"x012"`, which the
+caller sees too.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String) returns Wrap
+		for i in 0 upto 3 'grow'
+			p = "{p}{i}"
+		end 'grow'
+
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "x"
+	let w = Wrap.make(s)
+	return (w.v.count() + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: a-caller-may-rebind-what-a-consuming-callee-wrote-through-its-cell -->
+⭐ **THE ARGUMENT WAS NOT MOVED, so reading it after the call is not E3102 and rebinding it is an ordinary
+`var` rebind.** The caller still owns the cell's occupant, so the rebind below is what releases
+`"replaced"` — and `w.v`'s own reference is why it is still there to be counted afterwards.
+```maxon
+type Wrap
+	export var v as String
+
+	export static function make(p String) returns Wrap
+		p = "replaced"
+		return Wrap{v: p}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	var s = "outer"
+	let w = Wrap.make(s)
+	s = "{s}-again"
+	return (w.v.count() + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+22
+```

@@ -1,0 +1,686 @@
+// RegAllocUnit — ONE FUNCTION'S ALLOCATOR INPUT AS A SELF-CONTAINED VALUE, and the result that comes
+// back from allocating it.
+//
+// ⭐⭐ **WHY A COPY AND NOT THE MODULE.** The register allocator is 71% of a self-compile and it is
+// per-function, so it runs on a pool of worker SERVICES. A message MOVES: the far side becomes the
+// value's one owner, which is what keeps this language's reference counting a plain load/add/store
+// rather than an atomic one. A `TargetModule` cannot cross — every function shares its `ops` array, its
+// `blocks` array and its phi arrays with every other, and the phi model is shared all the way back into
+// the PARSE MEMO (`IrBlock`'s header). So what crosses is a purpose-built record holding EXACTLY the
+// surface the allocator reads, built FRESH so that every record reachable from it has exactly one owner.
+//
+// ⛔⛔ **"FRESH" IS A RUN-TIME CONTRACT WITH A LOUD FAILURE, NOT A STYLE.** The send walks the whole graph
+// and a shared record ABORTS THE PROCESS WITH EXIT 96 (`specs-shv2/services.md`, the `deepmove.abort.*`
+// family). A `sharedEmpty*` singleton, a phi array aliased out of the module, or a `TargetOp` copied
+// straight out of `module.ops` while a name-carrying variant still points at the module's `ByteArray`
+// are each exactly that. `soleTargetOp` below is why the last one cannot happen, and it is EXHAUSTIVE
+// over `TargetOp` on purpose: a new op with a managed payload fails to compile here rather than aborting
+// a compile at run time.
+//
+// ⚠ **WHAT IS *NOT* CARRIED IS AS DELIBERATE AS WHAT IS.** `paramTypes`, `returnType`, `varSlotCount`,
+// `outgoingArgSize` and every value column but the register-class one are read by no pass the allocator
+// runs; `blockSourceInfo` is parallel to the MODULE's blocks and is not a Target-tier fact at all; and
+// `nextBlockId` is read only by `splitCriticalEdges`, which runs on the main thread BEFORE any unit is
+// built (it is the one allocator pass that adds blocks). Carrying a field nothing reads would be a
+// second home for it, and the reconstruction is where the two would drift.
+//
+// ⭐ **EVERY ARRAY BUILT HERE IS RESERVED TO ITS FINAL COUNT FIRST, AND THAT IS A MEASUREMENT RATHER
+// THAN TIDINESS.** A pushed `Array` grows geometrically, so one filled element by element from empty
+// allocates a buffer log₂(n) times over and copies its contents as often. The round trip builds four
+// op-sized arrays per block — the unit's body, the rebuilt block's `opRefs`, the result's body, the
+// spliced `opRefs` — on every block of every function of every compile, and every one of those counts is
+// known before its first push. Reserved, each is ONE buffer.
+//
+// ⭐ **THE UNIT IS BUILT AND SENT IN ONE EXPRESSION, and that is E3138's doing**: a value this frame has
+// taken a second reference to — a container push, a local that outlives the call — cannot be proven sole
+// at the send. `extract` is a static factory whose every return is `Self{…}`, which is the one shape
+// `SignatureIndex.returnsFreshValue` admits, so `worker.allocate(RegAllocUnit.extract(…))` is accepted
+// and `let u = …` followed by a send is not.
+
+// An op's position inside one unit block's body — an index into `RegAllocUnitBlock.body`, which is the
+// same numbering `IrBlock.opRefs` uses once the block is rebuilt.
+typealias UnitOpPos = int(0 to u64.max)
+
+// A block's terminator, carrying the OP rather than an index into an ops array the unit does not have.
+// The four states are `Terminator`'s, one representation over.
+union UnitTerminator
+	unset
+	dead
+	fallthrough
+	op(instruction TargetOp)
+end 'UnitTerminator'
+
+// Where a block's conditional branch sits IN ITS BODY. A `CondBranch` names a `module.ops` index, which
+// is meaningless in a unit; a POSITION survives the rebuild because the body is re-appended in order.
+union UnitCondBranch
+	none
+	at(pos UnitOpPos)
+end 'UnitCondBranch'
+
+// One outgoing branch edge: the successor and the values this predecessor passes to its block-args.
+// `IrBlock.BranchEdge` one field lighter — the edge's `argIds` is cloned, never aliased, because the
+// module's copy of it reaches back into the parse memo.
+type UnitEdge
+	export var targetBlockId as BlockId
+	export var argIds as ValueIdArray
+
+	export static function create(targetBlockId BlockId, argIds ValueIdArray) returns UnitEdge
+		return Self{targetBlockId: targetBlockId, argIds: argIds}
+	end 'create'
+end 'UnitEdge'
+
+typealias UnitEdgeArray = Array with UnitEdge
+
+// One block of a unit. `body` holds the LIVE ops inline, in order: the module's flat `ops` array is
+// append-only and every block-rebuilding pass leaves orphans behind in it (`IrModule.liveOpIndices`), so
+// carrying indices would carry the orphans too and mean nothing on the far side.
+//
+// ⚠ **THE BLOCK-ARGS ARE VALUE IDS AND NOTHING ELSE.** An `IrBlockArg` also carries an `argType` and a
+// `returnRole`, and the allocator reads neither: the type is consumed by the LOWERING, which is what
+// produced the register-class column this unit carries instead, and `returnRole` has no reader anywhere
+// in shv2. Rebuilding an arg therefore needs a type only because the record has the field.
+type RegAllocUnitBlock
+	export var id as BlockId
+	export var label as ByteArray
+	export var body as TargetOpArray
+	export var terminator as UnitTerminator
+	export var condBranch as UnitCondBranch
+	export var blockArgIds as ValueIdArray
+	export var edges as UnitEdgeArray
+
+	export static function create(id BlockId, label ByteArray, body TargetOpArray, terminator UnitTerminator, condBranch UnitCondBranch, blockArgIds ValueIdArray, edges UnitEdgeArray) returns RegAllocUnitBlock
+		return Self{id: id, label: label, body: body, terminator: terminator, condBranch: condBranch, blockArgIds: blockArgIds, edges: edges}
+	end 'create'
+end 'RegAllocUnitBlock'
+
+typealias RegAllocUnitBlockArray = Array with RegAllocUnitBlock
+
+// ONE FUNCTION'S WHOLE ALLOCATOR INPUT.
+module type RegAllocUnit
+	export var name as ByteArray
+	// Was this function PARSED? The splitter asks it twice — a function the compiler emitted has no
+	// author to refuse, so its full-pool peak is relieved by a forced bracket rather than raised as
+	// E5001. Carried as the bool the two sites actually ask for rather than as the `FilePath` they used
+	// to derive it from: a path is a managed value with no other reader here, and a reconstruction that
+	// left it empty would silently turn every user function into a compiler-emitted one.
+	export var hasAuthor as bool
+	export var paramCount as ParamCount
+	// The bytes of slot area already reserved — `promoteStackRecords`' region. It is the SEED the spill
+	// slots are placed above, and the result carries the final total back.
+	export var stackSize as StackSize
+	export var valueClass as ValueClassColumn
+	// The blocks in `func.blockRefs` order. The allocator re-orders them (RPO) and the result carries
+	// the order it chose.
+	export var blocks as RegAllocUnitBlockArray
+
+	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
+	// argument of a send: `returnsFreshValue` admits exactly that shape, and E3138 refuses everything it
+	// cannot prove sole. The locals below are consumed by the literal, so nothing survives the return
+	// holding a second reference.
+	export static function extract(module TargetModule, func IrFunction, valueClass ValueClassColumn) returns RegAllocUnit
+		var blocks = RegAllocUnitBlockArray.create()
+		blocks.reserve(func.blockRefs.count())
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("RegAllocUnit.extract: blockRef {blockRef} from '{String.from(func.name)}' is not in module.blocks")
+			blocks.push(extractUnitBlock(module, block: block))
+		end 'eachBlock'
+
+		return Self{name: func.name.clone(), hasAuthor: not func.sourceFilePath.isEmpty(), paramCount: func.paramCount, stackSize: func.stackSize, valueClass: valueClass.clone(), blocks: blocks}
+	end 'extract'
+end 'RegAllocUnit'
+
+// ⭐ **ONE BLOCK'S LIVE BODY, CARRIED SOLE, AND WHERE ITS CONDITIONAL BRANCH LANDED.** `unitOpAt` is
+// where "sole" is bought — by a mint on the way out and by a move on the way home.
+//
+// Both directions of the round trip ask a block exactly this — the unit built out of the real module, and
+// the result read back out of the rebuilt one — so it is asked ONCE. A second spelling would be a second
+// chance for the two ends to disagree about a position that has to survive the crossing, and the position
+// is the only thing about a `condBranch` that can: an `OpIndex` names an ops array the far side does not
+// have.
+type SoleBody
+	export var ops as TargetOpArray
+	// The conditional branch's POSITION, and whether there is one — two scalars rather than a
+	// `UnitCondBranch`, so nothing hands a union BOX out through a field read. Each consumer mints its own
+	// (see `soleTargetOp` for why a shared box is not a copy).
+	export var hasCondBranch as bool
+	export var condPos as UnitOpPos
+
+	export static function of(module TargetModule, block IrBlock, moduleKeepsOps bool) returns SoleBody
+		var ops = TargetOpArray.create()
+		ops.reserve(block.opRefs.count())
+		var condPos = 0 as UnitOpPos
+		let condIsSet = block.hasCondBranchOp()
+		let condOpIdx = block.condBranchIndex() if condIsSet else 0
+
+		for opIdx in block.opRefs 'eachOp'
+			if condIsSet and opIdx == condOpIdx 'thisIsTheConditionalBranch'
+				condPos = ops.count()
+			end 'thisIsTheConditionalBranch'
+			ops.push(unitOpAt(module, opIdx: opIdx, moduleKeepsOps: moduleKeepsOps))
+		end 'eachOp'
+
+		return Self{ops: ops, hasCondBranch: condIsSet, condPos: condPos}
+	end 'of'
+
+	// This body's conditional branch as a unit carries it — minted fresh at each call.
+	export function condBranch() returns UnitCondBranch
+		return UnitCondBranch.at(self.condPos) if self.hasCondBranch else UnitCondBranch.none
+	end 'condBranch'
+end 'SoleBody'
+
+// ⛔⛔ **ONE OP CROSSING INTO A UNIT OR A RESULT — MINTED WHEN THE MODULE KEEPS ITS COPY, MOVED WHEN IT
+// DOES NOT.** That one bit is the whole difference between the two directions, and it is a run-time
+// contract with exit 96 behind it rather than a preference.
+//
+// `moduleKeepsOps: true` is the way OUT: the REAL module outlives every unit extracted from it, so an op
+// carried across unchanged would leave two owners on one box (`soleTargetOp` states the reduced case).
+//
+// `moduleKeepsOps: false` is the way HOME, and it is what makes the return trip allocate nothing.
+// `RegAllocResult.byAllocating` empties BOTH holders — the unit's bodies at the rebuild, the rebuilt
+// module's `ops` after this walk — so each box is already the result's alone. A mint there would be a
+// copy of a copy: MEASURED at 17.8% of the whole round trip's allocations at the top rung of
+// `scale-test`, and 24.0% of them on a self-compile of `maxon-shv2`.
+//
+// ⛔ The bit is the CALLER's to get right. Passing `false` while some other array still holds the op is
+// not a diagnostic, it is `RuntimeAbort.transferredRecordNotSole` — an `osExit` with no message.
+function unitOpAt(module TargetModule, opIdx OpIndex, moduleKeepsOps bool) returns TargetOp
+	let op = try module.ops.get(opIdx) otherwise panic("unitOpAt: op {opIdx} is not in module.ops")
+	return soleTargetOp(op) if moduleKeepsOps else op
+end 'unitOpAt'
+
+// One block, copied out of the module. Split from `extract` so the factory above stays a single
+// `Self{…}` return.
+function extractUnitBlock(module TargetModule, block IrBlock) returns RegAllocUnitBlock
+	let body = SoleBody.of(module, block: block, moduleKeepsOps: true)
+
+	var blockArgIds = ValueIdArray.create()
+	blockArgIds.reserve(block.blockArgs.count())
+	for arg in block.blockArgs 'eachPhi'
+		blockArgIds.push(arg.valueId)
+	end 'eachPhi'
+
+	var edges = UnitEdgeArray.create()
+	edges.reserve(block.branchEdges.count())
+	for edge in block.branchEdges 'eachEdge'
+		edges.push(UnitEdge.create(edge.targetBlockId, argIds: edge.argIds.clone()))
+	end 'eachEdge'
+
+	return RegAllocUnitBlock.create(block.id, label: block.label.clone(), body: body.ops, terminator: unitTerminatorOf(module, block: block, moduleKeepsOps: true), condBranch: body.condBranch(), blockArgIds: blockArgIds, edges: edges)
+end 'extractUnitBlock'
+
+function unitTerminatorOf(module TargetModule, block IrBlock, moduleKeepsOps bool) returns UnitTerminator
+	return match block.terminator 'term'
+		unset gives UnitTerminator.unset
+		dead gives UnitTerminator.dead
+		fallthrough gives UnitTerminator.fallthrough
+		opIndex(index) gives UnitTerminator.op(unitOpAt(module, opIdx: index, moduleKeepsOps: moduleKeepsOps))
+	end 'term'
+end 'unitTerminatorOf'
+
+// ⛔⛔⛔ **AN OP MINTED HERE, NOT COPIED — BECAUSE A UNION VALUE IN AN ARRAY IS A BOX.**
+//
+// MEASURED, and it is the whole reason this function is 140 arms long. Copying a `TargetOp` out of
+// `module.ops` into a fresh array copies a POINTER: the module's element and the unit's are ONE record,
+// and the send's walk answers that with exit 96 — a compile that dies with no message at all
+// (`RuntimeAbort.transferredRecordNotSole` is an `osExit`, not a panic). A two-variant union carrying
+// nothing but integers behaves identically, so this is a property of unions and not of managed payloads:
+// the reduced case is a `union V { physical(int) virtual(int) }` pushed unchanged from one array into
+// another and sent, which aborts.
+//
+// ⇒ **EVERY ARM RE-MINTS.** A `gives op` arm would be a shared box wearing a copy's spelling; a
+// `TargetVReg` operand passed through would be the same defect one level down, which is what `soleVReg`
+// is for; and the two managed payload shapes — a symbol or label `ByteArray`, a jump table's
+// `BlockIdArray` — take `.clone()`, whose shared copy-on-write BUFFER the walk detaches on its own.
+//
+// ⛔ **THE MATCH IS EXHAUSTIVE BY VARIANT AND MUST STAY THAT WAY — NO RANGES, NO `default`.** A range arm
+// answers `gives op` for everything inside it, which is exactly the shared box; a `default` would do it
+// for every op declared after today. Spelled out, a new `TargetOp` fails to COMPILE here, which is the
+// only way this stays true. `colorTargetOp` is the same shape for the same structural reason.
+function soleTargetOp(op TargetOp) returns TargetOp
+	return match op 'variant'
+		prologue(stackSize) gives TargetOp.prologue(stackSize)
+		epilogue(stackSize) gives TargetOp.epilogue(stackSize)
+		ret gives TargetOp.ret
+		jmp(targetBlockId) gives TargetOp.jmp(targetBlockId)
+		jcc(cond, targetBlockId) gives TargetOp.jcc(cond, targetBlockId: targetBlockId)
+		movRegImm(dest, value) gives TargetOp.movRegImm(soleVReg(dest), value: value)
+		movRegImm32(dest, value) gives TargetOp.movRegImm32(soleVReg(dest), value: value)
+		movRegReg(destReg, srcReg) gives TargetOp.movRegReg(soleVReg(destReg), srcReg: soleVReg(srcReg))
+		movReg32Reg32(destReg, srcReg) gives TargetOp.movReg32Reg32(soleVReg(destReg), srcReg: soleVReg(srcReg))
+		subRegReg(dest, lhs, rhs) gives TargetOp.subRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		imulRegReg(dest, lhs, rhs) gives TargetOp.imulRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		negReg(dest, src) gives TargetOp.negReg(soleVReg(dest), src: soleVReg(src))
+		cmpRegReg(lhsReg, rhsReg) gives TargetOp.cmpRegReg(soleVReg(lhsReg), rhsReg: soleVReg(rhsReg))
+		leaRegRegReg(dest, base, index) gives TargetOp.leaRegRegReg(soleVReg(dest), base: soleVReg(base), index: soleVReg(index))
+		leaRegRegImm32(dest, base, disp) gives TargetOp.leaRegRegImm32(soleVReg(dest), base: soleVReg(base), disp: disp)
+		imulRegRegImm32(dest, src, imm) gives TargetOp.imulRegRegImm32(soleVReg(dest), src: soleVReg(src), imm: imm)
+		cmpRegImm32(reg, imm) gives TargetOp.cmpRegImm32(soleVReg(reg), imm: imm)
+		xchgRegReg(a, b) gives TargetOp.xchgRegReg(soleVReg(a), b: soleVReg(b))
+		callDirect(targetName) gives TargetOp.callDirect(targetName.clone())
+		iatCall(slotIndex) gives TargetOp.iatCall(slotIndex)
+		cqo gives TargetOp.cqo
+		divideReg(divisor, signedness) gives TargetOp.divideReg(soleVReg(divisor), signedness: signedness)
+		pushReg(reg) gives TargetOp.pushReg(reg)
+		popReg(reg) gives TargetOp.popReg(reg)
+		storeSlotReg(slot, srcReg) gives TargetOp.storeSlotReg(slot, srcReg: soleVReg(srcReg))
+		loadRegSlot(destReg, slot) gives TargetOp.loadRegSlot(soleVReg(destReg), slot: slot)
+		andRegReg(dest, lhs, rhs) gives TargetOp.andRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		orRegReg(dest, lhs, rhs) gives TargetOp.orRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		xorRegReg(dest, lhs, rhs) gives TargetOp.xorRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		notReg(dest, src) gives TargetOp.notReg(soleVReg(dest), src: soleVReg(src))
+		andRegImm32(dest, lhs, imm) gives TargetOp.andRegImm32(soleVReg(dest), lhs: soleVReg(lhs), imm: imm)
+		orRegImm32(dest, lhs, imm) gives TargetOp.orRegImm32(soleVReg(dest), lhs: soleVReg(lhs), imm: imm)
+		xorRegImm32(dest, lhs, imm) gives TargetOp.xorRegImm32(soleVReg(dest), lhs: soleVReg(lhs), imm: imm)
+		shlRegImm8(dest, lhs, imm) gives TargetOp.shlRegImm8(soleVReg(dest), lhs: soleVReg(lhs), imm: imm)
+		sarRegImm8(dest, lhs, imm) gives TargetOp.sarRegImm8(soleVReg(dest), lhs: soleVReg(lhs), imm: imm)
+		shrRegImm8(dest, lhs, imm) gives TargetOp.shrRegImm8(soleVReg(dest), lhs: soleVReg(lhs), imm: imm)
+		shlRegCl(dest, lhs) gives TargetOp.shlRegCl(soleVReg(dest), lhs: soleVReg(lhs))
+		sarRegCl(dest, lhs) gives TargetOp.sarRegCl(soleVReg(dest), lhs: soleVReg(lhs))
+		shrRegCl(dest, lhs) gives TargetOp.shrRegCl(soleVReg(dest), lhs: soleVReg(lhs))
+		setccReg(dest, cond) gives TargetOp.setccReg(soleVReg(dest), cond: cond)
+		leaRegGlobal(dest, label) gives TargetOp.leaRegGlobal(soleVReg(dest), label: label.clone())
+		loadRegBaseDisp(dest, base, disp, width) gives TargetOp.loadRegBaseDisp(soleVReg(dest), base: soleVReg(base), disp: disp, width: width)
+		storeBaseDispReg(base, disp, src, width) gives TargetOp.storeBaseDispReg(soleVReg(base), disp: disp, src: soleVReg(src), width: width)
+		addsdRegReg(dest, lhs, rhs) gives TargetOp.addsdRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		subsdRegReg(dest, lhs, rhs) gives TargetOp.subsdRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		mulsdRegReg(dest, lhs, rhs) gives TargetOp.mulsdRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		divsdRegReg(dest, lhs, rhs) gives TargetOp.divsdRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		ucomisdRegReg(lhs, rhs) gives TargetOp.ucomisdRegReg(soleVReg(lhs), rhs: soleVReg(rhs))
+		movsdRegRip(dest, label) gives TargetOp.movsdRegRip(soleVReg(dest), label: label.clone())
+		cvtsi2sdRegReg(dest, src) gives TargetOp.cvtsi2sdRegReg(soleVReg(dest), src: soleVReg(src))
+		cvttsd2siRegReg(dest, src) gives TargetOp.cvttsd2siRegReg(soleVReg(dest), src: soleVReg(src))
+		sqrtsdRegReg(dest, src) gives TargetOp.sqrtsdRegReg(soleVReg(dest), src: soleVReg(src))
+		roundsdRegReg(dest, src, mode) gives TargetOp.roundsdRegReg(soleVReg(dest), src: soleVReg(src), mode: mode)
+		movqGprXmm(dest, src) gives TargetOp.movqGprXmm(soleVReg(dest), src: soleVReg(src))
+		absF64RegReg(dest, src) gives TargetOp.absF64RegReg(soleVReg(dest), src: soleVReg(src))
+		leaRegRdata(dest, label) gives TargetOp.leaRegRdata(soleVReg(dest), label: label.clone())
+		minMaxSdRegReg(dest, lhs, rhs, kind) gives TargetOp.minMaxSdRegReg(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs), kind: kind)
+		movqXmmGpr(dest, src) gives TargetOp.movqXmmGpr(soleVReg(dest), src: soleVReg(src))
+		negF64RegReg(dest, src) gives TargetOp.negF64RegReg(soleVReg(dest), src: soleVReg(src))
+		arm64Ret gives TargetOp.arm64Ret
+		arm64Branch(targetBlockId) gives TargetOp.arm64Branch(targetBlockId)
+		arm64CondBranch(cond, targetBlockId) gives TargetOp.arm64CondBranch(cond, targetBlockId: targetBlockId)
+		arm64Cbz(reg, targetBlockId) gives TargetOp.arm64Cbz(soleVReg(reg), targetBlockId: targetBlockId)
+		arm64Cbnz(reg, targetBlockId) gives TargetOp.arm64Cbnz(soleVReg(reg), targetBlockId: targetBlockId)
+		arm64MovImm(dest, value) gives TargetOp.arm64MovImm(soleVReg(dest), value: value)
+		arm64Prologue(stackSize, recordOffset) gives TargetOp.arm64Prologue(stackSize, recordOffset: recordOffset)
+		arm64Epilogue(stackSize, recordOffset) gives TargetOp.arm64Epilogue(stackSize, recordOffset: recordOffset)
+		arm64Add(dest, lhs, rhs) gives TargetOp.arm64Add(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Sub(dest, lhs, rhs) gives TargetOp.arm64Sub(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Mul(dest, lhs, rhs) gives TargetOp.arm64Mul(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Smulh(dest, lhs, rhs) gives TargetOp.arm64Smulh(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Sdiv(dest, lhs, rhs) gives TargetOp.arm64Sdiv(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Udiv(dest, lhs, rhs) gives TargetOp.arm64Udiv(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Msub(dest, mulLhs, mulRhs, minuend) gives TargetOp.arm64Msub(soleVReg(dest), mulLhs: soleVReg(mulLhs), mulRhs: soleVReg(mulRhs), minuend: soleVReg(minuend))
+		arm64And(dest, lhs, rhs) gives TargetOp.arm64And(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Orr(dest, lhs, rhs) gives TargetOp.arm64Orr(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Eor(dest, lhs, rhs) gives TargetOp.arm64Eor(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Lslv(dest, lhs, rhs) gives TargetOp.arm64Lslv(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Asrv(dest, lhs, rhs) gives TargetOp.arm64Asrv(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Lsrv(dest, lhs, rhs) gives TargetOp.arm64Lsrv(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Neg(dest, src) gives TargetOp.arm64Neg(soleVReg(dest), src: soleVReg(src))
+		arm64Mvn(dest, src) gives TargetOp.arm64Mvn(soleVReg(dest), src: soleVReg(src))
+		arm64AddImm(dest, src, imm) gives TargetOp.arm64AddImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64SubImm(dest, src, imm) gives TargetOp.arm64SubImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64AndImm(dest, src, imm) gives TargetOp.arm64AndImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64OrrImm(dest, src, imm) gives TargetOp.arm64OrrImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64EorImm(dest, src, imm) gives TargetOp.arm64EorImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64LslImm(dest, src, imm) gives TargetOp.arm64LslImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64AsrImm(dest, src, imm) gives TargetOp.arm64AsrImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64LsrImm(dest, src, imm) gives TargetOp.arm64LsrImm(soleVReg(dest), src: soleVReg(src), imm: imm)
+		arm64Cmp(lhs, rhs) gives TargetOp.arm64Cmp(soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64CmpImm(reg, imm) gives TargetOp.arm64CmpImm(soleVReg(reg), imm: imm)
+		arm64Cset(dest, cond) gives TargetOp.arm64Cset(soleVReg(dest), cond: cond)
+		arm64LeaFuncAddr(dest, funcName) gives TargetOp.arm64LeaFuncAddr(soleVReg(dest), funcName: funcName.clone())
+		arm64LeaRdata(dest, label) gives TargetOp.arm64LeaRdata(soleVReg(dest), label: label.clone())
+		arm64LeaGlobal(dest, label) gives TargetOp.arm64LeaGlobal(soleVReg(dest), label: label.clone())
+		arm64BranchLink(targetName) gives TargetOp.arm64BranchLink(targetName.clone())
+		arm64BranchLinkReg(reg) gives TargetOp.arm64BranchLinkReg(soleVReg(reg))
+		arm64Fadd(dest, lhs, rhs) gives TargetOp.arm64Fadd(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Fsub(dest, lhs, rhs) gives TargetOp.arm64Fsub(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Fmul(dest, lhs, rhs) gives TargetOp.arm64Fmul(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Fdiv(dest, lhs, rhs) gives TargetOp.arm64Fdiv(soleVReg(dest), lhs: soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Fcmp(lhs, rhs) gives TargetOp.arm64Fcmp(soleVReg(lhs), rhs: soleVReg(rhs))
+		arm64Scvtf(dest, src) gives TargetOp.arm64Scvtf(soleVReg(dest), src: soleVReg(src))
+		arm64Fcvtzs(dest, src) gives TargetOp.arm64Fcvtzs(soleVReg(dest), src: soleVReg(src))
+		arm64Fsqrt(dest, src) gives TargetOp.arm64Fsqrt(soleVReg(dest), src: soleVReg(src))
+		arm64Frint(dest, src, mode) gives TargetOp.arm64Frint(soleVReg(dest), src: soleVReg(src), mode: mode)
+		arm64Fabs(dest, src) gives TargetOp.arm64Fabs(soleVReg(dest), src: soleVReg(src))
+		arm64FpLoadRdata(dest, label) gives TargetOp.arm64FpLoadRdata(soleVReg(dest), label: label.clone())
+		arm64ImportCall(slotIndex) gives TargetOp.arm64ImportCall(slotIndex)
+		arm64Syscall(number) gives TargetOp.arm64Syscall(number)
+		arm64Fcsel(dest, ifTrue, ifFalse, cond) gives TargetOp.arm64Fcsel(soleVReg(dest), ifTrue: soleVReg(ifTrue), ifFalse: soleVReg(ifFalse), cond: cond)
+		leaRegFunc(dest, funcName) gives TargetOp.leaRegFunc(soleVReg(dest), funcName: funcName.clone())
+		callReg(reg) gives TargetOp.callReg(soleVReg(reg))
+		x64Syscall(number) gives TargetOp.x64Syscall(number)
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives TargetOp.x64JumpTable(soleVReg(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets.clone(), tableLabel: tableLabel.clone())
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives TargetOp.arm64JumpTable(soleVReg(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets.clone(), tableLabel: tableLabel.clone())
+		callMem(baseReg, disp) gives TargetOp.callMem(soleVReg(baseReg), disp: disp)
+		arm64StoreOutgoingArg(slot, srcReg) gives TargetOp.arm64StoreOutgoingArg(slot, srcReg: soleVReg(srcReg))
+		arm64LoadIncomingArg(dest, slot) gives TargetOp.arm64LoadIncomingArg(soleVReg(dest), slot: slot)
+		arm64FmovGprFp(dest, src) gives TargetOp.arm64FmovGprFp(soleVReg(dest), src: soleVReg(src))
+		arm64FmovFpGpr(dest, src) gives TargetOp.arm64FmovFpGpr(soleVReg(dest), src: soleVReg(src))
+		leaRegSlot(destReg, slot) gives TargetOp.leaRegSlot(soleVReg(destReg), slot: slot)
+		x64MemFill(fillByte) gives TargetOp.x64MemFill(fillByte)
+		arm64MemFill(fillByte) gives TargetOp.arm64MemFill(fillByte)
+		x64LockCmpxchg(addrReg, srcReg) gives TargetOp.x64LockCmpxchg(soleVReg(addrReg), srcReg: soleVReg(srcReg))
+		x64LockXadd(dest, src, addrReg) gives TargetOp.x64LockXadd(soleVReg(dest), src: soleVReg(src), addrReg: soleVReg(addrReg))
+		x64LockAdd(addrReg, srcReg) gives TargetOp.x64LockAdd(soleVReg(addrReg), srcReg: soleVReg(srcReg))
+		x64TebSelfPointer(dest) gives TargetOp.x64TebSelfPointer(soleVReg(dest))
+		x64GsLoadRegBase(dest, base) gives TargetOp.x64GsLoadRegBase(soleVReg(dest), base: soleVReg(base))
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) gives TargetOp.arm64AtomicCas(soleVReg(dest), addrReg: soleVReg(addrReg), expectedReg: soleVReg(expectedReg), replacementReg: soleVReg(replacementReg))
+		arm64AtomicRmw(dest, addrReg, operandReg, opcode) gives TargetOp.arm64AtomicRmw(soleVReg(dest), addrReg: soleVReg(addrReg), operandReg: soleVReg(operandReg), opcode: opcode)
+		arm64ThreadPointer(dest, source) gives TargetOp.arm64ThreadPointer(soleVReg(dest), source: source)
+		leaRegBaseIndexScale(dest, base, index, scale) gives TargetOp.leaRegBaseIndexScale(soleVReg(dest), base: soleVReg(base), index: soleVReg(index), scale: scale)
+		loadRegBaseIndexScale(dest, base, index, scale, disp, width) gives TargetOp.loadRegBaseIndexScale(soleVReg(dest), base: soleVReg(base), index: soleVReg(index), scale: scale, disp: disp, width: width)
+		storeBaseIndexScaleReg(base, index, scale, disp, src, width) gives TargetOp.storeBaseIndexScaleReg(soleVReg(base), index: soleVReg(index), scale: scale, disp: disp, src: soleVReg(src), width: width)
+		arm64AddLsl(dest, base, index, scale) gives TargetOp.arm64AddLsl(soleVReg(dest), base: soleVReg(base), index: soleVReg(index), scale: scale)
+		imulHighReg(src) gives TargetOp.imulHighReg(soleVReg(src))
+		arm64Fneg(dest, src) gives TargetOp.arm64Fneg(soleVReg(dest), src: soleVReg(src))
+		arm64LoadAcquire(dest, base, width) gives TargetOp.arm64LoadAcquire(soleVReg(dest), base: soleVReg(base), width: width)
+		arm64StoreRelease(base, src, width) gives TargetOp.arm64StoreRelease(soleVReg(base), src: soleVReg(src), width: width)
+	end 'variant'
+end 'soleTargetOp'
+
+// One operand, re-minted. `TargetVReg` is a union of two scalars and is boxed like any other, so an
+// operand carried across unchanged shares its box with the op it was read out of — see `soleTargetOp`.
+function soleVReg(vreg TargetVReg) returns TargetVReg
+	return match vreg 'v'
+		physical(regNum) gives TargetVReg.physical(regNum)
+		virtual(id) gives TargetVReg.virtual(id)
+	end 'v'
+end 'soleVReg'
+
+// ==========================================================================
+// The rebuild — a unit as a one-function module the allocator can run on
+// ==========================================================================
+
+// A MODULE OF EXACTLY ONE FUNCTION, laid out so op indices run 0..n-1 in layout order.
+//
+// ⚠ **THAT NUMBERING IS SAFE AND IT IS NOT A COINCIDENCE.** Nothing in the allocator reads an op index
+// as a POSITION — the one numbering it orders by is `OpSeq`, which is derived from the block layout and
+// the position within a block (`TargetLiveness.seqAt`), never from the flat array. So any injective
+// assignment does, and appending in layout order is the cheapest one.
+function rebuildUnitModule(unit RegAllocUnit) returns TargetModule
+	var module = TargetModule.create()
+	var func = IrFunction.createFromStd(unit.name, returnType: StdReturnType.void, paramCount: unit.paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
+	func.stackSize = unit.stackSize
+
+	// One block per unit block, and at most one terminator op per block on top of the bodies. The
+	// splitter pushes more ops onto `module.ops` later; what this removes is the log₂ climb to get there.
+	module.blocks.reserve(unit.blocks.count())
+	func.blockRefs.reserve(unit.blocks.count())
+	module.ops.reserve(unitBodyTally(unit) + unit.blocks.count())
+
+	for unitBlock in unit.blocks 'eachBlock'
+		let blockRef = module.blocks.count()
+		var block = IrBlock.create(unitBlock.id, label: unitBlock.label)
+		module.pushBlock(block)
+		func.blockRefs.push(blockRef)
+		fillRebuiltBlock(module, block: block, unitBlock: unitBlock)
+	end 'eachBlock'
+
+	module.functions.push(func)
+	return module
+end 'rebuildUnitModule'
+
+// How many ops the unit's block BODIES hold, terminators aside. Counted rather than collected — this is
+// only ever a capacity.
+function unitBodyTally(unit RegAllocUnit) returns ElementCount
+	var tally = 0 as ElementCount
+	for unitBlock in unit.blocks 'eachBlock'
+		tally = tally + unitBlock.body.count()
+	end 'eachBlock'
+
+	return tally
+end 'unitBodyTally'
+
+// ⚠ **THE OPS GO IN THROUGH `module.ops` DIRECTLY RATHER THAN THROUGH `appendOp`.** That door refuses to
+// append past a block's conditional branch, which is the right guard for the ISEL that BUILDS a block
+// and the wrong one for a rebuild: this block's op order is already whatever the tiers before the
+// allocator settled on, and re-deriving a verdict about it here would be a second opinion about a
+// question that was answered upstream.
+function fillRebuiltBlock(module TargetModule, block IrBlock, unitBlock RegAllocUnitBlock)
+	block.opRefs.reserve(unitBlock.body.count())
+	for op in unitBlock.body 'eachOp'
+		let opIdx = module.ops.count()
+		module.ops.push(op)
+		block.opRefs.push(opIdx)
+	end 'eachOp'
+
+	match unitBlock.condBranch 'cond'
+		none then break 'cond'
+		at(pos) then block.condBranch = CondBranch.opIndex(try block.opRefs.get(pos) otherwise panic("fillRebuiltBlock: block '{String.from(block.label)}' names its conditional branch at body position {pos} of {block.opRefs.count()}"))
+	end 'cond'
+
+	match unitBlock.terminator 'term'
+		unset then block.terminator = Terminator.unset
+		dead then block.terminator = Terminator.dead
+		fallthrough then block.terminator = Terminator.fallthrough
+		op(instruction) then module.setTerminator(block, op: instruction)
+	end 'term'
+
+	var blockArgs = IrBlockArgArray.create()
+	blockArgs.reserve(unitBlock.blockArgIds.count())
+	for valueId in unitBlock.blockArgIds 'eachPhi'
+		// The TYPE is a placeholder and can be: the allocator reads a value's register FILE off the
+		// class column the lowering produced, never off a phi's Std type (see `RegAllocUnitBlock`).
+		blockArgs.push(IrBlockArg.create(valueId, argType: StdType.i64))
+	end 'eachPhi'
+	block.blockArgs = blockArgs
+
+	var branchEdges = BranchEdgeArray.create()
+	branchEdges.reserve(unitBlock.edges.count())
+	for edge in unitBlock.edges 'eachEdge'
+		branchEdges.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds))
+	end 'eachEdge'
+	block.branchEdges = branchEdges
+end 'fillRebuiltBlock'
+
+// ==========================================================================
+// The result, and splicing it back into the real module
+// ==========================================================================
+
+// One allocated block, as it comes home: its ops COLOURED and in their final order, and the two slots
+// that are not ops. Its `id` is what the splice finds the real block by — the allocator never adds or
+// removes a block (`splitCriticalEdges`, the one pass that does, runs before any unit is built), so the
+// result's block SET is the unit's and only its ORDER can have changed.
+type RegAllocResultBlock
+	export var id as BlockId
+	export var ops as TargetOpArray
+	export var terminator as UnitTerminator
+	export var condBranch as UnitCondBranch
+
+	export static function create(id BlockId, ops TargetOpArray, terminator UnitTerminator, condBranch UnitCondBranch) returns RegAllocResultBlock
+		return Self{id: id, ops: ops, terminator: terminator, condBranch: condBranch}
+	end 'create'
+end 'RegAllocResultBlock'
+
+typealias RegAllocResultBlockArray = Array with RegAllocResultBlock
+
+// EVERYTHING ONE ALLOCATED FUNCTION HANDS BACK — the emitted code, and the three measurement values the
+// main thread folds into the compile.
+//
+// ⚠ It crosses a reply cell, which carries two words, so it is ONE record: a tuple of the four would be
+// four moves and four walks.
+module type RegAllocResult
+	export var stackSize as StackSize
+	export var blocks as RegAllocResultBlockArray
+	export var counters as RegAllocCounters
+	export var facts as RegAllocFacts
+	export var costs as RegAllocCosts
+
+	// ALLOCATE ONE UNIT - the whole of what a pool worker does, and the whole of what the serial path
+	// does. It takes the four per-ISA facts rather than deriving them, because both callers already hold
+	// them for the life of a compile: the driver sources them once per module and a worker once at
+	// `spawn`. `OpVariantFacts` especially - every fact in it is a property of the DIALECT, so a memo
+	// rebuilt per unit would re-derive the ~30 cases each function's ops name and pay the column growth
+	// to hold them, on every function.
+	//
+	// ⭐⭐ **IT IS A STATIC FACTORY WHOSE ONE RETURN IS `Self{…}`, AND THAT SHAPE IS LOAD-BEARING (E3137).**
+	// A REPLY moves, exactly as a message argument does, so a message may return only a value its frame
+	// provably owns alone - a fresh record, a `.clone()`, or a call the freshness summary can prove. A
+	// call is proved by every one of its returns being a record literal, which is why the allocation
+	// lives HERE and not behind an ordinary function the message would forward to.
+	//
+	// ⚠ **IT IS NOT NAMED `allocate`.** `SignatureIndex` files a declaration's body facts under the name
+	// the source writes, and `RegAllocWorker.allocate` is a declaration of that name whose body is NOT a
+	// record literal; sharing a key would make the freshness summary answer `false` for both.
+	export static function byAllocating(unit RegAllocUnit, pool RegMask, callerSaved RegMask, file RegisterFile, opFacts OpVariantFacts) returns RegAllocResult throws RegAllocRefusal
+		var module = rebuildUnitModule(unit)
+		// ⛔ **THE UNIT STOPS HOLDING ITS OPS THE MOMENT THE REBUILT MODULE HOLDS THEM.** `fillRebuiltBlock`
+		// pushes the unit's own boxes rather than copies of them, so until this runs every op has two
+		// owners and the harvest below could not move one home. Only `blocks` goes: `valueClass` and
+		// `hasAuthor` are read after this.
+		unit.blocks.clear()
+		var func = try module.functions.get(0) otherwise panic("RegAllocResult.byAllocating: the rebuilt module holds no function — `rebuildUnitModule` pushes exactly one")
+		var counters = RegAllocCounters.create()
+		var costs = RegAllocCosts.create()
+		var facts = RegAllocFacts.create()
+		var refusal = RegAllocRefusalSite.create()
+
+		try allocateFunctionCore(module, func: func, hasAuthor: unit.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: unit.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal)
+
+		let blocks = harvestAllocatedBlocks(module, func: func)
+		let stackSize = func.stackSize
+		// ⭐⭐ **THE REPLY MOVES THE OPS HOME, AND THIS IS THE HALF THAT MAKES THEM SOLE.** Every op box the
+		// allocator settled on is in exactly two places by now — this module's flat `ops` and the blocks
+		// above — and dropping the module's half is what lets the harvest carry the boxes themselves
+		// rather than a third copy of every one. Nothing reads `module` past here.
+		module.ops.clear()
+
+		return Self{stackSize: stackSize, blocks: blocks, counters: counters, facts: facts, costs: costs}
+	end 'byAllocating'
+end 'RegAllocResult'
+
+// The allocated blocks, in the order the allocator laid them out.
+//
+// ⚠ **THE OPS ARE MOVED, NOT COPIED - AND THAT RESTS ON THE TWO `clear()`s IN `byAllocating`.** A reply
+// is a move like any other, so every box reachable from the result must be sole when it is walked; here
+// they are, because the unit gave up its half at the rebuild and the module gives up its half as soon as
+// this returns. `unitOpAt` carries the rule and what re-minting them cost.
+function harvestAllocatedBlocks(module TargetModule, func IrFunction) returns RegAllocResultBlockArray
+	var blocks = RegAllocResultBlockArray.create()
+	blocks.reserve(func.blockRefs.count())
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("harvestAllocatedBlocks: blockRef {blockRef} is not in the rebuilt module's blocks")
+		blocks.push(harvestResultBlock(module, block: block))
+	end 'eachBlock'
+
+	return blocks
+end 'harvestAllocatedBlocks'
+
+function harvestResultBlock(module TargetModule, block IrBlock) returns RegAllocResultBlock
+	let body = SoleBody.of(module, block: block, moduleKeepsOps: false)
+	return RegAllocResultBlock.create(block.id, ops: body.ops, terminator: unitTerminatorOf(module, block: block, moduleKeepsOps: false), condBranch: body.condBranch())
+end 'harvestResultBlock'
+
+// ⭐⭐ **PUT ONE ALLOCATED FUNCTION BACK, IN FUNCTION-INDEX ORDER.**
+//
+// The block SET is unchanged, so every result block names a block this function already owns; what
+// changes is the block ORDER, each block's op list, its terminator and its frame size. The phi model is
+// EMPTIED here rather than carried, because that is what `applyAllocation` did to it on the far side —
+// SSA destruction consumed it and nothing downstream reads it.
+//
+// ⚠ **FRESH `blockArgs` / `branchEdges` ARRAYS, NEVER A `.clear()` ON THE ONES THAT ARE THERE.** Those
+// arrays are SHARED with the Maxon and Std tiers and reach back into the parse memo, so emptying one in
+// place corrupts every later compile of the project — silently, since nothing downstream re-reads it
+// (`IrBlock`'s header states the rule; this is one of its sites).
+module function spliceRegAllocResult(module TargetModule, func IrFunction, result RegAllocResult)
+	let blockRefById = blockRefsByIdOf(module, func: func)
+	let noSuchBlock = module.blocks.count()
+	var slots = OpSlotSupply.create(module.liveOpIndices(func))
+
+	var newRefs = BlockRefArray.create()
+	newRefs.reserve(result.blocks.count())
+	for resultBlock in result.blocks 'eachBlock'
+		let blockRef = try blockRefById.get(resultBlock.id) otherwise panic("spliceRegAllocResult: '{String.from(func.name)}' names a block id {resultBlock.id} outside this function's id space")
+		if blockRef == noSuchBlock 'idNotInThisFunction'
+			panic("spliceRegAllocResult: '{String.from(func.name)}' has no block with id {resultBlock.id} — the allocator neither adds nor removes blocks, so every result block is one this function already owns")
+		end 'idNotInThisFunction'
+		var block = try module.blocks.get(blockRef) otherwise panic("spliceRegAllocResult: blockRef {blockRef} is not in module.blocks")
+
+		var opRefs = OpIndexArray.create()
+		opRefs.reserve(resultBlock.ops.count())
+		for op in resultBlock.ops 'eachOp'
+			opRefs.push(slots.place(module, op: op))
+		end 'eachOp'
+		block.opRefs = opRefs
+
+		block.condBranch = match resultBlock.condBranch 'cond'
+			none gives CondBranch.none
+			at(pos) gives CondBranch.opIndex(try opRefs.get(pos) otherwise panic("spliceRegAllocResult: block {resultBlock.id} names its conditional branch at position {pos} of {opRefs.count()}"))
+		end 'cond'
+
+		match resultBlock.terminator 'term'
+			unset then block.terminator = Terminator.unset
+			dead then block.terminator = Terminator.dead
+			fallthrough then block.terminator = Terminator.fallthrough
+			op(instruction) then block.terminator = Terminator.opIndex(slots.place(module, op: instruction))
+		end 'term'
+
+		block.blockArgs = IrBlockArgArray.create()
+		block.branchEdges = BranchEdgeArray.create()
+		newRefs.push(blockRef)
+	end 'eachBlock'
+
+	func.blockRefs = newRefs
+	func.stackSize = result.stackSize
+end 'spliceRegAllocResult'
+
+// WHERE A SPLICED OP GOES: THIS FUNCTION'S OWN SLOTS FIRST, THEN THE TAIL OF `module.ops`.
+//
+// A rebuilt function's ops are new VALUES, but they are the same COUNT to within the handful a split
+// added and a self-move dropped - and the slots the function held before the splice belong to nobody
+// else, because an op index is never shared between functions. Appending all of them instead would put
+// a second copy of the whole program's Target ops into a module that already holds one, which is a
+// doubling of the backend's largest single structure for no gain.
+//
+// The recycled list is `liveOpIndices`, not every index in the function's range: the array is
+// append-only and earlier passes leave orphans in it, and an orphan is not this splice's to reuse.
+type OpSlotSupply
+	var recycled as OpIndexArray
+	var taken as ElementCount
+
+	export static function create(recycled OpIndexArray) returns OpSlotSupply
+		return Self{recycled: recycled, taken: 0}
+	end 'create'
+
+	export function place(module TargetModule, op TargetOp) returns OpIndex
+		if self.taken < self.recycled.count() 'reuseThisFunctionsOwnSlot'
+			let recycledIdx = try self.recycled.get(self.taken) otherwise panic("OpSlotSupply.place: recycled.get OOB at {self.taken} below count {self.recycled.count()}")
+			self.taken = self.taken + 1
+			try module.ops.set(recycledIdx, value: op) otherwise panic("OpSlotSupply.place: ops.set OOB at {recycledIdx}")
+			return recycledIdx
+		end 'reuseThisFunctionsOwnSlot'
+
+		let freshIdx = module.ops.count()
+		module.ops.push(op)
+		return freshIdx
+	end 'place'
+end 'OpSlotSupply'
+
+// This function's `BlockId -> BlockRef` map, as a dense column over the id space. One pass over the
+// block list rather than `IrModule.getBlockByIdIn` per result block, which is a scan and would make the
+// splice quadratic in a function's block count.
+function blockRefsByIdOf(module TargetModule, func IrFunction) returns BlockRefArray
+	var highestId = 0 as BlockId
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("blockRefsByIdOf: blockRef {blockRef} is not in module.blocks")
+		if block.id > highestId 'higher'
+			highestId = block.id
+		end 'higher'
+	end 'eachBlock'
+
+	// `module.blocks.count()` is the "no such block" sentinel: it is not a `BlockRef` any block has, so
+	// an id this function does not own reads as absent rather than as block 0. The id space is dense per
+	// function but not gap-free, so the holes are real.
+	var byId = BlockRefArray.create()
+	byId.refill(highestId + 1, value: module.blocks.count())
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("blockRefsByIdOf: blockRef {blockRef} is not in module.blocks")
+		try byId.set(block.id, value: blockRef) otherwise panic("blockRefsByIdOf: block id {block.id} is above the {byId.count()} the id space was sized to")
+	end 'eachBlock'
+
+	return byId
+end 'blockRefsByIdOf'

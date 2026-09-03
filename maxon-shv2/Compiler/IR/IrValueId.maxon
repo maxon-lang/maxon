@@ -60,13 +60,35 @@ export typealias ValueMarkSet = Set with ValueId
 // implementation rather than each spelling the same quadratic loop.
 export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId) returns BlockIdArray
 	var out = BlockIdArray.create()
-	var seen = BlockIdSet.create()
-	// Seeding the set with `exclude` drops every default/hole slot in the same membership test that
-	// dedups the real targets — no separate `!= exclude` compare per slot.
-	seen.insert(exclude)
+	if caseTargets.count() == 0 'noSlots'
+		return out
+	end 'noSlots'
+
+	// ⛔⛔ **A DENSE COLUMN OVER THE ID SPACE, NOT A HASH SET — AND THAT IS A REACHABILITY FACT BEFORE IT IS
+	// A COST ONE.** A `Set with BlockId` probes through the element's `hash`, which is a WITNESS DISPATCH,
+	// and this function is on the register allocator's POOL-WORKER path: the CFG build reaches it for every
+	// jump-table block of every function. A message that dispatches somewhere the compiler cannot name makes
+	// every address-taken function in the program message-reachable (E3143's widening), which refused the
+	// whole pool over a module `var` in the query engine that no allocator code goes near.
+	//
+	// It costs no more asymptotically and hashes nothing: block ids are FUNCTION-LOCAL and dense
+	// (`IrFunction.nextBlockId` counts from zero), so this is the same sizing every other dense column in
+	// the allocator already takes — `FuncTopology.localByBlockId` is a column over exactly this id space.
+	var highest = exclude
+	for target in caseTargets 'eachSlotForTheBound'
+		if target > highest 'higher'
+			highest = target
+		end 'higher'
+	end 'eachSlotForTheBound'
+
+	var seen = BoolArray.create()
+	seen.resize(highest + 1)
+	// Seeding with `exclude` drops every default/hole slot in the same membership test that dedups the
+	// real targets — no separate `!= exclude` compare per slot.
+	try seen.set(exclude, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past `exclude`, which the bound above folds in")
 	for target in caseTargets 'eachSlot'
-		if not seen.contains(target) 'fresh'
-			seen.insert(target)
+		if not (try seen.get(target) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")) 'fresh'
+			try seen.set(target, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")
 			out.push(target)
 		end 'fresh'
 	end 'eachSlot'

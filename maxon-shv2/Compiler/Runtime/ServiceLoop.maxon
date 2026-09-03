@@ -502,13 +502,16 @@ end 'emitFusedHandlerFlag'
 // — and the handler either consumed it or borrowed it. A borrowed one is still this loop's to release, and
 // releasing it is what balances the move.
 //
-// ⚠ **`paramIsConsumed` ANSWERS `false` FOR EVERY MESSAGE TODAY, AND ASKING IT IS STILL RIGHT.** The
-// consume analysis deliberately declines to scan a NON-GENERIC INSTANCE METHOD's body
-// (`Parser.recordScannedSignature`: *"the caller leaves EMPTY for a non-generic instance method"*), and a
-// service is never generic (`ServiceTargetVerdict.typeIsGeneric` refuses one at the `spawn`) — so every
-// message is exactly that shape. Asking the ONE door rather than hard-coding the answer costs a map lookup
-// per payload at compile time and is what makes this correct the day the analysis widens; hard-coding it
-// would be a double free the day it does.
+// ⚠ **`paramIsConsumed` ANSWERS `false` FOR EVERY MESSAGE, AND THAT IS A CHECKED ANSWER, NOT A SKIP.**
+// The sweep reads every declaration's parameters, an instance method's included, but only three doors can
+// mark one consumed and a message handler can hold none of them: a direct `Self{f: p}` store in an instance
+// method is co-ownership rather than a move (`Parser.scanBodyFacts`, `detectFieldStores: false`); a
+// type-parameter feed needs a generic type, and a service is never one
+// (`ServiceTargetVerdict.typeIsGeneric` refuses it at the `spawn`); and a promise reclaim needs a `Promise`
+// payload, which `untransferableParameterNoun` refuses at the `spawn` reading the handler's declared slot
+// type (E3135) — a promise owns a green thread, so it never crosses a send.
+// Asking the ONE door rather than hard-coding that costs a map lookup per payload at compile time and is
+// what keeps this correct the day a fourth door opens; hard-coding it would be a double free that day.
 //
 // ⚠ The index is CALL-ALIGNED — the receiver is position 0 — which is the space `ParamConsumeInfo`'s columns
 // are recorded in (`Parser.recordScannedSignature` states it), and `args` is built in that same order.

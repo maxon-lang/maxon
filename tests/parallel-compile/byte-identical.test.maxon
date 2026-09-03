@@ -1,0 +1,26 @@
+// byte-identical.test.maxon — the executable the allocator emits does not depend on how many workers
+// allocated it. One staged copy, compiled twice to two outputs from the same source path, so the only
+// thing that differs between the runs is the processor count.
+//
+// The PE writer stamps no build time and the image carries no output path, which is what makes byte
+// identity the right instrument here rather than a comparison that has to look past known noise.
+//
+// Two compiles in one file is the budget `test-command/reserved-name-refused.test.maxon` prices against
+// the 5,000 ms deadline; a third case here would need its own file.
+
+test 'the executable is byte-identical at one processor and at the default'
+	let staged = stagedProgram("pool-program", caseLabel: "byte-identical")
+	let noArguments = StringArray.create()
+
+	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true)
+	let pinnedExit = pinnedRun.exitCode()
+	try Expect.equal(pinnedExit, expected: 0, message: "the pool program did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
+
+	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false)
+	let defaultExit = defaultRun.exitCode()
+	try Expect.equal(defaultExit, expected: 0, message: "the pool program did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
+
+	let pinnedExecutable = builtExecutable(staged, label: "single-processor")
+	let defaultExecutable = builtExecutable(staged, label: "default-processors")
+	try requireIdenticalBytes(pinnedExecutable, second: defaultExecutable)
+end 'the executable is byte-identical at one processor and at the default'

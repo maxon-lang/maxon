@@ -1,0 +1,438 @@
+// parallel.test.maxon — the shared half of the register allocator's PARALLEL-POOL gate: how a fixture
+// program is staged, how the compiler is spawned at it with the processor count pinned or left to the
+// machine, and the two things asked of the corpus itself. The per-contract `test` declarations are the
+// files beside this one, one contract line each.
+//
+// The allocator runs on a pool of worker services, one per processor, and its contract has three lines:
+// it REPORTS the pool it built, the executable it emits is BYTE-IDENTICAL whatever the processor count,
+// and a register-pressure refusal is RENDERED identically at every count.
+//
+// ⚠ THE POOL LINE IS LOGGED UNDER `LogCategory.codegen`, SO THE FLAG THAT SHOWS IT IS `--log=codegen:debug`.
+// `Logger.parseLogOption` raises ONE category for a `<category>:<level>` spec and every other category
+// falls through to the global level, which is INFO — `--log=compiler:debug` raises `[CMP]` alone and can
+// never print a `[GEN]` line at DEBUG. The needle carries the sink's whole prefix (`[GEN] DEBUG: `) so a
+// line that moved to another category or level is red rather than merely quieter.
+//
+// ⛔ ONE SPAWNING `test` PER FILE, FOR TWO REASONS THAT ARE BOTH STRUCTURAL. A file is what ONE process
+// runs under `TestExecutor.DefaultTestTimeoutMs` (5,000 ms), and the four contracts need six compiles
+// between them. And `maxon test` runs its files CONCURRENTLY, so two files staging the same fixture into
+// one directory race on it — the flake `test-command/reserved-name-refused.test.maxon` measured. Every
+// case therefore stages into a directory named for ITSELF, never for the fixture it stages.
+//
+// ⛔ THE SPAWNED COMPILER'S WORKING DIRECTORY IS THE STAGED TREE; THIS FILE'S OWN PATHS ARE RELATIVE TO
+// THE CHECKOUT ROOT, which is what a test binary inherits from `maxon test`. Everything handed to the
+// child — the binary, the source, the output — is made absolute first, because a relative path resolves
+// against the child's directory on POSIX and the parent's on Windows.
+
+// Where the corpus lives and where a runnable copy is built, both relative to the checkout root. Staging
+// goes to gitignored `temp/`: a live `.maxon` under `tests/` is one `maxon fmt` over the checkout rewrites.
+let FixturesDirName = "tests/parallel-compile/fixtures"
+let ProjectDirName = "tests/parallel-compile"
+let StagingRootDirName = "temp/parallel-compile"
+
+// The binary under test, relative to the checkout root, without its host suffix.
+let TestedCompilerStem = "maxon-shv2/.maxon/maxon-shv2"
+
+// The command line one build is run from: `build <staged>/main.maxon -o <staged>/out-<label>[.exe]`.
+// `-o` is what keeps the build out of the tree lock, so two case files can compile at once.
+let BuildCommandName = "build"
+let OutputOption = "-o"
+let OutputStem = "out-"
+let StagedProgramFileName = "main.maxon"
+
+// The flag that raises the codegen category to DEBUG — see the header for why it is not `compiler:debug`.
+export let CodegenDebugLogFlag = "--log=codegen:debug"
+
+// The sink's rendering of a codegen DEBUG line, then the pool report's own words. The report ends with
+// the function count, which is the allocator's and not the fixture's; `defaultPoolNeedle` says why it
+// is not pinned.
+let PoolLinePrefix = "[GEN] DEBUG: regalloc: "
+let PoolLineWorkersWord = "worker(s) over"
+let PoolLineProcessorsWord = "processor(s), "
+
+// The scheduler's processor-count marker. Spelled here rather than read from `SchedRuntime.MaxProcsEnvName`
+// because a test project cannot import the compiler. It cannot rot silently: a marker the scheduler stops
+// reading leaves the pinned case reporting the machine's count, which is red.
+let MaxProcsEnvName = "MAXON_MAX_PROCS"
+let SingleProcessor = 1
+
+// The phrase every register-pressure refusal carries. A phrase rather than the error number, because a
+// code spelled outside the registry is a copy of the number space; this rots red, not silently.
+export let RegisterPressureRefusalPhrase = "more register(s) than are available"
+
+// A declaration line of a staged program. Counting them bounds from below the functions the allocator
+// sees, which is what decides whether the default pool's worker count is knowable.
+let FunctionDeclarationPrefix = "function "
+
+// The stored-name mapping: `<name>.fixture -> <name>`, the half of `tests/README.md` rule 1 this corpus
+// uses. Nothing stored here is a live `.maxon`, so `maxon fmt` over the checkout cannot rewrite a fixture.
+let StoredFixtureSuffix = ".fixture"
+
+// A `*.test.maxon` here is a driver and may be a live source; any other `.maxon` under this project is
+// one the corpus guard refuses.
+let TestSourceSuffix = ".test.maxon"
+let MaxonSourceSuffix = ".maxon"
+
+// The per-project build-products directory. `maxon test` stages a copy of this project under it and writes
+// a generated entry source beside the copy, so the corpus walk must not descend into one.
+let ProjectProductsDirName = ".maxon"
+
+// The three folds a refusal's stderr goes through before two runs are compared: CR, the host separator,
+// and the absolute staging path, in that order because the path is matched in its forward-slash form.
+let CarriageReturn = "\r"
+let LineFeed = "\n"
+let PortablePathSeparator = "/"
+let StagingTreeToken = "<TREE>"
+
+// A processor count as the scheduler resolves one. Its floor is carried in by a guard rather than by the
+// runtime's clamp, which nothing here proves.
+typealias ProcessorCount = int(1 to u32.max)
+
+// How many declarations a staged program holds.
+typealias FunctionTally = int(0 to u64.max)
+
+// A list of paths one directory walk produced. Stdlib's own `FilePathArray` is a member of `Directory` and
+// has no file-scope spelling.
+typealias FixturePathArray = Array with FilePath
+
+// ============================================================================================
+// THE CORPUS ITSELF
+// ============================================================================================
+
+// A fixture program nobody stages reads exactly like one that passed, and no case can see its own
+// absence, so the question is asked once of the corpus as a whole — by matching the `stagedProgram("…")`
+// call in the case files' own source, which keeps asking it however the cases are arranged.
+test 'every fixture program is staged by name from a case file'
+	let cases = caseFileSources()
+
+	var unstaged = StringArray.create()
+	for fixtureName in fixtureNames() 'eachFixture'
+		if not cases.contains("stagedProgram(\"{fixtureName}\"") 'neverStaged'
+			unstaged.push(fixtureName)
+		end 'neverStaged'
+	end 'eachFixture'
+
+	let listed = listedLines(unstaged)
+	try Expect.isEmpty(listed, message: "these program directories under {FixturesDirName} are never staged from a case file in {ProjectDirName}. Each one needs a `test` that calls `stagedProgram(\"<name>\", caseLabel: …)`; a fixture nothing compiles proves nothing and reads exactly like one that passed.")
+end 'every fixture program is staged by name from a case file'
+
+// `maxon fmt` over the checkout walks `tests/`, so a real `main.maxon` under `fixtures/` would be
+// formatted by a sibling command of the one under test. Stored as `<name>.fixture`, it is inert.
+test 'no fixture is stored as a source maxon fmt would rewrite'
+	let live = listedLines(liveSourcesUnder(readableDir(ProjectDirName)))
+	try Expect.isEmpty(live, message: "these files under {ProjectDirName} are LIVE Maxon sources, which `maxon fmt` over this checkout would rewrite. Store a fixture source as `<name>{StoredFixtureSuffix}`; do NOT add a `.maxonignore`, which would hide the corpus from the compiler's own walks.")
+end 'no fixture is stored as a source maxon fmt would rewrite'
+
+// ============================================================================================
+// STAGING AND SPAWNING
+// ============================================================================================
+
+// A runnable copy of one fixture program under a directory named for the CASE, so concurrent case files
+// never share a staging tree. Absolute, because it is handed to the child as its working directory.
+export function stagedProgram(fixtureName String, caseLabel String) returns FilePath
+	let staged = writableDir("{StagingRootDirName}/{caseLabel}")
+	purgeFilesIn(staged)
+	copyStagedTree(readableDir("{FixturesDirName}/{fixtureName}"), into: staged)
+
+	return staged
+end 'stagedProgram'
+
+// Compile the staged program to `out-<label>`, pinned to one processor or left to the machine.
+//
+// Everything that would stop the build running at all panics rather than failing an assertion: a missing
+// binary or a spawn that never happened is the gate being broken, never the allocator answering wrongly.
+export function spawnBuild(staged FilePath, label String, extraArguments StringArray, singleProcessor bool) returns CollectedOutput
+	let binary = testedCompilerPath()
+	if not File.exists(binary) 'noBinary'
+		panic("parallel-compile.test: the gate could not run — there is no compiler at {binary.toString()}. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	var arguments = StringArray.create()
+	arguments.push(BuildCommandName)
+	arguments.push(staged.join("{StagedProgramFileName}").toString())
+	arguments.push(OutputOption)
+	arguments.push(builtExecutable(staged, label: label).toString())
+	for extra in extraArguments 'eachExtra'
+		arguments.push(extra)
+	end 'eachExtra'
+
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = staged
+	if singleProcessor 'pinned'
+		config.environment = Environment.inheritUpdating([MaxProcsEnvName: "{SingleProcessor}"])
+	end 'pinned'
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("parallel-compile.test: the gate could not run — could not spawn the '{label}' build ({e.displayReason()}). It pins what the allocator reports and what it emits, and a build nothing ran is a claim.")
+	end 'spawnFailed'
+end 'spawnBuild'
+
+// Where a labelled build's executable lands. The host suffix is spelled INTO the `-o` argument rather than
+// left for the compiler to append, so the path handed to the child and the path read back are one spelling.
+export function builtExecutable(staged FilePath, label String) returns FilePath
+	return staged.join("{OutputStem}{label}{executableSuffix()}")
+end 'builtExecutable'
+
+// The binary under test, absolute and with the suffix this host can spawn.
+function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("parallel-compile.test: the gate could not run — '{spelled}' is not a spellable path")
+
+	return relative.resolve(Directory.currentPath())
+end 'testedCompilerPath'
+
+function executableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'executableSuffix'
+
+// ============================================================================================
+// THE POOL LINE
+// ============================================================================================
+
+// The pool line at the default: one worker per processor, over every processor the machine has.
+//
+// W is min(P, F) and F is the allocator's function count, which exceeds the fixture's declared count by
+// however many runtime functions it allocates — a number this file cannot know. So the needle stops at
+// the count, and W = P is asserted only where the DECLARED count alone guarantees it; a host with more
+// processors than the fixture declares functions is refused loudly rather than pinned to a guess.
+export function defaultPoolNeedle(staged FilePath) returns String
+	let reported = __Builtins.cpuCount()
+	if reported < 1 'unreported'
+		panic("parallel-compile.test: the gate could not run — __Builtins.cpuCount() answered {reported}, below the floor its own contract promises.")
+	end 'unreported'
+
+	let declared = declaredFunctionCount(staged)
+	if reported > declared 'poolSmallerThanTheMachine'
+		panic("parallel-compile.test: the gate could not run — this host has {reported} processors and the staged program declares only {declared} functions, so the default pool's worker count is min(P, F) with F unknowable from here. Add functions to the fixture until it declares more than the host has processors.")
+	end 'poolSmallerThanTheMachine'
+
+	return poolNeedle(reported, processors: reported)
+end 'defaultPoolNeedle'
+
+// The pool line with the scheduler pinned to one processor: a pool of one worker.
+export function singleProcessorPoolNeedle() returns String
+	return poolNeedle(SingleProcessor, processors: SingleProcessor)
+end 'singleProcessorPoolNeedle'
+
+// The one grammar every pool needle is built from, up to and excluding the function count.
+function poolNeedle(workers ProcessorCount, processors ProcessorCount) returns String
+	return "{PoolLinePrefix}{workers} {PoolLineWorkersWord} {processors} {PoolLineProcessorsWord}"
+end 'poolNeedle'
+
+// How many declarations the staged program holds: every line that opens a function, `main` included.
+function declaredFunctionCount(staged FilePath) returns FunctionTally
+	let source = fileText(staged.join("{StagedProgramFileName}"))
+
+	var declared = 0 as FunctionTally
+	for line in source.split(LineFeed) 'eachLine'
+		if line.startsWith(FunctionDeclarationPrefix) 'declaresOne'
+			declared = declared + 1
+		end 'declaresOne'
+	end 'eachLine'
+
+	return declared
+end 'declaredFunctionCount'
+
+// ============================================================================================
+// COMPARING TWO RUNS
+// ============================================================================================
+
+// A run's stderr as two runs are compared: CR folded, separators folded, and the staging path replaced
+// by `<TREE>` so a message that names the source stays readable in a failure report.
+export function normalizedStderr(run CollectedOutput, staged FilePath) returns String
+	let folded = run.stderr.replace(CarriageReturn, with: "").replace(FilePath.separator(), with: PortablePathSeparator)
+	let tree = staged.toString().replace(FilePath.separator(), with: PortablePathSeparator)
+
+	return folded.replace(tree, with: StagingTreeToken)
+end 'normalizedStderr'
+
+// Two emitted executables, byte for byte. The count is asked first and asked to be non-zero: two empty
+// files are identical, and a pair of builds that wrote nothing must not read as agreement.
+export function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailure
+	let firstBytes = fileBytes(first)
+	let secondBytes = fileBytes(second)
+	let firstCount = firstBytes.count()
+	let secondCount = secondBytes.count()
+	try Expect.notEqual(firstCount, expected: 0, message: "{first.toString()} is empty. A build that wrote nothing has nothing to compare, and two of them would agree.")
+	try Expect.equal(secondCount, expected: firstCount, message: "{second.toString()} and {first.toString()} differ in length, so the processor count changed what the compiler EMITTED, not merely how fast it emitted it.")
+
+	var offset = 0
+	var identical = true
+	for octet in firstBytes 'eachByte'
+		let other = try secondBytes.get(offset) otherwise panic("parallel-compile.test: the gate could not run — offset {offset} is inside {first.toString()} and outside {second.toString()} after their lengths were found equal.")
+		if octet != other 'differs'
+			identical = false
+			break
+		end 'differs'
+
+		offset = offset + 1
+	end 'eachByte'
+
+	try Expect.isTrue(identical, message: "{second.toString()} first differs from {first.toString()} at byte offset {offset}. The allocator's result must not depend on which worker allocated a function or in what order the pool finished; a difference here is a nondeterminism, not a performance fact.")
+end 'requireIdenticalBytes'
+
+// ============================================================================================
+// STAGING
+// ============================================================================================
+
+// Copy one stored tree into a runnable one, mapping every name on the way.
+function copyStagedTree(stored FilePath, into FilePath)
+	for entry in listing(stored) 'eachEntry'
+		let target = into.join("{storedToReal(entry.filename())}")
+		if Directory.isDirectory(entry) 'aDirectory'
+			if not Directory.create(target) 'couldNotCreate'
+				panic("parallel-compile.test: the gate could not run — could not create the staging directory {target.toString()}.")
+			end 'couldNotCreate'
+
+			copyStagedTree(entry, into: target)
+			continue
+		end 'aDirectory'
+
+		let body = fileText(entry)
+		try File.writeText(target, content: body) otherwise panic("parallel-compile.test: the gate could not run — could not stage {target.toString()}.")
+	end 'eachEntry'
+end 'copyStagedTree'
+
+// The stored-name mapping. A name without the marker is already what it will be called.
+function storedToReal(stored String) returns String
+	if not stored.endsWith(StoredFixtureSuffix) 'alreadyReal'
+		return stored
+	end 'alreadyReal'
+
+	let suffixStart = try stored.findLast(StoredFixtureSuffix) otherwise panic("parallel-compile.test: the gate could not run — '{stored}' ends with {StoredFixtureSuffix} and yet does not contain it.")
+	return stored.slice(stored.startIndex(), endIndex: suffixStart)
+end 'storedToReal'
+
+// Delete every file under a directory, leaving the directories. Enough for a re-run: a case stages the
+// same shape every time, and the previous run's executable and build products must not survive into a
+// comparison.
+function purgeFilesIn(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			purgeFilesIn(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("parallel-compile.test: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
+	end 'eachEntry'
+end 'purgeFilesIn'
+
+// ============================================================================================
+// WALKING THE CORPUS
+// ============================================================================================
+
+// The fixture programs, read from the filesystem rather than from a constant, so a fixture added without
+// a case is one the guard above sees.
+function fixtureNames() returns StringArray
+	var names = StringArray.create()
+	for entry in listing(readableDir(FixturesDirName)) 'eachEntry'
+		if Directory.isDirectory(entry) 'aProgram'
+			names.push(entry.filename())
+		end 'aProgram'
+	end 'eachEntry'
+
+	return names
+end 'fixtureNames'
+
+// Every driver in this project, concatenated: the text the staging guard searches for each fixture's name.
+function caseFileSources() returns String
+	var sources = ""
+	for entry in listing(readableDir(ProjectDirName)) 'eachEntry'
+		if entry.filename().endsWith(TestSourceSuffix) 'aDriver'
+			sources.append(fileText(entry))
+		end 'aDriver'
+	end 'eachEntry'
+
+	return sources
+end 'caseFileSources'
+
+// Every `.maxon` file under `root` that is not a test driver, skipping `.maxon/` product directories.
+function liveSourcesUnder(root FilePath) returns StringArray
+	var live = StringArray.create()
+
+	for entry in listing(root) 'eachEntry'
+		let name = entry.filename()
+		if Directory.isDirectory(entry) 'aDirectory'
+			if name == ProjectProductsDirName 'buildProducts'
+				continue
+			end 'buildProducts'
+
+			for nested in liveSourcesUnder(entry) 'eachNested'
+				live.push(nested)
+			end 'eachNested'
+			continue
+		end 'aDirectory'
+
+		if name.endsWith(MaxonSourceSuffix) and not name.endsWith(TestSourceSuffix) 'aLiveSource'
+			live.push(entry.toString())
+		end 'aLiveSource'
+	end 'eachEntry'
+
+	return live
+end 'liveSourcesUnder'
+
+// The paths a refusal lists, one per line — empty when there are none, which is what makes the guards
+// an `isEmpty` on the very text a reader has to act on.
+function listedLines(paths StringArray) returns String
+	var listed = ""
+	for path in paths 'eachPath'
+		listed.append("{LineFeed}  {path}")
+	end 'eachPath'
+
+	return listed
+end 'listedLines'
+
+// A directory this file's paths name, refused loudly when it is not there: every such refusal is the
+// working-directory contract in the header not being met.
+function readableDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("parallel-compile.test: the gate could not run — '{spelled}' is not a spellable path")
+	if not Directory.isDirectory(path) 'notThere'
+		panic("parallel-compile.test: the gate could not run — there is no directory at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
+	end 'notThere'
+
+	return path
+end 'readableDir'
+
+// A directory this run writes into, created ancestor by ancestor so a fresh checkout without `temp/` is
+// not a failure, and absolute because it is handed to a child process as its working directory.
+function writableDir(spelled String) returns FilePath
+	var prefix = ""
+	for component in spelled.split(PortablePathSeparator) 'eachComponent'
+		prefix = component if prefix.isEmpty() else "{prefix}{PortablePathSeparator}{component}"
+		let ancestor = try FilePath.from(prefix) otherwise panic("parallel-compile.test: the gate could not run — '{prefix}' is not a spellable path")
+		if not Directory.create(ancestor) 'couldNotCreate'
+			panic("parallel-compile.test: the gate could not run — could not create '{prefix}'. It is where a case's runnable copy is built; nothing can be staged without it.")
+		end 'couldNotCreate'
+	end 'eachComponent'
+
+	let path = try FilePath.from(spelled) otherwise panic("parallel-compile.test: the gate could not run — '{spelled}' is not a spellable path")
+	return path.resolve(Directory.currentPath())
+end 'writableDir'
+
+// One file's bytes as text. A file that cannot be read is the instrument being broken: the corpus is
+// checked in and the staging tree was written by this process moments ago.
+function fileText(path FilePath) returns String
+	return try File.readText(path) otherwise panic("parallel-compile.test: the gate could not run — could not read {path.toString()}.")
+end 'fileText'
+
+// One emitted executable's bytes. Its absence is asked here rather than read as an empty file: a build
+// that exited 0 and wrote nothing is a claim the caller's exit-code assertion cannot see.
+function fileBytes(path FilePath) returns ByteArray
+	if not File.exists(path) 'notWritten'
+		panic("parallel-compile.test: the gate could not run — there is no executable at {path.toString()}, so there is nothing to compare. The build that should have written it is the one whose exit code the case asserts first.")
+	end 'notWritten'
+
+	return try File.readBinary(path) otherwise panic("parallel-compile.test: the gate could not run — could not read {path.toString()}.")
+end 'fileBytes'
+
+// What one directory holds.
+function listing(dir FilePath) returns FixturePathArray
+	return try Directory.list(dir) otherwise panic("parallel-compile.test: the gate could not run — could not list {dir.toString()}")
+end 'listing'

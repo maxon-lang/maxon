@@ -3581,10 +3581,15 @@ function checkDiscardedResults(project Project, module MaxonModule, funcNames Fu
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
 		let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
-		let calleeIndex = try funcNames.byName.get(site.callee) otherwise continue
-		if not (try effectFree.get(calleeIndex) otherwise panic("checkDiscardedResults: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")) 'theCallDidSomething'
-			continue
-		end 'theCallDidSomething'
+		// An INTRINSIC is not in `funcNames` and never will be — it emits no call — so the summary is not asked
+		// about it. Its site already carries the answer (see `PendingDiscardedResult`), and asking anyway would
+		// miss the lookup and silently drop the diagnostic.
+		if not site.calleeIsACompilerIntrinsic 'aDeclaredCalleeTheSummaryJudges'
+			let calleeIndex = try funcNames.byName.get(site.callee) otherwise continue
+			if not (try effectFree.get(calleeIndex) otherwise panic("checkDiscardedResults: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")) 'theCallDidSomething'
+				continue
+			end 'theCallDidSomething'
+		end 'aDeclaredCalleeTheSummaryJudges'
 
 		// Scalars off the borrow, a fresh inline read for the managed halves — see the loop header's note.
 		let line = site.line

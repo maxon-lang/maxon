@@ -1546,7 +1546,9 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, ze
 	let size = 0 as ValueId
 
 	if countRaw 'rawColumns'
-		emitRawTrafficCredit(module, block: entry, bytes: size, multiM: sharded, ids: ids)
+		// It BRANCHES when the per-thread columns are on, so the cursor MOVES — the routing below continues
+		// in the block it answers. See `MmRuntime.emitThreadTrafficStep`.
+		entry = emitRawTrafficCredit(module, func: func, block: entry, bytes: size, multiM: sharded, perThread: sharded, ids: ids)
 	end 'rawColumns'
 
 	emitSlabSizeRouting(module, block: entry, size: size, osDirect: osDirect, small: small, ids: ids)

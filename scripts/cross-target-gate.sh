@@ -59,7 +59,7 @@
 #
 # Run straight, this script rebuilds both compilers and runs the HOST suite — all three of which the
 # rung's own step-8 battery performed moments earlier, on the identical tree. Measured on that tree:
-# `dotnet build` + `maxon build maxon-shv2` (13 s) + the host suite (17 s) against a whole local
+# `dotnet build` + `scripts/build-shv2.sh` (two compiles, minutes) + the host suite (17 s) against a whole local
 # matrix of ~2.5 min. That is most of the gate spent re-deriving a known answer.
 #
 # So the rung path passes `--skip-build --skip-host`, and NEITHER weakens the matrix:
@@ -198,7 +198,7 @@ else
 		exit 1
 	fi
 
-	if ! "$MAXON" build maxon-shv2; then
+	if ! scripts/build-shv2.sh; then
 		echo "cross-target-gate: shv2 failed to build." >&2
 		row "ALL" "FAIL" "shv2 build failed"
 		printf '%s\n' "${ROWS[@]}"

@@ -37,6 +37,18 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return try create(path)
 	end 'from'
 
+	/// The EMPTY path, built without the `create` ladder - and NOT as a shorthand.
+	///
+	/// `create` resolves a file URL first, and `URL.parse` asks a `CharacterSet`, which is a `Set`: its
+	/// probe dispatches the element's `hash` through a WITNESS SLOT. A caller on a green thread pays for
+	/// that in a way no ordinary caller does - a dispatch a reachability walk cannot follow widens the
+	/// shared-global rule (E3143) to every address-taken function in the program - and it buys nothing
+	/// here: the empty string has no scheme to resolve, no character to refuse and no separator to
+	/// normalize, so `create("")` and this answer the same `FilePath{path: ""}`.
+	public static function empty() returns FilePath
+		return FilePath{path: ""}
+	end 'empty'
+
 	/// Resolve URL, validate characters, normalize separators.
 	static function create(input String) returns FilePath throws FilePathError
 		let resolved = try resolveFileURL(input)

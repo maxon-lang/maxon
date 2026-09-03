@@ -46,11 +46,12 @@ public static class RefcountOptimizationPass {
     // distinct funcs is safe.
     ParallelFunctions.Run(module, func => {
       var useCounts = ComputeUseCounts(func);
+      var addressTaken = CollectAddressTakenSlots(func);
       foreach (var block in func.Body.Blocks) {
-        CancelRedundantRefcounts(block, useCounts, funcLookup);
+        CancelRedundantRefcounts(block, useCounts, funcLookup, addressTaken);
       }
-      CancelCrossBlockRedundantRefcounts(func, useCounts, funcLookup);
-      CancelLoopInvariantRedundantRefcounts(func, useCounts, funcLookup);
+      CancelCrossBlockRedundantRefcounts(func, useCounts, funcLookup, addressTaken);
+      CancelLoopInvariantRedundantRefcounts(func, useCounts, funcLookup, addressTaken);
       CancelGlobalLoadOrphanBrackets(func, funcLookup);
     }, hot);
 
@@ -119,7 +120,8 @@ public static class RefcountOptimizationPass {
   private static void CancelRedundantRefcounts(
       IrBlock<StandardOp> block,
       Dictionary<int, int> useCounts,
-      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
+      Dictionary<string, IrFunction<StandardOp>> funcLookup,
+      HashSet<string> addressTaken) {
     var ops = block.Operations;
 
     // Incref index → variable name it operates on
@@ -131,7 +133,7 @@ public static class RefcountOptimizationPass {
     // Decref index → variable name it operates on
     var decrefVar = new Dictionary<int, string>();
 
-    AnalyzeAliases(ops, (i, varName, srcVar, isFromStore) => {
+    AnalyzeAliases(ops, addressTaken, (i, varName, srcVar, isFromStore) => {
       increfVar[i] = varName;
       if (srcVar != null) {
         increfSource[i] = srcVar;
@@ -355,7 +357,8 @@ public static class RefcountOptimizationPass {
   private static void CancelCrossBlockRedundantRefcounts(
       IrFunction<StandardOp> func,
       Dictionary<int, int> useCounts,
-      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
+      Dictionary<string, IrFunction<StandardOp>> funcLookup,
+      HashSet<string> addressTaken) {
     var blocks = func.Body.Blocks;
     if (blocks.Count < 2) return;
 
@@ -386,7 +389,7 @@ public static class RefcountOptimizationPass {
     var aliasFromStoreGlobal = new HashSet<string>();
     var storeAliasGlobal = new Dictionary<string, string>();
     foreach (var block in blocks) {
-      AnalyzeAliases(block.Operations, (_, _, _, _) => { }, (_, _) => { },
+      AnalyzeAliases(block.Operations, addressTaken, (_, _, _, _) => { }, (_, _) => { },
           aliasSourceGlobal, aliasFromStoreGlobal, storeAliasGlobal);
     }
 
@@ -396,7 +399,7 @@ public static class RefcountOptimizationPass {
     var decrefsByVar = new Dictionary<string, List<DecrefSite>>();
 
     foreach (var block in blocks) {
-      CollectRefcountSites(block, increfCandidates, decrefsByVar, requireSrcVar: true,
+      CollectRefcountSites(block, addressTaken, increfCandidates, decrefsByVar, requireSrcVar: true,
           aliasSourceOverride: aliasSourceGlobal,
           aliasFromStoreOverride: aliasFromStoreGlobal,
           storeAliasOverride: storeAliasGlobal);
@@ -618,7 +621,8 @@ public static class RefcountOptimizationPass {
   private static void CancelLoopInvariantRedundantRefcounts(
       IrFunction<StandardOp> func,
       Dictionary<int, int> useCounts,
-      Dictionary<string, IrFunction<StandardOp>> funcLookup) {
+      Dictionary<string, IrFunction<StandardOp>> funcLookup,
+      HashSet<string> addressTaken) {
     var blocks = func.Body.Blocks;
     if (blocks.Count < 2) return;
 
@@ -641,7 +645,7 @@ public static class RefcountOptimizationPass {
     // under the source key for the same reason as in CollectRefcountSites.
     var decrefsByVarAllBlocks = new Dictionary<string, List<DecrefSite>>();
     foreach (var block in blocks) {
-      CollectRefcountSites(block, [], decrefsByVarAllBlocks, requireSrcVar: false);
+      CollectRefcountSites(block, addressTaken, [], decrefsByVarAllBlocks, requireSrcVar: false);
     }
 
     // Function parameters own a reference supplied by the caller; aliasFromStore
@@ -653,7 +657,7 @@ public static class RefcountOptimizationPass {
 
     foreach (var loop in loops) {
       EliminateLoopInvariantPairs(loop, blockByName, killInfo, cfg, useCounts,
-          toRemovePerBlock, decrefsByVarAllBlocks, paramVarNames);
+          toRemovePerBlock, decrefsByVarAllBlocks, paramVarNames, addressTaken);
     }
 
     ApplyRemovals(toRemovePerBlock, blockByName);
@@ -667,7 +671,8 @@ public static class RefcountOptimizationPass {
       Dictionary<int, int> useCounts,
       Dictionary<string, HashSet<int>> toRemovePerBlock,
       Dictionary<string, List<DecrefSite>> decrefsByVarAllBlocks,
-      HashSet<string> paramVarNames) {
+      HashSet<string> paramVarNames,
+      HashSet<string> addressTaken) {
     // Increfs are restricted to the loop body (we only optimize pairs fully
     // inside the loop). Decrefs for pairing come from the loop body too. The
     // function-wide decref map is used below for the "exactly one reachable
@@ -676,7 +681,7 @@ public static class RefcountOptimizationPass {
     var decrefsByVar = new Dictionary<string, List<DecrefSite>>();
 
     foreach (var blockName in loop.Body) {
-      CollectRefcountSites(blockByName[blockName], increfs, decrefsByVar, requireSrcVar: false);
+      CollectRefcountSites(blockByName[blockName], addressTaken, increfs, decrefsByVar, requireSrcVar: false);
     }
 
     if (increfs.Count == 0) return;
@@ -1283,6 +1288,7 @@ public static class RefcountOptimizationPass {
   /// </summary>
   private static void CollectRefcountSites(
       IrBlock<StandardOp> block,
+      HashSet<string> addressTaken,
       List<IncrefSite> increfs,
       Dictionary<string, List<DecrefSite>> decrefsByVar,
       bool requireSrcVar,
@@ -1297,7 +1303,7 @@ public static class RefcountOptimizationPass {
     var dualAliasFromStore = aliasFromStoreOverride ?? localAliasFromStore;
     var dualStoreAlias = storeAliasOverride ?? localStoreAlias;
 
-    AnalyzeAliases(block.Operations, (i, varName, srcVar, isFromStore) => {
+    AnalyzeAliases(block.Operations, addressTaken, (i, varName, srcVar, isFromStore) => {
       if (requireSrcVar && srcVar == null) return;
       increfs.Add(new IncrefSite {
         Block = block,
@@ -1364,6 +1370,7 @@ public static class RefcountOptimizationPass {
   /// </summary>
   private static void AnalyzeAliases(
       List<StandardOp> ops,
+      HashSet<string> addressTaken,
       Action<int, string, string?, bool> onIncref,
       Action<int, string> onDecref,
       Dictionary<string, string>? aliasSourceOut = null,
@@ -1426,16 +1433,29 @@ public static class RefcountOptimizationPass {
       }
 
       if (op is IStoreOp store) {
-        if (borrowedFrom.TryGetValue(store.Value.Id, out var srcVar) && srcVar != store.VarName) {
+        // A slot whose address escapes holds no stable alias in either direction: whoever holds the
+        // address may rebind it, releasing the occupant the alias stands on and installing one this
+        // function holds no reference for. Neither end of the pair may then be cancelled.
+        bool slotEscapes = addressTaken.Contains(store.VarName);
+
+        if (!slotEscapes
+            && borrowedFrom.TryGetValue(store.Value.Id, out var srcVar)
+            && srcVar != store.VarName
+            && !addressTaken.Contains(srcVar)) {
           aliasSource[store.VarName] = srcVar;
           aliasFromStore.Remove(store.VarName);
           // If the same SSA value was already stored to an earlier slot, record
           // that predecessor as a storeAlias. This lets the decref dual-indexing
           // find the incref even when borrowedFrom dominates aliasSource.
-          if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlotBf) && firstSlotBf != store.VarName) {
+          if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlotBf)
+              && firstSlotBf != store.VarName
+              && !addressTaken.Contains(firstSlotBf)) {
             storeAlias[store.VarName] = firstSlotBf;
           }
-        } else if (firstStoreOf.TryGetValue(store.Value.Id, out var firstSlot) && firstSlot != store.VarName) {
+        } else if (!slotEscapes
+            && firstStoreOf.TryGetValue(store.Value.Id, out var firstSlot)
+            && firstSlot != store.VarName
+            && !addressTaken.Contains(firstSlot)) {
           aliasSource[store.VarName] = firstSlot;
           aliasFromStore.Add(store.VarName);
         }
@@ -1461,6 +1481,27 @@ public static class RefcountOptimizationPass {
     aliasFromStoreOut?.UnionWith(aliasFromStore);
     if (storeAliasOut != null)
       foreach (var kv in storeAlias) storeAliasOut[kv.Key] = kv.Value;
+  }
+
+  /// <summary>
+  /// Slot names whose ADDRESS is taken anywhere in the function — a by-reference argument, or an
+  /// sret destination. The callee writes THROUGH that address: it releases whatever the slot held
+  /// and installs a value it took its own reference for, so from the call onwards the slot is no
+  /// longer an alias of the value it was initialized from.
+  ///
+  /// Cancelling such a slot's incref/decref bracket is therefore unsound in both directions at once —
+  /// the surviving decref of the initializer names a record the callee already freed (a
+  /// <c>mm_decref: refcount underflow</c>) and the slot's new occupant is never released.
+  /// Collected per function because the store, the address-of and the decref need not share a block.
+  /// </summary>
+  private static HashSet<string> CollectAddressTakenSlots(IrFunction<StandardOp> func) {
+    var taken = new HashSet<string>();
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is StdLeaOp lea) taken.Add(lea.VarName);
+      }
+    }
+    return taken;
   }
 
   /// <summary>

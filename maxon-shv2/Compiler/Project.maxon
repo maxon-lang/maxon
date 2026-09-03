@@ -7186,22 +7186,34 @@ export typealias PendingTransformArityArray = Array with PendingTransformArity
 // the whole call graph — its body, its callees, and their callees — and shv2's parser is a pure function of
 // ONE FILE, so the callee's body may not even have been read yet when the site is found.
 //
-// ⚠ **THE ONLY DOOR THAT RECORDS ONE TODAY IS THE ALL-DISCARD TUPLE ASSIGNMENT** — `(_, _) = makePair(…)`,
-// which names every target `_` and so uses nothing the call produced. The canonical language raises E3064 at
-// two more doors (a bare `foo()` statement and `_ = foo()`), and shv2 raises it at NEITHER: both stand
-// shelved with their reason in `specs-shv2/discarded-results.md`, and wiring them is a change of blast
-// radius rather than a change of mechanism — this record and the summary that judges it serve all three.
+// ⚠ **TWO DOORS RECORD ONE**, and they differ in WHO can answer the purity question rather than in what is
+// recorded. The all-discard tuple assignment — `(_, _) = makePair(…)`, which names every target `_` — files a
+// callee the effect summary must judge. A discarded MATH INTRINSIC (`round(10)` as a statement) files one
+// whose answer is already in hand: the roster is machine instructions, so there is no body to walk and no
+// entry in the module's function index to walk it from. The canonical language raises E3064 at a third door
+// too — a bare `foo()` statement over a DECLARED callee — which stands shelved with its reason in
+// `specs-shv2/discarded-results.md`; wiring it is a change of blast radius rather than of mechanism, because
+// this record and the summary that judges it already serve it.
 export type PendingDiscardedResult
 	// The callee whose result nobody took, as the CALL OP spells it — the key the effect summary is indexed
 	// by, so it is the resolved name and not the source token.
 	export var callee as ByteArray
+	// ⭐ Whether this callee is a COMPILER INTRINSIC rather than a declared function. An intrinsic has no
+	// entry in the module's function index — it emits no call at all — so the effect summary cannot be asked
+	// about it, and does not need to be: a machine instruction over its arguments has no observable effect.
+	// Recording the provenance rather than a bare "already known pure" keeps the field to one meaning.
+	export var calleeIsACompilerIntrinsic as bool
 	export var line as LineNumber
 	export var column as ColumnNumber
 	export var filePath as FilePath
 
 	export static function create(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{callee: callee, line: line, column: column, filePath: filePath}
+		return Self{callee: callee, calleeIsACompilerIntrinsic: false, line: line, column: column, filePath: filePath}
 	end 'create'
+
+	export static function createForIntrinsic(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
+		return Self{callee: callee, calleeIsACompilerIntrinsic: true, line: line, column: column, filePath: filePath}
+	end 'createForIntrinsic'
 end 'PendingDiscardedResult'
 
 export typealias PendingDiscardedResultArray = Array with PendingDiscardedResult

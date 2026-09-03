@@ -461,15 +461,22 @@ function buildMboxHandleCloneBox(module StdModule)
 	module.functions.push(func)
 end 'buildMboxHandleCloneBox'
 
-// `__mbox_handle_retain_box(handleBox)`. See `MboxHandleRetainBoxName` for the double free its absence was.
+// `__mbox_handle_retain_box(handleBox) -> handleBox`. See `MboxHandleRetainBoxName` for the double free its
+// absence was.
 //
 // ⚠ **IT IS THE DROP READ BACKWARDS, INCLUDING THE ORDER.** The drop is close-then-release because
 // `__mbox_close` reads the record and needs `refs` to still be holding it; going up there is no such
 // hazard — nothing is freed on this road — so the two steps are simply both taken before the box's own
 // incref. What matters is that the SET is the same set: miss either count here and the drop's matching step
 // runs one time too many, which is the failure this function exists to prevent.
+//
+// ⭐ **IT HANDS THE BOX BACK, WHICH IS WHAT LETS ONE ENTRY SERVE BOTH RETAIN SHAPES.** The plain-box family
+// needs two entries — `__mm_incref` where the caller already holds the ValueId, `__mm_retain` where a FRESH
+// SSA name for the same box is what it needs — and a second handle entry would be the `handles`/`refs` pair
+// written down twice. A caller that wants no name ignores the result, exactly as it ignores `__mm_alloc`'s
+// when it is emitting for effect.
 function buildMboxHandleRetainBox(module StdModule)
-	var func = IrFunction.createFromStd(MboxHandleRetainBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxHandleRetainBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -480,7 +487,7 @@ function buildMboxHandleRetainBox(module StdModule)
 	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
 	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountUp, ids: ids)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(handleBox)))
-	module.setTerminator(entry, op: StdOp.retVoid)
+	module.setTerminator(entry, op: StdOp.ret(handleBox))
 
 	module.functions.push(func)
 end 'buildMboxHandleRetainBox'

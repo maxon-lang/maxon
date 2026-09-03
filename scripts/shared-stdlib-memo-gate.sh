@@ -166,7 +166,7 @@ done
 SHV2="./maxon-shv2/.maxon/maxon-shv2.exe"
 [ -x "$SHV2" ] || SHV2="./maxon-shv2/.maxon/maxon-shv2"
 if [ ! -x "$SHV2" ]; then
-	echo "gate: no shv2 binary — run \`./bin/maxon.exe build maxon-shv2\` first" >&2
+	echo "gate: no shv2 binary — run \`scripts/build-shv2.sh\` first" >&2
 	exit 2
 fi
 

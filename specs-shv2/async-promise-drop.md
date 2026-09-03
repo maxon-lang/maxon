@@ -812,3 +812,202 @@ end 'main'
 ```maxoncstderr
 error E3141: <fragment>:23:5: a promise cannot be borrowed through 'cancel': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
 ```
+
+<!-- test: async-promise-drop.a-callee-awaits-the-promise-it-is-handed -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⭐⭐ **A CALLEE THAT AWAITS ITS PROMISE PARAMETER OWNS IT, so the caller MOVES the promise in.** A green
+thread has exactly one owner; `await` hands that thread back to the runtime, so the frame that spells the
+`await` must be the frame that owns it. The transfer is the ordinary consumed-argument road — the caller
+vacates its binding at the call and the callee is enrolled the promise's owner at its parameter.
+
+⛔⛔ **THE OWNERSHIP IS DECIDED BEFORE THE CALLEE'S BODY IS PARSED, WHICH IS WHY THE DECLARATION SWEEP HAS
+TO SEE THE DOOR.** `bindParameters` asks the swept consume set whether the callee takes its promise
+parameter, and that sweep recognised stores into durable storage and nothing else — so `await p` on a
+parameter enrolled nobody, and the `await` met `requireConsumedPromiseIsOwned`'s E3141 at a program that
+is perfectly legal. That refusal is the SECOND answer this shape got: before it existed the callee awaited
+a thread it did not own and the program aborted **75**, which is the stamp-without-vacate abort
+`error.cancel-a-promise-no-frame-owns` records one case up. `promise-peek.md`'s
+`a-peek-through-a-function-leaves-the-promise-alone` pins the other side — a callee that only READS
+`p.inner` consumes nothing and leaves the promise with the caller.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Runtime.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise) returns Integer
+	return await p
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(6)
+	return finish(p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.a-callee-cancels-the-promise-it-is-handed -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+`cancel` is the other door onto the same reclaim, so it transfers ownership exactly as `await` does — the
+callee cancels a thread it owns, `__gt_live_count` balances to zero and no leak abort fires. The two doors
+are one list (`PromiseConsume`), which is what stops the sweep learning one and not the other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	Runtime.yield()
+	return 1
+end 'work'
+
+function abandon(p IntPromise)
+	p.cancel()
+end 'abandon'
+
+function main() returns ExitCode
+	let p = async work()
+	abandon(p)
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.error.a-promise-handed-to-an-awaiting-callee-is-consumed -->
+The negative of the two above: handing the promise over is a MOVE, so the caller has stopped naming the
+thread and a later `await` of its binding is refused at that second use — at the CALLER's line, which is
+where the mistake is. The refusal the caller earns is the ordinary use-after-move: the thread is alive and
+the callee has it, which is exactly what E3102 says.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Runtime.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise) returns Integer
+	return await p
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(6)
+	let handed = finish(p)
+	return (handed + (await p)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:17:26: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-promise-drop.an-instance-method-awaits-the-promise-it-is-handed -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⭐⭐ **AN INSTANCE METHOD OWNS THE PROMISE IT AWAITS, EXACTLY AS THE FREE FUNCTION TWO CASES UP DOES.**
+A receiver decides nothing about who holds a green thread: `await` hands the thread back to the runtime,
+so the frame that spells it is the owner and the caller moves the promise in at the call.
+
+⛔ **WHICH IS A CLAIM ABOUT THE DECLARATION SWEEP, because ownership is settled before the body is
+parsed.** `bindParameters` asks the swept consume set, so a sweep reading only receiver-less declarations
+leaves nobody enrolled and the method's own `await` meets E3141 — a refusal earned by the receiver rather
+than by the program, which is what it answered until the sweep read every shape's parameters
+(`Parser.sweptParamNamesFor`). `ServiceLoop.dropUnconsumedPayloads` reads the same widened set and still
+gets `false` for every message, by a checked reason rather than by that skip: a promise never crosses a
+send (E3135 refuses a `Promise` payload at the `spawn`, reading the handler's declared slot type), and
+neither of the other two consume doors can fire in a service either.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Runtime.yield()
+	return n + 1
+end 'work'
+
+type Runner
+	export static function create() returns Runner
+		return Runner{}
+	end 'create'
+
+	export function finish(p IntPromise) returns Integer
+		return await p
+	end 'finish'
+end 'Runner'
+
+function main() returns ExitCode
+	let r = Runner.create()
+	let p = async work(6)
+	return r.finish(p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.a-local-that-rebinds-a-promise-parameters-name -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⛔⛔ **A `let p = …` INSIDE THE BODY TAKES THE NAME, SO THE `await` PAST IT CONSUMES THE LOCAL AND NOT THE
+PARAMETER.** The declaration sweep matches a consume door's operand against the parameter list BY NAME, so
+a rebinding is where the parameter's claim on its own name ends. Attributing the `await` below to the
+parameter has the caller move its promise in against a callee that never reclaims it — the green thread
+outlives the program and the run aborts **101** with no diagnostic anywhere. The parameter stays the
+CALLER's, and `main`'s own scope exit is what drops it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Runtime.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise) returns Integer
+	let p = async work(5)
+	return await p
+end 'finish'
+
+function main() returns ExitCode
+	let outer = async work(1)
+	return finish(outer) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: async-promise-drop.a-closure-parameters-shadow-ends-at-its-line -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⭐ **A CLOSURE'S PARAMETERS BIND FOR THE ONE EXPRESSION AFTER `gives`, so the shadow is gone at the next
+newline.** `p` on the last line below is the promise parameter again, and its `await` is what enrols this
+frame the promise's owner. A shadow that outlived its line would leave nothing enrolled and
+`requireConsumedPromiseIsOwned` refuses the body at that very `await` (E3141) — which is the loud half of
+what a line column that never cleared would cost; the quiet half is a promise nobody reclaims.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Runtime.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise) returns Integer
+	let bump = function(p Integer) gives p + 1
+	let extra = bump(4)
+	return (await p) + extra
+end 'finish'
+
+function main() returns ExitCode
+	let outer = async work(1)
+	return finish(outer) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
