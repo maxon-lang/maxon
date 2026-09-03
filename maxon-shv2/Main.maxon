@@ -34,12 +34,21 @@ let DefaultSpecDir = "specs-shv2"
 // so the number is declared once, HERE, where the driver's exit codes are decided.
 module let NothingRanExitCode = 2
 
-// The CLI spellings the spec-test WORKER POOL has to re-emit, because a worker is this same
-// executable re-launched with this same command line (see SpecWorkerPool). Named here — where the
-// parser that reads them back also lives — so the two halves of that command line cannot drift
-// apart into a hang. The rest of the driver's flags are matched inline: they are read here and
-// nowhere else.
+// The CLI spellings a spec-test command line is RE-EMITTED from, because two things relaunch this
+// driver with one: a pool worker is this same executable (`SpecWorkerPool.spawnNoWait`), and a Linux
+// suite is handed to a compiler inside the OrbStack machine (`SpecTestRunner.spawnGuestSuite`). Named
+// here — where the parser that reads them back also lives — so the two halves of such a command line
+// cannot drift apart into a hang. The rest of the driver's flags are matched inline: they are read here
+// and nowhere else.
 module let SpecTestCommandName = "spec-test"
+
+// The CLI spellings a `build` command line is RE-EMITTED from, for the same reason and read back by the
+// same parser: three callers spawn a compiler with one — the delegated Linux lane's per-target compiler
+// (`SpecTestRunner.buildGuestCompiler`) and the two scale-test instruments
+// (`ScaleTestRunner.compileRung`, `ScalePerType`).
+module let BuildSubcommandName = "build"
+
+module let OutputFlagName = "-o"
 
 // ⭐ **`fmt` TAKES NO OPTIONS AT ALL, AND THAT IS ENFORCED IN THE PARSER**, not left to the command:
 // silently DROPPING an unrecognized flag is the most destructive thing this command could do -
@@ -56,9 +65,10 @@ let FmtUsageLine = "usage: maxon fmt [<file|directory>]   (formats in place; no 
 
 module let WorkerPersistentFlag = "--worker-persistent"
 
-module let FilterFlagPrefix = "--filter="
+// Read by the parser and written by `specSelectionArgv`, both in this file, so neither leaves it.
+let FilterFlagPrefix = "--filter="
 
-module let UpdateRequiredFlag = "--update-required"
+let UpdateRequiredFlag = "--update-required"
 
 // ⭐ `--network` — RUN THE CASES THAT REACH A REAL EXTERNAL HOST. The cases marked `<!-- network: live -->`
 // across `tcp-client`, `async-tcp` and `http-client` open a socket to `tcpbin.com` / `httpbin.org`; a default
@@ -94,7 +104,42 @@ let WithdrawnCompilerFlagPrefix = "--compiler"
 // parser below reads it back through this same constant, so the two halves cannot drift.
 module let TargetFlagPrefix = "--target="
 
-let WorkersFlagPrefix = "--workers="
+// `module` because the guest delegation forwards a pool size the caller TYPED
+// (`SpecTestRunner.spawnGuestSuite`), and a flag emitted under a spelling this parser does not read
+// back is a flag that is silently refused.
+module let WorkersFlagPrefix = "--workers="
+
+// ⭐ **WHICH DIRECTORY, WHICH CASES — the selection half of a `spec-test` command line, emitted ONCE.**
+//
+// Two re-emitters read it: a pool worker is this executable relaunched
+// (`SpecWorkerPool.spawnNoWait`), and a Linux suite is delegated to a compiler inside the OrbStack
+// machine (`SpecTestRunner.spawnGuestSuite`). Both must answer for exactly the set the parent planned
+// for, and a selection spelled twice is two halves of one run free to select differently.
+//
+// The spec directory is the RESOLVED one, never the default the far side would otherwise re-derive
+// from its own working directory: which directory this run is about has already been decided, and a
+// second decision could differ. `--filter` and `--network` change WHICH cases are selected, so a reader
+// that never heard them answers with records nobody asked for; `--update-required` changes what the run
+// WRITES. Each is emitted only when it is set, so a default run's command line carries the directory
+// and nothing else.
+module function specSelectionArgv(specDir FilePath, filter String, updateRequired bool, includeNetwork bool) returns StringArray
+	var argv = StringArray.create()
+	argv.push(specDir.toString())
+
+	if not filter.isEmpty() 'hasFilter'
+		argv.push("{FilterFlagPrefix}{filter}")
+	end 'hasFilter'
+
+	if updateRequired 'isUpdate'
+		argv.push(UpdateRequiredFlag)
+	end 'isUpdate'
+
+	if includeNetwork 'wantsLiveNetwork'
+		argv.push(NetworkFlag)
+	end 'wantsLiveNetwork'
+
+	return argv
+end 'specSelectionArgv'
 
 // ⭐ **`test`'S OWN FLAGS.** They are matched here with every other flag rather than parsed by the
 // command, because `MaxonArgs.parse` is the ONE reader of this driver's command line — a second parser
@@ -571,6 +616,21 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// ⚠ A target with NO runner on this host at all is not refused here — it is a lane that compiles
 	// and compares everything and executes nothing, reported per case. See `requireRunnerAvailable`.
 	requireRunnerAvailable(effectiveTarget)
+
+	// ⭐⭐ **THIS TARGET'S SUITE IS NOT RUN HERE AT ALL — IT IS HANDED, WHOLE, TO A COMPILER INSIDE THE
+	// GUEST** (`SpecTestRunner.runSuiteInGuest`), which reaches this same function on the other side and
+	// asks everything below this line for itself, against this very tree: the machine mirrors the
+	// checkout at identical real paths.
+	//
+	// ⚠ **THE POSITION IS REQUIRED, NOT TIDY.** The tree lock is a FILE at the checkout root, so the
+	// guest contends for the very same one and a host still holding it would refuse its own delegated
+	// run. It is placed after `requireRunnerAvailable` because that probe is the delegation's preflight
+	// — `orb` installed, the machine reachable and able to execute — and after `refuseIfStale`, which
+	// proves the binary that builds the guest's compiler current.
+	match runStrategyFor(effectiveTarget) 'lane'
+		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
+		individually to noneHere then break 'lane'
+	end 'lane'
 
 	// ⭐ **AND THAT A VERDICT NOTHING RAN IS STILL COUNTED, REASONED AND NOT GREEN** — the mapping that
 	// lane rests on, asked in the same slot and for `requireRunnerAvailable`'s reason. It is pure and
@@ -1229,6 +1289,10 @@ module type MaxonArgs
 	// `--workers=<n>` (spec-test only): how many persistent worker subprocesses the pool runs. 1 is
 	// the SAME pool with one worker in it, not a serial in-process branch — see runSpecTest.
 	export var workers as WorkerCount
+	// ⚠ Whether a `--workers=` was typed on this command line. Read by the delegated Linux lane
+	// (`SpecTestRunner.spawnGuestSuite`), which forwards the flag only when it was: the field above
+	// cannot answer that, because a typed count is free to equal the default this host computed.
+	export var workersOverridden as bool
 	// `--worker-persistent` (spec-test only, INTERNAL): this process IS a pool worker. Set by the
 	// parent dispatcher on the command line it spawns, never typed by a person, and therefore left
 	// out of the usage text. Undocumented but PARSED: an unrecognized flag aborts the run, so a
@@ -1329,7 +1393,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -1387,7 +1451,7 @@ module type MaxonArgs
 			let commandBefore = parsed.command
 			parsed.command = MaxonCommand.unknown
 
-			if arg == "build" 'buildCmd'
+			if arg == BuildSubcommandName 'buildCmd'
 				parsed.command = MaxonCommand.build
 			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
 				parsed.command = MaxonCommand.verifyWarmRebuild
@@ -1403,7 +1467,7 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.test
 			end 'testCmd' else if arg == FmtCommandName 'fmtCmd'
 				parsed.command = MaxonCommand.fmt
-			end 'fmtCmd' else if arg == "-o" 'dashOutput'
+			end 'fmtCmd' else if arg == OutputFlagName 'dashOutput'
 				i = i + 1
 				parsed.outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
@@ -1445,6 +1509,13 @@ module type MaxonArgs
 				parsed.includeNetwork = true
 			end 'networkFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
+
+				// ⚠ RECORDED, because the delegated Linux lane forwards this flag only when it was typed
+				// and the count alone cannot say so. See `MaxonArgs.workersOverridden`. The flag was
+				// typed whatever its value parses to; an unusable one is refused below, and a refused
+				// command line runs nothing to forward it to.
+				parsed.workersOverridden = true
+
 				// A bad value is a BAD OPTION, not a clamp — the same door as `--rungs`. `--workers=0`
 				// asks for a pool that can run nothing; quietly running the default instead would
 				// answer a question the caller never asked. See SpecWorkerPool.parseWorkerCount.

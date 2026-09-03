@@ -351,9 +351,10 @@ let WasmtimeFrameModuleSeparator = "!"
 // --- OrbStack: the arm64-linux runner ---
 //
 // `orb run -m <machine> <exe>` executes a binary that lives on the MAC's filesystem inside a Linux
-// VM, which mirrors the Mac's tree at IDENTICAL real paths. That mirroring is the whole reason an
-// arm64-linux spec run works from this host with no copying, no image and no cross-mount: the ELF
-// the build just wrote under `specs-shv2/.spec-tmp/` is already visible to the VM at the same path.
+// VM, which mirrors the Mac's tree at IDENTICAL real paths. That mirroring is the whole reason a Linux
+// spec run works from this host with no copying, no image and no cross-mount: the compiler this
+// command builds, the specs it reads and the goldens it writes are all one tree, seen from both sides
+// at one set of paths (`runSuiteInGuest`).
 //
 // ⚠ UNLIKE WASMTIME, `orb` IS A SYSTEM INSTALL, NOT VENDORED. There is no `vendor/` tree to walk up
 // to and no in-repo copy to prefer; the locator for a system tool is PATH, which is exactly what
@@ -3328,7 +3329,11 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 
 	let launch = match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives buildWasmRunCommand(modulePath)
-		orbstack gives buildLinuxVmRunCommand(modulePath)
+		// ⛔ NOT A GAP — the OrbStack lane does not execute one program per command either. It delegates
+		// the whole SUITE to a compiler running inside the machine, so no test binary is ever spawned
+		// from this host for it. Reaching here means a lane `runStrategyFor` had claimed to delegate was
+		// routed to a per-test spawn.
+		orbstack panic("SpecTestRunner: the {targetToString(effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
 		// ⛔ NOT A GAP — the WSL lane does not execute one program per command, so there is no per-test
 		// command to build for it. It runs a whole spec's programs from one generated script inside a
 		// single entry (`runWslBatch`), and `runStrategyFor` is the ONE table that decides which lane
@@ -3421,7 +3426,9 @@ function findWasmtimePath() returns FilePath
 	return found
 end 'findWasmtimePath'
 
-// `orb run -m maxon-linux <exe>` — run a static aarch64 ELF inside the OrbStack Linux machine.
+// `orb run -m maxon-linux <exe>` — the ONE spelling of "run this Linux binary inside the OrbStack
+// machine", and its single caller is the delegation below: what crosses is a whole COMPILER, handed
+// the suite's own command line, not a test binary.
 //
 // ⚠ THE PATH IS MADE ABSOLUTE BEFORE IT CROSSES, AND THAT IS NOT DEFENSIVENESS. The VM mirrors the
 // Mac's filesystem at IDENTICAL REAL paths, which is what lets it run a binary the build wrote
@@ -3444,7 +3451,7 @@ end 'findWasmtimePath'
 // not in `Executable.resolve()`, which despite its doc comment only wraps the bare name. Naming it
 // is therefore the way to get the lookup; pre-resolving it here would not.
 //
-// A missing `orb` is caught ONCE, up front, by `requireRunnerAvailable` — not here, per test.
+// A missing `orb` is caught ONCE, up front, by `requireRunnerAvailable`.
 function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
 	var argv = StringArray.create()
 	argv.push(OrbRunSubcommand)
@@ -3454,6 +3461,187 @@ function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
 
 	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
 end 'buildLinuxVmRunCommand'
+
+// ============================================================================================
+// THE DELEGATED LANE — a macOS host's Linux suite, run by a Linux-hosted copy of this compiler
+// ============================================================================================
+//
+// The compiler that answers these cases is hosted on the machine they are about: it compiles each one
+// and runs it natively. `RunStrategy` carries why this lane is delegated rather than batched, and the
+// measurement that says the two compilers emit identical code.
+//
+// The code lives here because everything it needs is already in this file in one copy each: the `orb`
+// spelling, the machine name and the absolute-path rule (`buildLinuxVmRunCommand`).
+//
+// ⚠ ONE machine serves BOTH Linux targets. `OrbMachineName` is aarch64 with Rosetta enabled, so an
+// x64-linux compiler runs there too; a second machine would be a second answer to "where does Linux
+// run here".
+export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
+	return match guestCompilerFor(harnessExe, effectiveTarget: effectiveTarget) 'compiler'
+		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filter: filter, updateRequired: updateRequired, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
+		unavailable(reason) gives reportGuestUnavailable(reason, effectiveTarget: effectiveTarget)
+	end 'compiler'
+end 'runSuiteInGuest'
+
+// The compiler that will run the suite inside the guest, or the sentence explaining why there is none.
+union GuestCompiler
+	ready(exe FilePath)
+	unavailable(reason String)
+end 'GuestCompiler'
+
+// ⭐ **IT MUST NEVER SILENTLY USE A STALE ONE**, which is the same question `refuseIfStale` asks of the
+// host's own binary and is asked through the same function (`CompilerFreshness.stalenessOf`) rather
+// than mirrored. The ANSWER differs: a stale guest compiler is not a refusal but a rebuild, because
+// nothing but this code puts that binary there and the reader never asked for it by name.
+//
+// ⚠ `stalenessOf` reads the binary's modification time and panics if it is not there, so "absent" is
+// asked first — and absent means the same thing staleness does: build it.
+function guestCompilerFor(harnessExe FilePath, effectiveTarget Target) returns GuestCompiler
+	return match binarySourceRootOf(harnessExe) 'origin'
+		checkout(projectRoot) gives guestCompilerUnder(projectRoot, harnessExe: harnessExe, effectiveTarget: effectiveTarget)
+		elsewhere(reason) gives GuestCompiler.unavailable("{reason} — the {targetToString(effectiveTarget)} suite is run by a compiler this command builds from those sources, so it needs a development checkout")
+	end 'origin'
+end 'guestCompilerFor'
+
+function guestCompilerUnder(projectRoot FilePath, harnessExe FilePath, effectiveTarget Target) returns GuestCompiler
+	let guestExe = guestCompilerPath(projectRoot, harnessExe: harnessExe, effectiveTarget: effectiveTarget)
+
+	if not File.exists(guestExe) 'neverBuilt'
+		return buildGuestCompiler(harnessExe, projectRoot: projectRoot, guestExe: guestExe, effectiveTarget: effectiveTarget, because: "it is not there yet")
+	end 'neverBuilt'
+
+	// ⚠ **THE HOST BINARY IS THE SECOND BOUND, AND `stalenessOf` CANNOT SUPPLY IT.** That walk covers the
+	// project root alone, so an edit to `stdlib/` — compiled into both compilers — leaves the guest one
+	// reading clean while the host was rebuilt around it, and the delegated lane answers from a tree
+	// nobody is looking at. This binary has already been proved current (`Main.runSpecTest` →
+	// `refuseIfStale`), so anything older than it was built from an older tree. Strictly older, matching
+	// `CompilerFreshness`'s tie-break: a same-second write is not a rebuild.
+	let host = try File.info(harnessExe) otherwise panic("SpecTestRunner: could not read the modification time of {harnessExe.toString()}, the file this command is running from")
+	let guest = try File.info(guestExe) otherwise panic("SpecTestRunner: could not read the modification time of {guestExe.toString()}, a file this command has just proved exists")
+
+	if guest.modifiedTime < host.modifiedTime 'builtBeforeTheHost'
+		return buildGuestCompiler(harnessExe, projectRoot: projectRoot, guestExe: guestExe, effectiveTarget: effectiveTarget, because: "{harnessExe.toString()} is newer than it")
+	end 'builtBeforeTheHost'
+
+	return match stalenessOf(guestExe) 'freshness'
+		mayProceed gives GuestCompiler.ready(guestExe)
+		stale(newerSource) gives buildGuestCompiler(harnessExe, projectRoot: projectRoot, guestExe: guestExe, effectiveTarget: effectiveTarget, because: "{newerSource.toString()} is newer than it")
+	end 'freshness'
+end 'guestCompilerUnder'
+
+// `<projectRoot>/.maxon/<stem>-<target>` — beside the compiler that built it, under the directory
+// `maxon build` writes into, so `stalenessOf` can answer about it at all (that function requires a
+// `.maxon` parent with a source root above it, and answers `mayProceed` for anything else, which for
+// this binary would be a false green). `.maxon/` is also gitignored, so a per-target compiler is not a
+// tree change.
+//
+// The STEM, not the filename: the target key is the only thing that distinguishes the two Linux
+// compilers from each other and from the host's, and an extension between them would read as part of
+// the name.
+function guestCompilerPath(projectRoot FilePath, harnessExe FilePath, effectiveTarget Target) returns FilePath
+	let outputDir = try FilePath.from(CompilerOutputDirName) otherwise panic("SpecTestRunner: '{CompilerOutputDirName}' is not a valid path component")
+	let exeName = try FilePath.from("{harnessExe.stem()}-{targetToString(effectiveTarget)}") otherwise panic("SpecTestRunner: '{harnessExe.stem()}-{targetToString(effectiveTarget)}' is not a valid file name")
+
+	return projectRoot.join(outputDir).join(exeName)
+end 'guestCompilerPath'
+
+// ⚠ **ANNOUNCED, BECAUSE IT IS A PAUSE MEASURED IN MINUTES.** A caller who typed `spec-test
+// --target=arm64-linux` asked for a suite, not a build, and a silent two-minute gap before the first
+// test line reads as a hang. The line names the source that forced it, because the verdict is holding
+// exactly that fact and a reader who has to go looking for it will not.
+function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe FilePath, effectiveTarget Target, because String) returns GuestCompiler
+	let targetKey = targetToString(effectiveTarget)
+	printError("building the {targetKey} compiler that will run this suite ({because}) — a few minutes\n")
+
+	var argv = StringArray.create()
+	argv.push(BuildSubcommandName)
+	argv.push(projectRoot.toString())
+	argv.push("{TargetFlagPrefix}{targetKey}")
+	argv.push(OutputFlagName)
+	argv.push(guestExe.toString())
+
+	let built = try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: inheritedWorkingDir(), timeoutMs: GuestCompilerBuildDeadlineMs) otherwise (e) 'buildUnspawnable'
+		return GuestCompiler.unavailable("could not run `{harnessExe.toString()} {BuildSubcommandName} {projectRoot.toString()}`: {e.displayReason()}")
+	end 'buildUnspawnable'
+
+	if built.exitCode != 0 'buildFailed'
+		return GuestCompiler.unavailable("building the {targetKey} compiler failed (exit {built.exitCode}):\n{built.stderr}")
+	end 'buildFailed'
+
+	// ⚠ A zero exit is a claim about the BUILD; what the caller needs is a claim about the FILE. Absent
+	// it, `orb` is asked to execute a path that is not there, exits 127, and that number is forwarded as
+	// this suite's own — a run that never started, reported in the numbers a verdict is read from.
+	if not File.exists(guestExe) 'nothingWritten'
+		return GuestCompiler.unavailable("building the {targetKey} compiler reported success but left no {guestExe.toString()}")
+	end 'nothingWritten'
+
+	return GuestCompiler.ready(guestExe)
+end 'buildGuestCompiler'
+
+// ⚠ **THIS NUMBER BOUNDS A WEDGE, NOT A SLOW BUILD.** A cross-target self-build of this compiler takes
+// on the order of two minutes, so no honest build approaches it; what it exists to convert is a build
+// that has stopped making progress into a named failure instead of a suite that never starts.
+let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisPerSecond
+
+// The suite's own command line, behind `orb run`, streamed rather than collected.
+//
+// ⚠ **STREAMED IS NOT A PREFERENCE.** The guest prints a line per test and the run lasts minutes;
+// collecting would hold every one of them until the process ended, so a reader would watch a blank
+// terminal and a failure would arrive only after everything else. `timeoutMs: 0` for the same reason
+// the deadline above is generous — the pool inside the guest carries every bound this run needs, and a
+// second one out here could only pre-empt a report that was about to arrive.
+function spawnGuestSuite(guestExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
+	let launch = buildLinuxVmRunCommand(guestExe)
+
+	var argv = StringArray.create()
+	argv.append(launch.argv)
+	argv.push(SpecTestCommandName)
+	argv.append(specSelectionArgv(specDir, filter: filter, updateRequired: updateRequired, includeNetwork: includeNetwork))
+
+	// ⛔ **`--target` IS NEVER FORWARDED.** `detectHostTarget()` is answered at COMPILE time, so the
+	// binary crossing into the guest already reports the guest's own target as its host and takes the
+	// native lane. A forwarded flag would ask it to cross-compile to itself.
+	//
+	// ⭐ `--workers` IS FORWARDED WHEN, AND ONLY WHEN, THE CALLER TYPED IT. The two machines report
+	// different CPU counts (7 in the guest against 8 here), so a pool size nobody chose belongs to the
+	// machine doing the work — while a count that WAS typed must reach that machine whatever it is.
+	// The count alone cannot separate the two: a typed one is free to equal this host's default.
+	if workersOverridden 'poolSizeTyped'
+		argv.push("{WorkersFlagPrefix}{workerCount}")
+	end 'poolSizeTyped'
+
+	var config = Configuration.create(launch.exe)
+	config.arguments = argv
+	config.standardOutput = OutputDestination.inherit
+	config.standardError = OutputDestination.inherit
+	config.standardInput = InputSource.none
+	config.timeoutMs = 0
+
+	let ran = try Subprocess.runConfiguration(config) otherwise (e) 'guestUnreachable'
+		printError("error: could not run the suite inside '{OrbMachineName}': {e.displayReason()}\n")
+		return NothingRanExitCode
+	end 'guestUnreachable'
+
+	// The guest's exit code IS this command's: a red inside the machine must be red outside it, and
+	// that includes the codes whose meaning is not "a test failed" — `LeakCheckExitCode` and
+	// `NothingRanExitCode`.
+	return match ran.status 'termination'
+		exited(code) gives code
+		signalled(code) gives reportGuestSignalled(code)
+	end 'termination'
+end 'spawnGuestSuite'
+
+// A guest that died on a signal has no exit code to forward, and the suite it was running reported
+// nothing about itself — so this is a failure of the RUN, named as one.
+function reportGuestSignalled(signal ExitCodeValue) returns ExitCode
+	printError("error: the suite inside '{OrbMachineName}' was killed by signal {signal} — no verdict was reported\n")
+	return 1
+end 'reportGuestSignalled'
+
+function reportGuestUnavailable(reason String, effectiveTarget Target) returns ExitCode
+	printError("error: nothing was run for {targetToString(effectiveTarget)}: {reason}\n")
+	return NothingRanExitCode
+end 'reportGuestUnavailable'
 
 // ============================================================================================
 // THE RUN PASS — every execution one spec needs, performed the way this lane performs them best
@@ -3484,20 +3672,36 @@ typealias RunObservationArray = Array with RunObservation
 // commands and the preflight are built from, so "which runner" and "one entry or many" cannot come to
 // disagree — adding a runner makes this match fail to compile until it decides.
 //
-// ⚠ **ORBSTACK IS DELIBERATELY NOT BATCHED, AND THIS IS THE STATEMENT OF THAT.** The gain measured here
-// is WSL's VM-ENTRY latency (137 ms per entry, on a Windows host); `orb`'s per-entry cost has never been
-// measured, and it cannot be from this host. More decisive: the two lanes give a test binary DIFFERENT
-// working directories today — WSL's `--cd` puts it in the spec's scratch directory while `orb run`
-// leaves it in the cwd this harness spawns with (`temp/`, the `RunWorkingSubdirName` contract) — so a
-// shared script would have to reproduce each lane's cwd exactly, and only one of the two can be
-// verified from here. Batching a lane whose results cannot be diffed is how a speed change becomes a
-// silent behaviour change.
+// The four lanes, and what each one is:
+//
+//   * **`individually`** — the host's own binaries and the wasm modules the vendored wasmtime runs. One
+//     spawn per execution, because a spawn here costs what a spawn costs.
+//   * **`wslBatch`** — a Windows host's Linux lane. A whole spec's executions go into ONE `wsl` entry,
+//     because the entry itself is what costs (137 ms, measured on that host).
+//   * **`noneHere`** — nothing on this machine can execute such a binary. Not an absence of a strategy
+//     but a strategy: every test that needed its program run is told so, in its own record, exactly as
+//     the executing lanes tell theirs.
+//   * **`inGuest`** — a macOS host's Linux lane, and the one that is not a batch at all. The SUITE is
+//     handed to a Linux-hosted copy of this compiler inside the OrbStack machine
+//     (`Main.runSpecTest` → `runSuiteInGuest`), which then takes the `individually` lane natively; no
+//     spec is ever staged on this side, so nothing reaches the run pass here.
+//
+// ⚠ **WHY THE LINUX LANE IS DELEGATED RATHER THAN BATCHED, AND WHAT LICENSES MOVING IT.** Per-entry
+// cost is not what hurts on `orb`: an entry is ~23 ms, but 480 executions across twelve parallel
+// streams — exactly what the pool does — do not finish in 600 s, while 200 sequential ones take 3.4 s.
+// The problem is CONCURRENCY, and batching per spec would cut the count without cutting that; one
+// entry for the whole suite removes it outright. What makes the move safe is that it changes no
+// expectation: the guest-hosted compiler was run over the whole arm64-linux lane with
+// `--update-required` and rewrote every golden to the same bytes — zero changes in
+// `specs-shv2/fragments/` — so the macOS cross-compiler and the Linux-hosted compiler emit identical
+// code and only the machine doing the emitting differs.
 export union RunStrategy
 	individually
 	wslBatch
-	// ⭐ PERFORM NONE OF THEM. Not an absence of a strategy but a strategy: every test that needed its
-	// program run is told so, in its own record, exactly as the two executing lanes tell theirs.
 	noneHere
+	// DECLARED LAST so `individually to noneHere` stays a contiguous range for the callers that ask
+	// only whether a lane is delegated.
+	inGuest
 end 'RunStrategy'
 
 // EXPORTED because the verdict self-test asks it of every supported target — that guard's whole subject
@@ -3510,7 +3714,7 @@ export function runStrategyFor(effectiveTarget Target) returns RunStrategy
 
 	return match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives RunStrategy.individually
-		orbstack gives RunStrategy.individually
+		orbstack gives RunStrategy.inGuest
 		wsl gives RunStrategy.wslBatch
 		unspawnable gives RunStrategy.noneHere
 	end 'runner'
@@ -3524,6 +3728,7 @@ function executeRuns(prepared PreparedTestArray, specName String, tempDir FilePa
 		individually gives spawnEachRun(prepared, specName: specName, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
 		wslBatch gives runWslBatch(prepared, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir)
 		noneHere gives unperformedRuns(prepared)
+		inGuest panic("SpecTestRunner: the {targetToString(effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so nothing is staged on this host to execute — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
 	end 'strategy'
 end 'executeRuns'
 
@@ -3594,31 +3799,16 @@ end 'spawnOneRun'
 // reads it back through — because a marker set under one name and read under another is accepted, ignored
 // and silent.
 //
-// ⛔⛔ **AND A SECOND VARIABLE IS SET, BECAUSE ON ONE LANE THE CHILD THIS RUNNER SPAWNS IS NOT THE PROGRAM.**
-// An `arm64-linux` case runs as `orb run -m <machine> <exe>`: the environment below reaches ORB, and `orb
-// run` does NOT carry the host's environment into the Linux machine — it forwards exactly the variables
-// named in `ORBENV` (`orb run --help`: *"To pass environment variables, set ORBENV to a colon-separated
-// list of variables"*). Without this line the marker was set, accepted and silently DROPPED at the VM
-// boundary: MEASURED on this host, one program that prints `__Builtins.schedMaxActiveWorkers()` —
-// `MAXON_MAX_PROCS=1 orb run …` reached the guest as an EMPTY variable and started **7** worker Ms, while
-// `ORBENV=MAXON_MAX_PROCS MAXON_MAX_PROCS=1 orb run …` started **1**. Every `<!-- procs: N -->` case on that
-// lane was running unpinned, which is the opposite of what the marker exists to guarantee.
-//
-// ⚠ **IT IS SET FOR EVERY PINNED RUN AND NOT ONLY THE `orb` ONES, AND THAT IS THE POINT.** A host binary
-// and a wasm module never read `ORBENV`, so the variable costs them nothing — and asking the RUNNER here
-// would put "which variable must cross" in two places, where the whole reason it is spelled from
-// `MaxProcsEnvName` is that it must be in one.
+// ⚠ Nothing here forwards the variable across a launcher, because no lane puts one between this call and
+// the program. The one that would — `orb run`, which carries only the variables named in `ORBENV` —
+// spawns no test binary from this host: a Linux suite is answered by a compiler inside the machine,
+// which spawns its own children there and reaches this same block (`runSuiteInGuest`).
 function runEnvironmentFor(procs SpecProcs) returns Environment
 	return match procs 'p'
 		unset gives Environment.inherit
-		pinned(count) gives Environment.inheritUpdating([String.from(MaxProcsEnvName): "{count}", OrbForwardedEnvName: String.from(MaxProcsEnvName)])
+		pinned(count) gives Environment.inheritUpdating([String.from(MaxProcsEnvName): "{count}"])
 	end 'p'
 end 'runEnvironmentFor'
-
-// `orb run`'s own forwarding list: the names — colon-separated, were there ever more than one — that cross
-// from the host's environment into the Linux machine. See `runEnvironmentFor` for the measurement that
-// nothing else does.
-let OrbForwardedEnvName = "ORBENV"
 
 // ⭐ **WHAT A `<!-- stdin: delayed -->` CASE'S PROGRAM READS.** One line, so a `readLine()` returns and
 // the case can pin its LENGTH (5) as evidence that the read completed rather than being cut short by

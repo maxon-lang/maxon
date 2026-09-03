@@ -86,7 +86,11 @@
 // source to anybody — `collectMaxonSources` walks straight into it.
 //
 // Written in lower case because every comparison against it goes through `caseFolded`. See there.
-let CompilerOutputDirName = ".maxon"
+//
+// `module` because the guest-compiler delegation names the same directory when it decides where to put
+// the binary it builds (`SpecTestRunner.guestCompilerPath`) — the output directory is one fact, and a
+// second spelling of it is a binary written where nothing looks for it.
+module let CompilerOutputDirName = ".maxon"
 
 // The directory whose presence in the project root says this is a DEVELOPMENT CHECKOUT rather than an
 // installed copy. Detected, never guessed from the path's spelling: a released binary's own path can
@@ -98,8 +102,11 @@ let SourceRootMarkerDirName = "Compiler"
 // TWO arms, not three: "no source tree beside the binary" and "a source tree entirely older than it"
 // are genuinely different facts, but every caller does the same thing with both — proceed — and a
 // third arm nobody could act on differently would only invite a caller to invent a difference. Which
-// of the two it was is visible in `stalenessOf`'s own early returns, where it matters.
-union StalenessVerdict
+// of the two it was is `binarySourceRootOf`'s answer, asked separately by the caller that acts on it.
+//
+// EXPORTED because one caller answers a staleness by REBUILDING rather than by refusing, and needs the
+// verdict itself to say which source forced the rebuild (`SpecTestRunner.guestCompilerFor`).
+export union StalenessVerdict
 	mayProceed
 	stale(newerSource FilePath)
 end 'StalenessVerdict'
@@ -122,25 +129,53 @@ export function refuseIfStale(binary FilePath, role String) returns ExitCode
 	end 'verdict'
 end 'refuseIfStale'
 
-// Is any source compiled into `binary` newer than it?
+// Where the sources a binary was built from live, or why there are none to compare it against.
 //
-// The scan stops at the FIRST one, for `cross-target-gate.sh`'s reason: the reader needs an example,
-// not an inventory, and the fix is the same however many there are.
-function stalenessOf(binary FilePath) returns StalenessVerdict
-	let outputDir = try binary.parent() otherwise return StalenessVerdict.mayProceed
+// ⭐ **ONE DERIVATION, TWO QUESTIONS THAT ARE THE SAME QUESTION.** `stalenessOf` needs the root to walk
+// it for newer sources; the guest-compiler delegation (`SpecTestRunner.guestCompilerFor`) needs the
+// very same root to know WHICH project to build and where to put the result. A binary with no checkout
+// above it can neither be compared against sources nor be rebuilt from them, so both callers turn on
+// one answer rather than on two derivations that agree by coincidence.
+//
+// `elsewhere` carries the sentence a caller that must REFUSE prints, because the reason is only
+// stateable beside the constants that make it true.
+export union BinarySourceRoot
+	checkout(root FilePath)
+	elsewhere(reason String)
+end 'BinarySourceRoot'
+
+export function binarySourceRootOf(binary FilePath) returns BinarySourceRoot
+	let outputDir = try binary.parent() otherwise return BinarySourceRoot.elsewhere("{binary.toString()} has no parent directory")
+
 	if caseFolded(outputDir.filename()) != CompilerOutputDirName 'notBuiltInPlace'
-		return StalenessVerdict.mayProceed
+		return BinarySourceRoot.elsewhere("{binary.toString()} was not built in place — `maxon build` writes a project's executable into its own {CompilerOutputDirName}/ directory, and this one is not in such a directory")
 	end 'notBuiltInPlace'
 
-	let sourceRoot = try outputDir.parent() otherwise return StalenessVerdict.mayProceed
+	let sourceRoot = try outputDir.parent() otherwise return BinarySourceRoot.elsewhere("{outputDir.toString()} has no parent directory")
 
 	// Bound to a local first: `join` is overloaded on String and FilePath, and a CALL in the argument
 	// position does not disambiguate them any more than an inline `try` expression does (E3007).
 	let marker = pathComponent(SourceRootMarkerDirName)
 	if not Directory.exists(sourceRoot.join(marker)) 'notACheckout'
-		return StalenessVerdict.mayProceed
+		return BinarySourceRoot.elsewhere("{sourceRoot.toString()} is not a development checkout — it holds no {SourceRootMarkerDirName}/ directory, so this binary's sources are not here")
 	end 'notACheckout'
 
+	return BinarySourceRoot.checkout(sourceRoot)
+end 'binarySourceRootOf'
+
+// Is any source compiled into `binary` newer than it?
+//
+// EXPORTED for `StalenessVerdict`'s reason: one caller acts on a staleness by rebuilding.
+export function stalenessOf(binary FilePath) returns StalenessVerdict
+	return match binarySourceRootOf(binary) 'origin'
+		checkout(sourceRoot) gives stalenessUnder(binary, sourceRoot: sourceRoot)
+		elsewhere gives StalenessVerdict.mayProceed
+	end 'origin'
+end 'stalenessOf'
+
+// The scan stops at the FIRST newer source, for `cross-target-gate.sh`'s reason: the reader needs an
+// example, not an inventory, and the fix is the same however many there are.
+function stalenessUnder(binary FilePath, sourceRoot FilePath) returns StalenessVerdict
 	let built = try File.info(binary) otherwise panic("CompilerFreshness: could not read the modification time of {binary.toString()}, a file this command is running from or has already proved exists")
 
 	var sources = MaxonSourcePathArray.create()
@@ -163,7 +198,7 @@ function stalenessOf(binary FilePath) returns StalenessVerdict
 	end 'each'
 
 	return StalenessVerdict.mayProceed
-end 'stalenessOf'
+end 'stalenessUnder'
 
 // Whether `maxon build` compiled `source` into the binary, given that `collectMaxonSources` has
 // already dropped the build manifest, every `.maxonignore`d subtree and every `*.test.maxon`. See this

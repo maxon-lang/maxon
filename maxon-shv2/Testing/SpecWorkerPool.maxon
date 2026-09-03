@@ -385,7 +385,7 @@ let WedgeWatchdogGraceMs = 180 * MillisPerSecond
 // once, before the loop.
 //
 // ⚠ **ONE LANE DOES NOT PERFORM ONE EXECUTION PER STEP, AND AN OUTER BOUND THAT IGNORED THAT WOULD
-// PRE-EMPT THE INNER ONE.** The x64-linux/arm64-linux lane runs a whole spec's executions inside a
+// PRE-EMPT THE INNER ONE.** A WINDOWS host's Linux lane runs a whole spec's executions inside a
 // SINGLE `wsl` entry (`SpecTestRunner.runWslBatch`), which the WORKER bounds at
 // `batchDeadlineMs(executions)` — a number that scales with the spec because the entry does. The
 // parent cannot see inside that entry and no breadcrumb can arrive from within it, so the silence it
@@ -413,6 +413,7 @@ function progressDeadlineMs(tests TestTally, strategy RunStrategy) returns Durat
 	return match strategy 'lane'
 		individually or noneHere gives TestProgressDeadlineMs
 		wslBatch gives TestProgressDeadlineMs + batchDeadlineMs(tests)
+		inGuest panic("SpecWorkerPool: a delegated suite runs no workers on this host (see SpecTestRunner.runSuiteInGuest), so there is no worker silence to bound — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
 	end 'lane'
 end 'progressDeadlineMs'
 
@@ -1463,27 +1464,9 @@ type PersistentWorkerHandle
 		var argv = StringArray.create()
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
-		// The RESOLVED spec directory, not the default the worker would otherwise re-derive from
-		// its inherited working directory. The parent already decided which directory this run is
-		// about; a worker that decided again could decide differently.
-		argv.push(specDir.toString())
-
-		if not filter.isEmpty() 'hasFilter'
-			argv.push("{FilterFlagPrefix}{filter}")
-		end 'hasFilter'
-
-		if updateRequired 'isUpdate'
-			argv.push(UpdateRequiredFlag)
-		end 'isUpdate'
-
-		// ⭐ FORWARDED FOR THE REASON `--filter` IS, and it is the same failure if it is not: the parent
-		// counted the live-network cases in its plan, and a worker that never heard about the flag would
-		// select a DIFFERENT set and answer with records the parent never asked for. Conditional like
-		// `--update-required` above rather than unconditional, so a default run's worker command line is
-		// byte-identical to what it was before this flag existed.
-		if includeNetwork 'wantsLiveNetwork'
-			argv.push(NetworkFlag)
-		end 'wantsLiveNetwork'
+		// WHICH directory and WHICH cases, emitted by the one function both re-emitters of this command
+		// line read — see `Main.specSelectionArgv`.
+		argv.append(specSelectionArgv(specDir, filter: filter, updateRequired: updateRequired, includeNetwork: includeNetwork))
 
 		// Forward the effective target ONLY when it differs from the host the worker would otherwise
 		// default to. A worker is this exe relaunched; with no `--target` it resolves
