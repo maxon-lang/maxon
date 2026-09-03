@@ -1,0 +1,98 @@
+// Test: a-case-member-before-a-parenthesized-group-keeps-the-next-union
+typealias Idx = int(0 to 100)
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function trips(m Marker, flag bool) returns bool
+	if m == Marker.function and (flag or not flag) 'both'
+		return true
+	end 'both'
+	return false
+end 'trips'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	if trips(Marker.function, flag: true) 'ok'
+		return pick(Victim.found(42))
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  andrhs:
+    x64.movRegImm32 rax, 1
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#10
+  both:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#3
+  ifcont#10:
+    x64.movRegImm32 rax, 0
+  __il_cont#3:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#2
+  ok:
+    x64.movRegImm32 rbx, 42
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#13:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.jmp __il_cont#11
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#14:
+    x64.movRegImm32 rbx, 0
+  __il_cont#11:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  ifcont#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,47 @@
+// Test: a-case-member-before-a-parenthesized-group-keeps-the-next-top-level-binding
+enum Marker
+	function
+	other
+end 'Marker'
+
+function trips(m Marker, flag bool) returns bool
+	if m == Marker.function and (flag or not flag) 'both'
+		return true
+	end 'both'
+	return false
+end 'trips'
+
+let counter = 42
+
+function main() returns ExitCode
+	if trips(Marker.function, flag: true) 'ok'
+		return counter as ExitCode
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  andrhs:
+    arm64.movImm x0, 1
+  scmerge:
+    arm64.cbz x0, ifcont#10
+  both:
+    arm64.movImm x0, 1
+    arm64.b __il_cont
+  ifcont#10:
+    arm64.movImm x0, 0
+  __il_cont:
+    arm64.cbz x0, ifcont#2
+  ok:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
