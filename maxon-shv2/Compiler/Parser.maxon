@@ -14323,7 +14323,19 @@ export type Parser
 	//
 	//   • a CLOSURE LITERAL — `function(n Integer) gives n + c` — an expression, with no name, no `end`,
 	//     and no block of its own;
-	//   • an enum/union CASE NAME — `function` is a legal one (`keyword-as-case-name.md`).
+	//   • an enum/union CASE NAME — `function` is a legal one (`keyword-as-case-name.md`), and READING one
+	//     as a member puts the keyword in the middle of an expression.
+	//
+	// ⭐⭐ **THE THREE-TOKEN SHAPE IS NOT ENOUGH ON ITS OWN, AND THE POSITION CLAUSE IS WHAT MAKES IT A
+	// DECLARATION** (`declarationBeginsStatement`). A keyword-named case READ, followed by a word-shaped
+	// operator, followed by a parenthesized group spells `function` · <name> · `(` character for character:
+	// `if m == Marker.function and (flag or not flag) 'both'` puts `and` in the NAME slot and the group's
+	// `(` after it. MEASURED without the clause: every declaration after that line went unrecorded — a
+	// `union` declared below it earned **E2015 `a match pattern naming 'found' … enum-case patterns arrive
+	// in a later wave`**, blaming an unbuilt feature for a type the index never received, and a top-level
+	// `var` below it took `ProgramSignatures.recordedDeclFor`'s drift guard down as a compiler PANIC. It is
+	// the SEQUENCE and not the word `and`: any word-shaped operator (`or`, `xor`, `mod`, `is`) reaches it,
+	// which is why the cure is where a declaration may STAND rather than what may follow the keyword.
 	//
 	// ONE predicate, read by the whole-file declaration sweep, by `recordScannedType`'s body walk and by
 	// `atEnumMethodStart`, for `atTopLevelBindingKeyword`'s reason: the sweep's `function` arm counts a
@@ -14341,8 +14353,43 @@ export type Parser
 	// by a keyword rather than by a closure. A closure literal is still excluded by construction: its `(`
 	// sits where the name would, and a punctuator carries no spelling.
 	function functionDeclarationAt(index TokenIndex) returns bool
-		return self.kindAt(index) == TokenKind.function and tokenCanBeAName(self.tokenAt(index + 1)) and self.kindAt(index + 2) == TokenKind.leftParen
+		return self.kindAt(index) == TokenKind.function and self.declarationBeginsStatement(index) and tokenCanBeAName(self.tokenAt(index + 1)) and self.kindAt(index + 2) == TokenKind.leftParen
 	end 'functionDeclarationAt'
+
+	// ⭐⭐ **DOES A DECLARATION BEGIN AT `index` — is that token the FIRST of its statement, past the
+	// modifiers a declaration may carry?** Maxon separates statements with newlines, so a declaration's
+	// keyword either opens the file or follows a `newline`; a keyword standing anywhere else in a line is
+	// part of an EXPRESSION, whatever three-token shape it happens to spell.
+	//
+	// It is `ifBeginsStatement`'s rule one construct over, read the same way and for the same reason: both
+	// tell a token that OPENS something from the identically-spelled token that does not, and neither can
+	// be answered by looking forward. They differ only in what may precede — an `if` admits an `else` (the
+	// `else if` chain), a declaration admits its modifiers.
+	//
+	// ⚠ It is a bounded LOOKBEHIND and must stay one. `buildDeclaredNameIndex` reads
+	// `functionDeclarationAt`, and `keywordIsAName` reads that index, so a position test that asked the
+	// block-extent walk would close a cycle between the two.
+	function declarationBeginsStatement(index TokenIndex) returns bool
+		var start = index
+		while start > 0 and self.declarationModifierAt((start - 1) as TokenIndex) 'pastModifiers'
+			start = (start - 1) as TokenIndex
+		end 'pastModifiers'
+
+		if start == 0 'atFileStart'
+			return true
+		end 'atFileStart'
+
+		return self.kindAt((start - 1) as TokenIndex) == TokenKind.newline
+	end 'declarationBeginsStatement'
+
+	// A modifier that may stand between a statement's start and the keyword opening its declaration: a
+	// visibility tier, or the `static` a type member spells (`export static function create`). The tier half
+	// asks `visibilityModifierAt` rather than respelling `export`/`public`/`module`, for that predicate's
+	// own stated reason — a third tier taught to one reader and not another would put two readers of one
+	// grammar a token apart.
+	function declarationModifierAt(index TokenIndex) returns bool
+		return self.visibilityModifierAt(index) or self.kindAt(index) == TokenKind.static
+	end 'declarationModifierAt'
 
 	// Is the cursor on a `Set from` construction — a bare `Set` identifier immediately followed by `from`
 	// (P1.7b slice B)?

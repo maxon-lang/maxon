@@ -1,0 +1,130 @@
+// Test: the-sweep-and-the-parse-agree-about-what-a-declaration-is
+typealias Idx = int(0 to 100)
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function trips(m Marker) returns bool
+	return m == Marker.function and (true or false)
+end 'trips'
+
+type Holder
+	export var base as Idx
+
+	export static function create() returns Holder
+		return Self{base: 12}
+	end 'create'
+
+	export function total() returns Idx
+		return self.base + bonus()
+	end 'total'
+
+	export function bonus() returns Idx
+		return 10
+	end 'bonus'
+end 'Holder'
+
+export function exported() returns Idx
+	let h = Holder.create()
+	return h.total()
+end 'exported'
+
+module function scoped() returns Idx
+	return 20
+end 'scoped'
+
+function main() returns ExitCode
+	if trips(Marker.function) 'ok'
+		return (exported() + scoped()) as ExitCode
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.total {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 10
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-sweep-and-the-parse-agree-about-what-a-declaration-is.test:21: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @exported {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.leaRegSlot rcx, slot0
+    x64.movRegImm32 rax, 12
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.callDirect Holder.total
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  andrhs:
+    x64.movRegImm32 rax, 1
+  __il_cont#6:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  ok:
+    x64.callDirect exported
+  __il_cont#12:
+    x64.leaRegRegImm32 r8, r8, 20
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-sweep-and-the-parse-agree-about-what-a-declaration-is.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
