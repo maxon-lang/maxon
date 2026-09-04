@@ -1,0 +1,124 @@
+// Test: a-literal-decays-at-every-door
+typealias Wide = int(0 to u64.max)
+
+enum Fault implements Error
+	failed
+end 'Fault'
+
+type Holder
+	export var w as Wide
+
+	static function create() returns Self
+		return Self{w: 1}
+	end 'create'
+end 'Holder'
+
+function takesWide(w Wide) returns Wide
+	return w
+end 'takesWide'
+
+function mayFail() returns Wide throws Fault
+	throw Fault.failed
+end 'mayFail'
+
+function pick(k Wide) returns Wide
+	return match k 'm'
+		0 gives 8
+		default gives 16
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var w = takesWide(2)
+	w = 32
+	let fallback = try mayFail() otherwise 64
+	let total = h.w + w + fallback + pick(0) + pick(1)
+	print("{total}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @mayFail {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.leaRegSlot x19, slot0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+  __il_cont#4:
+    arm64.bl mayFail
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 64
+  trycont:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.add x1, x1, 32
+    arm64.add x0, x1, x0
+  matcharm:
+    arm64.movImm x1, 8
+  __il_cont#7:
+    arm64.add x0, x0, x1
+  matchdefault:
+    arm64.movImm x1, 16
+  __il_cont#6:
+    arm64.add x19, x0, x1
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __uint_to_string
+    arm64.movRegReg x19, x0
+    arm64.add x0, x19, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x0, x22, x19
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl print
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

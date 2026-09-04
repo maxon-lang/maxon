@@ -2430,11 +2430,11 @@ end 'arm64PrologueFrameBytes'
 // a module function already laid out first). The panic/software runtime GROWS back here at its
 // milestone. `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core),
 // `initGlobals` its managed-global init/release bracket (P1.7 slice 2a — false for a program with no
-// managed top-level `var`), and
+// managed top-level `var`), `debugStream` the DebugStream producer's attach/detach bracket, and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, os Os, entryFunction ByteArray)
-	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, os: os, entryFunction: entryFunction))
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, os Os, entryFunction ByteArray)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, os: os, entryFunction: entryFunction))
 end 'appendArm64RuntimeChunks'
 
 // ==========================================================================
@@ -2565,7 +2565,8 @@ end 'arm64SectionOffsetOfReloc'
 // which section a kind names; this one applies it. `arm64*` kinds reach the read-only constant
 // section (float islands, String literal records); `dataSection*` kinds reach the top-level `var`
 // globals. Every other arm is named and PANICS: the x64 kinds cannot appear in an arm64 image, and
-// `symdata`/`covdata` are not emitted at this milestone. (A witness-table method slot, and a
+// `covdata` is not emitted at this milestone, and nothing addresses `symdata` from code. (A witness-table
+// method slot, and a
 // managed-opaque descriptor's `destroyFunc@40`/`copyFunc@32`, are not `RdataRelocKind`s at all — they ride
 // `GlobalDataTable.pendingRdataRelocs`, filled by `bakeFuncAbs64Relocs` on the static arm64-linux ELF and
 // by `writeMachoRdataRebases` as a dyld rebase on the always-PIE arm64-macOS.)
@@ -2586,7 +2587,7 @@ export function patchArm64SectionRelocations(code ByteArray, rdataRelocs RdataRe
 			covdataRipRelDisp32 then panic("patchArm64SectionRelocations: x64 covdata relocation in an arm64 image — target/emitter mismatch")
 			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + (reloc.rdataOffset as MachineWord))
 			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + (reloc.rdataOffset as MachineWord))
-			symdataArm64Adr then panic("patchArm64SectionRelocations: the symdata section is empty at this milestone — a symdataArm64Adr relocation has no section to reach; it arrives at the reflection milestone")
+			symdataArm64Adr then panic("patchArm64SectionRelocations: nothing in an image reads its own symdata — the DebugStream name blobs are read out of the FILE by `maxon monitor`, so no code addresses that section and this relocation kind has no producer on this lane")
 			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataVmAddr + (reloc.rdataOffset as MachineWord))
 			covdataArm64Adr then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
 			arm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + (reloc.rdataOffset as MachineWord))
@@ -2696,7 +2697,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	//
 	// ⚠ It is no longer the WHOLE arm64 runtime: the panic runtime below is the rest of it, and this
 	// comment said "the scalar core needs no panic handler" until A3n landed one three lines away.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: posixReadsEnvironment(usage) and target.os == Os.linux, os: target.os, entryFunction: project.entryFunctionName)
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: posixReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, os: target.os, entryFunction: project.entryFunctionName)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target))
 	end 'eachFunc'

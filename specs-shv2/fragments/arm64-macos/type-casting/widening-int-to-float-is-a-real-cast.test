@@ -1,0 +1,35 @@
+// Test: widening-int-to-float-is-a-real-cast
+
+typealias Integer = int(i64.min to i64.max)
+typealias JsonFloat = float(f64.min to f64.max)
+
+function identity(x Integer) returns Integer
+	return x
+end 'identity'
+
+function main() returns ExitCode
+	let i = identity(42)
+	let f = i as JsonFloat
+	return trunc(f)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_cont:
+    arm64.movImm x0, 42
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at widening-int-to-float-is-a-real-cast.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

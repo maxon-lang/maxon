@@ -1,0 +1,83 @@
+// Test: debugstream-log-events.the-four-events-reach-the-ring
+function main() returns ExitCode
+	let phase = __DebugStream.nameId("compile")
+	let ev = __DebugStream.nameId("allocated")
+	__DebugStream.phaseBegin(phase, 7)
+	__DebugStream.event(ev, 1, 2, 7, 100, 200)
+	let msg = "hello ring"
+	let bytes = msg.toByteArray()
+	__DebugStream.text(3, 4, 7, bytes.managed)
+	__DebugStream.phaseEnd(phase, 7)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __ds_base@32 = i64 0
+  __ds_buf_size@40 = i64 0
+  __ds_buf_mask@48 = i64 0
+  __ds_start_ts@56 = i64 0
+  __ds_lock@64 = i64 0
+  __mm_alloc_id@72 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.movImm x2, 7
+    arm64.movImm x0, 96
+    arm64.movRegReg x1, x19
+    arm64.bl __ds_emit_log_phase
+    arm64.movImm x1, 1
+    arm64.movImm x2, 2
+    arm64.movImm x3, 7
+    arm64.movImm x4, 100
+    arm64.movImm x5, 200
+    arm64.movRegReg x0, x20
+    arm64.bl __ds_emit_log_event
+    arm64.leaRdata x0, __str_rec_1  ; "hello ring"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 3
+    arm64.movImm x22, 4
+    arm64.movImm x23, 7
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_retain
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.movRegReg x3, x24
+    arm64.bl __ds_emit_log_text
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_decref
+    arm64.movImm x2, 7
+    arm64.movImm x0, 97
+    arm64.movRegReg x1, x19
+    arm64.bl __ds_emit_log_phase
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

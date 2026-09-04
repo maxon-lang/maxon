@@ -731,9 +731,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// The terminal question defines the file-type word `GetFileType` answers in EAX — an integer, so a
 		// GPR, exactly as the priority read above classes `GetPriorityClass`'s.
 		osHandleFileType(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		// A created section's HANDLE is a machine integer, so a GPR; the unmap defines nothing at all.
+		// A created section's HANDLE is a machine integer, so a GPR; the unmap and the unpublish define nothing.
 		osCreateNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
-		osUnmapNamedSegment then break 'result'
+		osUnmapNamedSegment or osUnpublishNamedSegment then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1128,7 +1128,7 @@ export type ScaledIndexFolds
 			// the address op then emits its own `lea` and the access reads it.
 			loadAcquire or storeRelease then break 'mem'
 			osHandleFileType then break 'mem'
-			osCreateNamedSegment to osUnmapNamedSegment then break 'mem'
+			osCreateNamedSegment to osUnpublishNamedSegment then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 
@@ -1497,7 +1497,7 @@ export type CompareFusionCensus
 				osEnvBlock to osEnvBlockFree then break 'term'
 				loadAcquire or storeRelease then break 'term'
 				osHandleFileType then break 'term'
-				osCreateNamedSegment to osUnmapNamedSegment then break 'term'
+				osCreateNamedSegment to osUnpublishNamedSegment then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1605,7 +1605,7 @@ export type CompareFusionCensus
 				// G3: `mov` writes no flags, so neither ordered access can be the last flag-writer.
 				loadAcquire or storeRelease then break 'isTheCompare'
 				osHandleFileType then break 'isTheCompare'
-				osCreateNamedSegment to osUnmapNamedSegment then break 'isTheCompare'
+				osCreateNamedSegment to osUnpublishNamedSegment then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'

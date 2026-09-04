@@ -1192,17 +1192,16 @@ function networkModeAllows(test SpecTest, includeNetwork bool) returns bool
 end 'networkModeAllows'
 
 // ⭐⭐ **THE THIRD DERIVED PER-TARGET GATE: CAN THIS TARGET BE TRACED AT ALL?** A capture case needs the
-// DebugStream PRODUCER, which opens a named Win32 section object and is x64-windows only. Without this
-// gate such a case would ask for a producer no other target has.
+// DebugStream PRODUCER, and the lanes that have one are exactly the lanes with a named shared section and
+// a millisecond stopwatch — which is what `targetCanProduceDebugStream` answers, off the facility table
+// both this gate and the compiler's own command-line refusal read.
 //
-// ⚠⚠ **IT IS NOW THE ONLY GATE ON THIS PATH, AND IT USED TO HAVE A COMMAND-LINE BACKSTOP UNDER IT.**
-// The compiler refuses `--debugstream` on every other target BEFORE compiling anything
-// (`Main.debugStreamSupports`), and that refusal is `runBuild`'s — reached by a `build` command line
-// and not by `compileToProduct`, which is what this harness calls since G20. So a bug here no longer
-// surfaces as a clean refusal naming the flag: it reaches the three Std ops' own lowerings, which
-// PANIC on any target but x64-windows, and a panic inside a worker costs that spec (see
-// `SpecWorkerPool`'s dead-worker recovery) rather than one named FAIL. Loud either way, and that is
-// what matters — but it is a different loud, and worth knowing before reading such a failure.
+// ⚠⚠ **IT IS THE ONLY GATE ON THIS PATH.** The compiler's `--debugstream` refusal is `runBuild`'s, reached
+// by a `build` command line and not by `compileToProduct`, which is what this harness calls. So a bug here
+// does not surface as a clean refusal naming the flag: it reaches the Std ops' own lowerings, which refuse
+// on a lane without the substrate, and a panic inside a worker costs that spec (see `SpecWorkerPool`'s
+// dead-worker recovery) rather than one named FAIL. Loud either way, and worth knowing before reading such
+// a failure.
 //
 // ⚠ **IT IS DERIVED, NOT SPELLED, AND THAT IS THE `targetCanCheckSectionPins` RULING APPLIED AGAIN.** The
 // alternative is a `<!-- targets: x64-windows -->` marker on every capture case, which is the same fact
@@ -1218,7 +1217,7 @@ function targetCanCaptureTrace(test SpecTest, effectiveTarget Target) returns bo
 		return true
 	end 'notATraceCase'
 
-	return effectiveTarget.cpu == CpuArch.x64 and effectiveTarget.os == Os.windows
+	return targetCanProduceDebugStream(effectiveTarget)
 end 'targetCanCaptureTrace'
 
 // The MARKER's own gate — what the SPEC AUTHOR SPELLED. A gated-out test is not run, not failed and
@@ -3360,8 +3359,8 @@ end 'buildRunCommand'
 // the monitor — EXCEPT when the monitor itself died, which is exactly why the exit code is checked FIRST.
 // See `checkTraceCapture`.
 //
-// ⚠ It is the HOST path only, and it has to be: the producer is x64-windows only, so a capture case on
-// any other target is skipped before it is ever compiled (`targetCanCaptureTrace`).
+// ⚠ It is the HOST path only, and it has to be: the monitor SPAWNS the binary, so a capture case on a
+// target this host cannot run is skipped before it is ever compiled (`targetCanCaptureTrace`).
 function buildMonitorRunCommand(modulePath FilePath, family TraceFamily, programArgs ProgramArgArray) returns RunCommand
 	var argv = StringArray.create()
 	argv.push(MonitorSubcommand)

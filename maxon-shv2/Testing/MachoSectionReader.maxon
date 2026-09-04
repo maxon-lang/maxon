@@ -27,6 +27,10 @@ export let MachoDataSegmentName = "__DATA"
 let MachoDataSectionName = "__data"
 let MachoConstSectionName = "__const"
 
+// Where shv2's Mach-O writer puts `CodeResult.symdata`. It sits in `__DATA` beside the other two, which
+// is what keeps ONE segment name right for all three kinds.
+let MachoSymtabSectionName = "__symtab"
+
 // How a `segment,section` pair is written when a message names one. Mach-O is the only format whose
 // section identity is a PAIR, so this punctuation exists nowhere else.
 export let MachoSectionPairSeparator = ","
@@ -39,6 +43,7 @@ export function machoSectionName(section LinkedSectionKind) returns String
 	return match section 'k'
 		globals gives MachoDataSectionName
 		readOnly gives MachoConstSectionName
+		internedNames gives MachoSymtabSectionName
 	end 'k'
 end 'machoSectionName'
 

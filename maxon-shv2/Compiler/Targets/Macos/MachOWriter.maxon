@@ -9,10 +9,11 @@
 // patchers this compiler already carries in BinaryHelpers.
 //
 // It handles what the CodeResult carries: __text, rdata (float constants + String
-// literal records + witness tables) in __const, top-level `var` globals in __data, GOT
-// imports, and the DYLD_CHAINED_PTR_64_OFFSET *rebases* a PIE image needs for EVERY
-// absolute pointer baked into rdata. `symdata`/`covdata` are empty and their arms panic —
-// the day one is emitted is a loud failure, not a wrong address.
+// literal records + witness tables) in __const, top-level `var` globals in __data, the
+// DebugStream interned-name blobs in __symtab, GOT imports, and the
+// DYLD_CHAINED_PTR_64_OFFSET *rebases* a PIE image needs for EVERY absolute pointer baked
+// into rdata. `covdata` is empty and its arm panics — the day one is emitted is a loud
+// failure, not a wrong address.
 //
 // ⭐ THE rdata REBASES (M2b for String buffers; P1.7a slice 2b-iv-C for function pointers).
 // Unlike PeWriter's fixed-base image (`patchStringBufferFixups` bakes `ImageBase + rdataRva
@@ -50,6 +51,16 @@ let MhPie = 0x200000
 // --- Load command types ---
 let LcSegment64 = 0x19
 let LcSymtab = 0x02
+
+// ⭐ **THE SECTION THE DebugStream INTERNED-NAME BLOBS RIDE.** A section rather than a load command
+// because nothing in the image reads it: `maxon monitor` opens the file and scans these bytes for each
+// blob's magic, so all it needs is a name and an extent. It lives in `__DATA` beside `__const` for the
+// reason `__const` does — this writer keeps one non-`__TEXT` home for everything that is not code.
+//
+// ⚠ **A `section_64` NAME, NOT `LC_SYMTAB`.** The two are unrelated: `LC_SYMTAB` carries this image's
+// debug symbols and is written below.
+let MachoSymdataSectionName = "__symtab"
+
 let LcDysymtab = 0x0B
 let LcCodeSignature = 0x1D
 let LcMain = 0x80000028
@@ -268,6 +279,10 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		connect gives "_connect"
 		send gives "_send"
 		recv gives "_recv"
+		// The named-shared-section band. Ordinary C names plus the Mach-O ABI's leading underscore.
+		shmOpen gives "_shm_open"
+		shmUnlink gives "_shm_unlink"
+		ftruncate gives "_ftruncate"
 	end 'sym'
 end 'machoImportSymbol'
 
@@ -769,18 +784,21 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let rdataSize = codeResult.rdata.count()
 	let preludeSize = codeResult.dataPrelude.count()
 
-	// symdata (reflection) and covdata (coverage) are not produced at M1. If either
-	// ever arrives, the section that backs it must be laid down here first — fail
-	// loudly rather than reference a section that does not exist.
-	if codeResult.symdata.count() > 0 'hasSymdata'
-		panic("writeMachO: symdata is non-empty but the arm64-macos writer emits no __symtab section yet — it arrives at the reflection milestone")
-	end 'hasSymdata'
+	// covdata (coverage) is not produced yet. If it ever arrives, the section that backs it must be laid
+	// down here first — fail loudly rather than reference a section that does not exist.
 	if codeResult.covDataSectionBytes.count() > 0 'hasCovdata'
 		panic("writeMachO: covdata is non-empty but the arm64-macos writer emits no coverage section yet")
 	end 'hasCovdata'
 
+	// ⭐ **THE INTERNED NAME BLOBS A `--debugstream` BUILD CARRIES** — `MXDS_TAGS` and `MXDS_STRS` end to
+	// end (`DebugStreamRuntime.installDebugStreamRuntime`). Nothing in the IMAGE reads them: they exist for
+	// `maxon monitor`, which finds each blob by scanning this section for its magic, so the section needs no
+	// relocation, no alignment beyond a word, and no fixed offset.
+	let symdataSize = codeResult.symdata.count()
+
 	let hasRdata = rdataSize > 0
 	let hasPrelude = preludeSize > 0
+	let hasSymdata = symdataSize > 0
 
 	// --- Section counts ---
 	// __TEXT: __text ONLY — rdata (__const) has moved to writable __DATA so dyld can PIE-rebase
@@ -794,6 +812,9 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	if hasPrelude 'countData'
 		dataSectionCount = dataSectionCount + 1
 	end 'countData'
+	if hasSymdata 'countSymtab'
+		dataSectionCount = dataSectionCount + 1
+	end 'countSymtab'
 
 	// --- Load-command sizes ---
 	let textCmdSize = SegmentCommandBaseSize + SectionHeaderSize * textSectionCount
@@ -806,7 +827,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let textSectionVmAddr = imageBase + (textSectionOffset as MachineWord)
 	let textSegmentFileSize = alignUp(textSectionOffset + codeSize, alignment: MachoPageSize)
 
-	// --- __DATA layout: __const (rebased rdata) | __got | __data (globals) ---
+	// --- __DATA layout: __const (rebased rdata) | __got | __data (globals) | __symtab (names) ---
 	// __const begins at the segment start, so a String record's rebased slot offset within the rdata
 	// image IS its offset within __DATA — the page_start math is then trivial. The rdata image is
 	// page-padded so __got starts on a fresh page, isolating the import-bind chain from the rebase
@@ -827,7 +848,14 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let dataSectionFileOff = dataSegmentFileOff + constGotFileSize
 	let dataSectionVmAddr = dataSegmentVmAddr + (constGotFileSize as MachineWord)  // globals begin after the got
 	let preludeAreaSize = alignUp(preludeSize, alignment: MachoPageSize) if hasPrelude else 0
-	let dataSegmentFileSize = constGotFileSize + preludeAreaSize
+	// ⚠ **LAST IN `__DATA`, ON ITS OWN PAGES, AND THAT PLACEMENT IS LOAD-BEARING.** The chained-fixups
+	// page_start table covers the rdata pages and the got page and stops
+	// (`buildMachoDataPageStarts`); a section beyond it carries no fixups and needs none, so appending here
+	// leaves every rebase offset above it untouched.
+	let symdataSectionFileOff = dataSectionFileOff + preludeAreaSize
+	let symdataSectionVmAddr = dataSectionVmAddr + (preludeAreaSize as MachineWord)
+	let symdataAreaSize = alignUp(symdataSize, alignment: MachoPageSize) if hasSymdata else 0
+	let dataSegmentFileSize = constGotFileSize + preludeAreaSize + symdataAreaSize
 
 	// --- __LINKEDIT layout ---
 	let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
@@ -906,7 +934,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MachoTextVmAddr, vmsize: textSegmentFileSize as MachineWord, fileoff: 0, filesize: textSegmentFileSize as MachineWord, maxprot: VmProtRead or VmProtExecute, initprot: VmProtRead or VmProtExecute, nsects: textSectionCount)
 	writeMachoSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVmAddr, size: codeSize, offset: textSectionOffset as MachineWord, alignLog2: 2, flags: SAttrPureInstructions or SAttrSomeInstructions or SRegular)
 
-	// __DATA — __const (rebased rdata) | __got | __data (globals).
+	// __DATA — __const (rebased rdata) | __got | __data (globals) | __symtab (interned names).
 	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVmAddr, vmsize: dataSegmentFileSize as MachineWord, fileoff: dataSegmentFileOff as MachineWord, filesize: dataSegmentFileSize as MachineWord, maxprot: VmProtRead or VmProtWrite, initprot: VmProtRead or VmProtWrite, nsects: dataSectionCount)
 	if hasRdata 'writeConstHeader'
 		writeMachoSectionHeader(macho, sectname: "__const", segname: "__DATA", addr: constSectionVmAddr, size: rdataSize, offset: dataSegmentFileOff as MachineWord, alignLog2: 3, flags: SRegular)
@@ -915,6 +943,9 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	if hasPrelude 'writeDataHeader'
 		writeMachoSectionHeader(macho, sectname: "__data", segname: "__DATA", addr: dataSectionVmAddr, size: preludeSize, offset: dataSectionFileOff as MachineWord, alignLog2: 3, flags: SRegular)
 	end 'writeDataHeader'
+	if hasSymdata 'writeSymtabHeader'
+		writeMachoSectionHeader(macho, sectname: MachoSymdataSectionName, segname: "__DATA", addr: symdataSectionVmAddr, size: symdataSize, offset: symdataSectionFileOff as MachineWord, alignLog2: 3, flags: SRegular)
+	end 'writeSymtabHeader'
 
 	// __LINKEDIT.
 	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVmAddr, vmsize: linkeditFileSize as MachineWord, fileoff: linkeditFileOff as MachineWord, filesize: linkeditFileSize as MachineWord, maxprot: VmProtRead, initprot: VmProtRead, nsects: 0)
@@ -995,7 +1026,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	macho.append(code)
 	padTo(macho, size: textSegmentFileSize)
 
-	// __DATA: __const (rebased rdata) | __got | __data (globals).
+	// __DATA: __const (rebased rdata) | __got | __data (globals) | __symtab (interned names).
 	if hasRdata 'writeConst'
 		padTo(macho, size: dataSegmentFileOff)
 		macho.append(codeResult.rdata)
@@ -1006,6 +1037,10 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 		padTo(macho, size: dataSectionFileOff)
 		macho.append(codeResult.dataPrelude)
 	end 'writeData'
+	if hasSymdata 'writeSymdata'
+		padTo(macho, size: symdataSectionFileOff)
+		macho.append(codeResult.symdata)
+	end 'writeSymdata'
 	padTo(macho, size: dataSegmentFileOff + dataSegmentFileSize)
 
 	// --- __LINKEDIT contents ---

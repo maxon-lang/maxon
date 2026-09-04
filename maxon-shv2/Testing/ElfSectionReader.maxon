@@ -34,6 +34,10 @@
 let ElfDataSectionName = ".data"
 let ElfRodataSectionName = ".rodata"
 
+// ⚠ NAMED, NOT YET WRITTEN: `ElfWriter` refuses a non-empty `CodeResult.symdata` outright, so a read of
+// this section on a Linux lane reports a missing section rather than a wrong one.
+let ElfSymdataSectionName = ".symdata"
+
 // The ELF spelling of a `LinkedSectionKind` — this format's half of the one name table
 // `LinkedSection.linkedSectionName` reads. Exhaustive, so a third section cannot be added to the
 // kind without an ELF name for it.
@@ -41,6 +45,7 @@ export function elfSectionName(section LinkedSectionKind) returns String
 	return match section 'k'
 		globals gives ElfDataSectionName
 		readOnly gives ElfRodataSectionName
+		internedNames gives ElfSymdataSectionName
 	end 'k'
 end 'elfSectionName'
 

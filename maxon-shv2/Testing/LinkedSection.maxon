@@ -23,9 +23,16 @@
 // It is a KIND rather than a section NAME because the name is a per-FORMAT fact: the read-only
 // section is `.rdata` in a PE, `.rodata` in an ELF and `__DATA,__const` in a Mach-O image, and a
 // spec author naming one of those would be writing a target into a portable claim.
+//
+// ⭐ **THE THIRD KIND IS NOT PINNABLE, AND IT IS HERE FOR THE SAME REASON THE OTHER TWO ARE.** No fence
+// mints `internedNames` — `maxon monitor` reads it, off a binary it is about to spawn, to turn a trace's
+// 16-bit tag and name indices back into names. It joins the enum rather than growing a second
+// three-format dispatch beside this one, which would be free to disagree with it about how a Mach-O
+// section is opened.
 export enum LinkedSectionKind
 	globals
 	readOnly
+	internedNames
 end 'LinkedSectionKind'
 
 // A read failure from whichever executable format the target produces, joined so the one section-gate
@@ -112,6 +119,7 @@ function linkedSectionLabel(section LinkedSectionKind) returns String
 	return match section 'k'
 		globals gives "globals"
 		readOnly gives "read-only"
+		internedNames gives "interned-name"
 	end 'k'
 end 'linkedSectionLabel'
 

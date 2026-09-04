@@ -121,7 +121,7 @@ end 'arm64ThreadPointerSource'
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -146,6 +146,14 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	if captureEnvp 'envp'
 		emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
 	end 'envp'
+
+	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
+	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would
+	// silently drop exactly the allocations a program makes before `main`. It takes no argument and returns
+	// nothing, so there is nothing to move around it — `__module_init`'s shape.
+	if debugStream 'debugStreamAttach'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: DsInitName)
+	end 'debugStreamAttach'
 
 	// Fill every EAGER managed global's `.data` slot BEFORE user code (P1.7 slice 2a) — a `static` member's
 	// is filled on first access instead (see `ModuleInit`). `__module_init` takes
@@ -187,6 +195,22 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	if leakCheck 'leakGate'
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: MmLeakCheckName)
 	end 'leakGate'
+
+	// ⚠ AFTER the leak gate, and it must be: `__ds_shutdown` clears the segment's producer-alive flag, and
+	// the leak check is the last thing that can still free a box — so the trace's final events happen above
+	// this line.
+	//
+	// ⛔⛔ **AND THE EXIT CODE MUST BE PARKED ACROSS IT, WHICH IS NOT TRUE OF THE TWO GATES ABOVE.**
+	// `__mm_leak_check` and `__gt_drain_at_exit` are shaped to take the code and hand it back, so it flows
+	// through them in x0 with no move. `__ds_shutdown` is a VOID function, and x0 is exactly the register
+	// AAPCS64 lets one return in — so a traced program's exit code is whatever the detach happened to leave
+	// there. MEASURED: `mm-trace/string-builder-append-allocates-no-record-per-append` answered 0 where its
+	// spec pins 4. x19 is callee-saved, so the compiled detach restores it, and `mrt_start` owes it to nobody.
+	if debugStream 'debugStreamDetach'
+		arm64EmitMovGpr(code, rd: arm64RuntimeReg(Arm64Register.x19), rn: arm64RuntimeReg(Arm64Register.x0))
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: DsShutdownName)
+		arm64EmitMovGpr(code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x19))
+	end 'debugStreamDetach'
 
 	// Terminate with the ExitCode already in x0. macOS records the `_exit` GOT slot as a Relocation
 	// the Mach-O writer patches (the twin of x64's `iatCall` → ExitProcess); Linux needs no

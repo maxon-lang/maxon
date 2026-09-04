@@ -307,9 +307,9 @@ end 'refuseDuplicateChunkName'
 function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, entryFunction ByteArray)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, entryFunction: entryFunction)
-		// ⛔ The Linux stub takes no `debugStream`: the producer's three host primitives are x64-windows
-		// only and `--debugstream` is REFUSED at the command line on every other target (see
-		// `Main.debugStreamSupports`), so this arm can never be reached with the flag on.
+		// ⛔ The Linux stub takes no `debugStream`: no Linux lane provides the named-section or uptime-clock
+		// facility the producer needs, so `--debugstream` is REFUSED at the command line there (see
+		// `TargetFacilities.targetCanProduceDebugStream`) and this arm cannot be reached with the flag on.
 		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, entryFunction: entryFunction)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")

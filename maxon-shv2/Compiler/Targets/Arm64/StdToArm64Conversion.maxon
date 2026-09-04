@@ -620,6 +620,10 @@ type StdToArm64Lowering
 			osWriteStderr gives 0
 			// A frame address computes an address; it calls nothing and so passes no outgoing argument.
 			stackRecordAddr gives 0
+			// The DebugStream band lowers here through chunks, and still reserves nothing: each hands its chunk at
+			// most two arguments, inside AAPCS64's x0..x7. The variadic `shm_open` DOES need a stack argument,
+			// and the region for it belongs to the chunk's own frame (`Arm64RuntimeAsm.beginFunction`), not to
+			// the frame of whatever called it.
 			osOpenNamedSegment to osTickCountMs gives 0
 			// The rest of the appended band, and it now answers 0 for TWO different reasons rather than one.
 			// The four attached-subprocess host primitives and the `ws2_32` socket band are x64-windows only and
@@ -661,9 +665,9 @@ type StdToArm64Lowering
 			// chunk ONE argument, inside AAPCS64's x0..x7, so nothing overflows onto the outgoing-argument
 			// stack. The Linux route is refused below and marshals nothing at all.
 			osHandleFileType gives 0
-			// The named-section consumer pair is x64-windows only and never reaches an arm64 frame, so it
-			// reserves nothing exactly as every other refused op does.
-			osCreateNamedSegment to osUnmapNamedSegment gives 0
+			// The named-section consumer pair reserves nothing for the producer band's reason one arm up: two
+			// arguments each, and the variadic call's stack word is the chunk's own.
+			osCreateNamedSegment to osUnpublishNamedSegment gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -950,16 +954,28 @@ type StdToArm64Lowering
 			// `arm64LeaGlobal`. arm64 has no per-function slot base (`Arm64Backend.arm64SlotDisplacement`), so
 			// the encoder resolves it from the slot alone, exactly as it does a spill.
 			stackRecordAddr(resultId, slot) then self.emit(dstRef, op: TargetOp.leaRegSlot(TargetVReg.virtual(resultId), slot: slot))
-			// ⛔ O3: the DebugStream producer is x64-windows only and `--debugstream` is REFUSED at the
-			// command line on every other target (`Main.debugStreamSupports`), so this is a backstop for a
-			// compiler bug that got one past that gate, never the user-facing rejection.
-			osOpenNamedSegment to osMapNamedSegment then panic("lowerStdToArm64: the DebugStream host primitives are x64-windows only — `--debugstream` is refused at the command line on every other target")
+			// ⭐⭐ **THE PRODUCER'S ATTACH — `getenv` then `shm_open`, in ONE chunk, and the SCRATCH BUFFER THE OP
+			// CARRIES IS DEAD HERE.** Win32 fuses `GetEnvironmentVariableA` with `OpenFileMappingA` because the
+			// first FILLS a buffer the second reads; `getenv` answers a pointer into the environment block that
+			// `shm_open` takes directly, so the buffer and its length have no reader on this route.
+			osOpenNamedSegment(resultId, namePtrId, _, _) then self.lowerDarwinShm(resultId, args: argsOf(namePtrId), chunk: DarwinShmOpenName, dstRef: dstRef)
+			// The mapping takes the descriptor whichever call minted it, exactly as `MapViewOfFile` takes a
+			// section handle from either the open or the create.
+			osMapNamedSegment(resultId, handleId, sizeId) then self.lowerDarwinShm(resultId, args: twoArgs(handleId, second: sizeId), chunk: DarwinShmMapName, dstRef: dstRef)
 			// MAC8: `GetTickCount64` — the same `CLOCK_UPTIME_RAW` the scheduler's own clock reads, in
 			// milliseconds. It sits in the DebugStream band by declaration order and belongs to the subprocess
 			// family, whose deadlines are the only thing that measures with it.
 			osTickCountMs(resultId) then self.lowerHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostTickMsName, dstRef: dstRef)
-			// ⛔ The named-section CONSUMER pair is x64-windows only on the same terms as the producer band above.
-			osCreateNamedSegment to osUnmapNamedSegment then panic("lowerStdToArm64: the named-section CONSUMER primitives are x64-windows only — `stdlib/SharedMemory.maxon` is refused at the call's own span on every other lane (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
+			// The consumer's half. `shm_open` only NAMES, so the chunk sizes what it opened with `ftruncate` and
+			// undoes the name if that fails — which is why a create is a chunk here and one call on Win32.
+			osCreateNamedSegment(resultId, namePtrId, sizeId) then self.lowerDarwinShm(resultId, args: twoArgs(namePtrId, second: sizeId), chunk: DarwinShmCreateName, dstRef: dstRef)
+			// ⚠ The LENGTH is read here and nowhere else in the tree: `munmap` takes one where `UnmapViewOfFile`
+			// derives it from the base (`StdOp.osUnmapNamedSegment`).
+			osUnmapNamedSegment(baseId, sizeId) then self.lowerDarwinShmVoid(dstRef, chunk: DarwinShmUnmapName, args: twoArgs(baseId, second: sizeId))
+			// ⭐ **THE STEP WIN32 GETS FOR FREE.** A POSIX shared object outlives every descriptor and every
+			// mapping until its NAME is removed, so the consumer's teardown ends here. One argument, one import,
+			// no chunk: there is nothing to test and no answer to fold.
+			osUnpublishNamedSegment(namePtrId) then self.lowerOsUnpublishNamedSegment(namePtrId, dstRef: dstRef)
 			// ⛔ The four attached-subprocess host primitives are x64-windows only on the same terms as the
 			// spawn/wait/pipe band above, and `SemanticCheck.calleeNeedsWin32Substrate` refuses a program that
 			// reaches one at its own source span (E3104) — so this is the backstop for a compiler bug that got
@@ -1129,7 +1145,7 @@ type StdToArm64Lowering
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToArm64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or storeRelease then panic("lowerStdToArm64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
 			osHandleFileType then panic("lowerStdToArm64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
-			osCreateNamedSegment to osUnmapNamedSegment then panic("lowerStdToArm64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+			osCreateNamedSegment to osUnpublishNamedSegment then panic("lowerStdToArm64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2241,6 +2257,41 @@ type StdToArm64Lowering
 		self.emitHostChunkCall(dstRef, chunk: chunk, args: args)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerHostChunkValue'
+
+	// ⭐⭐ **THE NAMED-SHARED-SECTION BAND IS THE ONE FAMILY WHOSE CHUNKS ONLY ONE arm64 LANE HAS**, so the
+	// route is asked here rather than at each of the four arms. `shm_open` is a libSystem call on Darwin and a
+	// libc FUNCTION on Linux — it opens a path under `/dev/shm` itself — so a libc-less static image has to
+	// re-answer the question rather than re-spell the call, and until it does the refusal must be loud.
+	//
+	// The Linux arm is a backstop, not the user-facing rejection: `TargetFacilities` refuses a `__shm_` callee
+	// at its own source span (E3104) and `targetCanProduceDebugStream` refuses `--debugstream` at the command
+	// line, both before anything is lowered.
+	function lowerDarwinShm(resultId ValueId, args ValueIdArray, chunk ByteArray, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerHostChunkValue(resultId, args: args, chunk: chunk, dstRef: dstRef)
+			syscall then panic("lowerStdToArm64: the named-section primitives have no arm64-linux substrate — `shm_open` is a libc function there, which a libc-less static image cannot call; `TargetFacilities.sharedMemory` and `targetCanProduceDebugStream` both refuse this lane before anything is lowered")
+		end 'route'
+	end 'lowerDarwinShm'
+
+	// The same route for the one member of the band that answers nothing.
+	function lowerDarwinShmVoid(dstRef BlockRef, chunk ByteArray, args ValueIdArray)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emitHostChunkCall(dstRef, chunk: chunk, args: args)
+			syscall then panic("lowerStdToArm64: the named-section unmap has no arm64-linux substrate — see `lowerDarwinShm`, which states the whole band's refusal")
+		end 'route'
+	end 'lowerDarwinShmVoid'
+
+	// `shm_unlink(namePtr)` — a bare import call. The status is discarded for `mrt_host_file_close`'s reason:
+	// a name that could not be removed leaves a caller nothing to do.
+	function lowerOsUnpublishNamedSegment(namePtrId ValueId, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then break 'route'
+			syscall then panic("lowerStdToArm64: the named-section unpublish has no arm64-linux substrate — see `lowerDarwinShm`, which states the whole band's refusal")
+		end 'route'
+
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(namePtrId)))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.shmUnlink)))
+	end 'lowerOsUnpublishNamedSegment'
 
 	// ⭐⭐ **THE OPEN IS INLINE ON macOS AND A CHUNK ON LINUX, AND THE SPLIT IS NOT A STYLE CHOICE.**
 	//

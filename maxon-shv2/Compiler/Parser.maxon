@@ -6108,12 +6108,16 @@ let SubprocessSpawnEnvSlot = 3
 // working directory and the environment, so the block lands past the flags rather than before them.
 let SubprocessStreamingSpawnEnvSlot = 4
 
-// ⭐ **THE TWO ARGUMENT SHAPES THE SIX SHARED-MEMORY INTRINSICS FALL INTO.** Stated here for
+// ⭐ **THE THREE ARGUMENT SHAPES THE SIX SHARED-MEMORY INTRINSICS FALL INTO.** Stated here for
 // `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's ordinary arity check
 // to read. They are the shared-memory family's own numbers rather than the subprocess band's above: the
 // two contracts are independent, and sharing a constant would let a change to one silently move the other.
 let SharedMemoryTwoArgArity = 2 as ParamCount
 let SharedMemoryThreeArgArity = 3 as ParamCount
+
+// The teardown takes the handle, the view base, the mapping's length and the published name — three
+// steps on a POSIX lane where Win32 needs two (`SharedMemoryRuntime.buildSharedMemoryClose`).
+let SharedMemoryFourArgArity = 4 as ParamCount
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
@@ -76724,7 +76728,7 @@ export type Parser
 			end 'sharedMemoryWriteWord'
 
 			if callee.equals(BuiltinsSharedMemoryCloseName) 'sharedMemoryClose'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCloseName, arity: SharedMemoryTwoArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCloseName, arity: SharedMemoryFourArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
 			end 'sharedMemoryClose'
 
 			if callee.equals(BuiltinsSharedMemoryCopyOutName) 'sharedMemoryCopyOut'

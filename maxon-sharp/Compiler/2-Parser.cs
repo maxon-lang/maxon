@@ -28358,7 +28358,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// <summary>
   /// Evaluate a conditional compilation condition with boolean operators.
-  /// Supports: os(X), arch(X), testing(X), `not`, `and`, `or`.
+  /// Supports: os(X), arch(X), testing(X), `not`, `and`, `or`, and parentheses.
   /// Precedence (lowest→highest): or → and → not → atom.
   /// </summary>
   private bool EvaluateConditionalCondition() {
@@ -28393,6 +28393,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private bool EvaluateConditionalAtom() {
+    // A parenthesized subcondition, which is the only way to bind an `or` tighter than the
+    // `and` around it — `compiler(shv2) and (os(Windows) or os(Macos))`. Accepted here because
+    // both parsers must accept the same conditional-compilation language, and the other one does.
+    if (Check(TokenType.LeftParen)) {
+      Advance();
+      var inner = EvaluateConditionalCondition();
+      Expect(TokenType.RightParen);
+      return inner;
+    }
+
     var funcToken = Expect(TokenType.Identifier);
     var funcName = funcToken.Value;
     Expect(TokenType.LeftParen);

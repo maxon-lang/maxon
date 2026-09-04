@@ -503,6 +503,17 @@ export type RuntimeUsage
 	// the byte copy under it, all one tier down where this Maxon-module scan cannot see them.
 	export var usesSharedMemory as bool
 
+	// ⭐⭐ **DOES THIS BUILD CARRY THE DebugStream PRODUCER?** Not a finding of the scan — no walk of a Maxon
+	// module can see it, because the producer is `--debugstream` plus a heap and both are decided after the
+	// walk — but a DECLARATION `Compiler.compileToCodeResult` makes at the one moment
+	// `buildCarriesDebugStream` is answered.
+	//
+	// ⚠ **IT EXISTS BECAUSE A BACKEND SEES ONLY THIS RECORD.** The producer's own body reaches the uptime
+	// clock, the ring lock and the segment attach from a SYNTHESIZED Std function, so a target whose host
+	// surface is emitted per-family (`Arm64DarwinRuntime`) has no other way to know it owes those chunks —
+	// and the symptom of not knowing is a `bl` to a symbol nothing laid out.
+	export var usesDebugStream as bool
+
 	// ⭐⭐ **DOES A FILESYSTEM OR SOCKET ENTRY POINT PARK BEFORE ITS KERNEL CALL ON THIS TARGET?** It is an
 	// INPUT to the scan rather than one of its findings — the target decides it, not the program — and it is
 	// carried on this record because the arms that read it are three levels down inside `recordCallUsage`,
@@ -516,7 +527,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesDebugStream: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 

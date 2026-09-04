@@ -12,20 +12,24 @@
 // op serve the consumer — see `StdOp.osCreateNamedSegment`.
 //
 // ⭐ **THE MAPPING IS `osMapNamedSegment`, REUSED UNCHANGED.** It takes a HANDLE and does not care which call
-// minted it, so a created section maps through the same op an opened one does. Only the CREATE and the UNMAP
-// are new.
+// minted it, so a created section maps through the same op an opened one does.
 //
-// ⚠ **x64-WINDOWS ONLY, and the gate is `TargetFacilities`'.** A call site on any other lane is refused with
-// the existing `E3104 targetUnsupportedConstruct`, matched on the `__shm_` PREFIX, so an entry point added
-// here later is gated by construction rather than by memory. The arm64 and wasm lowerings of the two new ops
-// panic as a backstop for a compiler bug that got one past that refusal, never as the user-facing rejection.
+// ⚠ **THE LANES THAT SERVE THIS ARE `TargetFacilities.sharedMemory`'s, and a call site on any other is
+// refused** with the existing `E3104 targetUnsupportedConstruct`, matched on the `__shm_` PREFIX — so an
+// entry point added here later is gated by construction rather than by memory. The lowerings of the band's
+// ops panic on a lane without the substrate, as a backstop for a compiler bug that got one past that
+// refusal, never as the user-facing rejection.
+//
+// ⚠ **A POSIX TEARDOWN HAS ONE STEP WIN32 DOES NOT**, and it is the reason `__shm_close` takes the NAME:
+// a Win32 section dies with its last handle and view, while a POSIX object outlives both until
+// `shm_unlink` withdraws its name. See `StdOp.osUnpublishNamedSegment`.
 
 // The `__shm_` prefix that identifies EVERY shared-memory runtime entry point — the one test
 // `scanRuntimeUsage` reads to set `usesSharedMemory`, and the one `TargetFacilities` reads for E3104.
 let SharedMemoryRuntimePrefix = b"__shm_"
 
-// ⭐ **THE SIX ENTRY POINTS.** Two host calls (create, unmap-and-close), one mapping, and three accessors over
-// the mapped bytes. The accessors are entries rather than surface syntax because Maxon has no raw
+// ⭐ **THE SIX ENTRY POINTS.** Two host calls (create, and the whole teardown), one mapping, and three
+// accessors over the mapped bytes. The accessors are entries rather than surface syntax because Maxon has no raw
 // dereference: `readWord` is one `loadIndirect` at an address the language cannot otherwise name.
 export let SharedMemoryCreateName = b"__shm_create"
 export let SharedMemoryMapName = b"__shm_map"
@@ -149,25 +153,34 @@ function buildSharedMemoryCopyOut(module StdModule)
 	module.functions.push(func)
 end 'buildSharedMemoryCopyOut'
 
-// ⭐ `__shm_close(handle, base)` — the whole teardown, in the order the OS requires.
+// ⭐ `__shm_close(handle, base, bytes)` — the whole teardown, in the order the OS requires.
 //
 // ⛔ **THE UNMAP COMES FIRST AND BOTH CALLS ARE NEEDED.** A section object stays alive while any view of it is
 // mapped, so closing the handle alone keeps the section, its backing and its address range for the life of
 // the process — silently, because nothing in the language counts an OS mapping.
 //
-// A zero handle or a zero base reaches `CloseHandle(0)` / `UnmapViewOfFile(0)`, which are no-ops — so a
-// segment whose create or map failed needs no kind test on this path.
+// ⚠ **THE LENGTH AND THE NAME TRAVEL FOR THE SAME REASON: A POSIX TEARDOWN NEEDS THREE STEPS WHERE WIN32
+// NEEDS TWO.** `UnmapViewOfFile` derives the extent from the base and `CloseHandle` takes the section's name
+// with it; `munmap` is given a length, and a POSIX object OUTLIVES every descriptor and every mapping until
+// `shm_unlink` removes its name. The segment is the only party that remembers either
+// (`stdlib/SharedMemory.maxon`), and both operands are dead in the Win32 lowerings.
+//
+// A zero handle or a zero base is a no-op at both ends — so a segment whose create or map failed needs no
+// kind test on this path.
 function buildSharedMemoryClose(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryCloseName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SharedMemoryCloseName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
 
 	var entry = module.addBlock(func, label: b"entry")
 
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: 4)
 	let handle = 0 as ValueId
 	let base = 1 as ValueId
+	let bytes = 2 as ValueId
+	let namePtr = 3 as ValueId
 
-	module.appendOp(entry, op: StdOp.osUnmapNamedSegment(base))
+	module.appendOp(entry, op: StdOp.osUnmapNamedSegment(base, sizeId: bytes))
 	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
+	module.appendOp(entry, op: StdOp.osUnpublishNamedSegment(namePtr))
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)

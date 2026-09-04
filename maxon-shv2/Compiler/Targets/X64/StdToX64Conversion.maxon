@@ -1036,9 +1036,9 @@ type StdToX64Lowering
 			// ⚠⚠ **`CreateFileMappingA` TAKES SIX, SO ITS LAST TWO ARE REAL OUTGOING STACK ARGUMENTS** and the
 			// frame must reserve both slots, exactly as `osMapNamedSegment` reserves its one — reserving nothing
 			// puts a SPILL SLOT at the same displacement and the store lands on a spilled value.
-			// `UnmapViewOfFile` takes one and is register-only.
+			// `UnmapViewOfFile` takes one and is register-only, and the unpublish emits nothing at all.
 			osCreateNamedSegment gives win64OutgoingArgBytes(CreateFileMappingStackArgWords)
-			osUnmapNamedSegment gives 0
+			osUnmapNamedSegment or osUnpublishNamedSegment gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1221,7 +1221,13 @@ type StdToX64Lowering
 			osEnvBlockFree(blockPtrId) then self.lowerOsEnvBlockFree(blockPtrId, dstBlock: dstBlock)
 			osHandleFileType(resultId, handleId) then self.lowerOsHandleFileType(resultId, handleId: handleId, dstBlock: dstBlock)
 			osCreateNamedSegment(resultId, namePtrId, sizeId) then self.lowerOsCreateNamedSegment(resultId, namePtrId: namePtrId, sizeId: sizeId, dstBlock: dstBlock)
-			osUnmapNamedSegment(baseId) then self.lowerOsUnmapNamedSegment(baseId, dstBlock: dstBlock)
+			// The LENGTH the op carries is `munmap`'s and has no place in this call: `UnmapViewOfFile` derives the
+			// extent from the base alone (`StdOp.osUnmapNamedSegment`).
+			osUnmapNamedSegment(baseId, _) then self.lowerOsUnmapNamedSegment(baseId, dstBlock: dstBlock)
+			// ⭐ **EMITS NOTHING, AND THE REASON IS THAT WIN32 REFCOUNTS THE NAME.** A section object dies with
+			// its last handle and view, so the name is already gone by the time this op is reached — there is no
+			// call to make. A stated no-op, the shape `osHandleSetInherit` has on the arm64 lane.
+			osUnpublishNamedSegment then break 'lower'
 			osProcessTerminate(handleId, exitCodeId) then self.lowerOsProcessTerminate(handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1400,7 +1406,7 @@ type StdToX64Lowering
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToX64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or storeRelease then panic("lowerStdToX64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
 			osHandleFileType then panic("lowerStdToX64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
-			osCreateNamedSegment to osUnmapNamedSegment then panic("lowerStdToX64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+			osCreateNamedSegment to osUnpublishNamedSegment then panic("lowerStdToX64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -4476,7 +4482,7 @@ type StdToX64Lowering
 			osEnvBlock to osEnvBlockFree gives false
 			loadAcquire or storeRelease gives false
 			osHandleFileType gives false
-			osCreateNamedSegment to osUnmapNamedSegment gives false
+			osCreateNamedSegment to osUnpublishNamedSegment gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -4638,7 +4644,7 @@ type StdToX64Lowering
 			osEnvBlock to osEnvBlockFree panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an environment-block read or release, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			loadAcquire or storeRelease panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an ordered load or store, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osHandleFileType panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHandleFileType`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			osCreateNamedSegment to osUnmapNamedSegment panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a named-section create or unmap, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osCreateNamedSegment to osUnpublishNamedSegment panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a named-section create or unmap, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

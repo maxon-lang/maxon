@@ -725,7 +725,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osEnvBlock to osEnvBlockFree then break 'k'
 		loadAcquire or storeRelease then break 'k'
 		osHandleFileType then break 'k'
-		osCreateNamedSegment to osUnmapNamedSegment then break 'k'
+		osCreateNamedSegment to osUnpublishNamedSegment then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1353,7 +1353,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osFileOpenWriteExecutable then break 'def'
 		osEnvBlock to osEnvBlockFree then break 'def'
 		osHandleFileType then break 'def'
-		osCreateNamedSegment to osUnmapNamedSegment then break 'def'
+		osCreateNamedSegment to osUnpublishNamedSegment then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1584,7 +1584,7 @@ type WasmFuncEmitter
 			osEnvBlock to osEnvBlockFree then panic("emitStraightLineTerminator: an environment-block read or release is a body op, never a terminator")
 			loadAcquire or storeRelease then panic("emitStraightLineTerminator: an ordered load or store is a body op, never a terminator")
 			osHandleFileType then panic("emitStraightLineTerminator: `osHandleFileType` is a body op, never a terminator")
-			osCreateNamedSegment to osUnmapNamedSegment then panic("emitStraightLineTerminator: a named-section create or unmap is a body op, never a terminator")
+			osCreateNamedSegment to osUnpublishNamedSegment then panic("emitStraightLineTerminator: a named-section create or unmap is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1679,7 +1679,7 @@ type WasmFuncEmitter
 			osEnvBlock to osEnvBlockFree then panic("emitDispatcherTerminator: an environment-block read or release is a body op, never a terminator")
 			loadAcquire or storeRelease then panic("emitDispatcherTerminator: an ordered load or store is a body op, never a terminator")
 			osHandleFileType then panic("emitDispatcherTerminator: `osHandleFileType` is a body op, never a terminator")
-			osCreateNamedSegment to osUnmapNamedSegment then panic("emitDispatcherTerminator: a named-section create or unmap is a body op, never a terminator")
+			osCreateNamedSegment to osUnpublishNamedSegment then panic("emitDispatcherTerminator: a named-section create or unmap is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1867,7 +1867,7 @@ type WasmFuncEmitter
 			// `HostFacility.terminalDetection` and gives this lane a `__tty_stdout_wants_color` body that answers
 			// `false` without asking, so the op is never emitted on it and there is nothing for a gate to reject.
 			osHandleFileType then panic("emitBodyOp: `osHandleFileType` has no WASI spelling and is never emitted on this lane — `installTerminalRuntime` reads `HostFacility.terminalDetection` and builds the fallback `__tty_stdout_wants_color` body (answering `false`) instead of asking. Reaching here is a compiler bug, not a program this lane should have rejected")
-			osCreateNamedSegment to osUnmapNamedSegment then panic("emitBodyOp: the named-section CONSUMER primitives are x64-windows only — `stdlib/SharedMemory.maxon` is refused at the call's own span on every other lane (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
+			osCreateNamedSegment to osUnpublishNamedSegment then panic("emitBodyOp: the named-section CONSUMER primitives are x64-windows only — `stdlib/SharedMemory.maxon` is refused at the call's own span on every other lane (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3239,7 +3239,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osEnvBlock to osEnvBlockFree then panic("decideDispatcher: an environment-block read or release is a body op, never a terminator")
 		loadAcquire or storeRelease then panic("decideDispatcher: an ordered load or store is a body op, never a terminator")
 		osHandleFileType then panic("decideDispatcher: `osHandleFileType` is a body op, never a terminator")
-		osCreateNamedSegment to osUnmapNamedSegment then panic("decideDispatcher: a named-section create or unmap is a body op, never a terminator")
+		osCreateNamedSegment to osUnpublishNamedSegment then panic("decideDispatcher: a named-section create or unmap is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

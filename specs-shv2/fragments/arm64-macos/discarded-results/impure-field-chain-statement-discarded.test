@@ -1,0 +1,34 @@
+// Test: impure-field-chain-statement-discarded
+typealias Integer = int(i64.min to i64.max)
+
+var counter = 0 as Integer
+
+type Inner
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump() returns Integer
+		counter = counter + 1
+		return counter
+	end 'bump'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create()}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var o = Outer.create()
+	o.inner.bump()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3065: <fragment>:29:10: result of 'Inner.bump' is not used (use '_ = expr' to discard)

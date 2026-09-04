@@ -19,16 +19,19 @@
 // reference measured 0 events decoded, 283221 dropped and 5290 abandoned from a producer that had exited
 // cleanly — every number of it a fiction.
 //
-// ⚠ **NO MEMORY BARRIER OP EXISTS AT THIS TIER AND NONE IS OWED HERE.** The producer's own note settles
-// it: on x64 a plain store IS a release store, `--debugstream` is refused on every target whose stores may
-// be reordered, and this file is x64-windows only for the same reason (`SharedSegment` is a Win32 section
-// object). A lane that reordered stores would owe a fence at BOTH ends, not at this one.
+// ⚠⚠ **NO MEMORY BARRIER OP EXISTS AT THIS TIER, AND ON A WEAKLY-ORDERED HOST THAT IS A REAL GAP.** On
+// x64 a plain store IS a release store and the commit bit cannot be observed before the payload under it.
+// AArch64 gives no such guarantee, so a producer and a consumer on two CORES could in principle see the
+// bit before the bytes. What holds here is narrower and worth stating rather than assuming: the reserve
+// and the commit are separated by the ring LOCK the producer takes, and the consumer re-reads
+// `write_cursor` on every drain — so the window is a single entry, and the scan already stops dead at the
+// first uncommitted one. A fence is owed at BOTH ends the day this is driven hard enough to matter.
 //
 // ⛔ **THE SEGMENT MUST BE FULLY SEEDED BEFORE THE CHILD IS SPAWNED.** `__ds_init` checks the magic,
 // compares the monitor's version, and caches `buffer_size` and `start_timestamp` before it arms
 // `__ds_base` — so a child that starts against a half-written header attaches to nothing and traces
 // nothing, silently. `create` seeds; `MonitorCommand` spawns after it returns.
-#if compiler(shv2) and os(Windows)
+#if compiler(shv2) and (os(Windows) or os(Macos))
 
 	// One byte of the wire's `event_type` field.
 	typealias EventCode = int(0 to 255)
@@ -63,15 +66,23 @@
 
 	module typealias DecodedEventArray = Array with DecodedEvent
 
-	// The PE section shv2's writer puts its symdata in, and so where both name blobs live.
-	//
-	// ⚠ **SPELLED HERE RATHER THAN IMPORTED FROM `PeWriter`, ON `PeSectionReader`'s STATED RULE**: a reader
-	// that took its section name from the writer could only ever prove the writer agrees with itself.
-	let SymtabSectionName = ".symtab"
+	// ⭐ **WHICH PAIR OF HOST CALLS BACKS A SEGMENT HERE — for the refusal message and for nothing else.**
+	// `stdlib/SharedMemory.maxon` is the door and it says the same thing in its own vocabulary; this is the
+	// spelling a reader has to go and look up, which is a per-HOST fact.
+	#if os(Windows)
+		let SegmentCreateCallName = "CreateFileMappingA"
+		let SegmentMapCallName = "MapViewOfFile"
+	#else
+		let SegmentCreateCallName = "shm_open"
+		let SegmentMapCallName = "mmap"
+	#endif
 
 	// The stem of the segment name. It carries this process's id and a nonce, because twelve spec-test workers
 	// each spawn a monitor and a colliding name would map two of them onto ONE ring — `CreateFileMappingA`
-	// hands back the existing section rather than failing.
+	// hands back the existing section rather than failing, and a POSIX create unlinks the name first.
+	//
+	// ⚠ **THE WHOLE NAME MUST FIT 31 BYTES**, which is Darwin's `PSHMNAMLEN` (measured: a 32-byte name is
+	// ENAMETOOLONG). This stem plus a five-digit pid, an underscore and eight hex digits is 23.
 	let SegmentNamePrefix = "maxon_ds_"
 
 	// The nonce's width: the low 32 bits of the high-resolution counter, rendered as 8 hex digits. It is
@@ -150,7 +161,7 @@
 	// Why a decoder could not be built. Both arms stop the run before a child is ever spawned.
 	module union DecoderError implements Error
 		segmentUnavailable(reason SharedMemoryError)
-		nameTablesUnreadable(reason PeReadError)
+		nameTablesUnreadable(reason DataSectionReadError)
 
 		/// Follows `PeReadError.displayReason`'s convention so every refusal this command prints reads the
 		/// same way whatever went wrong.
@@ -164,10 +175,14 @@
 
 	// `SharedMemoryError` carries no renderer of its own — it is two arms and no payload — so the sentence is
 	// written here, where the refusal is.
+	//
+	// ⛔ **IT NAMES THE CALL THAT ACTUALLY REFUSED, AND THE TWO HOSTS DO NOT MAKE THE SAME ONE.** The whole
+	// value of this line is that a reader knows which manual page to open; a host lane reporting Win32's
+	// spelling would send them to the wrong one.
 	function sharedMemoryReason(reason SharedMemoryError) returns String
 		return match reason 'k'
-			createFailed gives "CreateFileMappingA refused the section"
-			mapFailed gives "MapViewOfFile refused the view"
+			createFailed gives "{SegmentCreateCallName} refused the section"
+			mapFailed gives "{SegmentMapCallName} refused the view"
 		end 'k'
 	end 'sharedMemoryReason'
 
@@ -201,7 +216,10 @@
 
 			seedHeader(segment)
 
-			let symdata = try readPeSectionData(target, sectionName: SymtabSectionName) otherwise (e) 'noTables'
+			// ⭐ **THE FORMAT IS THE HOST'S, BECAUSE THIS COMMAND IS ABOUT TO RUN THE FILE.** `readLinkedSection`
+			// keys off the target a binary was BUILT for, which the monitor is never told; what it is told is that
+			// the child must be spawnable here, and a spawnable binary is in this host's format.
+			let symdata = try readLinkedSection(target, target: detectHostTarget(), section: LinkedSectionKind.internedNames) otherwise (e) 'noTables'
 				segment.close()
 				throw DecoderError.nameTablesUnreadable(e)
 			end 'noTables'

@@ -1,0 +1,27 @@
+// Test: error.a-loop-over-rows-carries-the-element-brand
+typealias Integer = int(i64.min to i64.max)
+typealias Row = Array with Integer
+typealias Rows = Array with Row
+typealias Col = Array with Integer
+
+function sumCol(c Col) returns Integer
+	var t = 0
+	for v in c 'each'
+		t = t + v
+	end 'each'
+	return t
+end 'sumCol'
+
+function main() returns ExitCode
+	var rows = Rows.create()
+	rows.push([1, 2])
+	var total = 0
+	for row in rows 'each'
+		total = total + sumCol(row)
+	end 'each'
+	print("{total}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:19: argument type mismatch for 'c': expected 'Col', got 'Row'

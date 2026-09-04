@@ -359,8 +359,18 @@ function runBuild(args MaxonArgs) returns ExitCode
 		unrecognized(spec) then return reportUnknownTarget(spec)
 	end 'targetSel'
 
-	if args.debugStream and not debugStreamSupports(target) 'unsupportedDebugStream'
-		printError("error: {DebugStreamFlag} is not implemented for {targetToString(target)}. The DebugStream producer opens a NAMED shared segment (OpenFileMappingA / MapViewOfFile), reads an activation environment variable and stamps a millisecond stopwatch (GetTickCount64) — three host primitives shv2 has only on x64-windows, whose Std ops (`osOpenNamedSegment`, `osMapNamedSegment`, `osTickCountMs`) refuse every other lowering. Build for x64-windows, or implement those three for this target.\n")
+	// ⛔ **REFUSED ON A TARGET WITH NO PRODUCER, RATHER THAN SILENTLY EMITTING NOTHING.** The whole failure
+	// mode of an instrument is an EMPTY answer that reads as "the program did none of that", so this must be
+	// said at the command line, loudly, before anything is compiled — and here rather than as a diagnostic,
+	// because nothing in the PROGRAM asked for it and there is no span to hang it on. The Std ops' own
+	// lowerings refuse too, but that is a backstop for a compiler bug that got past this gate.
+	//
+	// ⚠ **IT GUARDS THE COMMAND LINE AND ONLY THE COMMAND LINE.** The spec harness calls `compileToProduct`
+	// directly with a per-case `debugStream` and carries its own gate for the same fact
+	// (`SpecTestRunner.targetCanCaptureTrace`, which SKIPS such a case rather than compiling it). Both read
+	// `targetCanProduceDebugStream`, so the two doors cannot come to disagree about which lanes have one.
+	if args.debugStream and not targetCanProduceDebugStream(target) 'unsupportedDebugStream'
+		printError("error: {DebugStreamFlag} is not implemented for {targetToString(target)}. The DebugStream producer attaches to a NAMED shared segment named by an activation environment variable and stamps a millisecond stopwatch — two host facilities (`sharedMemory`, `uptimeClock`) this target does not provide, so the Std ops behind them (`osOpenNamedSegment`, `osMapNamedSegment`, `osTickCountMs`) have no lowering on this lane. Build for a target that has them, or implement those facilities here.\n")
 		return 1
 	end 'unsupportedDebugStream'
 
@@ -419,25 +429,6 @@ end 'runBuild'
 // A root with no `stdlib/` above it takes no lock regardless: `acquireTreeLock` answers that itself
 // (`maxon-shv2 build /tmp/scratch.maxon` has nothing shared to guard), which is why there is no
 // separate scratch-path arm here.
-// ⛔ **`--debugstream` IS REFUSED ON A TARGET IT IS NOT BUILT FOR, RATHER THAN SILENTLY EMITTING
-// NOTHING.** The whole failure mode of an instrument is an EMPTY answer that reads as "the program did
-// none of that" — the reference records exactly that costing it a day when the monitor died before
-// spawning the child — so a target with no producer must say so at the command line, loudly, before
-// anything is compiled. It is refused HERE, beside the other flag refusals, rather than as a diagnostic:
-// there is no source span to hang it on, because nothing in the PROGRAM asked for this. The three Std
-// ops' own lowerings panic on any other target, but that is a backstop for a compiler bug that got past
-// this gate, never the user-facing rejection.
-//
-// ⚠ **IT GUARDS THE COMMAND LINE AND ONLY THE COMMAND LINE.** `runBuild` asks it; `compileToProduct`
-// does not, and since G20 the spec harness calls that directly with a per-case `debugStream`. The
-// harness carries its own gate for the same fact (`SpecTestRunner.targetCanCaptureMmTrace`, which
-// SKIPS such a case on any other target rather than compiling it), so nothing reaches the lowerings
-// by that road either — but the two are now separate doors onto one rule, and this one is no longer
-// the outer of the pair.
-function debugStreamSupports(target Target) returns bool
-	return target.cpu == CpuArch.x64 and target.os == Os.windows
-end 'debugStreamSupports'
-
 function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String) returns ExitCode
 	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
 		return 0

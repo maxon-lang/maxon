@@ -1,0 +1,17 @@
+// Test: error.negation-carries-a-signed-alias
+typealias Delta = int(-100 to 100)
+typealias Wide = int(0 to u64.max)
+
+function takesWide(w Wide) returns Wide
+	return w
+end 'takesWide'
+
+function main() returns ExitCode
+	let d = 5 as Delta
+	let r = takesWide(-d)
+	print("{r}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:11:10: argument type mismatch for 'w': expected 'Wide', got 'Delta'

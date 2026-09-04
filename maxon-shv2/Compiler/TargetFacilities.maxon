@@ -578,12 +578,18 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// AAPCS64 passes a variadic argument on the STACK, which a runtime chunk here does not use. A
 			// libc-less lane has no such choice — see the arm64-linux row.
 			terminalDetection gives true
-			// The two host calls behind `__shm_*` are Win32 section calls with no lowering on this lane.
-			sharedMemory gives false
-			// `mrt_host_tick_ms` exists on this lane and is installed only under `usesIocp`
-			// (see `HostFacility.uptimeClock`), so a program that reads the uptime and spawns nothing would
-			// relocate against a chunk the image does not carry.
-			uptimeClock gives false
+			// ⭐⭐ **THE NAMED SECTION — `shm_open` + `ftruncate` + `mmap(MAP_SHARED)` + `munmap`, four chunks and
+			// three import slots** (`Arm64DarwinRuntime`'s named-shared-section band). It is what carries a
+			// DebugStream ring between `maxon monitor` and the child it traces on this lane.
+			//
+			// ⚠ **`shm_open` IS VARIADIC AND ITS MODE THEREFORE TRAVELS ON THE STACK**, which is the one thing
+			// this band needed that no other chunk here does — an outgoing-argument region in a runtime chunk's
+			// own frame (`Arm64RuntimeAsm.beginFunction`'s `outgoingArgBytes`).
+			sharedMemory gives true
+			// `mrt_host_tick_ms` is now gated on the union of its three producers rather than on the pipe band
+			// alone (`appendArm64DarwinRuntimeChunks`), so a program that reads the uptime and spawns nothing
+			// carries the chunk it branches to.
+			uptimeClock gives true
 		end 'f'
 	end 'darwinArm64'
 
@@ -872,6 +878,18 @@ end 'targetProvidesFacility'
 // `targetHasWin32Substrate`. Written as a walk over `allCases` rather than as `x64 and windows` so that the
 // day a second lane completes the table it becomes true here by MEASUREMENT rather than by someone
 // remembering to widen a hard-coded pair.
+// ⭐⭐ **CAN THIS TARGET CARRY THE DebugStream PRODUCER? — the ONE producer of that fact.** Two parties ask
+// it and they are in different trees: `Main.runBuild` refuses `--debugstream` at the command line, and the
+// spec harness skips a capture case rather than compiling one. Spelled at each, it was a target pair written
+// twice beside the table that already held the answer.
+//
+// It is a CONJUNCTION of facilities rather than a list of targets because that is what `__ds_init` actually
+// needs: it attaches to a named shared section, and every entry it writes stamps the millisecond stopwatch.
+// A lane that gains both gains the producer here by MEASUREMENT.
+export function targetCanProduceDebugStream(target Target) returns bool
+	return targetProvidesFacility(target, facility: HostFacility.sharedMemory) and targetProvidesFacility(target, facility: HostFacility.uptimeClock)
+end 'targetCanProduceDebugStream'
+
 export function targetProvidesEveryFacility(target Target) returns bool
 	for facility in HostFacility.allCases 'each'
 		if not targetProvidesFacility(target, facility: facility) 'missing'

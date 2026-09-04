@@ -1,0 +1,47 @@
+// Test: debugstream-log-events.a-unit-demuxes-two-emitters
+function main() returns ExitCode
+	let ev = __DebugStream.nameId("step")
+	__DebugStream.event(ev, 0, 0, 100, 1, 0)
+	__DebugStream.event(ev, 0, 0, 200, 2, 0)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __ds_base@32 = i64 0
+  __ds_buf_size@40 = i64 0
+  __ds_buf_mask@48 = i64 0
+  __ds_start_ts@56 = i64 0
+  __ds_lock@64 = i64 0
+  __mm_alloc_id@72 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.movImm x3, 100
+    arm64.movImm x4, 1
+    arm64.movImm x5, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __ds_emit_log_event
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.movImm x3, 200
+    arm64.movImm x4, 2
+    arm64.movImm x5, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __ds_emit_log_event
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

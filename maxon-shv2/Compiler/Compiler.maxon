@@ -910,7 +910,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The DebugStream producer's six `.data` slots ride the FLAG rather than a usage bit — nothing in a
 	// program can ask for a trace, so `--debugstream` is the only thing that can. The condition is asked of
 	// `buildCarriesDebugStream`, which is where the four parts that must agree about it read it from.
-	if buildCarriesDebugStream(project, usage: usage) 'debugStreamGlobals'
+	//
+	// ⚠ **RECORDED ON `usage` AT THE SAME MOMENT, BECAUSE A BACKEND SEES ONLY THAT RECORD.** The producer's
+	// synthesized body reaches the uptime clock, the ring lock and the segment attach, and a host surface
+	// emitted family by family owes those chunks — see `RuntimeUsage.usesDebugStream`. `usesHeap` is final
+	// here, which is what makes this the earliest honest place to ask.
+	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
+	if usage.usesDebugStream 'debugStreamGlobals'
 		for entry in debugStreamRuntimeGlobals() 'each'
 			declaredGlobals.push(entry)
 		end 'each'

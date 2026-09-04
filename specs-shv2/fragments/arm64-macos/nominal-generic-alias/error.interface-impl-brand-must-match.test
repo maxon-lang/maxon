@@ -1,0 +1,33 @@
+// Test: error.interface-impl-brand-must-match
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+interface Bag
+	function take(xs Xs) returns Integer
+end 'Bag'
+
+type Sack implements Bag
+	let n as Integer
+
+	function take(xs Ys) returns Integer
+		print("{xs.count()}")
+		return n
+	end 'take'
+
+	static function create() returns Self
+		return Self{n: 41}
+	end 'create'
+end 'Sack'
+
+function main() returns ExitCode
+	let s = Sack.create()
+	var f = Ys.create()
+	f.push(1)
+	print("{s.take(f)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:10:6: Partial interface implementation: type 'Sack' has 1 method(s) with wrong signature:
+  - take(xs Ys) returns Integer (expected take(xs Xs) returns Integer)

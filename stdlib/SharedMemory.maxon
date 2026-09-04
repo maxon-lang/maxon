@@ -11,17 +11,18 @@
 ///     segment.close()
 ///
 /// Forgetting `close()` leaks the mapping AND keeps the section alive: a Win32 section object outlives
-/// its handle for as long as any view of it is mapped.
+/// its handle for as long as any view of it is mapped, and a POSIX one outlives every descriptor and
+/// every mapping until its name is removed — until the next reboot.
 ///
-/// Available on `x64-windows` only — these are Win32 section objects, the same restriction the
-/// DebugStream host primitives carry. A call site on any other target is refused at compile time.
+/// Available on `x64-windows` (Win32 section objects) and `arm64-macos` (`shm_open` + `mmap`), the same
+/// targets the DebugStream host primitives reach. A call site on any other target is refused at compile time.
 ///
 /// @category System
 #if compiler(shv2)
 
 	/// How many bytes a section holds. Never zero — `CreateFileMappingA` reads a zero maximum size as "as
-	/// large as the backing file", which a page-file-backed section does not have — and never wider than the
-	/// DWORD the create call carries it in.
+	/// large as the backing file", which a page-file-backed section does not have, and `mmap` refuses a zero
+	/// length outright — and never wider than the DWORD the create call carries it in.
 	public typealias SegmentByteCount = int(1 to u32.max)
 
 	/// Where inside the mapping an accessor reads or writes. BYTES, never a word index: the records a
@@ -44,8 +45,9 @@
 	typealias Byte = int(0 to u8.max)
 	typealias ByteArray = Array with Byte
 
-	// The answer both host calls give for a failure: `CreateFileMappingA` and `MapViewOfFile` both return NULL,
-	// so one name serves both tests. It is also what a teardown passes for the half a failed create never made.
+	// The answer both host calls give for a failure. Zero on every lane: Win32 answers NULL, and a POSIX lane
+	// answers descriptor 0 — never a real one, because fd 0 is standard input and the runtime mints no handle
+	// there. It is also what a teardown passes for the half a failed create never made.
 	let NoSection = 0
 
 	/// Why a section could not be opened. Two arms because the two host calls fail for different reasons and
@@ -62,6 +64,9 @@
 		// down — see `close`.
 		var handle as SegmentHandle
 		var base as SegmentAddress
+		// How large the mapping is. Kept because the teardown needs it on a lane whose unmap takes a length,
+		// and the OS offers no way to read a view's extent back off its base.
+		let bytes as SegmentByteCount
 		// The name the section is published under, kept so `segmentName()` can answer it: the OS offers no way
 		// to read a section's name back off its handle, and the name is what a second process needs.
 		var name as String
@@ -78,12 +83,12 @@
 			let rawBase = __Builtins.sharedMemoryMap(rawHandle, bytes)
 			if rawBase == NoSection 'mapFailed'
 				// The section exists and nothing is mapped, so the teardown is the handle alone — which is
-				// exactly what `close` does with a zero base, since `UnmapViewOfFile(0)` is a no-op.
-				__Builtins.sharedMemoryClose(rawHandle, NoSection)
+				// exactly what `close` does with a zero base, since an unmap of one is a no-op on every lane.
+				__Builtins.sharedMemoryClose(rawHandle, NoSection, bytes, name.cstr())
 				throw SharedMemoryError.mapFailed
 			end 'mapFailed'
 
-			return SharedSegment{handle: rawHandle, base: rawBase, name: name, closed: false}
+			return SharedSegment{handle: rawHandle, base: rawBase, bytes: bytes, name: name, closed: false}
 		end 'create'
 
 		/// The name this section is published under — what a second process maps it by.
@@ -109,13 +114,15 @@
 			return ByteArray.init(__Builtins.sharedMemoryCopyOut(base, offset, byteCount))
 		end 'copyOut'
 
-		/// Unmap this process's view and release the section. Idempotent.
+		/// Unmap this process's view, release the section and withdraw its name. Idempotent.
 		///
-		/// Both steps are needed: a section object stays alive while any view of it is mapped, so releasing the
-		/// handle alone would keep the section and its address range for the life of the process.
+		/// Every step is needed: a section object stays alive while any view of it is mapped, so releasing the
+		/// handle alone would keep the section and its address range for the life of the process — and on a
+		/// POSIX host the NAME outlives all of them, so a segment closed without withdrawing it stays
+		/// addressable to any later process until the machine is restarted.
 		public function close()
 			if not closed 'stillOpen'
-				__Builtins.sharedMemoryClose(handle, base)
+				__Builtins.sharedMemoryClose(handle, base, bytes, name.cstr())
 				closed = true
 			end 'stillOpen'
 		end 'close'

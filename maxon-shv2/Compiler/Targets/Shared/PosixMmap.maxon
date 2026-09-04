@@ -49,3 +49,19 @@ export let MadviseDontNeedLinux = 0x4  // Linux: MADV_DONTNEED — drop the page
 // at the one site that materializes the immediate, so the per-OS fact stays stated once.
 export let MmapProtNone = 0x0  // PROT_NONE: reserved address space, and a touch of it FAULTS.
 export let MmapFixed = 0x10  // MAP_FIXED — map EXACTLY at the given address, REPLACING whatever was there.
+
+// --- The SHARED mapping: the one flag that makes two processes see the same bytes ---
+//
+// ⭐ **`MAP_SHARED` IS THE WHOLE DIFFERENCE BETWEEN A PAGE SOURCE AND A CHANNEL.** Every mapping above is
+// `MAP_PRIVATE`, whose writes are copy-on-write and therefore invisible to anyone else; a named segment two
+// processes both map is the opposite of that by definition, so the ring's mapping carries this flag INSTEAD
+// of the anon-private word — and names a descriptor rather than `MmapAnonFd`, because there is a shared
+// object to name.
+//
+// ⚠ **IT IS POSIX-UNIVERSAL (0x1 on Darwin and on Linux alike)**, unlike the anon-private word two blocks
+// up, which is why it stands here unqualified.
+export let MmapShared = 0x1
+
+// What `mmap` answers on failure — `MAP_FAILED`, which is `(void *) -1` and NOT NULL. A caller that tested
+// for zero would take a failed mapping for a valid base at address -1.
+export let MmapFailed = 0xFFFFFFFFFFFFFFFF

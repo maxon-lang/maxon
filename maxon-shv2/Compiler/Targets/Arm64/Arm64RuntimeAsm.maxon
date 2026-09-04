@@ -48,17 +48,40 @@ export type Arm64RuntimeAsm
 	export var branchFixups as Arm64BlockBranchFixupArray
 	export var nextLabel as BlockId
 	export var frameBytes as StackSize
+	// Where the frame record sits within the frame, and therefore how much of `[SP, 0 ..)` belongs to a
+	// callee's stack arguments. The epilogue must undo exactly what the prologue did, so it is carried
+	// rather than re-derived.
+	export var outgoingArgBytes as StackSize
 	export var slotCount as StackSize
 
 	// Open a function: a real frame record (`stp x29, x30, [sp, #-N]!; mov x29, sp`) plus `slots`
 	// 8-byte locals above it. EVERY chunk here is framed, and not merely because it calls something:
 	// `mrt_panic` SEEDS the walk from its own x29, and a chunk with no record would leave a hole in
 	// the very chain it is about to print.
+	//
+	// AAPCS64 puts the first eight arguments in registers, and every chunk opened here stays inside them.
 	export static function beginFunction(slots StackSize) returns Arm64RuntimeAsm
-		let frameBytes = alignUpStack(Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
+		return Self.openFrame(slots, outgoingArgBytes: NoOutgoingArgRegion)
+	end 'beginFunction'
+
+	// ⭐⭐ **THE SAME FRAME WITH `[SP, 0 .. 16)` RESERVED FOR ONE STACK ARGUMENT — what a VARIADIC callee
+	// costs.** Darwin passes a variadic argument on the stack whatever its number, so `shm_open(name, flags,
+	// mode)` leaves the mode at `[sp]` (MEASURED: clang emits `str x8, [sp]` for it). The frame record moves
+	// up by exactly that region, which is the shape `Arm64PrologueEpilogue`'s `recordOffset` already gives a
+	// compiled function.
+	//
+	// ⚠ **TWO OPENERS RATHER THAN ONE WITH A DEFAULT, BECAUSE THE TWO COMPILERS RESOLVE A DEFAULT-PARAMETER
+	// EXPRESSION IN DIFFERENT SCOPES** — the bootstrap in the CALLER's file, shv2 in the declaring one — so a
+	// named constant as a default is either undefined at 81 call sites or an export nothing references.
+	export static function beginVariadicCallerFunction(slots StackSize) returns Arm64RuntimeAsm
+		return Self.openFrame(slots, outgoingArgBytes: OneOutgoingArgWord)
+	end 'beginVariadicCallerFunction'
+
+	static function openFrame(slots StackSize, outgoingArgBytes StackSize) returns Arm64RuntimeAsm
+		let frameBytes = alignUpStack(outgoingArgBytes + Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
 
 		var code = ByteArray.create()
-		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: NoOutgoingArgRegion)
+		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: outgoingArgBytes)
 
 		return Self{
 			code: code,
@@ -70,9 +93,10 @@ export type Arm64RuntimeAsm
 			branchFixups: Arm64BlockBranchFixupArray.create(),
 			nextLabel: 0,
 			frameBytes: frameBytes,
+			outgoingArgBytes: outgoingArgBytes,
 			slotCount: slots
 		}
-	end 'beginFunction'
+	end 'openFrame'
 
 	// ⭐⭐ **OPEN A FUNCTION WITH NO FRAME AT ALL (MAC3) — the shape the GREEN-THREAD chunks need, and the
 	// one `beginFunction` above structurally cannot give them.**
@@ -103,6 +127,7 @@ export type Arm64RuntimeAsm
 			branchFixups: Arm64BlockBranchFixupArray.create(),
 			nextLabel: 0,
 			frameBytes: 0,
+			outgoingArgBytes: NoOutgoingArgRegion,
 			slotCount: 0
 		}
 	end 'beginRawFunction'
@@ -110,7 +135,7 @@ export type Arm64RuntimeAsm
 	// Close a RETURNING function: the epilogue (the exact mirror of the prologue, so sp comes home by
 	// balanced arithmetic and x30 is restored) and the `ret`.
 	export function finishFunction(name ByteArray) returns FunctionCodeChunk
-		arm64EmitEpilogue(self.code, frameSize: self.frameBytes, recordOffset: NoOutgoingArgRegion)
+		arm64EmitEpilogue(self.code, frameSize: self.frameBytes, recordOffset: self.outgoingArgBytes)
 		arm64EmitRet(self.code)
 		return self.finishChunk(name)
 	end 'finishFunction'
@@ -159,9 +184,14 @@ end 'Arm64RuntimeAsm'
 // where a lone digit says nothing about which of them it is.
 let ByteAccessStride = 1
 
-// A runtime chunk's frame record sits at SP: none of them passes an argument on the stack, so there
-// is no outgoing-argument region to displace it (see `Arm64PrologueEpilogue`'s `recordOffset`).
+// No outgoing-argument region: the frame record sits at SP, which is every chunk whose calls fit
+// AAPCS64's eight argument registers (see `Arm64PrologueEpilogue`'s `recordOffset`).
 let NoOutgoingArgRegion = 0 as StackSize
+
+// The region a single 8-byte outgoing argument needs. It is the stack ALIGNMENT rather than a word,
+// because SP may not move by less: rounding 8 up gives 16, and the second word is padding the callee
+// never reads.
+let OneOutgoingArgWord = StackFrameAlignment as StackSize
 
 // ==========================================================================
 // Shared emit fragments

@@ -16,7 +16,7 @@
 // version, `buffer_size` and `start_timestamp` and arms itself before `main` runs — so a child spawned
 // against a half-written header attaches to nothing, silently. `DebugStreamDecoder.create` returns with
 // the header complete; the spawn follows it.
-#if compiler(shv2) and os(Windows)
+#if compiler(shv2) and (os(Windows) or os(Macos))
 
 	// The one option this command takes, and the only argument shape that may precede the executable.
 	let FilterOptionPrefix = "--filter="
@@ -31,9 +31,14 @@
 	let SchemaMismatchExit = 3 as ExitCode
 	let RefusedCommandExit = 1 as ExitCode
 
-	// A Win32 exit code is a DWORD, and `ExitCode` on this host is exactly that width — so the child's code
-	// travels through unchanged and the mask is the conversion, not a clamp.
-	let ProcessExitCodeMask = 0xFFFFFFFF
+	// ⭐ **THE WIDTH `ExitCode` HAS ON THIS HOST, WHICH IS THE WIDTH THE OS REPORTS.** A Win32 exit code is a
+	// DWORD and a POSIX one a byte, and `stdlib/Process.maxon` declares `ExitCode` at exactly that width
+	// either way — so the child's code travels through unchanged and the mask is the conversion, not a clamp.
+	#if os(Windows)
+		let ProcessExitCodeMask = 0xFFFFFFFF
+	#else
+		let ProcessExitCodeMask = 0xFF
+	#endif
 
 	// The timestamp on the wire is a millisecond delta; the trace prints it as `+SSSS.mmm`.
 	let MillisecondsPerSecond = 1000
@@ -338,12 +343,12 @@
 	end 'abandonedNote'
 #else
 
-	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT.** A DebugStream ring is a Win32 named section and the decoder
-	/// is built only where one exists, so this command has nothing to do on any other host. It still EXISTS
-	/// there: the driver dispatches on a command enum whose match is exhaustive, and a caller who typed
-	/// `monitor` is owed the reason rather than a usage listing that says nothing about their host.
+	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT.** A DebugStream ring rides a named shared section, and the
+	/// decoder is built only on a host that has one. It still EXISTS here: the driver dispatches on a command
+	/// enum whose match is exhaustive, and a caller who typed `monitor` is owed the reason rather than a usage
+	/// listing that says nothing about their host.
 	export function runMonitor(args MaxonArgs) returns ExitCode
-		printError("maxon-shv2 monitor: unavailable on this host. The DebugStream ring is a Win32 named section and this compiler was built for a target with no such primitive, so the {args.paths.count()} argument(s) after `monitor` name a target nothing here can watch.\n")
+		printError("maxon-shv2 monitor: unavailable on this host. A DebugStream ring rides a named shared section and this compiler was built for a host with no such primitive, so the {args.paths.count()} argument(s) after `monitor` name a target nothing here can watch.\n")
 		return 1
 	end 'runMonitor'
 #endif

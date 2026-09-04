@@ -275,6 +275,26 @@ export enum OsImportSlot
 	connect
 	send
 	recv
+	// --- The NAMED SHARED SECTION both ends of a DebugStream ring map ---
+	//
+	// ⭐⭐ **THREE SLOTS BECAUSE POSIX SEPARATES NAMING A SHARED OBJECT FROM SIZING IT, AND WIN32 DOES NOT.**
+	// `CreateFileMappingA` takes the name and the length in one call; `shm_open` only names, so the length is
+	// a second call (`ftruncate`) on the descriptor it answers. `shm_unlink` removes the name — the create
+	// side runs it first, so a segment left behind by a monitor that died cannot be adopted as this run's
+	// ring. The MAPPING itself needs no slot: `mmap` is already the page source `osAllocPages` calls, one
+	// `MAP_SHARED` flag word over.
+	//
+	// ⚠ **`shm_open` IS VARIADIC AND ITS MODE THEREFORE TRAVELS ON THE STACK**, which is why the create chunk
+	// is the one runtime chunk on this lane with an outgoing-argument region (`Arm64RuntimeAsm.beginFunction`'s
+	// `outgoingArgBytes`). MEASURED on this host with `otool -tV` over a clang-compiled probe: a three-argument
+	// `shm_open` stores 0600 at `[sp]` and passes only the first two in registers.
+	//
+	// ⚠ **NEITHER HAS A LINUX TWIN THIS ENUM COULD SERVE**, for `sysconf`'s reason: `shm_open` is a libc
+	// FUNCTION there (it opens a path under `/dev/shm` itself), so a libc-less static image re-answers the
+	// question rather than re-spelling this call.
+	shmOpen
+	shmUnlink
+	ftruncate
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor
