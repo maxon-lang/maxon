@@ -27,12 +27,13 @@ binding retains its type and can be used normally.
 
 ## Tests
 
-<!-- disabled-test: error.dispatch-interface-payload -->
-<!-- MEASURED 2026-09-04: shv2 refuses the DECLARATION (`E2015` at the payload, with the fat-pointer reason) where
-     the pin refuses the DISPATCH (`E4006` at the use). shv2's refusal is earlier and better-reasoned; which site
-     the language blames is a ruling. -->
-Binding an interface-typed union payload and dispatching a method on it is
-rejected with E4006 — the binding has no witness to dispatch against.
+<!-- test: error.dispatch-interface-payload -->
+⚠ **shv2 REFUSES THE DECLARATION, NOT THE DISPATCH.** The bootstrap admits the payload and fails at the
+`who.volume()` that has no witness to dispatch against (`E4006`); shv2 refuses `live(who Speaker)` itself,
+and the reason is what makes the earlier site the right one: a value held at an interface type is a two-word
+`(value, witness)` fat pointer, a payload slot is ONE machine word, and unlike a struct field it cannot
+widen — every case of a union shares one slot region. That is a fact about the DECLARATION, so no use of it
+could ever have worked and the diagnostic that names it is the one an author can act on.
 ```maxon
 typealias Vol = int(0 to 1000)
 
@@ -69,7 +70,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/union-interface-payload/error.dispatch-interface-payload.test:27:19: Variable 'who' is not a struct or enum type
+error E2015: <fragment>:21:11: Unsupported: a union case payload declared at the interface type 'Speaker' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a payload slot is one machine word, and unlike a struct field it cannot widen — every case of a union shares one slot region. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```
 
 <!-- test: struct-payload-dispatch -->

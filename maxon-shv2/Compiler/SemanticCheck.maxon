@@ -3142,6 +3142,16 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 			return
 		end 'ambiguousAcrossDirectories'
 
+		// ⭐⭐ **A METHOD MISS IS NOT AN UNDEFINED FUNCTION, AND THE MINT IS WHAT TELLS THEM APART.** A
+		// `resolvedTypeQualifier` callee's HEAD came off the receiver's resolved type, not off the source —
+		// so `m.set(…)` on a `Map` reported "call to undefined function 'Map.set'", quoting a symbol the
+		// author never wrote and pointing the fix at a free function that was never the subject. The two
+		// halves of that callee are exactly the two nouns the honest sentence needs.
+		if mint == CalleeMint.resolvedTypeQualifier 'aMethodMissOnAResolvedType'
+			reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "Type '{String.from(qualifyingTypeName(callee))}' has no method named '{String.from(unqualifiedMemberName(callee))}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			return
+		end 'aMethodMissOnAResolvedType'
+
 		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{String.from(noun)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'unknownFn'

@@ -2050,7 +2050,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3018: <fragment>:10:25: type 'LexErr' has no field named 'bogus'
+error E3144: <fragment>:10:25: case 'pair' of `union LexErr` has no payload named 'bogus'
 ```
 
 <!-- test: error.payload-duplicate-label -->

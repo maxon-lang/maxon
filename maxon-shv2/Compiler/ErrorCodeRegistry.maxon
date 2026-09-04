@@ -780,6 +780,16 @@ export enum ErrorCode
 	// the cross-file fallback in `qualifyCalleeForContextWithType` when
 	// `methodNameIndex` returns multiple distinct visible candidates.
 	semanticAmbiguousCrossFileCall = "E3095"
+	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
+	// `.rawValue` accessor. Such a comparison is checking which case a value
+	// is, which must be done on the value itself (`value == Type.case` for a
+	// payload-free case, or `match value` for a union variant -- so adding a
+	// case forces every site to handle it instead of silently slipping
+	// through). Comparing the derived string/int accessor bypasses that.
+	// 3089-3096 are taken on the self-hosted side (semanticTypeResolutionLeak
+	// onward), so this shared diagnostic takes the next code free on both
+	// sides. Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.
+	semanticEnumAccessorComparison = "E3097"
 	// A promise is stored in a Promise type that does not name the error its thunk throws.
 	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
 	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
@@ -1637,6 +1647,13 @@ export enum ErrorCode
 	// that reaches it, and carries the `spawn` that made the type a service as a note, because whether a
 	// type is a service is a whole-program property whose cause may be in another file.
 	semanticSharedGlobalAccessFromGreenThread = "E3143"
+	// A union case's payload argument carries a `name:` label naming no payload of that case --
+	// `TwoParts.values(10, z: 20)` where the case declares `a` and `b`.
+	// NOT E3018, which is about a FIELD: a payload is a positional slot of one case, not a member of
+	// the union, and a message calling it a field names a thing the program does not have. The two
+	// mistakes also have different cures -- a field typo is fixed against the type, a payload label
+	// against the CASE -- so the diagnostic names the case rather than the union alone.
+	semanticUnknownPayloadName = "E3144"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

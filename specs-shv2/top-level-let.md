@@ -433,14 +433,14 @@ export let ROOT = 10
 42
 ```
 
-<!-- disabled-test: error.circular-dependency-cross-file -->
-<!-- MEASURED 2026-09-04: shv2 reports the cycle ONCE, from the file that closed it; the pin carries TWO E2012
-     lines, one per participating file. Whether a cycle is reported per file or per cycle is a ruling. -->
+<!-- test: error.circular-dependency-cross-file -->
 A cycle among top-level constants is reported as a circular dependency even when the cycle spans
-files. Each participating file folds its own constants, so each reports the cycle it is in, naming
-the file that closes it from that file's side. Before constant resolution became order-independent
-this was an `E2004 Undefined constant` naming one arbitrary participant — whichever file the
-filesystem happened to hand over second — because the cycle guard was never reached at all.
+files.
+
+⚠ **ONE LINE PER CYCLE, WHERE THE BOOTSTRAP GIVES ONE PER PARTICIPATING FILE**, and the difference is
+architectural rather than chosen: shv2 folds every top-level constant ONCE, whole-program, before any file
+is parsed (`ProgramSignatures.evaluateInitializers`), so there is one walk to find the cycle and one place
+to report it. A per-file folder finds the same cycle once per file it participates in.
 ```maxon
 // --- file: app/main.maxon
 export let A = B + 1
@@ -453,8 +453,7 @@ end 'main'
 export let B = A + 1
 ```
 ```maxoncstderr
-error E2012: api/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:10:12: Circular dependency detected among global constants: A, B
-error E2012: app/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:3:12: Circular dependency detected among global constants: B, A
+error E2012: api/<fragment>:10:12: Circular dependency detected among global constants: A, B
 ```
 
 <!-- test: error.file-private-constant-cross-file -->

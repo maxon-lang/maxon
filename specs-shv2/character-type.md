@@ -766,10 +766,7 @@ end 'main'
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'CharacterError', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one
 ```
 
-<!-- disabled-test: error.otherwise-out-of-range -->
-<!-- MEASURED 2026-09-04: shv2 COMPILES `try c.asciiValue() otherwise -1` CLEAN, so a value outside its ranged
-     type's domain reaches the merge. The bootstrap refuses it. An `otherwise` fallback is not range-checked
-     against the try's result type here, and that is a soundness hole rather than a diagnostic gap. -->
+<!-- test: error.otherwise-out-of-range -->
 ### Otherwise value must be within ranged type bounds
 
 ```maxon

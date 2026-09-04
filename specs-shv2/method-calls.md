@@ -473,13 +473,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: specs/fragments/method-calls/error-no-such-method-on-user-type.test:15:4: call to undefined function 'Counter.incrementt'
+error E4006: <fragment>:15:4: Type 'Counter' has no method named 'incrementt'
 ```
 
-<!-- disabled-test: error-no-such-method-on-stdlib-generic -->
-<!-- MEASURED 2026-09-04: `E3004: call to undefined function 'Map.set'` where the pin is `E4006: Type 'Map' has no
-     method named 'set'`. A method miss on a stdlib generic falls through to the free-function noun, which names a
-     symbol the author did not write. -->
+<!-- test: error-no-such-method-on-stdlib-generic -->
+⚠ **THE ANCHOR DIVERGES: shv2 blames the MEMBER, the bootstrap the receiver.** The member is the token the
+author has to change, and it is the one a method-miss diagnostic in this compiler always points at.
 ```maxon
 
 typealias ExitCode = int(0 to 255)
@@ -493,5 +492,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/method-calls/error-no-such-method-on-stdlib-generic.test:9:2: Type 'Map' has no method named 'set'
+error E4006: <fragment>:9:4: Type 'Map' has no method named 'set'
 ```

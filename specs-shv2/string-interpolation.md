@@ -1714,10 +1714,7 @@ Maxon's `String` doesn't overload `+`; string concatenation is done through inte
 (`"{a}{b}"`). Applying `+` to two strings must produce a clear semantic error instead
 of crashing in the binop constructor.
 
-<!-- disabled-test: error.plus-on-string -->
-<!-- MEASURED 2026-09-04: `E2004: Cannot operate on String and String` where the pin is `E3005: operator '+' is not
-     defined for type 'String'`. Same verdict, and shv2's code and noun are both the wrong ones: this is a TYPE
-     rule, not an undefined name. -->
+<!-- test: error.plus-on-string -->
 ```maxon
 function main() returns ExitCode
 	let a = "foo"

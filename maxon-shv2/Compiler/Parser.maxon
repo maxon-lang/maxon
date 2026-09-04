@@ -445,6 +445,15 @@ export union ParseError implements Error
 	// positioned at the operator, which is the code, text and anchor the C# bootstrap uses
 	// (2-Parser.cs:17785). Both operand type names ride along because the message names both.
 	nonNumericOperands(left String, right String, line LineNumber, column ColumnNumber)
+	// **E3097** — `==`/`!=` against an enum or union value's `.name`/`.ordinal`/`.rawValue`. See
+	// `Parser.requireNotAnEnumAccessorComparison` for why the accessor is the wrong thing to compare.
+	enumAccessorComparison(member String, op String, line LineNumber, column ColumnNumber)
+	// ⭐ **TWO OPERANDS OF ONE NON-NUMERIC TYPE, which is a different mistake from a MIXED pair.** The
+	// commonest of them is `a + b` over two `String`s reaching for concatenation, and "cannot operate on
+	// String and String" is true while saying nothing: what the author needs told is that the OPERATOR is
+	// not defined for the TYPE, which is the sentence that sends them to interpolation. Renders as
+	// **E3005** — it is a rule about a type, not a malformed expression.
+	undefinedOperatorForType(op String, typeName String, line LineNumber, column ColumnNumber)
 	// A prefix `-` applied to a non-numeric operand (`-flag`). The same rule as
 	// `nonNumericOperands`, asked of the one operand a unary has. Renders as E2004,
 	// positioned at the `-`. The bootstrap has no diagnostic for this at all — it reaches its
@@ -1172,9 +1181,20 @@ export union ParseError implements Error
 	// only `ErrA` and `ErrB`. Renders as **E3034** at the qualifier, distinct from the case-name arm above
 	// because the author's mistake is a different one (v1 splits the two sentences the same way).
 	errorUnionUnknownMember(memberName String, line LineNumber, column ColumnNumber)
-	// A payload pattern supplying the wrong number of bindings for a union member's case. Renders as
-	// **E3035**, positioned at the CASE name (past the qualifier), naming the case as `Enum.case`.
-	errorUnionWrongBindingCount(qualifiedCase String, expected CaseIndex, got ElementIndex, line LineNumber, column ColumnNumber)
+	// A payload ARGUMENT's `name:` label naming no payload of the case it constructs. Renders as **E3144**
+	// at the label. It is not `unknownField`: a payload is a positional slot of ONE CASE, so a message
+	// calling it a field of the union names a thing the program does not have and points the fix at the
+	// wrong declaration.
+	unknownPayloadName(unionName String, caseName String, payloadName String, line LineNumber, column ColumnNumber)
+	// A payload pattern supplying the wrong number of bindings for a case. Renders as **E3035**, positioned
+	// at the CASE name (past any qualifier). `caseName` is `Enum.case` for a synthesized error union's member,
+	// where the qualifier is what tells two members' identically-named cases apart, and the bare case name for
+	// an ordinary `union`, where the arm names nothing else.
+	//
+	// ⚠ **BOTH ARITY DIRECTIONS COME HERE, and the too-many one used to be `unsupported` (E2015).** That band
+	// says the COMPILER cannot do this; a pattern that binds two payloads out of a one-payload case is simply
+	// a wrong program, and the code a reader greps for it by is the one the other direction already used.
+	enumWrongBindingCount(caseName String, expected CaseIndex, got ElementIndex, line LineNumber, column ColumnNumber)
 	// **E3129** — a match arm whose payload binding cannot be honoured. `reason` carries the whole
 	// explanation and that shape's cure, because the four shapes refused share only their SUBJECT (this
 	// arm's bindings) and not their argument: two are about the arm's own binding list being a bijection
@@ -4412,7 +4432,7 @@ end 'calleeIsAnElementMoveOut'
 // AUTHOR wrote; `calleeMemberNoun` states the same rule for the compiler-emitted doors, and this is it for
 // the corpus ones. Returns the whole name when it carries no separator, which is not reachable from the one
 // caller (it is past `isQualifiedUnderTypeName`) but is the only honest answer if it ever were.
-function unqualifiedMemberName(callee ByteArray) returns ByteArray
+export function unqualifiedMemberName(callee ByteArray) returns ByteArray
 	let separator = try MethodNameSeparatorBytes.get(0) otherwise panic("unqualifiedMemberName: MethodNameSeparatorBytes is a one-byte literal")
 	var start = 0
 	for i in 0 upto callee.count() 'eachByte'
@@ -4428,6 +4448,27 @@ function unqualifiedMemberName(callee ByteArray) returns ByteArray
 
 	return out
 end 'unqualifiedMemberName'
+
+// ⭐ **THE QUALIFIER HALF — `Array.last` → `Array`.** The mirror of the member split above, homed beside it
+// and beside the JOIN the two undo (`qualifiedMethodName`), so a change to how a qualified callee is spelled
+// moves all three together. Split at the LAST separator, which is what makes a namespace-qualified head
+// (`util.Bag.pop`) answer `util.Bag` rather than `util`.
+export function qualifyingTypeName(callee ByteArray) returns ByteArray
+	let separator = try MethodNameSeparatorBytes.get(0) otherwise panic("qualifyingTypeName: MethodNameSeparatorBytes is a one-byte literal")
+	var headBytes = callee.count()
+	for i in 0 upto callee.count() 'eachByte'
+		if (try callee.get(i) otherwise panic("qualifyingTypeName: index {i} is below count {callee.count()}")) == separator 'separatorHere'
+			headBytes = i
+		end 'separatorHere'
+	end 'eachByte'
+
+	var out = ByteArray.create()
+	for i in 0 upto headBytes 'eachHeadByte'
+		out.push(try callee.get(i) otherwise panic("qualifyingTypeName: index {i} is below count {callee.count()}"))
+	end 'eachHeadByte'
+
+	return out
+end 'qualifyingTypeName'
 
 // Is the MEMBER half of a qualified callee (`Array.pop`) exactly `member`? Anchored at the separator, so
 // `Bag.pop` matches and a member merely ENDING in those letters (`Array.reshapePop`) does not.
@@ -5108,6 +5149,16 @@ end 'constantValueTypeIn'
 // scalar-returning function allocates nothing here — the same reason every type rule is stated over
 // the dense `valueTags`/`valueNameIds` columns (see TypeRules' header). Void is a caller bug: every
 // caller is gated on `maxonReturnTypeIsVoid`, and a void `return <expr>` is its own diagnostic.
+// The VALUE half of a declared return type, for a callee the caller already knows produces one. A `void`
+// here is a routing bug — a member routed to a runtime call for its RESULT was declared to return nothing —
+// so it panics rather than inventing a width.
+function requireDeclaredResultValue(ref MaxonReturnType, typeName ByteArray, methodName ByteArray) returns MaxonType
+	match ref 'k'
+		void then panic("requireDeclaredResultValue: `{String.from(typeName)}.{String.from(methodName)}` is declared to return nothing, but its dispatch uses the call for a value")
+		value(inner) then return inner
+	end 'k'
+end 'requireDeclaredResultValue'
+
 function maxonReturnTypeNameId(ref MaxonReturnType) returns TypeNameId
 	match ref 'k'
 		void then panic("maxonReturnTypeNameId: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
@@ -5166,11 +5217,22 @@ end 'identityOperator'
 // a mixed operand". A second copy on the OTHER path every `and`/`or` can take is free to
 // drift from the first, and the drift would show up as a `bool and int` silently accepted on
 // one path and rejected on the other — a wrong answer, not a compile error.
+// The non-numeric-operand refusal, split by whether the two operands AGREE — a `match` arm is one statement
+// and this is a fork. Both branches `throw` INLINE rather than returning a `ParseError` for the caller to
+// throw, which is the shape that leaks two allocations under the emitted refcount runtime.
+function raiseNonNumericOperands(opTok Token, left ValueTypeTag, right ValueTypeTag) throws ParseError
+	if left == right 'oneTypeOnBothSides'
+		throw ParseError.undefinedOperatorForType(opTok.kind.rawValue, typeName: typeTagName(left), line: opTok.line, column: opTok.column)
+	end 'oneTypeOnBothSides'
+
+	throw ParseError.nonNumericOperands(typeTagName(left), right: typeTagName(right), line: opTok.line, column: opTok.column)
+end 'raiseNonNumericOperands'
+
 function requireBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag, opTok Token) throws ParseError
 	match checkBinOpOperands(op, left: left, right: right) 'operands'
 		ok then break 'operands'
 		mixedWordOperands then throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
-		nonNumericOperands then throw ParseError.nonNumericOperands(typeTagName(left), right: typeTagName(right), line: opTok.line, column: opTok.column)
+		nonNumericOperands then try raiseNonNumericOperands(opTok, left: left, right: right)
 		// The offending tag is ASKED FOR, not assumed. This line named `float` outright, under a
 		// comment calling it "the only tag that can trip this rule" — true when written, and
 		// falsified by P1.0r admitting `structRef` to the same rule, which left `p and q`
@@ -9431,6 +9493,32 @@ type PromiseConsumeRecord
 end 'PromiseConsumeRecord'
 
 typealias PromiseConsumeRecordArray = Array with PromiseConsumeRecord
+
+// ⭐⭐ **ONE ENUM-ACCESSOR READ, the fact E3097 is decided from.** Keyed on the accessor result's own
+// `ValueId` and never on a NAME — that value IS the read's identity, and a `let o = c.ordinal` binds it
+// verbatim, so one record answers for the read and for every name of it at once. `PromiseConsumeRecord`
+// is keyed the same way for the same reason, and it is what keeps a symbol-table walk off the compare path.
+//
+// The MEMBER rides because the diagnostic has to name the accessor the author actually wrote: telling them
+// `.name` is not comparable, about a line spelling `.ordinal`, describes a program they do not have.
+type EnumAccessorRead
+	export let value as ValueId
+	export let member as ByteArray
+
+	export static function create(value ValueId, member ByteArray) returns EnumAccessorRead
+		return Self{value: value, member: member}
+	end 'create'
+end 'EnumAccessorRead'
+
+typealias EnumAccessorReadArray = Array with EnumAccessorRead
+
+
+// What `Parser.enumAccessorReadOf` found. A union rather than a bool-plus-out-parameter for the ordinary
+// reason: the MEMBER only exists when there was a read, and the two answers must not be representable apart.
+union EnumAccessorLookup
+	read(member ByteArray)
+	notAnAccessor
+end 'EnumAccessorLookup'
 
 // ⭐ **WHAT CONSUMED THE THREAD `promise` NAMES, ACCORDING TO `consumes`** — `notConsumed` when nothing in
 // it did. The ONE reader of a consume list's shape, so the membership test is written once for the use
@@ -13804,6 +13892,12 @@ export type Parser
 	// Re-created per function like `ownedBindings`, for the same reason: a `ValueId` names a value in one
 	// function's SSA space and nothing else.
 	var promiseConsumes as PromiseConsumeRecordArray
+
+	// ⭐ **THE ENUM-ACCESSOR READS THIS FUNCTION HAS EMITTED** (E3097). Fresh per function for
+	// `promiseConsumes`' reason: a `ValueId` means something else in the next body, so a record carried
+	// across would refuse a comparison in a program that has no accessor in it at all. Empty for every
+	// function that reads none, which is almost all of them.
+	var enumAccessorReads as EnumAccessorReadArray
 	// ⭐ **THE ONE EMPTY CONSUME LIST EVERY MARK OF A PROMISE-FREE PATH SHARES** — `emptyMoveMark`'s economy
 	// applied to the third column, and it is what keeps this whole mechanism free for the programs that have
 	// no promises in them. A mark is read-only, so one immortal empty list can stand in for all of them
@@ -14322,6 +14416,7 @@ export type Parser
 			unusedCandidates: UnusedBindingCandidateArray.create(),
 			functionMintedValueAliases: false,
 			promiseConsumes: PromiseConsumeRecordArray.create(),
+			enumAccessorReads: EnumAccessorReadArray.create(),
 			sharedEmptyPromiseConsumes: PromiseConsumeRecordArray.create(),
 			referencedNames: ByteArrayArray.create(),
 			mutabilityExercisedNames: ByteArrayArray.create(),
@@ -26374,6 +26469,9 @@ export type Parser
 		// records a `ValueId` in THAT function's SSA space, and this one's values reuse the same numbers —
 		// so a stale entry would refuse a perfectly live promise here, naming a door nobody wrote.
 		self.promiseConsumes = PromiseConsumeRecordArray.create()
+		// Re-created for the reason directly above: an accessor read is keyed on a `ValueId`, and this body's
+		// values reuse the previous one's numbers.
+		self.enumAccessorReads = EnumAccessorReadArray.create()
 		// Re-created for the same reason, one step further out: a name mentioned in the PREVIOUS function
 		// would excuse a candidate of that name here. The name-scoped half is bounded to ONE function,
 		// exactly as the oracle's per-function `_referencedVars` is.
@@ -27993,6 +28091,7 @@ export type Parser
 		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
 		self.ownedBindings = VarInfoArray.create()
 		self.promiseConsumes = PromiseConsumeRecordArray.create()
+		self.enumAccessorReads = EnumAccessorReadArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.lastRuntimeReadValid = false
@@ -47268,7 +47367,7 @@ export type Parser
 			return
 		end 'agrees'
 
-		throw ParseError.errorUnionWrongBindingCount("{String.from(member.name)}.{String.from(member.layout.caseNameAt(caseIndex))}", expected: declared, got: supplied, line: caseTok.line, column: caseTok.column)
+		throw ParseError.enumWrongBindingCount("{String.from(member.name)}.{String.from(member.layout.caseNameAt(caseIndex))}", expected: declared, got: supplied, line: caseTok.line, column: caseTok.column)
 	end 'requireErrorUnionBindingCount'
 
 	// ⭐⭐ **RELEASE A BOXED MEMBER'S BOX ON THE PATH INTO A `default` ARM, WHICH NAMED NO MEMBER.** Returns
@@ -47400,20 +47499,25 @@ export type Parser
 		// Tracked as the list is read rather than re-walked afterwards — the loop already knows which arm
 		// each binding took.
 		var allDiscard = true
+		// ⚠ **THE COUNT IS SEPARATE FROM THE LIST, because a SURPLUS binding has no slot to occupy.** The
+		// list is bounded by the declared arity — `payloads.get` has nothing past it — while the arity
+		// diagnostic has to name how many the author actually wrote, so a binding past the end is counted
+		// and dropped rather than pushed. Judged ONCE, below, so both directions carry one code.
+		var supplied = 0
 
 		while true 'bindLoop'
 			let nameTok = try self.consume(TokenKind.identifier)
-			if bindings.count() >= payloads.count() 'tooMany'
-				throw ParseError.unsupported("case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` binds more payloads than the {payloads.count()} it declares", line: nameTok.line, column: nameTok.column)
-			end 'tooMany'
-			let field = try payloads.get(bindings.count()) otherwise panic("parseCasePayloadBindings: payloads.get OOB after the count guard")
-			if nameTok.value.equals(DiscardBindingName) 'discard'
-				bindings.push(PayloadBinding.discard(nameTok, field: field, slot: bindings.count()))
-			end 'discard' else 'realBinding'
-				try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
-				bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count()))
-				allDiscard = false
-			end 'realBinding'
+			supplied = supplied + 1
+			if supplied <= payloads.count() 'withinTheDeclaredArity'
+				let field = try payloads.get(bindings.count()) otherwise panic("parseCasePayloadBindings: payloads.get OOB below the declared arity")
+				if nameTok.value.equals(DiscardBindingName) 'discard'
+					bindings.push(PayloadBinding.discard(nameTok, field: field, slot: bindings.count()))
+				end 'discard' else 'realBinding'
+					try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
+					bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count()))
+					allDiscard = false
+				end 'realBinding'
+			end 'withinTheDeclaredArity'
 
 			if not self.at(TokenKind.comma) 'endBindings'
 				break
@@ -47421,11 +47525,10 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'bindLoop'
 
-		let closeTok = self.current()
 		try self.consume(TokenKind.rightParen)
-		if bindings.count() != payloads.count() 'tooFew'
-			throw ParseError.unsupported("case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` binds {bindings.count()} payload(s) but declares {payloads.count()}", line: closeTok.line, column: closeTok.column)
-		end 'tooFew'
+		if supplied != payloads.count() 'arityDisagrees'
+			throw ParseError.enumWrongBindingCount(String.from(layout.caseNameAt(caseIndex)), expected: payloads.count(), got: supplied, line: caseTok.line, column: caseTok.column)
+		end 'arityDisagrees'
 
 		// ⭐ **AN ALL-DISCARD LIST IS EXACTLY THE BARE CASE NAME, so the language admits only the one
 		// spelling** (E3081, both reference compilers). The rule is about the LIST and nothing else: a
@@ -48702,6 +48805,19 @@ export type Parser
 	// Mint a value whose type is already in hand as a `MaxonType` — a `literal` op's type (the
 	// op stores one anyway), a call's declared return type. It DECOMPOSES an existing union
 	// rather than constructing a new one, so it allocates nothing either.
+	// ⭐ **THE TYPE A COMPILER-ROUTED BUILTIN METHOD HANDS BACK, READ OFF THE CORPUS DECLARATION.** A method
+	// shv2 serves with a RUNTIME CALL is still one `stdlib/` declares, and the declaration is the only place
+	// a ranged alias's NAME survives: minting the result from a bare tag drops it, and every rule stated over
+	// the alias then has nothing to look up. MEASURED before this: `try c.asciiValue() otherwise -1` compiled
+	// clean — a value outside `AsciiValue`'s `0 to 127` reaching the merge — while the identical shape over a
+	// user function returning a ranged alias was refused.
+	function declaredRuntimeMethodResult(typeName ByteArray, methodName ByteArray) returns MaxonType
+		match self.signatures.returnTypeOf(qualifiedMethodName(typeName, methodName: methodName), into: self.artifact.typeNames) 'lookup'
+			undeclared then panic("declaredRuntimeMethodResult: `{String.from(typeName)}.{String.from(methodName)}` is routed to a runtime call but no file declares it — every member the surface roster admits is one the corpus declares")
+			declared(returnType) then return requireDeclaredResultValue(returnType, typeName: typeName, methodName: methodName)
+		end 'lookup'
+	end 'declaredRuntimeMethodResult'
+
 	function mintValueOfType(valueType MaxonType) returns ValueId
 		return self.mintValue(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
 	end 'mintValueOfType'
@@ -52001,6 +52117,13 @@ export type Parser
 	// the promotion built for `emitBinOp` was routed through here too, because a compare's
 	// operands looked like a binOp's. They are not: one produces a number, the other a verdict.
 	function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+		// E3097, asked at the TOP — ahead of the byte-record interception below, so the `.name` (String)
+		// spelling is refused by the same line as the `.ordinal` (integer) one rather than by a second rule
+		// on the other side of a fork. See `requireNotAnEnumAccessorComparison`.
+		if op == MaxonCmpOp.eq or op == MaxonCmpOp.ne 'aCaseTestSpelling'
+			try self.requireNotAnEnumAccessorComparison(lhs, rhs: rhs, opTok: opTok)
+		end 'aCaseTestSpelling'
+
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
 
@@ -57004,7 +57127,7 @@ export type Parser
 			// consumes it, exactly as `parseCallArgs` captures `argFirstTok`.
 			let labelTok = self.current()
 			let label = try self.consumeArgLabel(argIndex, rule: ArgLabelRule.ordinary)
-			let slot = try self.payloadSlotFor(layout, payloads: payloads, argIndex: argIndex, label: label, labelTok: labelTok)
+			let slot = try self.payloadSlotFor(layout, payloads: payloads, argIndex: argIndex, label: label, labelTok: labelTok, caseTok: caseTok)
 
 			let alreadyFilled = try filled.get(slot) otherwise panic("parsePayloadArgs: filled.get OOB at slot {slot} — the columns are sized to the case's arity and payloadSlotFor returns an in-range slot")
 			if alreadyFilled 'duplicate'
@@ -57054,7 +57177,7 @@ export type Parser
 	// naming no field of this case is an unknown-field error, mirroring `requireFieldIndex`. Slot 0 is in
 	// range because a payload-free case never reaches the argument loop (`parsePayloadArgs` rejects its
 	// parens before any lookup).
-	function payloadSlotFor(layout EnumLayout, payloads PayloadFieldArray, argIndex ParamCount, label ByteArray, labelTok Token) returns CaseIndex throws ParseError
+	function payloadSlotFor(layout EnumLayout, payloads PayloadFieldArray, argIndex ParamCount, label ByteArray, labelTok Token, caseTok Token) returns CaseIndex throws ParseError
 		if argIndex == 0 'positional'
 			return 0 as CaseIndex
 		end 'positional'
@@ -57066,7 +57189,7 @@ export type Parser
 			end 'match'
 		end 'each'
 
-		throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(label), line: labelTok.line, column: labelTok.column)
+		throw ParseError.unknownPayloadName(String.from(layout.name), caseName: String.from(caseTok.value), payloadName: String.from(label), line: labelTok.line, column: labelTok.column)
 	end 'payloadSlotFor'
 
 	// Every declared payload slot must have been given a value. A union payload has NO defaults (unlike a
@@ -61263,7 +61386,14 @@ export type Parser
 		// answer a non-ASCII cluster with a sentinel.
 		if methodTok.value.equals(CharacterAsciiValueMethod) 'asciiValue'
 			try self.consumeEmptyArgList()
-			let asciiValue = self.emitRuntimeCall(CharAsciiValueName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			// ⭐ **THE RESULT IS TYPED FROM THE DECLARATION, NOT INVENTED HERE.** `stdlib/Character.maxon`
+			// declares `asciiValue() returns AsciiValue`, a ranged alias — and a bare `integer` result loses
+			// that name, which is the one thing a range rule can be stated over: `try c.asciiValue()
+			// otherwise -1` compiled clean while the identical shape over a user function was refused,
+			// because `declaredAliasOfValue` had no name to look up. Reading the signature rather than
+			// naming the alias here is what stops the compiler holding a second copy of a stdlib
+			// declaration.
+			let asciiValue = self.emitRuntimeCallInto(self.mintValueOfType(self.declaredRuntimeMethodResult(CharacterConformerName, methodName: methodTok.value)), callee: CharAsciiValueName, args: singletonArgs(recv.value), range: range, argLabels: NoRuntimeCallLabels)
 			self.noteRuntimeReadMember(asciiValue, typeName: CharacterConformerName, methodName: methodTok.value)
 			return asciiValue
 		end 'asciiValue'
@@ -73610,6 +73740,7 @@ export type Parser
 		let savedAliasUnprovenMarks = self.aliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedPromiseConsumes = self.promiseConsumes
+		let savedEnumAccessorReads = self.enumAccessorReads
 		let savedUnusedCandidates = self.unusedCandidates
 		let savedMintedValueAliases = self.functionMintedValueAliases
 		let savedReferencedNames = self.referencedNames
@@ -73790,6 +73921,8 @@ export type Parser
 		// Fresh for the reason above it: a closure body is a function of its own, so a thread the ENCLOSING
 		// frame consumed is recorded against a `ValueId` that means something else in here.
 		self.promiseConsumes = PromiseConsumeRecordArray.create()
+		// Fresh, and RESTORED below, for the same reason: an accessor read is keyed on a `ValueId`.
+		self.enumAccessorReads = EnumAccessorReadArray.create()
 		// A closure declares its own parameters and its body sees none of the enclosing function's bindings,
 		// so it owes its own E3012 accounting — drained under its own name below, before the restore.
 		self.unusedCandidates = UnusedBindingCandidateArray.create()
@@ -74075,6 +74208,7 @@ export type Parser
 		self.aliasUnprovenMarks = savedAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
 		self.promiseConsumes = savedPromiseConsumes
+		self.enumAccessorReads = savedEnumAccessorReads
 		self.unusedCandidates = savedUnusedCandidates
 		self.functionMintedValueAliases = savedMintedValueAliases
 		// ⭐ **A CAPTURE IS A MENTION IN THE ENCLOSING FUNCTION** — the oracle's own restore step
@@ -83099,8 +83233,11 @@ export type Parser
 		// this answer one rule: a member added to the classifier stops this function compiling until it is
 		// answered here. `notAnAccessor` survives as the unreachable arm the guard already excluded.
 		match enumInstanceAccessorOf(memberTok.value) 'member'
-			caseName then return try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.caseName, valueType: MaxonType.string, anchor: memberTok, range: range)
-			rawValue then return try self.emitEnumRawValue(layout, tag: tag, anchor: memberTok, range: range)
+			caseName then return self.notedEnumAccessorRead(try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.caseName, valueType: MaxonType.string, anchor: memberTok, range: range), member: memberTok, tag: tag, isACaseTest: true)
+			// ⚠ **A STRUCT-BACKED `.rawValue` IS NOT A CASE TEST AND IS NOT TAINTED.** Its answer is a whole
+			// RECORD, so what a program compares is a FIELD of it (`op.rawValue.category`) — an ordinary value
+			// read out of the backing, and refusing that would refuse the corpus's own dispatch tables.
+			rawValue then return self.notedEnumAccessorRead(try self.emitEnumRawValue(layout, tag: tag, anchor: memberTok, range: range), member: memberTok, tag: tag, isACaseTest: layout.backing != EnumBacking.structRecord)
 			ordinal then break 'member'
 			// ⭐ **THE ONE MEMBER THAT IS NOT ONE OF THE THREE AND IS STILL A READ: a STRUCT-BACKED enum's
 			// BACKING FIELD** (`p.width`, the shorthand for `p.rawValue.width`). `enumAccessorFieldAt` admits it
@@ -83118,11 +83255,65 @@ export type Parser
 		// QUESTION 2 — whether that tag is already the answer. The lookup reads the tag as a bare i64, which
 		// both forms of it are, so it needs to know nothing about question 1.
 		if not layout.tagsAreDeclarationIndices() 'renumberedCases'
-			return try self.emitEnumCaseConstantSelect(layout, tag: tag, column: EnumCaseConstant.declarationIndex, anchor: memberTok, range: range)
+			return self.notedEnumAccessorRead(try self.emitEnumCaseConstantSelect(layout, tag: tag, column: EnumCaseConstant.declarationIndex, anchor: memberTok, range: range), member: memberTok, tag: tag, isACaseTest: true)
 		end 'renumberedCases'
 
-		return try self.enumTagAsANumber(tag, anchor: memberTok, range: range)
+		return self.notedEnumAccessorRead(try self.enumTagAsANumber(tag, anchor: memberTok, range: range), member: memberTok, tag: tag, isACaseTest: true)
 	end 'emitEnumInstanceAccessor'
+
+	// ⭐ **E3097's TAINT, MINTED AT THE ONE DOOR THAT PRODUCES AN ACCESSOR VALUE.** Every `.name`,
+	// `.ordinal` and `.rawValue` read in the program comes out of `emitEnumInstanceAccessor`, whichever
+	// spelling reached it, so recording here is what makes the refusal a property of the read rather than
+	// of the syntax around it. The BACKING-FIELD arm deliberately does not come through: `p.width` is a
+	// field of the enum's backing struct, an ordinary value, and comparing it is an ordinary comparison.
+	// ⛔⛔ **A PASS-THROUGH ANSWER MAY NOT BE TAINTED, AND THIS IS THE WHOLE OF WHY THE TAINT IS SOUND.**
+	// `enumTagAsANumber` hands the TAG back UNCHANGED when it is already `integer` — for a boxed union that
+	// tag is a LOADED value, and for an unboxed one it can be the BINDING's own — so marking it would make
+	// every later comparison of that value an accessor comparison. MEASURED before this guard existed: it
+	// refused three sites in shv2's own source that compare a FIELD of a backing record, none of them a case
+	// test. So the mark goes on a value the accessor actually MINTED, and a pass-through is silently
+	// un-refusable — a miss rather than a wrong answer, which is the direction this rule must fail in.
+	function notedEnumAccessorRead(value ValueId, member Token, tag ValueId, isACaseTest bool) returns ValueId
+		if not isACaseTest or value == tag 'nothingToMark'
+			return value
+		end 'nothingToMark'
+
+		self.enumAccessorReads.push(EnumAccessorRead.create(value, member: member.value))
+		return value
+	end 'notedEnumAccessorRead'
+
+	// The accessor a value came out of, or nothing. A linear scan of a list that is EMPTY in every function
+	// that reads no accessor — which is the shape the whole record is chosen for, and the reason this is not
+	// a per-`ValueId` column.
+	function enumAccessorReadOf(value ValueId) returns EnumAccessorLookup
+		for read in self.enumAccessorReads 'each'
+			if read.value == value 'thisOne'
+				return EnumAccessorLookup.read(read.member)
+			end 'thisOne'
+		end 'each'
+
+		return EnumAccessorLookup.notAnAccessor
+	end 'enumAccessorReadOf'
+
+	// ⭐⭐ **E3097 — `==`/`!=` AGAINST AN ENUM ACCESSOR IS A CASE TEST WRITTEN THE WRONG WAY ROUND.** The
+	// comparison reads as a dispatch and is a string or integer compare on a DERIVED value: add a case to the
+	// enum and every such site goes on answering as it did, silently, which is exactly what the rule exists
+	// to stop. The cure is on the value itself — `value == Type.case`, or `match` for a union variant — and
+	// the message says so because the author's next question is what to write instead.
+	//
+	// ⚠ Only EQUALITY. Ordering an accessor (`a.ordinal < b.ordinal`) claims to be no such test and is left
+	// alone, which is where both reference compilers draw the line too.
+	function requireNotAnEnumAccessorComparison(lhs ValueId, rhs ValueId, opTok Token) throws ParseError
+		match self.enumAccessorReadOf(lhs) 'left'
+			read(member) then throw ParseError.enumAccessorComparison(String.from(member), op: opTok.kind.rawValue, line: opTok.line, column: opTok.column)
+			notAnAccessor then break 'left'
+		end 'left'
+
+		match self.enumAccessorReadOf(rhs) 'right'
+			read(member) then throw ParseError.enumAccessorComparison(String.from(member), op: opTok.kind.rawValue, line: opTok.line, column: opTok.column)
+			notAnAccessor then break 'right'
+		end 'right'
+	end 'requireNotAnEnumAccessorComparison'
 
 	// ⭐ **QUESTION 3 — HAND A TAG BACK AS A NUMBER RATHER THAN AS A VALUE OF THE ENUM'S TYPE**, and it is a
 	// third question rather than question 1 re-read. It asks what the tag value is TYPED, which is the

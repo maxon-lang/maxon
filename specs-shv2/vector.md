@@ -765,7 +765,8 @@ end 'main'
 `Parser.vectorSurfaceMemberNames` rendered for a member the SYNTHESIZED surface did not carry — *"shv2
 provides count/get/set; that list IS the surface"*. `create`, `count`, `get` and `set` are
 `stdlib/Vector.maxon`'s now, so there is no synthesized surface to render a sentence from and a member a
-`Vector` does not have is `E3004` off the declaration, exactly as it is for a `List` (W153) or a `Map` (W41).
+`Vector` does not have is a METHOD MISS off the declaration (`E4006`), exactly as it is for a `List` (W153)
+or a `Map` (W41).
 
 ⛔⛔ **THE FIVE CASES BELOW ARE A PROBE THAT FOUND NOTHING, WRITTEN DOWN SO IT COUNTS AS HAVING HAPPENED**,
 and the thing they probe is a LANDMINE `W86` recorded in advance: a vector losing its dispatch arm would
@@ -789,7 +790,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:7:4: call to undefined function 'Vector.push'
+error E4006: <fragment>:7:4: Type 'Vector' has no method named 'push'
 ```
 
 <!-- test: error.resize-is-refused-off-the-declaration -->
@@ -806,7 +807,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:7:4: call to undefined function 'Vector.resize'
+error E4006: <fragment>:7:4: Type 'Vector' has no method named 'resize'
 ```
 
 <!-- test: error.clear-is-refused-off-the-declaration -->
@@ -822,7 +823,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:7:4: call to undefined function 'Vector.clear'
+error E4006: <fragment>:7:4: Type 'Vector' has no method named 'clear'
 ```
 
 <!-- test: error.insert-is-refused-off-the-declaration -->
@@ -840,7 +841,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:7:8: call to undefined function 'Vector.insert'
+error E4006: <fragment>:7:8: Type 'Vector' has no method named 'insert'
 ```
 
 <!-- test: error.remove-is-refused-off-the-declaration -->
@@ -855,7 +856,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:7:15: call to undefined function 'Vector.remove'
+error E4006: <fragment>:7:15: Type 'Vector' has no method named 'remove'
 ```
 
 <!-- test: error.a-bare-growth-call-inside-an-extension-body-is-refused -->

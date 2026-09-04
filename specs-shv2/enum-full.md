@@ -442,10 +442,11 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: error.associated-value-positional-second-arg -->
-<!-- MEASURED 2026-09-04: shv2 refuses it as `E2053: the second and later arguments must be named ('name: value')`
-     where the pin is `E3005: Second and subsequent arguments must be named`. Same rule, a dedicated CODE against a
-     general one — a ruling, not a gap. -->
+<!-- test: error.associated-value-positional-second-arg -->
+⚠ **shv2 DIVERGES FROM THE CANONICAL PIN, AND KEEPS THE SHARPER ANSWER.** The bootstrap reports this as
+the general `E3005` type mismatch anchored at the CALLEE; shv2 has a dedicated code for the rule
+(`E2053 ParserCallArgMissingLabel`, which every call site shares) and anchors at the ARGUMENT the author
+has to move. A dedicated code is greppable and a general one is not, and the anchor is where the fix goes.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -461,13 +462,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-full/error.associated-value-positional-second-arg.test:11:11: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E2053: <fragment>:11:31: the second and later arguments must be named ('name: value')
 ```
 
-<!-- disabled-test: error.associated-value-unknown-param -->
-<!-- MEASURED 2026-09-04: shv2 answers `E3018: type 'TwoParts' has no field named 'z'` where the pin is `E3003:
-     unknown parameter name: 'z'`. A union case's payload parameters are not FIELDS, so shv2's noun is wrong here
-     even though its verdict is right. -->
+<!-- test: error.associated-value-unknown-param -->
+⚠ **shv2 DIVERGES, AND THE DIVERGENCE IS THE NOUN.** A payload is a positional slot of ONE CASE, not a
+member of the union — so neither reference's sentence is right about it: the bootstrap's `unknown parameter
+name` (E3003) is the code for a name with no binding in scope, and calling it a FIELD points the fix at the
+wrong declaration. shv2 names the case, and the code (`E3144`) says which of the two mistakes this is.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -483,7 +485,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3003: specs/fragments/enum-full/error.associated-value-unknown-param.test:11:31: unknown parameter name: 'z'
+error E3144: <fragment>:11:31: case 'values' of `union TwoParts` has no payload named 'z'
 ```
 
 <!-- test: associated-value-array-push -->
@@ -888,9 +890,9 @@ end 'main'
 error E3034: specs/fragments/enum-full/error.unknown-enum-case.test:8:11: unknown enum case: 'green'
 ```
 
-<!-- disabled-test: error.associated-value-wrong-count -->
-<!-- MEASURED 2026-09-04: `E2053` against the pinned `E3005`, exactly as
-     `error.associated-value-positional-second-arg` — one ruling covers both. -->
+<!-- test: error.associated-value-wrong-count -->
+A surplus argument is the SAME mistake one door over — the second argument carries no label — so it is the
+same `E2053` at the same anchor, and `error.associated-value-positional-second-arg` carries the reason.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -906,7 +908,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-full/error.associated-value-wrong-count.test:11:11: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E2053: <fragment>:11:29: the second and later arguments must be named ('name: value')
 ```
 
 <!-- test: error.associated-value-type-mismatch -->
@@ -1016,10 +1018,9 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: error.match-enum-wrong-binding-count -->
-<!-- MEASURED 2026-09-04: shv2 answers `E2015 Unsupported: case 'value' of `union Container` binds more payloads
-     than the 1 it declares` where the pin is `E3035: wrong binding count`. The message is the better one and the
-     CODE is the wrong band: E2015 says the compiler cannot do this, and this program is simply wrong. -->
+<!-- test: error.match-enum-wrong-binding-count -->
+Both arity directions — too many bindings and too few — carry `E3035` at the CASE name, and the sentence
+says which way it disagrees. shv2 adds the two counts the bootstrap's leaves out.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1036,7 +1037,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3035: specs/fragments/enum-full/error.match-enum-wrong-binding-count.test:12:3: wrong binding count: 'value'
+error E3035: <fragment>:12:3: wrong binding count: 'value' expects 1 associated value(s), got 2
 ```
 
 <!-- test: error.match-enum-unknown-case -->

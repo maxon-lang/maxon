@@ -1199,8 +1199,8 @@
       "name": "SemanticEnumAccessorComparison",
       "stage": "semantic",
       "doc": "`==`/`!=` against an enum/union value's `.name`, `.ordinal`, or\n`.rawValue` accessor. Such a comparison is checking which case a value\nis, which must be done on the value itself (`value == Type.case` for a\npayload-free case, or `match value` for a union variant -- so adding a\ncase forces every site to handle it instead of silently slipping\nthrough). Comparing the derived string/int accessor bypasses that.\n3089-3096 are taken on the self-hosted side (semanticTypeResolutionLeak\nonward), so this shared diagnostic takes the next code free on both\nsides. Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.",
-      "emittedBy": {"csharp": "SemanticEnumAccessorComparison", "selfhosted": "semanticEnumAccessorComparison"},
-      "notEmittedBy": ["shv2"]
+      "emittedBy": {"csharp": "SemanticEnumAccessorComparison", "selfhosted": "semanticEnumAccessorComparison", "shv2": "semanticEnumAccessorComparison"},
+      "notEmittedBy": []
     },
     {
       "code": 3098,
@@ -1614,6 +1614,15 @@
       "stage": "semantic",
       "doc": "A module-level `var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function a message\nreaches through the call graph. A message runs on a green thread the scheduler may put on any OS\nthread, and a module `var` is one word every one of them shares.\nTHE TWO DIRECTIONS FAIL DIFFERENTLY AND BOTH ARE REFUSED BY THIS ONE CODE, because they are one rule\nwith one cure and one reachability question; only the diagnostic's subject clause differs.\nA WRITE is an arithmetic failure rather than a crash, which is why it cannot be a run-time check:\n`total = total + by` is a load, an add and a store two Ms can interleave, nothing traps, nothing\nleaks, and the program merely answers a number that is sometimes too small. MEASURED at\nMAXON_MAX_PROCS=16 over 1200 sends, ten runs: five lost an update and every one exited 0.\nA READ is worse. The write that changes the slot RELEASES the record it was holding, so a green\nthread that has already loaded the pointer reads on into freed memory -- a use-after-free, not a\nstale word. MEASURED: 12 services spinning on `label.count()` while `main` reassigned an\nINTERPOLATED string 4000 times read 8 of 8 clean at one processor and 20 of 20 EXIT 139 at sixteen,\nseveral panicking inside `utf8DecodeAt` with \"value outside typealias 'Codepoint'\".\nTHE RULE IS ABOUT WHO TOUCHES IT, not about globals as such. A write to `self.<field>` is legal -- a\nservice's fields are reached by one green thread, which is the whole point of putting state there. A\nread of a module-level `let` is legal and is the escape hatch every configuration constant takes: it\nis written once before any green thread exists, so no store can free anything under a reader. And a\nplain function no message reaches may read and write a module `var` all it likes: a `spawn` somewhere\ndoes not make the rest of the program concurrent.\nREACHABILITY IS TRANSITIVE, exactly as a service's blocking edge (E3139) is, and that is what makes\nthe rule worth having -- a rule keyed on writes syntactically inside a handler body would refuse only\nthe shape an author would have spotted anyway, while the race does not care which frame the store\ninstruction sits in.\nAn INDIRECT or WITNESS dispatch reached from a message is followed by treating every function in the\nprogram as message-reachable, which is this rule's refusing direction: unlike E3139 -- where a missed\nedge costs a guarantee -- a missed edge here costs a silently wrong answer at run time.\nThe cure is always available and is always the same for both directions: keep the value in a field of\n`self` and hand it back through a reply, or make the global a `let`. A reply is a Promise the awaiter\nowns, so the value is handled by one green thread at every instant.\nThe diagnostic anchors at the ACCESS -- which is where the program can be repaired -- names the message\nthat reaches it, and carries the `spawn` that made the type a service as a note, because whether a\ntype is a service is a whole-program property whose cause may be in another file.",
       "emittedBy": {"shv2": "semanticSharedGlobalAccessFromGreenThread"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3144,
+      "tag": "E3144",
+      "name": "SemanticUnknownPayloadName",
+      "stage": "semantic",
+      "doc": "A union case's payload argument carries a `name:` label naming no payload of that case --\n`TwoParts.values(10, z: 20)` where the case declares `a` and `b`.\nNOT E3018, which is about a FIELD: a payload is a positional slot of one case, not a member of\nthe union, and a message calling it a field names a thing the program does not have. The two\nmistakes also have different cures -- a field typo is fixed against the type, a payload label\nagainst the CASE -- so the diagnostic names the case rather than the union alone.",
+      "emittedBy": {"shv2": "semanticUnknownPayloadName"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

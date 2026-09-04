@@ -2281,9 +2281,10 @@ end 'main'
 
 Using a type that doesn't implement Hashable as a Map key should produce a compile error:
 
-<!-- disabled-test: where-clauses.constraint-violation -->
-<!-- MEASURED 2026-09-04: shv2 emits the pinned E3017 AND a second one for `Equatable`, the constraint `Hashable`
-     itself requires. One root cause, two lines — the transitive super-interface should not be reported separately. -->
+<!-- test: where-clauses.constraint-violation -->
+⚠ **TWO LINES, BECAUSE `Map` DECLARES TWO CONSTRAINTS.** `stdlib/Map.maxon:21` spells
+`where Key is Hashable and Equatable`, and `NotHashable` meets neither — so shv2 reports both, where the
+bootstrap stops at the first. Every unmet constraint is a separate thing the author has to supply.
 
 ```maxon
 
@@ -2300,7 +2301,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: specs/fragments/where-clauses/where-clauses.constraint-violation.test:9:11: Type 'NotHashable' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:9:11: Type 'NotHashable' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:9:11: Type 'NotHashable' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
 ```
 
 ### User-defined type with where clause

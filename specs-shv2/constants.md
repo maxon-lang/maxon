@@ -1228,9 +1228,7 @@ via `match` for a union — so adding a case forces every site to handle it
 rather than silently slipping through. The accessors remain available to
 *observe* a case's name/position/backing as data (print, serialize, etc.).
 
-<!-- disabled-test: error.enum-accessor-comparison -->
-<!-- MEASURED 2026-09-04: shv2 COMPILES `c.ordinal == 1` CLEAN; the bootstrap refuses it E3097. The refusal does
-     not exist here. -->
+<!-- test: error.enum-accessor-comparison -->
 ```maxon
 enum Color
 	red
@@ -1429,10 +1427,9 @@ end 'main'
 error E3034: specs/fragments/constants/error.fromRawValue-invalid-literal.test:8:26: no enum case with raw value '999': 'HttpStatus'
 ```
 
-<!-- disabled-test: error.fromRawValue-type-mismatch -->
-<!-- MEASURED 2026-09-04: same CODE and same TEXT, ANCHOR ONLY — shv2 blames the offending ARGUMENT and the
-     bootstrap the member name. Which one the language pins is a ruling over every argument mismatch, not this
-     case's to take. -->
+<!-- test: error.fromRawValue-type-mismatch -->
+⚠ **THE ANCHOR DIVERGES: shv2 blames the offending ARGUMENT, the bootstrap the member name.** Same code and
+same sentence; the argument is the token that has to change.
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -1445,7 +1442,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/constants/error.fromRawValue-type-mismatch.test:8:26: type mismatch: 'expected int, got String'
+error E3005: <fragment>:8:34: type mismatch: 'expected int, got String'
 ```
 
 ### fromName Tests

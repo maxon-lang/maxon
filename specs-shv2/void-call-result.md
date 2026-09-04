@@ -246,7 +246,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:8:12: call to undefined function 'Set.frobnicate'
+error E4006: <fragment>:8:12: Type 'Set' has no method named 'frobnicate'
 ```
 
 <!-- test: error.unknown-buffer-member-in-value-position -->

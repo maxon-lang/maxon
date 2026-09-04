@@ -157,7 +157,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:5:12: Cannot operate on bool and bool
+error E3005: <fragment>:5:12: operator '+' is not defined for type 'bool'
 ```
 
 ### Unary `-` needs a number
