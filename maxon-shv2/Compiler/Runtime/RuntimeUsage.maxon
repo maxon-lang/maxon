@@ -472,6 +472,12 @@ export type RuntimeUsage
 	// stay its own: it is the sole producer of `QueryThreadCycleTime`, whose OPTIONAL TRAILING BAND
 	// (`PeWriter.isOptionalTrailingImport`) is emitted when it is set.
 	export var usesThreadCpuTicks as bool
+	// The program asks how long the MACHINE has been up (`__Builtins.tickCountMs` ⇒ `__uptime_ms`). Its own
+	// bit rather than either clock's above, for their own reason one import over: it is the sole producer of
+	// `GetTickCount64` outside a `--debugstream` or child-spawning build, so a calendar read must not import
+	// it and this must not import theirs. Like them it declares NO transitive dependency — one host read, no
+	// `.data`, no heap and no scheduler.
+	export var usesUptimeClock as bool
 	// ⭐⭐ **THE PROGRAM REACHES THE SLAB'S PAGE LAYER** — the chunk arena, its bitmap and the pointer→span
 	// reverse map (`SlabArena.maxon`). Its own bit, and the one here that declares the LEAST: the family
 	// calls only itself and `osAllocPages`, so it pulls in no heap, no scheduler and no leak gate. It is
@@ -490,6 +496,13 @@ export type RuntimeUsage
 	// what keeps the two `.data` slots and the whole page layer out of a program that reaches neither.
 	export var usesSlabArena as bool
 
+	// The program creates or maps a NAMED SHARED SECTION (`stdlib/SharedMemory.maxon` ⇒ `__shm_*`). Its own
+	// bit, so a program that never maps one carries neither the entries nor the two kernel32 imports behind
+	// them. It declares `usesHeap` and `usesManagedMemory` transitively for the directory family's reasons —
+	// `__shm_copy_out` builds its `__ManagedMemory` answer through `__managed_create`/`__managed_reserve` and
+	// the byte copy under it, all one tier down where this Maxon-module scan cannot see them.
+	export var usesSharedMemory as bool
+
 	// ⭐⭐ **DOES A FILESYSTEM OR SOCKET ENTRY POINT PARK BEFORE ITS KERNEL CALL ON THIS TARGET?** It is an
 	// INPUT to the scan rather than one of its findings — the target decides it, not the program — and it is
 	// carried on this record because the arms that read it are three levels down inside `recordCallUsage`,
@@ -503,7 +516,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -716,6 +729,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isSlabArenaRuntimeCallee(callee) 'slabArena'
 		usage.usesSlabArena = true
 	end 'slabArena'
+	// A `__shm_*` call. It carries `usesHeap` and `usesManagedMemory` for the directory family's reasons:
+	// `__shm_copy_out` builds an `Array` record through `__managed_create`/`__managed_reserve` in a Std body
+	// this Maxon-module scan cannot see. It does NOT carry the scheduler — a mapped section is memory, so no
+	// entry here parks or makes a call the scheduler owns.
+	if isSharedMemoryRuntimeCallee(callee) 'sharedMemory'
+		usage.usesSharedMemory = true
+		usage.usesHeap = true
+		usage.usesManagedMemory = true
+	end 'sharedMemory'
 	// R4.1: a `__mf_*` call. It carries `usesHeap` with it, unlike the clock above — the open allocates a
 	// NUL-terminated scratch copy of the path and the handle box, and frees the scratch.
 	//
@@ -873,6 +895,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isThreadCpuRuntimeCallee(callee) 'threadCpuTicks'
 		usage.usesThreadCpuTicks = true
 	end 'threadCpuTicks'
+	// The UPTIME clock. It carries nothing beside itself, exactly as the two clocks above do and for the
+	// identical reason: `__uptime_ms`'s Std body is one host read and a `ret`, calling nothing this
+	// Maxon-module scan cannot see.
+	if isUptimeRuntimeCallee(callee) 'uptimeClock'
+		usage.usesUptimeClock = true
+	end 'uptimeClock'
 	if callee.equals(StreamWriteStdoutName) 'writestdout'
 		usage.usesWriteStdout = true
 	end 'writestdout'

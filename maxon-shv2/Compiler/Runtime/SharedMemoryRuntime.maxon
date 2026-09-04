@@ -1,0 +1,195 @@
+// Runtime/SharedMemoryRuntime.maxon — a NAMED SECTION two processes both map, from the side that CREATES it.
+//
+// ⭐ **WHAT IT SERVES.** `stdlib/SharedMemory.maxon`'s `SharedSegment` bottoms out in six `__Builtins`
+// intrinsics and nothing else in the language reaches these entry points. Everything above them — where the
+// ring's header sits, how its cursors advance, what an entry packs into — is ordinary Maxon in the consumer
+// that decodes the ring, exactly as the FILETIME arithmetic stays out of `osReadWallClock`.
+//
+// ⭐⭐ **IT IS THE OTHER HALF OF `DebugStreamRuntime`'s ATTACH, AND THE TWO CANNOT SHARE A DOOR.** A traced
+// child OPENS a section by a name it reads out of its environment (`osOpenNamedSegment`); the process
+// watching it CREATES that section, publishes the name, and reads what the child wrote. `OpenFileMappingA`
+// answers NULL for a section that does not exist yet, so no ordering of the two processes lets the producer's
+// op serve the consumer — see `StdOp.osCreateNamedSegment`.
+//
+// ⭐ **THE MAPPING IS `osMapNamedSegment`, REUSED UNCHANGED.** It takes a HANDLE and does not care which call
+// minted it, so a created section maps through the same op an opened one does. Only the CREATE and the UNMAP
+// are new.
+//
+// ⚠ **x64-WINDOWS ONLY, and the gate is `TargetFacilities`'.** A call site on any other lane is refused with
+// the existing `E3104 targetUnsupportedConstruct`, matched on the `__shm_` PREFIX, so an entry point added
+// here later is gated by construction rather than by memory. The arm64 and wasm lowerings of the two new ops
+// panic as a backstop for a compiler bug that got one past that refusal, never as the user-facing rejection.
+
+// The `__shm_` prefix that identifies EVERY shared-memory runtime entry point — the one test
+// `scanRuntimeUsage` reads to set `usesSharedMemory`, and the one `TargetFacilities` reads for E3104.
+let SharedMemoryRuntimePrefix = b"__shm_"
+
+// ⭐ **THE SIX ENTRY POINTS.** Two host calls (create, unmap-and-close), one mapping, and three accessors over
+// the mapped bytes. The accessors are entries rather than surface syntax because Maxon has no raw
+// dereference: `readWord` is one `loadIndirect` at an address the language cannot otherwise name.
+export let SharedMemoryCreateName = b"__shm_create"
+export let SharedMemoryMapName = b"__shm_map"
+export let SharedMemoryReadWordName = b"__shm_read_word"
+export let SharedMemoryWriteWordName = b"__shm_write_word"
+export let SharedMemoryCopyOutName = b"__shm_copy_out"
+export let SharedMemoryCloseName = b"__shm_close"
+
+// `__shm_create(namePtr, bytes) -> HANDLE | 0` — `CreateFileMappingA` under one Std op. A failure answers 0,
+// which is what `CreateFileMappingA` returns and what `stdlib/SharedMemory.maxon` tests for.
+function buildSharedMemoryCreate(module StdModule)
+	var func = IrFunction.createFromStd(SharedMemoryCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let namePtr = 0 as ValueId
+	let bytes = 1 as ValueId
+
+	let handle = ids.mint()
+	module.appendOp(entry, op: StdOp.osCreateNamedSegment(handle, namePtrId: namePtr, sizeId: bytes))
+	module.setTerminator(entry, op: StdOp.ret(handle))
+
+	module.functions.push(func)
+end 'buildSharedMemoryCreate'
+
+// `__shm_map(handle, bytes) -> base | 0` — the view. A NULL handle maps nothing and answers NULL, so a failed
+// create flows through here untested, exactly as `StdOp.osMapNamedSegment` records for the producer's open.
+function buildSharedMemoryMap(module StdModule)
+	var func = IrFunction.createFromStd(SharedMemoryMapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let handle = 0 as ValueId
+	let bytes = 1 as ValueId
+
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.osMapNamedSegment(base, handleId: handle, sizeId: bytes))
+	module.setTerminator(entry, op: StdOp.ret(base))
+
+	module.functions.push(func)
+end 'buildSharedMemoryMap'
+
+// ⭐ `__shm_read_word(base, offset) -> word` and `__shm_write_word(base, offset, value)`.
+//
+// ⭐⭐ **THE OFFSET IS BYTES AND IS NEVER SCALED**, which is the contract `specs-shv2/shared-memory-builtins.md`
+// pins: the ring's header and its records are laid out in bytes by a format neither process owns, so an
+// accessor that multiplied by eight would put every consumer read one stride away from the producer's write.
+//
+// ⚠ **THE BOUND IS THE CALLER'S AND THERE IS NO CHECK HERE.** A view is `bytes` long and this reads a word at
+// an arbitrary displacement inside it; a runtime guard would need the length, which is a fact the SEGMENT
+// holds and this entry is not given. `stdlib/SharedMemory.maxon`'s ranged `SegmentOffset` is where the domain
+// is stated.
+function buildSharedMemoryReadWord(module StdModule)
+	var func = IrFunction.createFromStd(SharedMemoryReadWordName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let base = 0 as ValueId
+	let offset = 1 as ValueId
+
+	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let word = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(word, addrId: addr, offset: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.ret(word))
+
+	module.functions.push(func)
+end 'buildSharedMemoryReadWord'
+
+function buildSharedMemoryWriteWord(module StdModule)
+	var func = IrFunction.createFromStd(SharedMemoryWriteWordName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 3)
+	let base = 0 as ValueId
+	let offset = 1 as ValueId
+	let value = 2 as ValueId
+
+	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(entry, op: StdOp.storeIndirect(addr, offset: 0, valueId: value, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSharedMemoryWriteWord'
+
+// ⭐ `__shm_copy_out(base, offset, byteCount) -> arrRec` — a FRESH owned `__ManagedMemory` holding a byte range
+// lifted out of the mapping, and the caller drops it.
+//
+// ⭐ **IT IS A COPY AND NOT A VIEW, WHICH IS THE ONLY HONEST ANSWER.** The bytes belong to a section another
+// process is writing; a record pointing INTO the mapping would answer differently on each read and would
+// outlive `close()`. Copying is also what makes the answer an ordinary `ByteArray` a caller may keep.
+//
+// ⚠ The length must be PUBLISHED — `emitManagedByteBuffer` reserves capacity and leaves `length@8` at zero by
+// `__managed_reserve`'s contract, so a copy that forgot the store would answer the empty array while holding
+// the right bytes.
+function buildSharedMemoryCopyOut(module StdModule)
+	var func = IrFunction.createFromStd(SharedMemoryCopyOutName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 3)
+	let base = 0 as ValueId
+	let offset = 1 as ValueId
+	let byteCount = 2 as ValueId
+
+	let record = ids.mint()
+	let destBuf = emitManagedByteBuffer(module, block: entry, record: record, byteCount: byteCount, ids: ids)
+	let src = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	var copied = emitForwardCopy(module, func: func, cur: entry, dest: destBuf, src: src, byteCount: byteCount, ids: ids)
+	emitStoreField(module, block: copied, record: record, offset: ManagedRecordLengthOffset, value: byteCount)
+	module.setTerminator(copied, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildSharedMemoryCopyOut'
+
+// ⭐ `__shm_close(handle, base)` — the whole teardown, in the order the OS requires.
+//
+// ⛔ **THE UNMAP COMES FIRST AND BOTH CALLS ARE NEEDED.** A section object stays alive while any view of it is
+// mapped, so closing the handle alone keeps the section, its backing and its address range for the life of
+// the process — silently, because nothing in the language counts an OS mapping.
+//
+// A zero handle or a zero base reaches `CloseHandle(0)` / `UnmapViewOfFile(0)`, which are no-ops — so a
+// segment whose create or map failed needs no kind test on this path.
+function buildSharedMemoryClose(module StdModule)
+	var func = IrFunction.createFromStd(SharedMemoryCloseName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let handle = 0 as ValueId
+	let base = 1 as ValueId
+
+	module.appendOp(entry, op: StdOp.osUnmapNamedSegment(base))
+	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSharedMemoryClose'
+
+export function installSharedMemoryRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesSharedMemory 'noSharedMemory'
+		return
+	end 'noSharedMemory'
+
+	buildSharedMemoryCreate(module)
+	buildSharedMemoryMap(module)
+	buildSharedMemoryReadWord(module)
+	buildSharedMemoryWriteWord(module)
+	buildSharedMemoryCopyOut(module)
+	buildSharedMemoryClose(module)
+end 'installSharedMemoryRuntime'
+
+// Every callee this file installs — what `scanRuntimeUsage` reads to set `usesSharedMemory`, and what
+// `TargetFacilities.calleeHostFacility` refuses on a lane without the substrate. A PREFIX test rather than a
+// six-way `or`, for `isConsoleRuntimeCallee`'s reason: a seventh entry point is then covered by construction
+// instead of having to be remembered at two sites.
+export function isSharedMemoryRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: SharedMemoryRuntimePrefix)
+end 'isSharedMemoryRuntimeCallee'

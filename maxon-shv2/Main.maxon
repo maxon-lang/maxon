@@ -63,6 +63,12 @@ let FmtCommandName = "fmt"
 // parity with the reference is the contract, so a "better" wording here is the failure, not a fix.
 let FmtUsageLine = "usage: maxon fmt [<file|directory>]   (formats in place; no options)"
 
+// ⭐⭐ **THE ONE COMMAND WHOSE TAIL IS NOT THIS DRIVER'S.** `monitor <exe> [args...]` hands everything
+// after the executable to the CHILD, so `parse` stops at this word and files the rest verbatim. Named
+// beside `fmt`'s for the same reason: a command word that decides how the REST of the line is read is not
+// an inline literal.
+let MonitorCommandName = "monitor"
+
 module let WorkerPersistentFlag = "--worker-persistent"
 
 // Read by the parser and written by `specSelectionArgv`, both in this file, so neither leaves it.
@@ -246,6 +252,7 @@ function main() returns ExitCode
 		scaleTest gives runScaleTest(args)
 		test gives runTest(args)
 		fmt gives runFmt(args)
+		monitor gives runMonitor(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -1096,6 +1103,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		specTest gives 1
 		scaleTest gives 1
 		fmt gives 1
+		monitor gives 1
 		unknown gives 1
 	end 'whichCommand'
 end 'refusedCommandLineExit'
@@ -1145,6 +1153,7 @@ function printUsage()
 	print("                                is called; a DIRECTORY is walked for `.maxon` files, skipping\n")
 	print("                                `build.maxon`, anything under a `.maxonignore`, and any\n")
 	print("                                subdirectory that is its own checkout. Takes no options.\n")
+	print("  monitor <exe> [args...]       Launch executable with shared-memory debug stream monitor\n")
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
@@ -1242,6 +1251,10 @@ enum MaxonCommand
 	test
 	// `maxon fmt` - re-print `.maxon` sources in canonical layout, IN PLACE. See `runFmt`.
 	fmt
+	// `maxon monitor` — run a `--debugstream` binary with a DebugStream ring attached and print the
+	// events it writes into it. The one command whose TAIL belongs to a child process rather than to this
+	// driver; see the `monitorTail` arm in `parse`.
+	monitor
 	unknown
 end 'MaxonCommand'
 
@@ -1440,6 +1453,21 @@ module type MaxonArgs
 			if arg.startsWith(OptionPrefix) 'anOption'
 				parsed.anyOption = firstBadOption(parsed.anyOption, arg: arg)
 			end 'anOption'
+
+			// ⭐⭐ **`monitor` STOPS THE PARSE, AND THAT IS THE WHOLE OF HOW A CHILD'S COMMAND LINE SURVIVES
+			// THIS DRIVER.** The arms below are order-independent, so a child's `--filter=mm` would be read as
+			// `spec-test`'s TEST SELECTION and any flag this driver does not implement would set `badOption`
+			// and abort the run before the child was ever spawned. Everything after the word is filed as a
+			// positional verbatim instead, and `anyOption` never sees one of them.
+			//
+			// ⚠ **ONLY THE FIRST COMMAND WORD IS THE COMMAND**, exactly as the restore block below enforces
+			// for every other one: a `monitor` typed after a command already chosen is an ordinary path, which
+			// is what asking that none has been chosen yet says.
+			if arg == MonitorCommandName and parsed.command == MaxonCommand.unknown 'monitorCmd'
+				parsed.command = MaxonCommand.monitor
+				parsed.paths = monitorTail(args, from: i + 1)
+				break
+			end 'monitorCmd'
 
 			// The command as it stood BEFORE this argument, so the arms below can stay a plain chain and
 			// the first-word rule be applied once, after them. See `laterCommandWordIsAPath`.
@@ -1652,6 +1680,22 @@ module type MaxonArgs
 		return parsed
 	end 'parse'
 end 'MaxonArgs'
+
+// A position in the process command line. Declared for `monitorTail`, which is the only place an index
+// into it leaves `MaxonArgs.parse`.
+typealias CommandLineIndex = int(0 to u32.max)
+
+// Everything after the word `monitor`, in the order typed. It is the CHILD's command line: no arm of the
+// parser consumes it and nothing here rewrites it. A function rather than a loop inside `parse`, because
+// that loop carries one register per live local and is already at the limit its own note records.
+function monitorTail(args StringArray, from CommandLineIndex) returns SourcePathSpellingArray
+	var tail = SourcePathSpellingArray.create()
+	for position in from upto args.count() 'eachTailArgument'
+		tail.push(try args.get(position) otherwise panic("monitorTail: index {position} is past args.count() despite the upto bound"))
+	end 'eachTailArgument'
+
+	return tail
+end 'monitorTail'
 
 // The function names an `--emit-ir-runtime=` value lists — split on the shared separator, each part
 // trimmed, empties dropped. The same shape `parseTargetKeys` gives a `<!-- targets: … -->` value,

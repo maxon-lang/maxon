@@ -60,6 +60,17 @@ export enum HostFacility
 	// clock above: a target can serve both wall and monotonic time and still have no per-thread cost clock,
 	// which is exactly WASI's position.
 	threadCpuClock
+	// How long the MACHINE has been up (`osTickCountMs`) — `__uptime_ms`. Its own facility rather than a
+	// corner of `wallClock`, on this enum's stated rule that a facility is named for what the HOST provides:
+	// a monotonic count since boot and a calendar are different questions with different APIs, and the
+	// answer to one says nothing about the other.
+	//
+	// ⚠ **THE OP BEHIND IT LOWERS ON MORE LANES THAN THIS ROW CLAIMS, AND THE ROW IS STILL HONEST.** Every
+	// POSIX lane has a `mrt_host_tick_ms` chunk, but each installs it only under `usesIocp` — so the
+	// callee's `iatCall`/`callDirect` would relocate against a chunk that is not in the image for a program
+	// that reads the uptime and spawns nothing. A lane claims this row by widening that install gate, which
+	// is the "a `true` promises a lowering" rule this file's header states.
+	uptimeClock
 	// The timed park (`osSleepMs`) — `__gt_sleep`, and so `sleep(ms)` through `stdlib/Sleep.maxon`.
 	sleep
 	// The cooperative reschedule (`__gt_resched`) — `Runtime.yield()`. The scheduler's run-queue handoff
@@ -121,6 +132,11 @@ export enum HostFacility
 	// shv2 UNBUILDABLE for arm64-macOS in a day: `Testing/TestRender` asks the question unconditionally,
 	// `Testing/` is ordinary user code, and this gate is reachability-blind for user code by design.
 	terminalDetection
+	// A NAMED SHARED SECTION two processes both map (`__shm_*`). Its own facility rather than a corner of
+	// `managedFile`, on this enum's stated rule that a facility is named for what the HOST provides:
+	// publishing a section under a name and mapping it into another process is a different API from
+	// reading a file, and a lane can serve either without the other.
+	sharedMemory
 end 'HostFacility'
 
 // The answer `calleeHostFacility` returns. A union rather than a bool-plus-out-param so that "this callee
@@ -198,8 +214,9 @@ end 'CalleeFacility'
 // entries (`__gt_process_*`) are not named here, so on another target they still die as a BACKEND PANIC
 // rather than a diagnostic — MEASURED"*. All three doors a program can spawn a child through now name their
 // entry here — `__Builtins.runProcess` → `__gt_process_run`, `spawnReadLine` → `__gt_io_read`, and the whole
-// `__gt_subp_` band behind the seven streaming builtins and the twenty-two `__Builtins.subprocess*`
-// intrinsics (a twenty-third name, `managedIsNull`, is a heap predicate and lowers nowhere near this band) —
+// `__gt_subp_` band behind the seven streaming builtins and the `__Builtins.subprocess*`
+// intrinsics (`managedIsNull` sits in that band's parser table but is a heap predicate and lowers nowhere
+// near it) —
 // so a subprocess program on arm64/linux/wasm is refused at the call's own span instead of panicking three
 // tiers down. Each satisfies this set's rule: SOURCE names the builtin and the parser routes it to exactly
 // one entry.
@@ -351,6 +368,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.subprocess)
 	end 'subprocessBand'
 
+	if isSharedMemoryRuntimeCallee(callee) 'sharedMemoryBand'
+		return CalleeFacility.needs(HostFacility.sharedMemory)
+	end 'sharedMemoryBand'
+
 	if isClockRuntimeCallee(callee) 'wallClockBand'
 		return CalleeFacility.needs(HostFacility.wallClock)
 	end 'wallClockBand'
@@ -358,6 +379,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	if isThreadCpuRuntimeCallee(callee) 'threadCpuBand'
 		return CalleeFacility.needs(HostFacility.threadCpuClock)
 	end 'threadCpuBand'
+
+	if isUptimeRuntimeCallee(callee) 'uptimeBand'
+		return CalleeFacility.needs(HostFacility.uptimeClock)
+	end 'uptimeBand'
 
 	if isManagedFileRuntimeCallee(callee) 'fileBand'
 		return CalleeFacility.needs(HostFacility.managedFile)
@@ -553,6 +578,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// AAPCS64 passes a variadic argument on the STACK, which a runtime chunk here does not use. A
 			// libc-less lane has no such choice — see the arm64-linux row.
 			terminalDetection gives true
+			// The two host calls behind `__shm_*` are Win32 section calls with no lowering on this lane.
+			sharedMemory gives false
+			// `mrt_host_tick_ms` exists on this lane and is installed only under `usesIocp`
+			// (see `HostFacility.uptimeClock`), so a program that reads the uptime and spawns nothing would
+			// relocate against a chunk the image does not carry.
+			uptimeClock gives false
 		end 'f'
 	end 'darwinArm64'
 
@@ -712,6 +743,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// program need not have a scheduler; gated on `usesGt` alone the first such program relocated
 			// against a word nothing wrote.
 			terminalDetection gives true
+			// The two host calls behind `__shm_*` are Win32 section calls with no lowering on this lane.
+			sharedMemory gives false
+			// `mrt_host_tick_ms` exists on this lane and is installed only under `usesIocp`
+			// (see `HostFacility.uptimeClock`), so a program that reads the uptime and spawns nothing would
+			// relocate against a chunk the image does not carry.
+			uptimeClock gives false
 		end 'f'
 	end 'linuxArm64'
 
@@ -818,6 +855,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `PosixRuntime.posixReadsEnvironment` — a union whose OTHER producer, the scheduler's
 			// `MAXON_MAX_PROCS` read, cannot fire here yet — so the day `greenThreads` lands it needs no widening.
 			terminalDetection gives true
+			// The two host calls behind `__shm_*` are Win32 section calls with no lowering on this lane.
+			sharedMemory gives false
+			// `mrt_host_tick_ms` exists on this lane and is installed only under `usesIocp`
+			// (see `HostFacility.uptimeClock`), so a program that reads the uptime and spawns nothing would
+			// relocate against a chunk the image does not carry.
+			uptimeClock gives false
 		end 'f'
 	end 'linuxX64'
 

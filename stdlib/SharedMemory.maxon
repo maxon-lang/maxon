@@ -1,0 +1,123 @@
+/// A NAMED SHARED SECTION — a block of bytes two processes both map, addressed by name.
+///
+/// One process CREATES a section of a fixed size and publishes it under a name; another maps the same
+/// name and sees the same bytes. That is how a DebugStream trace travels: the traced child writes
+/// fixed-size records into a ring inside the section, and the process watching it decodes what it finds
+/// there. Nothing about the ring's layout is here — this file is the door to the bytes.
+///
+///     var segment = try SharedSegment.create("maxon-trace-1", bytes: 65536)
+///     segment.writeWord(0, value: 1)
+///     let first = segment.readWord(0)
+///     segment.close()
+///
+/// Forgetting `close()` leaks the mapping AND keeps the section alive: a Win32 section object outlives
+/// its handle for as long as any view of it is mapped.
+///
+/// Available on `x64-windows` only — these are Win32 section objects, the same restriction the
+/// DebugStream host primitives carry. A call site on any other target is refused at compile time.
+///
+/// @category System
+#if compiler(shv2)
+
+	/// How many bytes a section holds. Never zero — `CreateFileMappingA` reads a zero maximum size as "as
+	/// large as the backing file", which a page-file-backed section does not have — and never wider than the
+	/// DWORD the create call carries it in.
+	public typealias SegmentByteCount = int(1 to u32.max)
+
+	/// Where inside the mapping an accessor reads or writes. BYTES, never a word index: the records a
+	/// section carries are laid out by a format neither process owns, so a scaled offset would put one side's
+	/// reads a stride away from the other's writes.
+	public typealias SegmentOffset = int(0 to u32.max)
+
+	/// One 64-bit word of a mapping's contents. Signed and full-width because a section holds whatever its
+	/// format puts there, and nothing here interprets it.
+	public typealias SegmentWord = int(i64.min to i64.max)
+
+	// The opaque machine words the two host calls answer — a section HANDLE and the base address of a view.
+	// Both are full-range rather than narrowed: they are the OS's numbers, and a narrower alias would be a
+	// range check on a value with no domain to check against.
+	typealias SegmentHandle = int(i64.min to i64.max)
+	typealias SegmentAddress = int(i64.min to i64.max)
+
+	// File-private aliases mirroring the names `stdlib/String.maxon` declares file-privately, exactly as
+	// `stdlib/Subprocess.maxon` re-declares them for the same reason.
+	typealias Byte = int(0 to u8.max)
+	typealias ByteArray = Array with Byte
+
+	// The answer both host calls give for a failure: `CreateFileMappingA` and `MapViewOfFile` both return NULL,
+	// so one name serves both tests. It is also what a teardown passes for the half a failed create never made.
+	let NoSection = 0
+
+	/// Why a section could not be opened. Two arms because the two host calls fail for different reasons and
+	/// a caller can act on the difference: a create fails on a name collision with an incompatible section or
+	/// on a size the system will not back, a map on address space.
+	public union SharedMemoryError implements Error
+		createFailed
+		mapFailed
+	end 'SharedMemoryError'
+
+	/// A named section, mapped into this process.
+	public type SharedSegment
+		// The section object, and the base of this process's view of it. Both are needed to tear the mapping
+		// down — see `close`.
+		var handle as SegmentHandle
+		var base as SegmentAddress
+		// The name the section is published under, kept so `segmentName()` can answer it: the OS offers no way
+		// to read a section's name back off its handle, and the name is what a second process needs.
+		var name as String
+		// Latched by `close()` so a second call is a no-op, the contract `StreamingSubprocess.release` states.
+		var closed as bool
+
+		/// Create a NEW section of exactly `bytes` bytes, published under `name`, and map it into this process.
+		public static function create(name String, bytes SegmentByteCount) returns SharedSegment throws SharedMemoryError
+			let rawHandle = __Builtins.sharedMemoryCreate(name.cstr(), bytes)
+			if rawHandle == NoSection 'createFailed'
+				throw SharedMemoryError.createFailed
+			end 'createFailed'
+
+			let rawBase = __Builtins.sharedMemoryMap(rawHandle, bytes)
+			if rawBase == NoSection 'mapFailed'
+				// The section exists and nothing is mapped, so the teardown is the handle alone — which is
+				// exactly what `close` does with a zero base, since `UnmapViewOfFile(0)` is a no-op.
+				__Builtins.sharedMemoryClose(rawHandle, NoSection)
+				throw SharedMemoryError.mapFailed
+			end 'mapFailed'
+
+			return SharedSegment{handle: rawHandle, base: rawBase, name: name, closed: false}
+		end 'create'
+
+		/// The name this section is published under — what a second process maps it by.
+		public function segmentName() returns String
+			return name
+		end 'segmentName'
+
+		/// The 64-bit word at `offset` bytes into the mapping.
+		public function readWord(offset SegmentOffset) returns SegmentWord
+			return __Builtins.sharedMemoryReadWord(base, offset)
+		end 'readWord'
+
+		/// Write `value` as a 64-bit word at `offset` bytes into the mapping.
+		public function writeWord(offset SegmentOffset, value SegmentWord)
+			__Builtins.sharedMemoryWriteWord(base, offset, value)
+		end 'writeWord'
+
+		/// `byteCount` bytes of the mapping starting at `offset`, as a fresh independent array.
+		///
+		/// It COPIES rather than viewing: the bytes belong to a section another process may be writing, and a
+		/// view would answer differently on each read and would outlive `close()`.
+		public function copyOut(offset SegmentOffset, byteCount SegmentByteCount) returns ByteArray
+			return ByteArray.init(__Builtins.sharedMemoryCopyOut(base, offset, byteCount))
+		end 'copyOut'
+
+		/// Unmap this process's view and release the section. Idempotent.
+		///
+		/// Both steps are needed: a section object stays alive while any view of it is mapped, so releasing the
+		/// handle alone would keep the section and its address range for the life of the process.
+		public function close()
+			if not closed 'stillOpen'
+				__Builtins.sharedMemoryClose(handle, base)
+				closed = true
+			end 'stillOpen'
+		end 'close'
+	end 'SharedSegment'
+#endif

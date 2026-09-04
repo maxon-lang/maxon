@@ -142,7 +142,9 @@ let VirtualAllocLetOsChooseBase = 0x0
 // `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` call to grow a GT stack — one
 // spelling of the two flags, shared by the Std lowering here and the byte code there, not two copies.
 export let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
-export let VirtualAllocPageReadWrite = 0x4  // PAGE_READWRITE
+// `PAGE_READWRITE` — the memory protection `VirtualAlloc` commits with and `CreateFileMappingA`
+// publishes a section with. ONE Win32 constant, so one name: it is not `VirtualAlloc`'s.
+export let PageReadWriteProtection = 0x4
 
 // The `VirtualFree(addr, 0, MEM_RELEASE)` shape `lowerOsFreePages` and the hand-assembled `__gt_morestack`
 // chunk both emit (P1.5-B1a′). `MEM_RELEASE` releases the WHOLE reservation from its base — which is why
@@ -279,7 +281,9 @@ let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT �
 let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
 let IocpNoCompletionKey = 0x0  // CreateIoCompletionPort CompletionKey for an associate
 let IocpNoConcurrentThreads = 0x0  // CreateIoCompletionPort NumberOfConcurrentThreads for an associate
-let IocpInvalidHandleValue = -1  // CreateIoCompletionPort FileHandle = INVALID_HANDLE_VALUE (-1) creates a new port
+// `INVALID_HANDLE_VALUE`. `CreateIoCompletionPort` reads it as "make a new port" and `CreateFileMappingA`
+// as "back this section with the page file rather than with a file on disk".
+let InvalidHandleValue = -1
 let IocpSingleConcurrentThread = 1  // NumberOfConcurrentThreads for a fresh port (the one completion thread)
 let FileSkipCompletionPortOnSuccess = 1  // SetFileCompletionNotificationModes — a SYNC read posts no IOCP packet
 let CreateEventManualReset = 0x0  // CreateEventA bManualReset = FALSE → AUTO-reset (one wait consumes one signal)
@@ -293,12 +297,17 @@ let ThreadRunImmediately = 0x0  // CreateThread dwCreationFlags = 0 (not CREATE_
 // difference between reporting the machine and reporting 64 of its 128 processors (see `lowerOsCpuCount`).
 let AllProcessorGroups = 0xFFFF
 
+// `CreateFileMappingA` splits its maximum size across two DWORD arguments. `stdlib/SharedMemory.maxon`'s
+// `SegmentByteCount` tops out at `u32.max`, so the high half is always zero and the low half carries the
+// whole size — which is what makes `dwMaximumSizeLow` an ordinary operand store rather than a split.
+let SectionSizeHighDword = 0x0
+
 // ⭐ **`GetCurrentThread()`'s PSEUDO-HANDLE, `(HANDLE)-2`, AS AN UNSIGNED MACHINE WORD.** It is a
 // compile-time CONSTANT that always names the calling thread, not a handle to open or close, so
 // `QueryThreadCycleTime`'s first argument costs neither an import nor a call — the bootstrap's Windows
 // emitter materializes the identical value for the identical reason (`X86CodeEmitter.Backend.cs`'s
 // `CurrentThreadPseudoHandle`). Spelled as an arithmetic negation rather than as a transcribed
-// two's-complement pattern, which is `IocpInvalidHandleValue`'s idiom in this same band and for its reason:
+// two's-complement pattern, which is `InvalidHandleValue`'s idiom in this same band and for its reason:
 // a hand-written 0xFFFFFFFFFFFFFFFE is sixteen digits nothing checks.
 let CurrentThreadPseudoHandle = -2
 
@@ -381,6 +390,10 @@ export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
 // frame reservation and the syscall shim's copy, so the two cannot disagree about the one word the kernel
 // reads off the stack.
 export let MapViewOfFileStackArgWords = 1 as MachineWord  // arg 5: dwNumberOfBytesToMap
+
+// The CONSUMER half's one import that overflows the register file, stated in this band with its siblings
+// for the band's own reason — the SAME constant sizes the frame reservation and the syscall shim's copy.
+export let CreateFileMappingStackArgWords = 2 as MachineWord  // args 5-6: dwMaximumSizeLow, lpName
 
 // ⚠ **NOT RESERVED BY `stdOpOutgoingArgBytes`, AND DELIBERATELY STATED ANYWAY (7a).** Unlike its five
 // neighbours above, `GetQueuedCompletionStatus` is never emitted as an `iatCall`: the completion loop is
@@ -1008,6 +1021,12 @@ type StdToX64Lowering
 			loadAcquire or storeRelease gives 0
 			// `GetFileType` takes ONE argument, so nothing overflows onto the stack — `osEnvBlockFree`'s case exactly.
 			osHandleFileType gives 0
+			// ⚠⚠ **`CreateFileMappingA` TAKES SIX, SO ITS LAST TWO ARE REAL OUTGOING STACK ARGUMENTS** and the
+			// frame must reserve both slots, exactly as `osMapNamedSegment` reserves its one — reserving nothing
+			// puts a SPILL SLOT at the same displacement and the store lands on a spilled value.
+			// `UnmapViewOfFile` takes one and is register-only.
+			osCreateNamedSegment gives win64OutgoingArgBytes(CreateFileMappingStackArgWords)
+			osUnmapNamedSegment gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1180,6 +1199,8 @@ type StdToX64Lowering
 			osEnvBlock(resultId) then self.lowerOsEnvBlock(resultId, dstBlock: dstBlock)
 			osEnvBlockFree(blockPtrId) then self.lowerOsEnvBlockFree(blockPtrId, dstBlock: dstBlock)
 			osHandleFileType(resultId, handleId) then self.lowerOsHandleFileType(resultId, handleId: handleId, dstBlock: dstBlock)
+			osCreateNamedSegment(resultId, namePtrId, sizeId) then self.lowerOsCreateNamedSegment(resultId, namePtrId: namePtrId, sizeId: sizeId, dstBlock: dstBlock)
+			osUnmapNamedSegment(baseId) then self.lowerOsUnmapNamedSegment(baseId, dstBlock: dstBlock)
 			osProcessTerminate(handleId, exitCodeId) then self.lowerOsProcessTerminate(handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1358,6 +1379,7 @@ type StdToX64Lowering
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToX64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or storeRelease then panic("lowerStdToX64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
 			osHandleFileType then panic("lowerStdToX64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
+			osCreateNamedSegment to osUnmapNamedSegment then panic("lowerStdToX64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2233,7 +2255,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: VirtualAllocLetOsChooseBase))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualAllocCommitAndReserve))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: VirtualAllocPageReadWrite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PageReadWriteProtection))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
 	end 'lowerOsAllocPagesWin64'
 
@@ -2767,7 +2789,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualAllocCommitOnly))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: VirtualAllocPageReadWrite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PageReadWriteProtection))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
 	end 'lowerOsCommitPagesWin64'
 
@@ -3731,6 +3753,34 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsMapNamedSegment'
 
+	// ⭐ **`CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)`** — six
+	// arguments, four in registers and the size and the name on the stack past the shadow space
+	// (`lowerOsMapNamedSegment`'s template, one slot wider).
+	//
+	// ⭐ **THE SIZE'S HIGH DWORD IS AN IMMEDIATE ZERO AND THE LOW ONE IS THE OPERAND**, which is exact
+	// rather than a truncation: `SegmentByteCount` tops out at `u32.max` (see `SectionSizeHighDword`).
+	//
+	// A failure answers NULL, which flows into `osMapNamedSegment` and maps nothing — so the two-step
+	// create-then-map needs one test at the caller, exactly as the producer's open-then-map does.
+	function lowerOsCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.requireWin64Import("osCreateNamedSegment")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: TargetVReg.virtual(sizeId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(1), src: TargetVReg.virtual(namePtrId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: InvalidHandleValue))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PageReadWriteProtection))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: SectionSizeHighDword))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileMappingA)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsCreateNamedSegment'
+
+	// ⭐ **`UnmapViewOfFile(base)`** — register-only, and the BOOL is DISCARDED for `lowerOsFileClose`'s
+	// reason: an unmap that fails leaves a caller nothing to do.
+	function lowerOsUnmapNamedSegment(baseId ValueId, dstBlock IrBlock)
+		self.requireWin64Import("osUnmapNamedSegment")
+		self.lowerOsWin64Call1(IatSlot.UnmapViewOfFile, arg0: baseId, dstBlock: dstBlock)
+	end 'lowerOsUnmapNamedSegment'
+
 	// ⭐ **`GetTickCount64()`** — no arguments to marshal, so the `iatCall` IS the whole call and there is
 	// no helper to reach for, exactly as `GetCommandLineA` above states.
 	//
@@ -3789,7 +3839,7 @@ type StdToX64Lowering
 	end 'lowerOsIocpCreate'
 
 	function lowerOsIocpCreateWin64(resultId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: IocpInvalidHandleValue))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: InvalidHandleValue))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IocpNoCompletionKey))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpSingleConcurrentThread))
@@ -4405,6 +4455,7 @@ type StdToX64Lowering
 			osEnvBlock to osEnvBlockFree gives false
 			loadAcquire or storeRelease gives false
 			osHandleFileType gives false
+			osCreateNamedSegment to osUnmapNamedSegment gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -4566,6 +4617,7 @@ type StdToX64Lowering
 			osEnvBlock to osEnvBlockFree panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an environment-block read or release, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			loadAcquire or storeRelease panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an ordered load or store, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osHandleFileType panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHandleFileType`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osCreateNamedSegment to osUnmapNamedSegment panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a named-section create or unmap, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

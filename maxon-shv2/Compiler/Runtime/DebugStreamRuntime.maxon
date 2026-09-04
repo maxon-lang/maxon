@@ -1,12 +1,18 @@
 // Runtime/DebugStreamRuntime.maxon — the DebugStream PRODUCER (Workstream O3).
 //
-// ⭐⭐ **THE SPLIT IS THE WHOLE DESIGN, AND IT IS NOT SHV2'S TO CHOOSE.** `maxon monitor` — the C#
-// bootstrap's `DebugStreamMonitor` / `DebugStreamDecoder` — is the CONSUMER: it creates the shared
-// segment, spawns the target with `MAXON_DEBUGSTREAM` naming it, and decodes and prints every event.
-// This file is the PRODUCER, and there is no decoder anywhere in shv2. Two processes, one wire format,
-// and the format is FROZEN: every constant below is read off the reference
+// ⭐⭐ **THE SPLIT IS THE WHOLE DESIGN, AND IT IS NOT SHV2'S TO CHOOSE.** A monitor is the CONSUMER: it
+// creates the shared segment, spawns the target with `MAXON_DEBUGSTREAM` naming it, and decodes and
+// prints every event. This file is the PRODUCER. Two processes, one wire format, and the format is
+// FROZEN: every constant below is read off the reference
 // (`maxon-sharp/Compiler/MLIR/Runtime/RuntimeEmitter.cs`) rather than chosen here, because a producer
 // that disagrees with its consumer about a shift does not fail to build — it makes the trace LIE.
+//
+// ⭐⭐ **THE ROSTER BELOW IS THE WHOLE WIRE FORMAT, NOT THE PART THIS PRODUCER WRITES, AND THAT IS WHY
+// CODES NOTHING HERE EMITS ARE DECLARED.** `Debug/DebugStreamDecoder` is shv2's consumer and it imports
+// these names rather than restating a number — one registry, two ends. It must decode EVERY code,
+// including the sched and dbg families this producer has no emitter for, because the binary in front of
+// it may have been built by the BOOTSTRAP, whose producer writes them. ⇒ a constant here with no
+// producer is not dead: it is the reader's half of a format neither compiler owns.
 //
 // ⭐ **WHAT IT IS FOR.** `specs-shv2/mm-trace.md` asserts a program's ALLOCATION BEHAVIOUR: not what it
 // computed, but how many records it allocated and what its refcount column did. No exit code can say
@@ -57,7 +63,7 @@
 // `"MXDBSTR\0"` — the segment's first word, written by the monitor when it creates the segment and
 // checked here before this producer writes a byte. It is what tells a DebugStream ring from somebody
 // else's shared memory that happens to be named the same thing.
-let DsMagic = 0x4D58444253545200
+export let DsMagic = 0x4D58444253545200
 
 // ⭐⭐ **THE WIRE SCHEMA VERSION — the one number the two ends must agree on, and the only thing between
 // a mismatch and a trace that LIES.** v2 introduced the entry COMMIT BIT, which was not an additive
@@ -65,7 +71,7 @@ let DsMagic = 0x4D58444253545200
 // schemas disagree about what an entry with flags == 0 IS. Neither end can tell the other's schema by
 // looking at the ring, so each ANNOUNCES its version and refuses to speak across a mismatch. Bump this
 // only in lockstep with the reference's `DsVersion`.
-let DsSchemaVersion = 2
+export let DsSchemaVersion = 2
 
 // The segment's three regions. The monitor CREATES the section exactly `DsSharedMemoryBytes` long and
 // this producer MAPS it exactly that long, in two different languages — and a `MapViewOfFile` longer
@@ -75,30 +81,47 @@ let DsSchemaVersion = 2
 // ⚠ `DsTagReserveBytes` is a region NOTHING WRITES: it held v1's in-band tag table, and the interned
 // names now live in the executable's own `.symtab` (see the MXDS_TAGS blob below). It stays part of the
 // layout because both processes must agree on the mapping LENGTH, and shrinking it buys nothing.
-let DsHeaderBytes = 128
-let DsRingBytes = 2097152
-let DsTagReserveBytes = 65536
-let DsSharedMemoryBytes = DsHeaderBytes + DsRingBytes + DsTagReserveBytes
+export let DsHeaderBytes = 128
+export let DsRingBytes = 2097152
+export let DsTagReserveBytes = 65536
+export let DsSharedMemoryBytes = DsHeaderBytes + DsRingBytes + DsTagReserveBytes
 
 // Segment-header field offsets, from the base of the mapping.
-let DsOffMagic = 0 as ByteOffset
+export let DsOffMagic = 0 as ByteOffset
 
 // The MONITOR's schema version, written when it creates the segment.
-let DsOffVersion = 8 as ByteOffset
-let DsOffBufferSize = 16 as ByteOffset
-let DsOffWriteCursor = 24 as ByteOffset
-let DsOffReadCursor = 32 as ByteOffset
-let DsOffFlags = 40 as ByteOffset
-let DsOffStartTimestamp = 56 as ByteOffset
-let DsOffTotalEvents = 64 as ByteOffset
-let DsOffDroppedEvents = 72 as ByteOffset
-let DsOffPeakUsed = 96 as ByteOffset
+export let DsOffVersion = 8 as ByteOffset
+export let DsOffBufferSize = 16 as ByteOffset
+export let DsOffWriteCursor = 24 as ByteOffset
+export let DsOffReadCursor = 32 as ByteOffset
+export let DsOffFlags = 40 as ByteOffset
+
+// The producer's process id. NOTHING WRITES IT — no emitter below stores here and the reference's does
+// not either — and the consumer still has to seed it, because a slot left at whatever the section's
+// pages last held is a number a reader would believe.
+export let DsOffProcessId = 0x30 as ByteOffset
+
+export let DsOffStartTimestamp = 56 as ByteOffset
+export let DsOffTotalEvents = 64 as ByteOffset
+export let DsOffDroppedEvents = 72 as ByteOffset
+
+// The v1 in-band tag table's base and length. The names travel in the executable's `.symtab` now (see the
+// MXDS_TAGS blob below) and nothing reads these two, but the consumer seeds them for `DsOffProcessId`'s
+// reason: a stale number in a slot a reader knows the meaning of is worse than a zero.
+export let DsOffTagTableOffset = 0x50 as ByteOffset
+export let DsOffTagTableCount = 0x58 as ByteOffset
+
+export let DsOffPeakUsed = 96 as ByteOffset
 
 // ⭐ The PRODUCER's schema version. `DsOffVersion` above is the MONITOR's — the two travel in opposite
 // directions, because it takes both for each end to check the other. A producer too old to know this slot
 // exists leaves it at zero, and "wrote entries but never announced a version" is precisely the signature
 // of one.
-let DsOffProducerVersion = 104 as ByteOffset
+export let DsOffProducerVersion = 104 as ByteOffset
+
+// What that slot holds before any producer has written to it. The CONSUMER seeds it, so "wrote entries
+// but never announced a version" is a state a reader can name rather than merely fail on.
+export let DsProducerVersionUnset = 0
 
 // Header flags bit 0 — a producer is attached and writing.
 let DsFlagProducerAlive = 1
@@ -111,13 +134,19 @@ let DsFlagProducerAlive = 1
 //   [32:63] timestamp_delta (ms since the header's start_timestamp)
 // ============================================================================
 let DsEntryFlagsShift = 8
-let DsEntrySizeShift = 16
-let DsEntryTimestampShift = 32
+export let DsEntrySizeShift = 16
+export let DsEntryTimestampShift = 32
+
+// The reader's half of the packing above. A field is recovered by SHIFTING and then MASKING, and the
+// mask is what makes the recovery independent of the sign the whole word happens to carry.
+export let DsEntryTypeMask = 0xFF
+export let DsEntrySizeMask = 0xFFFF
+export let DsEntryTimestampMask = 0xFFFFFFFF
 
 // ⭐⭐ **THE COMMIT BIT, ALREADY POSITIONED INSIDE THE PACKED HEADER WORD.** An entry below
 // `write_cursor` is PRESENT; only an entry carrying this bit is READABLE. See the ring-protocol note in
 // this file's header for what happens without it.
-let DsEntryCommittedBit = 256
+export let DsEntryCommittedBit = 256
 
 // A PADDING entry fills the ring's tail when the next real entry would straddle the wrap. It is written
 // ENTIRELY inside `__ds_reserve`, has no payload and no second writer — so it is BORN COMMITTED: nothing
@@ -126,25 +155,42 @@ let DsEntryCommittedBit = 256
 //
 // Its event_type is the reference's, exactly like the mm codes below — named rather than left a literal
 // beside four named siblings, because it is the same kind of wire fact they are.
-let DsEvPadding = 255
+export let DsEvPadding = 255
 let DsPaddingHeaderTypeAndFlags = DsEvPadding + DsEntryCommittedBit
 
 // ============================================================================
-// The mm event family. Codes 0x01-0x04; every one is 24 bytes with the same shape.
+// The mm event family. Codes 0x01-0x09; every one is 24 bytes with the same shape.
 // ============================================================================
 export let DsEvMmAlloc = 1
 export let DsEvMmFree = 2
 export let DsEvMmIncref = 3
 export let DsEvMmDecref = 4
 
+// ⭐ **FIVE CODES THIS PRODUCER NEVER WRITES.** The transfer/realloc/COW distinctions and the RAW pair
+// belong to the reference's memory manager; shv2's emits the four above and nothing else. They are here
+// because the DECODER is the other half of this registry and must read a bootstrap-built binary — see
+// the file header.
+export let DsEvMmTransfer = 0x05
+export let DsEvMmRealloc = 0x06
+export let DsEvMmCow = 0x07
+export let DsEvMmRawAlloc = 0x08
+export let DsEvMmRawFree = 0x09
+
 // Offsets from the START of the entry, so the header's 8 bytes are included and an emitter writes
 // straight through the pointer `__ds_reserve` handed back.
-let DsMmOffAllocId = 8 as ByteOffset
+export let DsMmOffAllocId = 8 as ByteOffset
 
 // `tag_index(2) | scope_len(2) | value(4)` — one word. `value` is the allocation SIZE for `mm_alloc` and
 // the new OWNER COUNT for the refcount family; `scope_len` is 0 (this producer emits no scope names).
-let DsMmOffPacked = 16 as ByteOffset
-let DsMmValueShift = 32
+export let DsMmOffPacked = 16 as ByteOffset
+export let DsMmValueShift = 32
+export let DsMmValueMask = 0xFFFFFFFF
+
+// ⭐ THE RAW PAIR PUTS A WHOLE 64-BIT SIZE WHERE THE TAGGED EVENTS PUT THEIR PACKED WORD. Same offset,
+// different field — a raw allocation has no tag to name and no refcount to report, so the slot carries
+// the size undivided. Named separately because a reader that spelled it `DsMmOffPacked` would be
+// claiming a packing that is not there.
+export let DsMmOffRawSize = 16 as ByteOffset
 
 // Header + alloc_id(8) + packed word(8). Already 8-byte aligned, so nothing rounds it.
 let DsMmEntryBytes = 24
@@ -154,7 +200,73 @@ let DsMmEntryBytes = 24
 // call sites — so both facts are stamped into the box by `__mm_alloc` and read back out here. The mask is
 // what bounds a tag index to the 16 bits the wire gives it.
 export let DsMmPackedIdShift = 16
-let DsMmTagIndexMask = 65535
+export let DsMmTagIndexMask = 65535
+
+// ============================================================================
+// The SCHED and DBG families, and the three STRUCTURAL codes. READER-ONLY.
+// ============================================================================
+//
+// ⭐ **NOT ONE OF THESE HAS AN EMITTER IN THIS FILE, AND THEY ARE STILL THE FORMAT.** They are the
+// reference scheduler talking about itself; shv2's decoder meets them in bootstrap-built binaries and
+// must name them rather than refuse. See the file header for why the registry is wider than the producer.
+
+// A green thread's life, one code per transition. The payload is the trace id alone.
+export let DsEvSchedSpawn = 0x20
+export let DsEvSchedAwait = 0x21
+export let DsEvSchedYield = 0x22
+export let DsEvSchedResume = 0x23
+export let DsEvIoYield = 0x2B
+export let DsEvIoResume = 0x2C
+export let DsSchedOffTraceId = 8 as ByteOffset
+
+// The scheduler's INTERNALS — queue moves, status stores, context switches. Five payload words, and what
+// `arg2`/`arg3`/`arg4` MEAN is per code (see the decoder's formatters), which is why they are numbered
+// rather than named here.
+export let DsEvDbgEnqueue = 0x50
+export let DsEvDbgDequeue = 0x51
+export let DsEvDbgRunnextSet = 0x52
+export let DsEvDbgRunnextTake = 0x53
+export let DsEvDbgRunnextDisplace = 0x54
+export let DsEvDbgStatusStore = 0x55
+export let DsEvDbgIoComplete = 0x56
+export let DsEvDbgFreeListPush = 0x57
+export let DsEvDbgFreeListPop = 0x58
+export let DsEvDbgWloopRunGt = 0x59
+export let DsEvDbgAwaitDeqRun = 0x5A
+export let DsEvDbgTrampolineCompleted = 0x5B
+export let DsEvDbgTimerFire = 0x5C
+export let DsEvDbgCsxEntry = 0x5D
+export let DsEvDbgCsxExit = 0x5E
+
+export let DsDbgOffGt = 8 as ByteOffset
+export let DsDbgOffPid = 16 as ByteOffset
+export let DsDbgOffArg2 = 24 as ByteOffset
+export let DsDbgOffArg3 = 32 as ByteOffset
+export let DsDbgOffArg4 = 40 as ByteOffset
+
+// WHICH QUEUE an enqueue/dequeue moved a green thread through.
+//
+// ⚠ **`DsDbgQueueSteal` IS ONE CODE READ TWO WAYS, WHICH IS WHY THERE IS ONE CONSTANT.** A steal is a
+// CHAIN going in and a FIRST coming out; the difference is the DIRECTION, which the reader already has,
+// and a second name for the same number would be a distinction the wire does not carry.
+export let DsDbgQueueLocal = 0
+export let DsDbgQueueGlobal = 1
+export let DsDbgQueueSteal = 2
+export let DsDbgQueueRunnext = 3
+
+// How far the I/O completion path had got when a `DsEvDbgIoComplete` was written.
+export let DsDbgIoPhaseStatusSet = 0
+export let DsDbgIoPhaseSpinDone = 1
+export let DsDbgIoPhaseEnqueueing = 2
+
+// ⭐ The two codes that carry NO payload and are not events at all: they nest the trace, and a reader
+// applies them to its own indent counter rather than printing a line for either.
+export let DsEvDepthInc = 0x40
+export let DsEvDepthDec = 0x41
+
+// A liveness tick. It decodes to NO LINE — it exists so a reader can tell a producer that is quiet from
+// one that is gone, which is a question about the ring rather than about the program.
+export let DsEvHeartbeat = 0xFE
 
 // ============================================================================
 // The LOG event family. Codes 0x60-0x63 — the only events a PROGRAM authors.
@@ -174,28 +286,28 @@ let DsMmTagIndexMask = 65535
 //   0x62:      gt(8) · p_id(8) · cat(1) lvl(1) event_id(2) unit_id(4) · a0(8) a1(8) — 48 bytes
 //   0x63:      gt(8) · p_id(8) · cat(1) lvl(1) len(2) unit_id(4) · UTF-8 tail       — variable
 //
-// ⭐ **THE TWO PHASE CODES ARE EXPORTED AND THE OTHER TWO ARE NOT, AND THAT IS THE SPLIT IN THE SURFACE.**
-// `phaseBegin` and `phaseEnd` are ONE runtime entry taking the code as an argument (they differ in nothing
-// else), so the LOWERING is what supplies it; `event` and `text` each have an entry of their own and their
-// code never leaves this file.
+// ⚠ **ONLY THE PHASE PAIR IS READ BY THE LOWERING**, because `phaseBegin` and `phaseEnd` are ONE runtime
+// entry taking the code as an argument (they differ in nothing else); `event` and `text` each have an
+// entry of their own and never need their code named at a call site. All four are exported all the same —
+// the decoder dispatches on every one.
 export let DsEvLogPhaseBegin = 96
 export let DsEvLogPhaseEnd = 97
-let DsEvLogEvent = 98
-let DsEvLogText = 99
+export let DsEvLogEvent = 98
+export let DsEvLogText = 99
 
 // Offsets from the START of the entry, so the 8-byte header is included — the mm family's convention above.
-let DsLogOffGt = 8 as ByteOffset
-let DsLogOffPid = 16 as ByteOffset
+export let DsLogOffGt = 8 as ByteOffset
+export let DsLogOffPid = 16 as ByteOffset
 
 // The packed field word. Its layout differs per event (see the table above), but every Log event has
 // exactly one and it always sits here.
-let DsLogOffFields = 24 as ByteOffset
-let DsLogOffArg0 = 32 as ByteOffset
-let DsLogOffArg1 = 40 as ByteOffset
+export let DsLogOffFields = 24 as ByteOffset
+export let DsLogOffArg0 = 32 as ByteOffset
+export let DsLogOffArg1 = 40 as ByteOffset
 
 // LOG_TEXT only: the first byte of the UTF-8 tail. It shares LOG_EVENT's `arg0` offset because the two
 // entries diverge exactly there — one carries two numbers, the other a string.
-let DsLogOffText = 32 as ByteOffset
+export let DsLogOffText = 32 as ByteOffset
 
 let DsLogPhaseEntryBytes = 32
 let DsLogEventEntryBytes = 48
@@ -218,12 +330,16 @@ let DsLogTextFixedBytes = 32
 //
 // ⚠ `unit_id` occupies the high 32 bits, so the shift itself discards anything that would not fit and it
 // needs no mask. Saying so is what keeps a fourth mask from being added "for symmetry".
-let DsLogCatMask = 255
-let DsLogLvlShift = 8
-let DsLogLvlMask = 255
-let DsLogU16FieldShift = 16
-let DsLogU16FieldMask = 65535
-let DsLogUnitIdShift = 32
+export let DsLogCatMask = 255
+export let DsLogLvlShift = 8
+export let DsLogLvlMask = 255
+export let DsLogU16FieldShift = 16
+export let DsLogU16FieldMask = 65535
+export let DsLogUnitIdShift = 32
+
+// The reader's half of the slot above. The PRODUCER needs no mask — the shift itself discards anything
+// that would not fit — but a CONSUMER shifting back down has the neighbouring bits to clear.
+export let DsLogUnitIdMask = 0xFFFFFFFF
 
 // The ring keeps every entry 8-byte aligned, so a LOG_TEXT's tail is rounded UP to this. The SHIFT is what
 // the round is emitted as (`>> 3 << 3`) and the bias is what makes it round up rather than down.
@@ -244,8 +360,9 @@ let DsEntryAlign = 8
 let DsEntryAlignShift = 3
 let DsEntryAlignBias = DsEntryAlign - 1
 
-// The entry header's `entry_size` is a u16, so no single entry can exceed what that field holds.
-let DsEntrySizeMax = 65535
+// The entry header's `entry_size` is a u16, so no single entry can exceed what that field holds. Derived
+// from the reader's mask rather than written out: a bound and the mask it comes from are one fact.
+let DsEntrySizeMax = DsEntrySizeMask
 
 // The largest 8-ALIGNED entry that field can express. ⚠ Subtracting the bias is the round-down here and
 // not a coincidence of 65535: a mask maximum is `2^k - 1`, which for every `k` above 2 is 7 modulo 8, so
@@ -271,7 +388,7 @@ let DsLogTextMaxBytes = DsMaxAlignedEntryBytes - DsLogTextFixedBytes
 // Format: `[magic(10)][count:u16][len0:u16][name0]…[lenN:u16][nameN]`, little-endian.
 // ⚠ **INDEX 0 MEANS "NO NAME"** — the monitor's own rule (`ResolveInternedName`), which is why
 // `MmTag.Untagged` occupies it and why its blob entry is written EMPTY rather than with its case name.
-let DsTagBlobMagic = b"MXDS_TAGS\0"
+export let DsTagBlobMagic = b"MXDS_TAGS\0"
 
 // ⭐⭐ **THE SECOND BLOB, IN THE SAME FORMAT AND THE SAME SECTION — the names `__DebugStream.nameId`
 // INTERNED AT COMPILE TIME** (phase names, event names). A separate TABLE from `MXDS_TAGS` because the two
@@ -283,13 +400,13 @@ let DsTagBlobMagic = b"MXDS_TAGS\0"
 // `debugStreamNameBlob` takes the magic and there is no second byte-splitting loop to drift from this one.
 // The MONITOR finds each by SCANNING the section for its magic (`DebugStreamDecode.ScanForNameBlob`), so
 // the two may sit end to end in one `symdataImage` here where the bootstrap defines two labelled payloads.
-let DsStrBlobMagic = b"MXDS_STRS\0"
+export let DsStrBlobMagic = b"MXDS_STRS\0"
 
 // The width of EVERY count and length field in the blob — `writeWord`'s width, named here because it is
 // what the MONITOR steps by when it parses the table back out of the executable. It is stated for the
 // refusal message and for the reader; the bytes themselves come from `writeWord`, so there is no second
 // splitting loop to drift from it.
-let DsNameBlobFieldBytes = 2
+export let DsNameBlobFieldBytes = 2
 let DsNameBlobFieldMax = 65535
 
 // ============================================================================
@@ -600,7 +717,7 @@ end 'debugStreamRuntimeGlobals'
 // The activation environment variable, whose VALUE names the ring segment. Stated ONCE: the monitor sets
 // this exact variable, and a drift that left the producer looking at the wrong name would not fail to
 // build — the trace would simply never appear.
-let DsActivationEnvVar = "MAXON_DEBUGSTREAM"
+export let DsActivationEnvVar = "MAXON_DEBUGSTREAM"
 let DsEnvNameRdataPrefix = "__ds_env_"
 
 // ⭐⭐ **DOES THIS BUILD CARRY THE PRODUCER? ONE ANSWER, FOR EVERY PART THAT MUST AGREE.** Four things ride

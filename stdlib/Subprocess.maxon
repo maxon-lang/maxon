@@ -896,22 +896,53 @@ public type StreamingSubprocess
 
 	/// Same as `spawn` with an explicit working directory.
 	public static function spawnWithCwd(executable Executable, arguments StringArray, workingDirectory FilePath) returns StreamingSubprocess throws SubprocessError
-		let exePath = try resolveExecutablePath(executable)
-		let argvBlob = buildArgvBlob(exePath, args: arguments)
-		let argc = arguments.count() + 1
-		// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup /
-		// detach). Streaming spawns never detach — the parent has to keep the
-		// pipes open — and don't take platform-options today, so the field is
-		// always 0. Environment is implicitly inherited by the runtime (the
-		// streaming variant of `__subp_spawn_core` hardcodes inherit-env).
-		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0)
-		if rawHandle == -1 'spawnFailed'
-			throw SubprocessError.spawnFailed(lastErrorMessage())
-		end 'spawnFailed'
-		// rawHandle is the wide builtin return; -1 is excluded above, so the
-		// narrow StreamingHandle range is satisfied.
-		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
+		#if compiler(shv2)
+			return try Self.spawnWithEnvironment(executable, arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inherit)
+		#else
+			let exePath = try resolveExecutablePath(executable)
+			let argvBlob = buildArgvBlob(exePath, args: arguments)
+			let argc = arguments.count() + 1
+			// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup /
+			// detach). Streaming spawns never detach — the parent has to keep the
+			// pipes open — and don't take platform-options today, so the field is
+			// always 0. Environment is implicitly inherited by the runtime (the
+			// streaming variant of `__subp_spawn_core` hardcodes inherit-env).
+			let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0)
+			if rawHandle == -1 'spawnFailed'
+				throw SubprocessError.spawnFailed(lastErrorMessage())
+			end 'spawnFailed'
+			// rawHandle is the wide builtin return; -1 is excluded above, so the
+			// narrow StreamingHandle range is satisfied.
+			return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
+		#endif
 	end 'spawnWithCwd'
+
+	#if compiler(shv2)
+		/// Same as `spawnWithCwd`, with the child's ENVIRONMENT taken by the caller rather than inherited.
+		///
+		/// ⭐ It matters because a streaming parent may have to TELL its child something before the child's
+		/// first instruction runs: a DebugStream producer finds the ring it writes into by reading a name out
+		/// of its environment, so a parent that could only inherit could only ever watch a child that was
+		/// already being watched. `Environment` answers all three arms — `inherit`, `inheritUpdating` and
+		/// `custom` — and `spawnEnvironmentFor` turns any of them into the (block, source) pair the spawn
+		/// contract takes, exactly as the attached spawn does.
+		public static function spawnWithEnvironment(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) returns StreamingSubprocess throws SubprocessError
+			let exePath = try resolveExecutablePath(executable)
+			let argvBlob = buildArgvBlob(exePath, args: arguments)
+			let argc = arguments.count() + 1
+			let spawnEnv = spawnEnvironmentFor(environment)
+			// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup / detach). Streaming spawns
+			// never detach — the parent has to keep the pipes open — and don't take platform-options today, so
+			// the field is always 0. The environment block and its source flag follow it.
+			let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0, spawnEnv.block.addressableBytes(), spawnEnv.source)
+			if rawHandle == -1 'spawnFailed'
+				throw SubprocessError.spawnFailed(lastErrorMessage())
+			end 'spawnFailed'
+			// rawHandle is the wide builtin return; -1 is excluded above, so the
+			// narrow StreamingHandle range is satisfied.
+			return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
+		end 'spawnWithEnvironment'
+	#endif
 
 	/// Write `line + "\n"` to the child's stdin. Throws on broken pipe.
 	/// Embeds the newline; pass payload WITHOUT a trailing newline.
@@ -1008,6 +1039,54 @@ public type StreamingSubprocess
 		return rc as ExitInt
 	end 'waitWithTimeout'
 
+	#if compiler(shv2)
+		/// Has the child exited? Answers without blocking and WITHOUT killing it.
+		///
+		/// ⭐ Neither `wait()` nor `waitWithTimeout()` can be asked this: the first blocks until the child ends,
+		/// and the second TERMINATES the child when its deadline fires. A parent that has to stay responsive —
+		/// draining output while the child runs — needs an answer that changes nothing.
+		///
+		/// ⚠ A handle `release()` has given back answers `running`, because after `release()` there is no live
+		/// child left to report an exit for.
+		public function pollExit() returns ExitPoll
+			if released 'gone'
+				return ExitPoll.running
+			end 'gone'
+
+			let raw = __Builtins.subprocessPollExit(handle)
+			if raw < 0 'stillRunning'
+				return ExitPoll.running
+			end 'stillRunning'
+
+			return ExitPoll.exited(raw)
+		end 'pollExit'
+
+		/// A line from the child's stdout if one is ALREADY buffered. Never blocks.
+		///
+		/// The terminator is stripped exactly as `readStdoutLine` strips it. ⭐ The answer is a UNION and not a
+		/// string, because a child's own BLANK LINE and a pipe holding nothing are the same bytes once the
+		/// terminator is off: a caller that read emptiness as "nothing yet" drops every blank line the child
+		/// writes, and nothing downstream can tell that it did. `none` says nothing about whether the stream has
+		/// ENDED — a caller that needs that asks `pollExit`, because a child that has exited writes no more.
+		public function tryReadStdoutLine() returns LinePoll
+			if released 'gone'
+				return LinePoll.none
+			end 'gone'
+
+			return bufferedLineIn(__Builtins.subprocessTryReadStdoutLine(handle, defaultReadLineCap))
+		end 'tryReadStdoutLine'
+
+		/// A line from the child's stderr if one is ALREADY buffered. Never blocks.
+		/// Same contract as `tryReadStdoutLine`.
+		public function tryReadStderrLine() returns LinePoll
+			if released 'gone'
+				return LinePoll.none
+			end 'gone'
+
+			return bufferedLineIn(__Builtins.subprocessTryReadStderrLine(handle, defaultReadLineCap))
+		end 'tryReadStderrLine'
+	#endif
+
 	/// Refuse every operation that would reach the runtime with a handle `release()` has given back.
 	/// The check belongs here rather than in a runtime guard because a handle is a raw pointer to a
 	/// freed struct on some lanes, so asking the runtime about it is already the bug.
@@ -1029,6 +1108,33 @@ public type StreamingSubprocess
 		end 'notYet'
 	end 'release'
 end 'StreamingSubprocess'
+
+#if compiler(shv2)
+	/// What `pollExit` found. A union rather than a code-plus-sentinel because "it has not finished" is not an
+	/// exit code and there is no number that could stand for it: a Windows exit code is a full DWORD.
+	public union ExitPoll
+		running
+		exited(code ExitInt)
+	end 'ExitPoll'
+
+	/// What a non-blocking line read found. A union rather than a string-plus-sentinel because a child's own
+	/// BLANK LINE is a line and `""` is the only string that could stand for "nothing buffered".
+	public union LinePoll
+		line(text String)
+		none
+	end 'LinePoll'
+
+	/// The runtime hands a line back WITH its terminating LF, so a buffered blank line is one byte where an
+	/// empty pipe is zero — which is the one place the two are still apart, before `stripTrailingCR` makes
+	/// them the same string.
+	function bufferedLineIn(raw __ManagedMemory) returns LinePoll
+		if raw.length() < lineReaderShortestAnswer 'nothingBuffered'
+			return LinePoll.none
+		end 'nothingBuffered'
+
+		return LinePoll.line(stripTrailingCR(String.init(raw)))
+	end 'bufferedLineIn'
+#endif
 
 // Default per-line truncation cap for the streaming readers. 1 MiB easily
 // holds spec-test IPC frames (typically <2 KiB) without ever truncating; a

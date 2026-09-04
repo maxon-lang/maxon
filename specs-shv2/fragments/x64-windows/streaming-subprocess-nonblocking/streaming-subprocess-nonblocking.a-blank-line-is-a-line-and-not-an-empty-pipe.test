@@ -1,0 +1,517 @@
+// Test: streaming-subprocess-nonblocking.a-blank-line-is-a-line-and-not-an-empty-pipe
+typealias StringArray = Array with String
+typealias SpinTally = int(0 to 100000)
+
+function blankBetweenArguments() returns StringArray
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("echo")
+	argv.push("first&")
+	argv.push("echo.&")
+	argv.push("echo")
+	argv.push("last")
+	return argv
+end 'blankBetweenArguments'
+
+function nextLine(child StreamingSubprocess) returns String
+	var spins = 0 as SpinTally
+	while spins < 400 'spin'
+		match child.tryReadStdoutLine() 'polled'
+			line(text) then return "line[{text}]"
+			none then break 'polled'
+		end 'polled'
+
+		sleep(5)
+		spins = spins + 1
+	end 'spin'
+
+	return "none"
+end 'nextLine'
+
+function main() returns ExitCode
+	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: blankBetweenArguments()) otherwise return 3
+
+	let first = nextLine(child)
+	let blank = nextLine(child)
+	let last = nextLine(child)
+	let code = try child.wait() otherwise return 4
+	child.release()
+
+	print("{first} {blank} {last} code={code}\n")
+	return (first.byteLength() + blank.byteLength() + last.byteLength()) as ExitCode
+end 'main'
+---
+ExitCode: 27
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __io_iocp@248 = i64 0
+  __io_done_event@256 = i64 0
+  __io_init_done@264 = i64 0
+  __io_pending@272 = i64 0
+  __io_pipe_seq@280 = i64 0
+  __subp_table@288 = i64 0
+  __subp_last_error@296 = i64 0
+  __slab_arena_list@304 = i64 0
+  __slab_arena_map_l1@312 = i64 0
+  __slab_state@320 = i64 0
+}
+
+func @blankBetweenArguments {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_34]  ; "/c"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_35]  ; "echo"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_36]  ; "first&"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_37]  ; "echo.&"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_35]  ; "echo"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_38]  ; "last"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @nextLine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+  whilehdr:
+    x64.cmpRegImm32 r12, 400
+    x64.jcc greaterEqual, whileexit
+  spin:
+    x64.movRegReg rcx, rbx
+    x64.callDirect StreamingSubprocess.tryReadStdoutLine
+    x64.storeSlotReg slot0, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.storeSlotReg slot1, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rax, [rip + __str_rec_40]  ; "line["
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_41]  ; "]"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot5
+    x64.loadRegSlot r12, slot4
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot3
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_LinePoll
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matchcont:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect sleep
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_LinePoll
+    x64.jmp whilehdr
+  matchdead:
+  whileexit:
+    x64.leaRegRdata rcx, [rip + __str_rec_39]  ; "none"
+    x64.callDirect __str_retain
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 184
+    x64.leaRegRdata rbx, [rip + __str_rec_42]  ; "cmd"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.callDirect blankBetweenArguments
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect StreamingSubprocess.spawn
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r13, 3
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r13
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg rcx, r13
+    x64.callDirect nextLine
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot3, rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect nextLine
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot2, r12
+    x64.movRegReg rcx, r13
+    x64.callDirect nextLine
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.movRegReg rcx, r13
+    x64.callDirect StreamingSubprocess.wait
+    x64.movRegReg r15, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r15, 4
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r15
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r13
+    x64.callDirect StreamingSubprocess.release
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.storeSlotReg slot15, rax
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_43]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot14, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.storeSlotReg slot13, rax
+    x64.loadRegBaseDisp.word64 r12, [r12 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_43]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot12, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot18, rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.storeSlotReg slot11, rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeSlotReg slot16, rax
+    x64.leaRegRdata rax, [rip + __str_rec_44]  ; " code="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.storeSlotReg slot6, r14
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRdata rax, [rip + __str_rec_45]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot17, rax
+    x64.leaRegRegReg rcx, rbx, r13
+    x64.leaRegRegReg rcx, rcx, r12
+    x64.loadRegSlot r15, slot18
+    x64.leaRegRegReg rcx, rcx, r15
+    x64.loadRegSlot rdx, slot16
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot9, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot10, r8
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.movRegReg rcx, r14
+    x64.loadRegSlot rdx, slot15
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot14
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r15
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot11
+    x64.loadRegSlot r12, slot16
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot7
+    x64.loadRegSlot r12, slot6
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot r12, slot5
+    x64.movRegReg rdx, r12
+    x64.loadRegSlot r13, slot4
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot8
+    x64.loadRegSlot r13, slot17
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot rbx, slot10
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.loadRegSlot rax, slot9
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+  __il_body#11:
+    x64.loadRegSlot rax, slot3
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greaterEqual, __il_body#14
+  __il_slow#13:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect String.byteLength
+    x64.movRegReg rbx, r8
+  __il_body#14:
+    x64.loadRegSlot rax, slot2
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok#15
+  __il_slow#16:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont#9
+  __rc_ok#15:
+    x64.movRegReg r8, rax
+  __il_cont#9:
+    x64.leaRegRegReg rbx, rbx, r8
+  __il_body#17:
+    x64.loadRegSlot rax, slot1
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok#18
+  __il_slow#19:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont#8
+  __rc_ok#18:
+    x64.movRegReg r8, rax
+  __il_cont#8:
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok#5
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_143]  ; "panic at streaming-subprocess-nonblocking.a-blank-line-is-a-line-and-not-an-empty-pipe.test:41: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#5:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

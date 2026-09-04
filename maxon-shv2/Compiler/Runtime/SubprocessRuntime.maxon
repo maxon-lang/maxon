@@ -1,10 +1,10 @@
 // Runtime/SubprocessRuntime.maxon — the ATTACHED child process, and the helpers around every child.
 //
 // ⭐ **WHAT IT SERVES.** `stdlib/Subprocess.maxon` — `Subprocess.run(...)`, `Configuration.run()`,
-// `runDetached()` and `StreamingSubprocess` — bottoms out in twenty-three `__Builtins.*` intrinsics and
-// nothing else — twenty-two `subprocess*` names plus `managedIsNull`, which is a `__ManagedMemory` predicate
-// rather than a subprocess entry and lowers to `__mm_is_null`.
-// `Parser.BuiltinsSubprocessSpawnName` lists all twenty-three and says which entry each becomes; this file
+// `runDetached()` and `StreamingSubprocess` — bottoms out in the `__Builtins.subprocess*` band and nothing
+// else, plus `managedIsNull`, which is a `__ManagedMemory` predicate rather than a subprocess entry and
+// lowers to `__mm_is_null`.
+// `Parser.BuiltinsSubprocessSpawnName` lists them all and says which entry each becomes; this file
 // builds the ones the STREAMING half (`GtRuntime.maxon`, P1.5 slice 1b) did not already have.
 //
 // ⭐⭐ **IT DOES NOT FORK A SECOND `CreateProcess` PATH, AND THAT IS THE WHOLE DESIGN.** `GtRuntime`'s
@@ -65,6 +65,10 @@ export let SubpStreamSpawnName = b"__gt_subp_stream_spawn"
 export let SubpGetPidName = b"__gt_subp_get_pid"
 export let SubpWaitCollectName = b"__gt_subp_wait_collect"
 export let SubpWaitExitName = b"__gt_subp_wait_exit"
+// ⭐ **THE EXIT POLL, AND IT CANNOT BE THE WAIT ABOVE WITH A ZERO TIMEOUT.** `__gt_subp_wait_exit` reads a
+// zero as INFINITE — the corpus's convention for this whole family — and TERMINATES the child when any other
+// deadline fires. A parent that wants to know whether its child has finished wants neither.
+export let SubpPollExitName = b"__gt_subp_poll_exit"
 export let SubpWriteAllName = b"__gt_subp_write_all"
 export let SubpReadOutBytesName = b"__gt_subp_read_out_bytes"
 export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
@@ -73,6 +77,12 @@ export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
 // reader in this file because the conversion is the same one: the difference between an exact read and a
 // line read lives entirely in `GtRuntime`'s two stopping rules, and nothing about the record shape.
 export let SubpReadExactOutBytesName = b"__gt_subp_read_exact_out_bytes"
+
+// The managed wrappers of the two NON-BLOCKING line readers. They ride `buildSubpReadBytes` with every
+// other owned-buffer reader here because the conversion is the same one: the difference between waiting for
+// a line and answering what is already buffered lives entirely in `GtRuntime`'s reader, not in the record.
+export let SubpTryReadOutBytesName = b"__gt_subp_try_read_out_bytes"
+export let SubpTryReadErrBytesName = b"__gt_subp_try_read_err_bytes"
 
 // The two per-stream state queries. Named into this family because they answer for a streaming child, and
 // so inherit its E3104 target gate; built in `GtRuntime` beside the readers whose state word they read.
@@ -115,6 +125,12 @@ let SubpEnvVectorName = b"__gt_subp_env_vector"
 // The failure answer every one of these entries shares — `stdlib/Subprocess.maxon` tests `handle == -1`,
 // `result == -1` and `rc == -1` against exactly this, and the bootstrap's table documents the same.
 let SubpFailure = -1
+
+// The streaming spawn contract's arity: `argv_mm, argc, cwd_cstr, flags, env_mm, envInherit`. The
+// environment pair sits PAST the flags rather than before them, because the streaming contract carries no
+// stdio triples between the working directory and it — `Parser.SubprocessStreamingSpawnEnvSlot` is the
+// caller's half of the same statement.
+let SubpStreamSpawnParamCount = 6 as ParamCount
 
 // `subprocessWaitExit`'s SECOND failure answer: the deadline fired. `waitWithTimeout` maps it to
 // `SubprocessError.timeout` and maps -1 to `ioFailed`, so the two must stay distinct.
@@ -999,8 +1015,6 @@ function buildSubpAttachedSpawn(module StdModule, shape SpawnEnvironmentShape)
 	var ids = ValueMinter.create(SubprocessSpawnParamCount)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var inheritEnv = module.addBlock(func, label: b"subpinhenv")
-	var callerEnv = module.addBlock(func, label: b"subpownenv")
 	var build = module.addBlock(func, label: b"subpbuild")
 
 	emitParams(module, block: entry, count: SubprocessSpawnParamCount)
@@ -1019,34 +1033,7 @@ function buildSubpAttachedSpawn(module StdModule, shape SpawnEnvironmentShape)
 	let errLimit = 12 as ValueId
 	let surfaceFlags = 13 as ValueId
 
-	// ⭐ **THE FLAG DECIDES A POINTER, AND `build` RECEIVES IT AS ITS ONE BLOCK ARGUMENT.** Inherit is NULL;
-	// a caller-built environment is the block's own bytes under `nulSeparatedBlock` and a vector over those
-	// bytes under `pointerVector`. Deciding it here rather than in the spawn core keeps the core's request
-	// record holding one pointer and nothing that has to be re-interpreted.
-	//
-	// ⛔⛔ **THE `env` PARAMETER IS THE RECORD, NOT THE BUFFER, AND ASSUMING OTHERWISE IS A MEASURED WRONG
-	// ANSWER.** `requireIntrinsicArgs` VALIDATES a `__ManagedMemory` argument's type and passes the record
-	// through untouched, so every reader extracts `ManagedRecordBufferOffset` itself — which is why
-	// `__gt_subp_argv_command` and `__gt_subp_env_vector` both take a RECORD. Handing the record straight to
-	// `lpEnvironment` gives `CreateProcessA` a struct header to read as `NAME=VALUE` text — MEASURED as
-	// `win32 error 87` (ERROR_INVALID_PARAMETER) on every spawn that names an override, while `inherit` goes
-	// on working because it never reads the slot.
-	let envPtr = ids.mint()
-	build.blockArgs.push(IrBlockArg.create(envPtr, argType: StdType.i64))
-	let parentSource = emitConst(module, block: entry, value: EnvSourceParent, ids: ids)
-	let inherits = emitCmp(module, block: entry, a: envInherit, b: parentSource, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(inherits, thenBlockId: inheritEnv.id, elseBlockId: callerEnv.id))
-
-	let nullEnv = emitConst(module, block: inheritEnv, value: 0, ids: ids)
-	module.setTerminator(inheritEnv, op: StdOp.branch(build.id))
-	inheritEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(nullEnv)))
-
-	let envPointer = match shape 'shape'
-		nulSeparatedBlock gives emitLoadField(module, block: callerEnv, record: env, offset: ManagedRecordBufferOffset, ids: ids)
-		pointerVector gives emitSubpEnvVectorCall(module, block: callerEnv, ids: ids, envRec: env)
-	end 'shape'
-	module.setTerminator(callerEnv, op: StdOp.branch(build.id))
-	callerEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(envPointer)))
+	let envPtr = emitSubpEnvPointer(module, func: func, ids: ids, entry: entry, build: build, env: env, envInherit: envInherit, shape: shape)
 
 	let cmdline = ids.mint()
 	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
@@ -1077,31 +1064,80 @@ function emitSubpEnvVectorCall(module StdModule, block IrBlock, ids ValueMinter,
 	return envp
 end 'emitSubpEnvVectorCall'
 
-// ⭐ `__gt_subp_stream_spawn(argv, argc, cwd, flags) -> handle | -1` — `__Builtins.subprocessSpawnStreaming`.
-// The same core with all three streams wired to pipes, which is what "streaming" MEANS: there are no stdio
-// triples to pass because a `StreamingSubprocess` drives all three by hand.
-function buildSubpStreamSpawn(module StdModule)
-	var func = IrFunction.createFromStd(SubpStreamSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(4)
+// ⭐⭐ **THE POINTER THE SPAWN CORE'S `env` SLOT TAKES, DECIDED ONCE FOR BOTH SPAWN DOORS THAT OFFER ONE.**
+// The two answers are different POINTERS rather than different code paths: inherit is NULL, and a
+// caller-built environment is whatever `SpawnEnvironmentShape` says this lane's primitive takes for one. It
+// reaches `build` as that block's ONE argument, which is what keeps the request record holding a single
+// pointer nothing downstream has to re-interpret.
+//
+// ⛔⛔ **THE `env` PARAMETER IS THE RECORD, NOT THE BUFFER, AND ASSUMING OTHERWISE IS A MEASURED WRONG
+// ANSWER.** `requireIntrinsicArgs` VALIDATES a `__ManagedMemory` argument's type and passes the record
+// through untouched, so every reader extracts `ManagedRecordBufferOffset` itself — which is why
+// `__gt_subp_argv_command` and `__gt_subp_env_vector` both take a RECORD. Handing the record straight to
+// `lpEnvironment` gives `CreateProcessA` a struct header to read as `NAME=VALUE` text — MEASURED as
+// `win32 error 87` (ERROR_INVALID_PARAMETER) on every spawn that names an override, while `inherit` goes on
+// working because it never reads the slot.
+function emitSubpEnvPointer(module StdModule, func IrFunction, ids ValueMinter, entry IrBlock, build IrBlock, env ValueId, envInherit ValueId, shape SpawnEnvironmentShape) returns ValueId
+	var inheritEnv = module.addBlock(func, label: b"subpinhenv")
+	var callerEnv = module.addBlock(func, label: b"subpownenv")
+
+	let envPtr = ids.mint()
+	build.blockArgs.push(IrBlockArg.create(envPtr, argType: StdType.i64))
+	let parentSource = emitConst(module, block: entry, value: EnvSourceParent, ids: ids)
+	let inherits = emitCmp(module, block: entry, a: envInherit, b: parentSource, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(inherits, thenBlockId: inheritEnv.id, elseBlockId: callerEnv.id))
+
+	let nullEnv = emitConst(module, block: inheritEnv, value: 0, ids: ids)
+	module.setTerminator(inheritEnv, op: StdOp.branch(build.id))
+	inheritEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(nullEnv)))
+
+	let envPointer = match shape 'shape'
+		nulSeparatedBlock gives emitLoadField(module, block: callerEnv, record: env, offset: ManagedRecordBufferOffset, ids: ids)
+		pointerVector gives emitSubpEnvVectorCall(module, block: callerEnv, ids: ids, envRec: env)
+	end 'shape'
+	module.setTerminator(callerEnv, op: StdOp.branch(build.id))
+	callerEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(envPointer)))
+
+	return envPtr
+end 'emitSubpEnvPointer'
+
+// ⭐ `__gt_subp_stream_spawn(argv, argc, cwd, flags, env, envInherit) -> handle | -1` —
+// `__Builtins.subprocessSpawnStreaming`. The same core with all three streams wired to pipes, which is what
+// "streaming" MEANS: there are no stdio triples to pass because a `StreamingSubprocess` drives all three by
+// hand.
+//
+// ⭐⭐ **THE ENVIRONMENT IS THE CALLER'S DECISION HERE TOO, AND IT IS THE SAME DIAMOND THE ATTACHED SPAWN
+// TAKES.** A monitor is a streaming parent that must TELL its child something before the child's first
+// instruction runs — a DebugStream producer finds its ring by reading a name out of its environment — so a
+// streaming spawn that could only inherit could only ever trace a child that was already being traced.
+function buildSubpStreamSpawn(module StdModule, shape SpawnEnvironmentShape)
+	var func = IrFunction.createFromStd(SubpStreamSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: SubpStreamSpawnParamCount, paramTypes: sixI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(SubpStreamSpawnParamCount)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var build = module.addBlock(func, label: b"subpbuild")
 
-	emitParams(module, block: entry, count: 4)
+	emitParams(module, block: entry, count: SubpStreamSpawnParamCount)
 	let argv = 0 as ValueId
 	let argc = 1 as ValueId
 	let cwd = 2 as ValueId
 	let surfaceFlags = 3 as ValueId
+	let env = 4 as ValueId
+	let envInherit = 5 as ValueId
+
+	let envPtr = emitSubpEnvPointer(module, func: func, ids: ids, entry: entry, build: build, env: env, envInherit: envInherit, shape: shape)
 
 	let cmdline = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
-	let req = emitSubpNewRequest(module, block: entry, ids: ids, cmdline: cmdline)
-	let stdinPipe = emitConst(module, block: entry, value: SubpStdinHold, ids: ids)
-	emitStoreField(module, block: entry, record: req, offset: SubpReqStdinKind, value: stdinPipe)
-	let collect = emitConst(module, block: entry, value: SubpOutCollect, ids: ids)
-	emitStoreField(module, block: entry, record: req, offset: SubpReqOutKind, value: collect)
-	emitStoreField(module, block: entry, record: req, offset: SubpReqErrKind, value: collect)
-	emitSubpCreationFlags(module, block: entry, ids: ids, surfaceFlags: surfaceFlags, req: req)
-	var afterCwd = emitSubpCwdOrNull(module, func: func, ids: ids, cur: entry, cwd: cwd, req: req)
+	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
+	let req = emitSubpNewRequest(module, block: build, ids: ids, cmdline: cmdline)
+	emitStoreField(module, block: build, record: req, offset: SubpReqEnv, value: envPtr)
+	let stdinPipe = emitConst(module, block: build, value: SubpStdinHold, ids: ids)
+	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinPipe)
+	let collect = emitConst(module, block: build, value: SubpOutCollect, ids: ids)
+	emitStoreField(module, block: build, record: req, offset: SubpReqOutKind, value: collect)
+	emitStoreField(module, block: build, record: req, offset: SubpReqErrKind, value: collect)
+	emitSubpCreationFlags(module, block: build, ids: ids, surfaceFlags: surfaceFlags, req: req)
+	var afterCwd = emitSubpCwdOrNull(module, func: func, ids: ids, cur: build, cwd: cwd, req: req)
 	let handle = ids.mint()
 	module.appendOp(afterCwd, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
 	module.setTerminator(afterCwd, op: StdOp.ret(handle))
@@ -1314,6 +1350,61 @@ function buildSubpWaitExit(module StdModule)
 
 	module.functions.push(func)
 end 'buildSubpWaitExit'
+
+// ⭐ `__gt_subp_poll_exit(handle) -> exitCode | -1` — `__Builtins.subprocessPollExit`. Has the child exited?
+// Answered with a ZERO-timeout wait, so it never blocks, and with no terminate on any path, so it never
+// changes what it is asking about.
+//
+// ⭐⭐ **-1 CANNOT COLLIDE WITH AN EXIT CODE, AND THE MASK IS WHAT MAKES THAT TRUE.** `GetExitCodeProcess`
+// writes a DWORD into a scratch word this runtime also lends to `WriteFile`'s bytes-written out-param, so the
+// upper half of the loaded machine word is whatever the last user left there. Masked, the answer is in
+// [0, 2^32) and every negative value is out of band — which is what lets one entry carry both "it exited with
+// this code" and "it has not". `StdOp.osHandleFileType` records the same hazard from the other end.
+//
+// ⚠ A handle naming no live child also answers -1, which `stdlib/Subprocess.maxon` reads as `running`: after
+// `release()` there is no child left to report an exit for, and the throwing methods refuse a released handle
+// on their own account.
+function buildSubpPollExit(module StdModule)
+	var func = IrFunction.createFromStd(SubpPollExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var bad = module.addBlock(func, label: b"subpbad")
+	var running = module.addBlock(func, label: b"subppolive")
+	var exited = module.addBlock(func, label: b"subppodone")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+
+	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
+	module.setTerminator(bad, op: StdOp.ret(failure))
+
+	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	let slot = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
+	let hProcess = emitLoadField(module, block: good, record: slot, offset: SubpSlotHProcess, ids: ids)
+	let noWait = emitConst(module, block: good, value: 0, ids: ids)
+	let waitResult = ids.mint()
+	module.appendOp(good, op: StdOp.osWaitHandle(waitResult, handleId: hProcess, timeoutMsId: noWait))
+	let signalled = emitConst(module, block: good, value: WaitObjectSignalled, ids: ids)
+	let didExit = emitCmp(module, block: good, a: waitResult, b: signalled, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(good, op: StdOp.condBranch(didExit, thenBlockId: exited.id, elseBlockId: running.id))
+
+	// A wait that TIMED OUT and one that FAILED are the same answer here, unlike in `__gt_subp_wait_exit`:
+	// neither says the child has finished, and this entry has no second failure value to report with.
+	let stillRunning = emitConst(module, block: running, value: SubpFailure, ids: ids)
+	module.setTerminator(running, op: StdOp.ret(stillRunning))
+
+	let slotE = emitSubpSlotOf(module, block: exited, ids: ids, handle: handle)
+	let hProcessE = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotHProcess, ids: ids)
+	let codePtr = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotBytesOut, ids: ids)
+	module.appendOp(exited, op: StdOp.osProcessExitCode(hProcessE, codePtrId: codePtr))
+	let raw = emitLoadField(module, block: exited, record: codePtr, offset: 0, ids: ids)
+	let mask = emitConst(module, block: exited, value: DwordMask, ids: ids)
+	let code = emitBin(module, block: exited, a: raw, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(exited, op: StdOp.ret(code))
+
+	module.functions.push(func)
+end 'buildSubpPollExit'
 
 // ⭐⭐ `__gt_subp_wait_collect(handle, timeoutMs) -> resultPtr | -1` — wait for the child while DRAINING BOTH
 // of its output pipes, and answer a result struct holding what they produced.
@@ -2436,13 +2527,16 @@ export function installSubprocessRuntime(module StdModule, target Target)
 		pointerVector then buildSubpEnvVector(module)
 	end 'envShape'
 	buildSubpAttachedSpawn(module, shape: envShape)
-	buildSubpStreamSpawn(module)
+	buildSubpStreamSpawn(module, shape: envShape)
 	buildSubpGetPid(module)
 	buildSubpWriteAll(module)
 	buildSubpReadBytes(module, name: SubpReadOutBytesName, readerName: SubpReadLineName)
 	buildSubpReadBytes(module, name: SubpReadErrBytesName, readerName: SubpReadErrLineName)
 	buildSubpReadBytes(module, name: SubpReadExactOutBytesName, readerName: SubpReadExactName)
+	buildSubpReadBytes(module, name: SubpTryReadOutBytesName, readerName: SubpTryReadLineName)
+	buildSubpReadBytes(module, name: SubpTryReadErrBytesName, readerName: SubpTryReadErrLineName)
 	buildSubpWaitExit(module)
+	buildSubpPollExit(module)
 	buildSubpWaitCollect(module)
 	buildSubpResultWordReader(module, name: SubpResultKindName, offset: ResStatus)
 	buildSubpResultWordReader(module, name: SubpResultCodeName, offset: ResCode)

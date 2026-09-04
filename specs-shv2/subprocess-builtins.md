@@ -11,19 +11,20 @@ category: system
 
 `stdlib/Subprocess.maxon` is the child-process surface — `Subprocess.run(...)`,
 `Configuration.run()`, `runDetached()` and `StreamingSubprocess` — and every one of its leaves
-bottoms out in one of twenty-three compiler intrinsics. `Parser.BuiltinsSubprocessSpawnName` lists all
-twenty-three; they fall into three families.
+bottoms out in a compiler intrinsic. `Parser.BuiltinsSubprocessSpawnName` lists them all; they fall into
+three families.
 
 | Family | Intrinsics |
 |---|---|
 | the ATTACHED run | `subprocessSpawn` / `subprocessDetach` (fourteen arguments), `subprocessGetPid`, `subprocessWaitCollect`, `subprocessResultStatusKind` / `StatusCode` / `Stdout` / `Stderr` / `DurationMs` / `Release`, `subprocessReleaseHandle` |
-| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll`, `subprocessReadStdoutLine` / `ReadStderrLine`, `subprocessReadStdoutBytes`, `subprocessStdoutState` / `subprocessStderrState`, `subprocessCloseStdin`, `subprocessWaitExit` |
+| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll`, `subprocessReadStdoutLine` / `ReadStderrLine`, `subprocessReadStdoutBytes`, `subprocessStdoutState` / `subprocessStderrState`, `subprocessCloseStdin`, `subprocessWaitExit`, and the three that ask rather than commit — `subprocessPollExit`, `subprocessTryReadStdoutLine` / `TryReadStderrLine` |
 | the helpers | `subprocessResolveOnPath`, `subprocessLastErrorMessage`, and `managedIsNull` (a `__ManagedMemory` predicate whose only corpus caller is the executable lookup) |
 
-The bootstrap declares all twenty-three with exactly these shapes
+The bootstrap declares most of them with exactly these shapes
 (`maxon-sharp/Compiler/2-Parser.cs`'s `CompilerBuiltins`, `subprocessSpawn` through
 `subprocessResultRelease`), plus `subprocessKill` and `subprocessSendSignal`, which shv2 does not surface
-because no corpus file calls either — so the SURFACE is the reference's minus that pair, and only the
+because no corpus file calls either. The three non-blocking members are shv2's own and the reference has
+no counterpart for them; the rest of the SURFACE is the reference's minus that pair, and only the
 implementation differs.
 
 ### The fourteen-argument spawn contract
@@ -1090,7 +1091,9 @@ kind=0 code=0 capped=true
 <!-- test: subprocess-builtins.streaming-over-argv -->
 <!-- targets: x64-windows -->
 `subprocessSpawnStreaming` takes the same argv blob and wires all three streams to pipes, which is
-what "streaming" MEANS — there are no stdio triples to pass because the caller drives all three.
+what "streaming" MEANS — there are no stdio triples to pass because the caller drives all three. It
+does take the environment pair the attached contract carries, and a `1` there is `EnvSource.parent`,
+under which the block beside it is never read.
 `writeStdinAll` writes exactly the bytes it is given (the surface appends its own newline), the
 `readStdoutLine` reader answers a `__ManagedMemory` rather than the `String` the bare-name
 `subpReadLine` builtin answers, and `waitExit` honours a deadline the streaming `subpWait` cannot.
@@ -1113,7 +1116,9 @@ function main() returns ExitCode
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	var envBlock = ByteArray.create()
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "ping\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)
@@ -1170,7 +1175,9 @@ function main() returns ExitCode
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	var envBlock = ByteArray.create()
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abcdefghij\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)
@@ -1221,7 +1228,9 @@ function main() returns ExitCode
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	var envBlock = ByteArray.create()
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "first\nabcdefghij\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)
@@ -1277,7 +1286,9 @@ function main() returns ExitCode
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	var envBlock = ByteArray.create()
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abcdefghij\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)
@@ -1328,7 +1339,9 @@ function main() returns ExitCode
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	var envBlock = ByteArray.create()
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abc\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)

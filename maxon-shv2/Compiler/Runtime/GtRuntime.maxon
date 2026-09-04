@@ -4929,6 +4929,7 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 		// The terminal question defines a file-type word, never the `completed` constant and never a load
 		// of the status word.
 		osHandleFileType then break 'k'
+		osCreateNamedSegment to osUnmapNamedSegment then break 'k'
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4955,6 +4956,7 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 		// The terminal question is neither a compare nor a store, so it can be neither the observation nor
 		// the publication this pass refuses an unordered form of.
 		osHandleFileType then break 'k'
+		osCreateNamedSegment to osUnmapNamedSegment then break 'k'
 	end 'k'
 end 'requireOrderedCompletedAccess'
 
@@ -7463,6 +7465,13 @@ export let SubpSpawnCoreName = b"__gt_subp_spawn_core"
 export let SubpReadLineName = b"__gt_subp_read_line"
 export let SubpReadErrLineName = b"__gt_subp_read_err_line"
 export let SubpReadExactName = b"__gt_subp_read_exact"
+
+// ⭐ **THE NON-BLOCKING TWINS OF THE TWO LINE READERS.** Same body-builder, same per-handle buffer, same
+// consume — the ONE difference is that a refill is preceded by a peek and a pipe with nothing ready ends
+// the call rather than parking on it. A parent that must stay responsive while its child runs has no other
+// way to drain a line: the blocking reader parks until one arrives, and a child that is quiet has not ended.
+export let SubpTryReadLineName = b"__gt_subp_try_read_line"
+export let SubpTryReadErrLineName = b"__gt_subp_try_read_err_line"
 export let SubpWriteLineName = b"__gt_subp_write_line"
 export let SubpCloseStdinName = b"__gt_subp_close_stdin"
 export let SubpWaitName = b"__gt_subp_wait"
@@ -7552,7 +7561,7 @@ end 'emitSubpSlotAddr'
 //     `emitSubpPushStdin`, `emitSubpDrainStream` and `emitSubpKeepWithinLimit`. Anything else in that grep
 //     without a guard at its top is a bug.
 //   * The guard is at the ENTRY POINT, never at a wrapper, which is what makes it complete with respect to
-//     CALL SITES: the seven bare-name streaming builtins and the twenty-two `__Builtins.subprocess*` intrinsics
+//     CALL SITES: the seven bare-name streaming builtins and the `__Builtins.subprocess*` intrinsics
 //     reach these same entries, so neither family — nor a future third — has anything to remember.
 //
 // `0 <= handle < SubpMaxHandles` AND the slot is live; anything else takes `whenBad`.
@@ -8573,6 +8582,55 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	return resumed
 end 'emitSubpTopUpStream'
 
+// ⭐⭐ **MAY A LINE READER PARK ON THE PIPE?** The one fact that separates `__gt_subp_read_line` from
+// `__gt_subp_try_read_line`, and it is a parameter rather than a second body-builder because everything else
+// about them is identical: the newline scan, the per-handle buffer, the growth policy, the consume, the EOF
+// remainder and the stale-slot guard. A second copy would be a second chance to get the generation guard
+// wrong, which is the one window in this substrate where a slot changes owner.
+enum LineReadWait
+	// Refill and PARK until a line arrives or the stream ends.
+	untilALineArrives
+	// Refill only from bytes the pipe already holds, and answer "" rather than wait.
+	onlyWhatIsBuffered
+end 'LineReadWait'
+
+// ⭐ **ASK THE PIPE BEFORE COMMITTING TO A REFILL** — the whole of what `onlyWhatIsBuffered` adds.
+// `emitSubpTopUpStream` parks the calling green thread on the read, so a reader that must never wait has to
+// establish first that bytes are already there; a peek that answers N then makes the overlapped read complete
+// SYNCHRONOUSLY, which is the same structure the collect loop drains two pipes with.
+//
+// ⚠ **A FAILED PEEK ANSWERS "" AND LATCHES NOTHING.** A broken pipe is what a peek fails with once the child
+// has closed its write end, and the stream's state word is `emitSubpTopUpStream`'s to write from a read that
+// really happened — so a caller that wants the end-of-stream verdict asks `subprocessStdoutState` for it
+// rather than inferring it from an empty answer.
+//
+// Answers the block `readMore` must branch to; `refill` is where a pipe with bytes ready continues.
+function emitSubpPeekBeforeRefill(module StdModule, func IrFunction, ids ValueMinter, readEnd ValueId, bytesOutPtr ValueId, refill IrBlock) returns IrBlock
+	var gate = module.addBlock(func, label: b"trypeek")
+	var ready = module.addBlock(func, label: b"trypeeked")
+	var nothing = module.addBlock(func, label: b"trynone")
+
+	let peekOk = ids.mint()
+	module.appendOp(gate, op: StdOp.osPipePeek(peekOk, handleId: readEnd, availPtrId: bytesOutPtr))
+	let zero = emitConst(module, block: gate, value: 0, ids: ids)
+	let peekFailed = emitCmp(module, block: gate, a: peekOk, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(gate, op: StdOp.condBranch(peekFailed, thenBlockId: nothing.id, elseBlockId: ready.id))
+
+	let avail = emitLoadField(module, block: ready, record: bytesOutPtr, offset: 0, ids: ids)
+	let zeroA = emitConst(module, block: ready, value: 0, ids: ids)
+	let nothingReady = emitCmp(module, block: ready, a: avail, b: zeroA, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(ready, op: StdOp.condBranch(nothingReady, thenBlockId: nothing.id, elseBlockId: refill.id))
+
+	// An empty OWNED String rather than 0, for `buildSubpReadLine`'s stated reason: the result is dropped
+	// through `__str_decref`, which dereferences the record header.
+	let emptyLen = emitConst(module, block: nothing, value: 0, ids: ids)
+	let emptyLine = ids.mint()
+	module.appendOp(nothing, op: StdOp.call(emptyLine, callee: SubpStrFromBytesName, args: twoArgs(emptyLen, second: emptyLen)))
+	module.setTerminator(nothing, op: StdOp.ret(emptyLine))
+
+	return gate
+end 'emitSubpPeekBeforeRefill'
+
 // ⭐ `<name>(handle) -> ownedString` — read one line (INCLUDING the trailing '\n') from the stream at `streamBase`
 // (SubpStdoutBase or SubpStderrBase, baked in per instance so stdout and stderr share this ONE body-builder),
 // yielding while a chunk read is in flight. Scans the handle's growable line buffer for '\n'; returns everything
@@ -8581,7 +8639,7 @@ end 'emitSubpTopUpStream'
 // leaves the stream's state word past `open`, and the remaining bytes (or "") are returned. The result is a
 // fresh OWNED String the caller drops (the parser marks it a pending owned temp). `i` (the scan resume index)
 // is `scanHdr`'s loop arg; everything else flows by dominance.
-function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffset, streamState EnumLayout)
+function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffset, streamState EnumLayout, wait LineReadWait)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
@@ -8671,7 +8729,13 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	// readMore: coarse per-line cap (a newline-less stream cannot grow unbounded) → treat as a line; else grow-check.
 	let bufLenM = emitLoadField(module, block: readMore, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let overCap = emitCmp(module, block: readMore, a: bufLenM, b: maxLineBytes, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(readMore, op: StdOp.condBranch(overCap, thenBlockId: emitRemainder.id, elseBlockId: growCheck.id))
+	// The BLOCK ID rather than the block: binding a block here would MOVE `growCheck`, which the top-up
+	// below still needs.
+	let refillEntry = match wait 'wait'
+		untilALineArrives gives growCheck.id
+		onlyWhatIsBuffered gives emitSubpPeekBeforeRefill(module, func: func, ids: ids, readEnd: readEnd, bytesOutPtr: bytesOutPtr, refill: growCheck).id
+	end 'wait'
+	module.setTerminator(readMore, op: StdOp.condBranch(overCap, thenBlockId: emitRemainder.id, elseBlockId: refillEntry))
 
 	// The top-up — grow, park on the read, and either latch why the stream stopped or publish the new
 	// length — is `emitSubpTopUpStream`'s, shared with `buildSubpReadExact`.
@@ -9029,8 +9093,10 @@ function installSubpRuntime(module StdModule, target Target, streamState EnumLay
 	buildSubpStrFromBytes(module)
 	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target), streamState: streamState)
 	buildSubpSpawn(module, commandShape: subprocessCommandShape(target))
-	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase, streamState: streamState)
-	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase, streamState: streamState)
+	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase, streamState: streamState, wait: LineReadWait.untilALineArrives)
+	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase, streamState: streamState, wait: LineReadWait.untilALineArrives)
+	buildSubpReadLine(module, name: SubpTryReadLineName, streamBase: SubpStdoutBase, streamState: streamState, wait: LineReadWait.onlyWhatIsBuffered)
+	buildSubpReadLine(module, name: SubpTryReadErrLineName, streamBase: SubpStderrBase, streamState: streamState, wait: LineReadWait.onlyWhatIsBuffered)
 	buildSubpReadExact(module, streamState: streamState)
 	// The two per-stream state queries, beside the readers whose empty answer they are the discriminator for.
 	buildSubpStreamStateQuery(module, name: SubpOutStateName, streamBase: SubpStdoutBase, streamState: streamState)

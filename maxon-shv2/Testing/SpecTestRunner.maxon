@@ -196,12 +196,16 @@ let AsyncTraceWorkerMarker = " [M="
 // Debug-stream capture mode — the `mm` and `log` families
 // ============================================================================
 //
-// ⭐⭐ **THE PRODUCER IS shv2'S AND THE CONSUMER IS THE BOOTSTRAP'S, AND THAT SPLIT IS THE DESIGN.** A
-// capture case (an `<!-- MmTrace -->` or `<!-- LogTrace -->` marker, or either golden) is built with
-// `--debugstream` (shv2 emits the shared-memory ring producer — see `DebugStreamRuntime`) and RUN UNDER
-// `maxon monitor --filter=<family>`, which creates the segment, spawns the binary into it, decodes every
-// event of that family and prints it. There is no decoder in shv2 and there is not meant to be one: two
-// decoders of one wire format is the defect this project has already paid for once.
+// ⭐⭐ **ONE PROCESS IS BOTH ENDS, AND IT IS THIS BINARY.** A capture case (an `<!-- MmTrace -->` or
+// `<!-- LogTrace -->` marker, or either golden) is built with `--debugstream` — shv2 emits the
+// shared-memory ring PRODUCER, see `Compiler/Runtime/DebugStreamRuntime` — and RUN UNDER
+// `<this compiler> monitor --filter=<family>`, whose CONSUMER is `Debug/DebugStreamDecoder`: it creates
+// the segment, spawns the binary into it, decodes every event of that family and prints it.
+//
+// ⚠ **THE WIRE FORMAT IS STILL NOT SHV2'S TO CHOOSE.** Both ends read one registry of constants and the
+// committed goldens below were minted through the BOOTSTRAP's decoder, so a byte this side disagrees about
+// is this side's defect. `tests/debug` is what gates that agreement, by running one traced binary under
+// both monitors and comparing.
 //
 // ⚠ **THE FAMILY REACHES EXACTLY FOUR DERIVED THINGS AND NOTHING ELSE** — the marker, the fence, the
 // filter below, and the prefix a decoded line of that family starts with. Everything else about a capture
@@ -210,21 +214,16 @@ let MonitorSubcommand = "monitor"
 let MonitorMmFilterArg = "--filter=mm"
 let MonitorLogFilterArg = "--filter=log"
 
-// The `--filter=` the monitor is given. Stated per family rather than derived from the enum case's name,
-// because the spelling is the CONSUMER's (`DebugStreamDecoder.Families`) and not this side's to compute —
-// a derived one would keep compiling on the day the decoder renamed a family and would simply stop
-// selecting anything.
+// The `--filter=` the monitor is given. Stated per family rather than derived from `TraceFamily`'s case
+// name, because the spelling belongs to the CONSUMER's own family roster (`Debug/DebugStreamDecoder`'s
+// `EventFamily`) and not to this enum — a derived one would keep compiling on the day the decoder renamed
+// a family and would simply stop selecting anything.
 function traceFilterArgOf(family TraceFamily) returns String
 	return match family 'f'
 		mm gives MonitorMmFilterArg
 		log gives MonitorLogFilterArg
 	end 'f'
 end 'traceFilterArgOf'
-
-// The host compiler that carries the monitor, relative to the checkout root. The `.exe`-vs-extensionless
-// ordering is `hostBinaryCandidates`', asked rather than restated — see `findMonitorPath`.
-let MonitorBinDirName = "bin"
-let MonitorExeStem = "maxon"
 
 // ⭐ The prefix the monitor puts on EVERY line it authors: `[+SSSS.mmm] `. It is what tells a decoded
 // event from the CHILD's own stdout, which the monitor forwards into the same stream verbatim — so it is
@@ -3373,26 +3372,18 @@ function buildMonitorRunCommand(modulePath FilePath, family TraceFamily, program
 	return RunCommand.create(Executable.path(findMonitorPath()), argv: argv)
 end 'buildMonitorRunCommand'
 
-// ⭐ **THE MONITOR BINARY, FOUND BY THE SAME UPWARD WALK AND THE SAME HOST ORDERING THE VENDORED TOOLS
-// ARE.** `findFileUpward` is the tree's ONE "walk up from the cwd to the checkout root looking for this
-// file" rule and `hostBinaryCandidates` is its ONE "`.exe` or extensionless, host first" rule — the wasm
-// lane's wasmtime and wasm-tools come through both — and a second copy of either here is precisely the
-// duplication that would let the two disagree about which binary a run belongs to. Only the DIRECTORY
-// differs, which is why that is the parameter: the monitor lives in `bin/`, not under `vendor/`.
+// ⭐⭐ **THE MONITOR IS THIS PROCESS'S OWN BINARY, AND ASKING THE OS FOR IT IS THE POINT.** A capture case
+// must be decoded by the compiler UNDER TEST — the one that emitted the producer whose ring it is reading
+// — and no search can promise that: a walk up from the cwd finds whichever compiler happens to sit at a
+// path, which on a suite spawned from a worktree or a staged binary is a different build from this one.
+// `Process.executablePath()` cannot name the wrong one.
 //
-// ⛔ **A MISSING MONITOR PANICS, NAMING IT.** It cannot pass silently: with no monitor there is no
+// ⛔ **A PATH THE OS WILL NOT ANSWER PANICS.** It cannot pass silently: with no monitor there is no
 // segment, so the binary runs untraced and reports an EMPTY trace — which reads as "this program allocated
 // nothing" rather than as "the instrument was not there". That is the single failure this whole capture
 // mode is written to make impossible.
 function findMonitorPath() returns FilePath
-	var binDir = StringArray.create()
-	binDir.push(MonitorBinDirName)
-
-	let found = findFileUpward(hostBinaryCandidates(binDir, stem: MonitorExeStem))
-	if found.isEmpty() 'notFound'
-		panic("SpecTestRunner: the mm-trace monitor was not found at {MonitorBinDirName}/{MonitorExeStem} (searched up from the cwd to the filesystem root). An mm-trace case is RUN under `{MonitorExeStem} {MonitorSubcommand} {MonitorMmFilterArg}`, which is the bootstrap's decoder — build it (`dotnet build` in maxon-sharp/) before running this suite")
-	end 'notFound'
-	return found
+	return try Process.executablePath() otherwise panic("SpecTestRunner: the host could not name this process's own executable, and a capture case is RUN under `<this compiler> {MonitorSubcommand} {MonitorMmFilterArg}` — there is no other binary that is guaranteed to be the one under test")
 end 'findMonitorPath'
 
 // `wasmtime run -S cli-exit-with-code=y <module.wasm>` — the exact command the wasm component

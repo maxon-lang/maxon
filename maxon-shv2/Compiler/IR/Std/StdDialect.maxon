@@ -2554,6 +2554,32 @@ export union StdOp
 	// position rather than `osEnvRead`'s. Every other call-barrier flag is set: it IS an indirect call once
 	// lowered.
 	osHandleFileType(resultId ValueId, handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The CONSUMER's half of a named section: CREATE one, and give a mapping back ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osHandleFileType`, per the band-append invariant every
+	// entry above states: a mid-band insert is silently swallowed by a `… to X` range arm. Both carry
+	// `category: system`, placing them logically in the OS band independent of this tail position. They are
+	// ADJACENT so the sites that treat "a named-section call" alike need ONE range arm rather than two.
+	//
+	// ⭐⭐ **`osOpenNamedSegment` IS THE PRODUCER'S DOOR AND CANNOT SERVE THE CONSUMER.** That op reads a name
+	// out of the environment and OPENS a section someone else already created; a monitor is the party that
+	// creates it, publishes its name to a child, and decodes what the child writes there. `OpenFileMappingA`
+	// on a section that does not exist yet answers NULL, so there is no ordering of the two processes that
+	// lets the existing op stand in.
+	//
+	// `osCreateNamedSegment(result, namePtr, size) -> HANDLE (0 on failure)` =
+	// `CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)` — a page-file-backed
+	// section of exactly `size` bytes published under the NUL-terminated name at `namePtr`. The MAPPING is
+	// `osMapNamedSegment`, which takes a HANDLE and so serves a created section exactly as it serves an
+	// opened one.
+	osCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osUnmapNamedSegment(base)` = `UnmapViewOfFile(base)`. One VALUE operand, no result — the BOOL is
+	// ignored for `osCloseHandle`'s reason.
+	//
+	// ⭐ **CLOSING THE HANDLE IS NOT ENOUGH, WHICH IS WHY THIS IS A SECOND OP AND NOT A SECOND ARGUMENT.** A
+	// section object stays alive while any view of it is mapped, so a `close()` that only released the handle
+	// would keep the whole section — and its address range — for the life of the process, silently.
+	osUnmapNamedSegment(baseId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2721,6 +2747,11 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		tlsAlloc gives SyscallClass.schedulerBound
 		tlsSetValue gives SyscallClass.schedulerBound
 		tlsSlotLoad gives SyscallClass.schedulerBound
+		// A section CREATE reaches the memory manager and can touch the page file, exactly as the OPEN and the
+		// MAP above it do; the UNMAP tears a mapping down without waiting on anything, which is `osCloseHandle`'s
+		// position.
+		osCreateNamedSegment gives SyscallClass.blocking
+		osUnmapNamedSegment gives SyscallClass.schedulerBound
 	end 'k'
 end 'stdOpSyscallClassOf'
 
@@ -3030,6 +3061,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		// twins have none.
 		loadAcquire or storeRelease then operands.recordNeither()
 		osHandleFileType then operands.recordNeither()
+		osCreateNamedSegment to osUnmapNamedSegment then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -3127,6 +3159,7 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 		// to the pass as a hoistable load at all. `storeRelease` is not a load in the first place.
 		loadAcquire or storeRelease then load.recordNotALoad()
 		osHandleFileType then load.recordNotALoad()
+		osCreateNamedSegment to osUnmapNamedSegment then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3384,6 +3417,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osEnvBlock then break 'u'
 		osEnvBlockFree(blockPtr) then referenced.insert(blockPtr)
 		osHandleFileType(_, handle) then referenced.insert(handle)
+		// The name and the size are both genuine register reads the OS call needs; the create's `resultId` is a
+		// DEF, skipped here exactly as `osMapNamedSegment`'s is. The unmap reads the view base and defines nothing.
+		osCreateNamedSegment(_, namePtr, size) then insertUsePair(referenced, a: namePtr, b: size)
+		osUnmapNamedSegment(base) then referenced.insert(base)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
@@ -3614,6 +3651,8 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osEnvBlock(resultId) gives DefinedValueLookup.defines(resultId)
 		osEnvBlockFree gives DefinedValueLookup.none
 		osHandleFileType(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osCreateNamedSegment(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osUnmapNamedSegment gives DefinedValueLookup.none
 		osFileSize(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileDelete(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
@@ -3864,6 +3903,8 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osEnvBlock(resultId) gives StdOp.osEnvBlock(resultId)
 		osEnvBlockFree(blockPtr) gives StdOp.osEnvBlockFree(remappedValue(blockPtr, subst: subst))
 		osHandleFileType(resultId, handle) gives StdOp.osHandleFileType(resultId, handleId: remappedValue(handle, subst: subst))
+		osCreateNamedSegment(resultId, namePtr, size) gives StdOp.osCreateNamedSegment(resultId, namePtrId: remappedValue(namePtr, subst: subst), sizeId: remappedValue(size, subst: subst))
+		osUnmapNamedSegment(base) gives StdOp.osUnmapNamedSegment(remappedValue(base, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -4111,6 +4152,7 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		loadAcquire(resultId, addrId, offset, valueType) then return StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
 		storeRelease then return op
 		osHandleFileType then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
+		osCreateNamedSegment to osUnmapNamedSegment then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -4357,6 +4399,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osEnvBlock to osEnvBlockFree then break 'term'
 		loadAcquire or storeRelease then break 'term'
 		osHandleFileType then break 'term'
+		osCreateNamedSegment to osUnmapNamedSegment then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 

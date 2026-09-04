@@ -442,6 +442,25 @@ export enum IatSlot
 	// import-lookup entry and its Hint/Name record, and a program that never asks whether it is talking to
 	// a terminal should not pay for one.
 	GetFileType
+	// ⭐⭐ **THE NAMED-SECTION PAIR THE CONSUMER HALF OF DebugStream NEEDS.** APPENDED AFTER `GetFileType` for
+	// the reason every entry above states, and they are the LAST kernel32 slots — the `ws2_32` note below
+	// still bounds this append. kernel32 again, so they add no import DIRECTORY entry (see `ImportDll`).
+	//
+	// ⭐⭐ **`OpenFileMappingA` — already a slot two bands up — CANNOT CREATE ONE.** It opens a section that
+	// already exists, which is the PRODUCER's half: a traced child finds the ring a monitor made. The monitor
+	// is the party that makes it, and `CreateFileMappingA` is the only call that does. `UnmapViewOfFile` is
+	// its teardown twin: a section object outlives `CloseHandle` for as long as any view of it is mapped, so
+	// releasing the handle alone leaks the whole section and its address range.
+	//
+	// ⚠ The `A` variant, for `CreateFileA`'s stated reason and inheriting it consistently: the name is
+	// published in the system ANSI codepage and read back by `OpenFileMappingA` in the same one, so the round
+	// trip between the two processes holds.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, on the same terms as every
+	// band above: their only producer is `stdlib/SharedMemory.maxon`, so a program that maps no section pays
+	// for neither.
+	CreateFileMappingA
+	UnmapViewOfFile
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -468,7 +487,7 @@ end 'IatSlot'
 // which would point its thunk at another library's Hint/Name entry.
 function slotDll(slot IatSlot) returns ImportDll
 	return match slot 'dll'
-		ExitProcess to GetFileType gives ImportDll.kernel32
+		ExitProcess to UnmapViewOfFile gives ImportDll.kernel32
 		WSAStartup to closesocket gives ImportDll.ws2_32
 	end 'dll'
 end 'slotDll'
@@ -502,13 +521,12 @@ export function iatSlotIndex(slot IatSlot) returns RelocSlotIndex
 	return slot.ordinal as RelocSlotIndex
 end 'iatSlotIndex'
 
-// ⭐ **DOES THIS SLOT BELONG TO THE OPTIONAL TRAILING BAND?** The four O3 DebugStream imports, the two
-// attached-subprocess ones, the machine query and the thread-CPU read are emitted ONLY into a build that has
-// a producer for them — an import nothing references still costs its IAT thunk, its import-lookup entry and
-// its Hint/Name record, and eight of those in EVERY binary in the language is not a price a debug
-// instrument, a child-process runtime, a core-count query or a phase timer may charge a program that uses
-// none of them. That is the same rule the `.data` slots, the box header and the event sites follow
-// (`DebugStreamRuntime`'s header states it once).
+// ⭐ **DOES THIS SLOT BELONG TO THE OPTIONAL TRAILING BAND?** Every import in it is emitted ONLY into a
+// build that has a producer for one of them — an import nothing references still costs its IAT thunk, its
+// import-lookup entry and its Hint/Name record, and a run of those in EVERY binary in the language is not a
+// price a debug instrument, a child-process runtime, a core-count query, a phase timer or a shared section
+// may charge a program that uses none of them. That is the same rule the `.data` slots, the box header and
+// the event sites follow (`DebugStreamRuntime`'s header states it once).
 //
 // ⚠ **THEY ARE THE TRAILING BAND, AND THAT IS WHAT MAKES OMITTING THEM SAFE.** An `iatCall` records a
 // slot INDEX; dropping entries off the END leaves every earlier index exactly where it was, while dropping
@@ -516,20 +534,20 @@ end 'iatSlotIndex'
 // `ordinal >=` test precisely so that a future import appended past this band fails to compile here
 // instead of quietly joining it.
 //
-// ⚠⚠ **IT IS ONE BAND WITH FOUR PRODUCERS, NOT FOUR BANDS, AND THAT IS FORCED BY THE INDEXING ABOVE.**
+// ⚠⚠ **IT IS ONE BAND WITH SEVERAL PRODUCERS, NOT ONE BAND EACH, AND THAT IS FORCED BY THE INDEXING ABOVE.**
 // Independently-gated bands would leave a HOLE in the emitted table whenever an earlier one was absent and
 // a later one present, and every slot after the hole would resolve to the wrong import. So the whole band is
-// emitted whenever ANY producer is present: a traced build pays for two subprocess imports, the machine
-// query and the thread-CPU read it does not call, and a spawning build pays for four DebugStream ones and
-// those same two. At most seven unreferenced imports in the rare build that wants one of the four, against a
-// silently-repointed import table — the trade is not close.
+// emitted whenever ANY producer is present: a traced build pays for the subprocess imports, the machine
+// query and the thread-CPU read it does not call, and a spawning build pays for the DebugStream ones. A
+// handful of unreferenced imports in the rare build that wants one producer, against a silently-repointed
+// import table — the trade is not close.
 //
-// ⚠ **THE COUNT IN THAT PARAGRAPH IS DERIVED FROM THE ENUM, NOT FROM THIS SENTENCE.** Count the band off
-// the `GetEnvironmentVariableA to TlsSetValue` range below rather than off the prose; a
-// producer added later must extend the range (or fail this total match) and this comment with it.
+// ⚠ **THE BAND'S MEMBERSHIP IS THE RANGE BELOW, NOT THIS PROSE.** Read it off
+// `GetEnvironmentVariableA to UnmapViewOfFile`; a producer added later must extend that range (or fail this
+// total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
-		GetEnvironmentVariableA to GetFileType gives true
+		GetEnvironmentVariableA to UnmapViewOfFile gives true
 		ExitProcess to GetModuleFileNameA gives false
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
@@ -1164,7 +1182,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// TLS pair lives in this band too — so a green-thread program needs the whole band, exactly as a traced or
 	// spawning one does. A program with no green threads is unaffected, which is what keeps a non-async
 	// binary byte-identical across this rung.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock
 	let sockets = codeResult.stdModule.usesSockets
 	let idata = buildImportSection(idataRva as Rva, optionalImports: optionalImports, sockets: sockets)
 	let idataSize = idata.data.count()

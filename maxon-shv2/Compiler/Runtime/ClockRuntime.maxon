@@ -1,5 +1,6 @@
-// Runtime/ClockRuntime.maxon — the two host clocks that are NOT the scheduler's: the CALENDAR
-// (`__clock_now_unix_s`) and this THREAD's own CPU consumption (`__thread_cpu_ticks`).
+// Runtime/ClockRuntime.maxon — the three host clocks that are NOT the scheduler's: the CALENDAR
+// (`__clock_now_unix_s`), this THREAD's own CPU consumption (`__thread_cpu_ticks`), and the machine's
+// UPTIME (`__uptime_ms`), which exists because it is the unit the DebugStream wire format is measured in.
 //
 // ⭐ WHY THIS IS ITS OWN FILE AND NOT A FUNCTION IN `GtRuntime`. `__gt_now_ns` lives there because the
 // green-thread scheduler OWNS it: the timer heap, the sleep deadline and the netpoll wait are all
@@ -56,6 +57,22 @@ let ThreadCpuRuntimeCallPrefix = b"__thread_"
 
 export let ThreadCpuTicksName = b"__thread_cpu_ticks"
 
+// ⭐⭐ **THE UPTIME COUNTER — MILLISECONDS SINCE THE MACHINE BOOTED (`GetTickCount64`), AND IT IS A FIFTH
+// CLOCK RATHER THAN A SPELLING OF ONE ABOVE.** It is here because the DebugStream wire format is measured
+// in it: the producer stamps every ring entry with `osTickCountMs() - start_timestamp`, so a consumer that
+// seeds that header field with any OTHER counter turns each delta into a number with no meaning. QPC-ms
+// (`Clock.nowMs()` → `__gt_now_ns` scaled) LEADS the tick, which makes the producer's subtraction underflow;
+// the calendar is not monotonic at all. Only the same counter closes it.
+//
+// ⚠ **ITS OWN `__uptime_` BAND AND ITS OWN BIT, ON THIS FILE'S STATED DISCIPLINE.** It reaches a THIRD
+// Win32 import, so sharing either neighbour's bit would make a program that reads the calendar import
+// `GetTickCount64` and a program that reads the uptime import `GetSystemTimeAsFileTime`. A PREFIX rather
+// than a name compare for `isThreadCpuRuntimeCallee`'s reason: an entry added to this band later is gated
+// by construction rather than by memory.
+let UptimeRuntimeCallPrefix = b"__uptime_"
+
+export let UptimeMsName = b"__uptime_ms"
+
 // ⭐⭐ **THE OUT-PARAM SCRATCH IS A FRAME SLOT, NOT A `.data` WORD (W212) — and that is a MULTI-M FIX rather
 // than tidiness.** Both host reads here take a pointer to write their answer into, and both used to point at
 // a shared global: `GetSystemTimeAsFileTime` into `__clock_wall_ticks`, `QueryThreadCycleTime` into
@@ -96,6 +113,13 @@ export function isThreadCpuRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ThreadCpuRuntimeCallPrefix)
 end 'isThreadCpuRuntimeCallee'
 
+// ⭐ **DOES THIS CALLEE ASK HOW LONG THE MACHINE HAS BEEN UP?** The `__uptime_`-only test, and narrow in its
+// neighbours' way: `__uptime_ms` is a leaf that calls one host primitive and returns it, so a program that
+// measures against the DebugStream wire clock carries neither the allocator nor the scheduler.
+export function isUptimeRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: UptimeRuntimeCallPrefix)
+end 'isUptimeRuntimeCallee'
+
 // ⚠ **THIS FILE LAYS OUT NO `.data` AT ALL SINCE W212, and the absence is the point.** Its two words were
 // out-param scratch for two host reads, and both are frame slots now (see `ClockScratchSlot`) — so there is
 // nothing left for a `clockRuntimeGlobals()` to return, and the producer is gone rather than kept as a
@@ -117,6 +141,10 @@ export function installClockRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesThreadCpuTicks 'threadCpu'
 		buildThreadCpuTicks(module)
 	end 'threadCpu'
+
+	if usage.usesUptimeClock 'uptime'
+		buildUptimeMs(module)
+	end 'uptime'
 end 'installClockRuntime'
 
 // `__clock_now_unix_s() -> i64` — whole seconds since 1970-01-01 UTC. `osReadWallClock` writes
@@ -180,3 +208,22 @@ function buildThreadCpuTicks(module StdModule)
 
 	module.functions.push(func)
 end 'buildThreadCpuTicks'
+
+// ⭐ **`__uptime_ms() -> i64`** — milliseconds since the machine booted, straight through.
+//
+// It is the shortest body in this file, and the absence of everything the two above do is the contract:
+// `osTickCountMs` answers a VALUE rather than writing an out-param, so there is no frame slot and no load,
+// and the unit is already the one its consumer measures in, so there is no scale. Any arithmetic added here
+// would put this reading out of step with the producer's, which is the one thing it exists to match.
+function buildUptimeMs(module StdModule)
+	var func = IrFunction.createFromStd(UptimeMsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	let ms = ids.mint()
+	module.appendOp(entry, op: StdOp.osTickCountMs(ms))
+	module.setTerminator(entry, op: StdOp.ret(ms))
+
+	module.functions.push(func)
+end 'buildUptimeMs'

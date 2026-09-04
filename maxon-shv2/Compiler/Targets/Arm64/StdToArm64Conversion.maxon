@@ -645,6 +645,9 @@ type StdToArm64Lowering
 			// chunk ONE argument, inside AAPCS64's x0..x7, so nothing overflows onto the outgoing-argument
 			// stack. The Linux route is refused below and marshals nothing at all.
 			osHandleFileType gives 0
+			// The named-section consumer pair is x64-windows only and never reaches an arm64 frame, so it
+			// reserves nothing exactly as every other refused op does.
+			osCreateNamedSegment to osUnmapNamedSegment gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -926,6 +929,8 @@ type StdToArm64Lowering
 			// milliseconds. It sits in the DebugStream band by declaration order and belongs to the subprocess
 			// family, whose deadlines are the only thing that measures with it.
 			osTickCountMs(resultId) then self.lowerHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostTickMsName, dstRef: dstRef)
+			// ⛔ The named-section CONSUMER pair is x64-windows only on the same terms as the producer band above.
+			osCreateNamedSegment to osUnmapNamedSegment then panic("lowerStdToArm64: the named-section CONSUMER primitives are x64-windows only — `stdlib/SharedMemory.maxon` is refused at the call's own span on every other lane (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
 			// ⛔ The four attached-subprocess host primitives are x64-windows only on the same terms as the
 			// spawn/wait/pipe band above, and `SemanticCheck.calleeNeedsWin32Substrate` refuses a program that
 			// reaches one at its own source span (E3104) — so this is the backstop for a compiler bug that got
@@ -1095,6 +1100,7 @@ type StdToArm64Lowering
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToArm64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or storeRelease then panic("lowerStdToArm64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
 			osHandleFileType then panic("lowerStdToArm64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
+			osCreateNamedSegment to osUnmapNamedSegment then panic("lowerStdToArm64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

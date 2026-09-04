@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Eight corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Nine corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1666` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -26,6 +26,7 @@ SERVER its tests spawn.
 | `lsp/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the server, not the dir |
 | `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
 | `parallel-compile/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the compiler it spawns |
+| `debug/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` + `BootstrapMonitorStem` — the two monitors it spawns |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler, `maxon-sharp/` and
@@ -34,7 +35,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other seven: `test-fixtures/`
+command `fmt` is. They are not automatically true of the other eight: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -65,6 +66,9 @@ tests/
     parallel.test.maxon          the shared half: the spawn, the staging, the counts
     <contract>.test.maxon        ONE contract per file - see its README section
     fixtures/<program>/main.maxon.fixture   stored name only - see rule 1
+  debug/
+    monitor-agreement.test.maxon            the DebugStream consumers, compared to each other
+    fixtures/trace/main.maxon.fixture       stored name only - see rule 1
 ```
 
 ## The six rules, and the hazard each one answers
@@ -183,3 +187,31 @@ test` runs files concurrently, so every case stages into a directory named for I
 `temp/parallel-compile/`. Its expectations are not generated — they are properties (a pinned
 report prefix, byte identity, stderr equality between two runs), each guarded by a positive
 control so two runs that both failed to build cannot read as agreement.
+
+## `debug/` — the two DebugStream ring consumers, compared to each other
+
+`maxon monitor --filter=mm <exe>` creates the shared section a `--debugstream` binary writes its
+ring into, spawns the binary, decodes every `mm` event and exits with the CHILD's code. shv2's spec
+runner depends on that consumer for every `<!-- MmTrace -->` case, so shv2 has one of its own — and
+the only way to know a second decoder reads the same wire format is to run BOTH over the same bytes.
+`monitor-agreement.test.maxon` stages `fixtures/trace/main.maxon.fixture`, builds it with the
+compiler under test plus `--debugstream`, runs that one binary under each monitor, strips the
+`[+SSSS.mmm] ` timestamp — a property of the RUN, not of the program — keeps the `mm_` lines and
+asserts the two lists are EQUAL and NON-EMPTY.
+
+⭐ **A MONITOR'S STDOUT IS TWO HALVES AND BOTH ARE COMPARED.** The stamp that marks a decoded event also
+marks its complement: the child's OWN output, which a monitor forwards verbatim. The fixture prints a
+BLANK line for that half's sake — it is the one line a forwarder that reads an empty string as *"the pipe
+had nothing"* drops, and it drops it while every decoded event stays identical.
+
+⚠ **THE `bin/maxon` ARM IS A TRANSITION ORACLE AND RETIRES WITH THE BOOTSTRAP.** What this corpus
+gates is AGREEMENT, which needs two decoders; when the bootstrap goes there is one and the case has
+no subject left. Its expectations are not generated and there is no stored transcript: what the
+fixture allocates is the memory manager's business and moves whenever `StringBuilder` or `Array`
+does, so a golden list of events would go red for changes that have nothing to do with either
+decoder. The non-zero count on BOTH sides is the positive control — two decoders that both read
+nothing compare equal.
+
+It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in the
+staging directory, `temp/debug/monitor-agreement/`), and it keeps rule 5: one spawning `test`,
+one file.

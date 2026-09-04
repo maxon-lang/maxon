@@ -96,6 +96,11 @@ export type IrModule uses Op
 	// `GetFileType` lives. Its neighbours' header owns the rest of the argument.
 	export var usesTerminalDetection as bool = false
 
+	// ⭐ **DOES THIS MODULE CREATE OR MAP A NAMED SHARED SECTION?** Set from `RuntimeUsage.usesSharedMemory`,
+	// and read in exactly one place — the PE writer's OPTIONAL trailing import band, which is where
+	// `CreateFileMappingA` and `UnmapViewOfFile` live. Its neighbours' header owns the rest of the argument.
+	export var usesSharedMemory as bool = false
+
 	// ⭐ **DOES THIS MODULE ASK HOW MUCH CPU TIME ITS OWN THREAD HAS USED?** Set once by the driver from
 	// `RuntimeUsage.usesThreadCpuTicks`, and read in exactly one place — the PE writer's OPTIONAL TRAILING
 	// IMPORT BAND, which is where `QueryThreadCycleTime` lives. `usesCpuCount`'s twin one producer over: the
@@ -105,6 +110,21 @@ export type IrModule uses Op
 	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that never times
 	// itself has a byte-identical import table.
 	export var usesThreadCpuTicks as bool = false
+
+	// ⭐ **DOES THIS MODULE ASK HOW LONG THE MACHINE HAS BEEN UP?** Set once by the driver from
+	// `RuntimeUsage.usesUptimeClock`, and read in exactly one place — the PE writer's OPTIONAL TRAILING
+	// IMPORT BAND, which is where `GetTickCount64` lives. `usesThreadCpuTicks`'s twin one producer over: the
+	// bits answer one question between them (*does this image reference the imports at the end of
+	// `IatSlot`*), and the band is emitted when ANY of them says yes (`isOptionalTrailingImport` carries why
+	// they cannot be gated apart).
+	//
+	// ⚠ **IT IS NOT `debugStream`'s, THOUGH BOTH REACH `GetTickCount64`.** That bit says the image carries
+	// the trace PRODUCER; this one says the image reads the counter the producer measures against, which is
+	// what a CONSUMER — `maxon monitor` — does. A monitor carries no producer at all.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that never asks
+	// has a byte-identical import table.
+	export var usesUptimeClock as bool = false
 
 	// ⭐ **DOES THIS MODULE CARRY THE GREEN-THREAD SCHEDULER?** Set once by the driver from
 	// `RuntimeUsage.usesGt`, and read in exactly one place — the PE writer's OPTIONAL TRAILING IMPORT BAND.

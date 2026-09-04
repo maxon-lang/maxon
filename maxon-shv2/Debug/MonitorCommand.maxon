@@ -1,0 +1,349 @@
+// Debug/MonitorCommand.maxon — `maxon monitor`, the LIVE TIMELINE face of the DebugStream ring.
+//
+// It creates the segment, spawns the target with `MAXON_DEBUGSTREAM` naming it, prints every decoded
+// event as it arrives, and answers the CHILD's own exit code. The wire format is not its business:
+// `DebugStreamDecoder` owns the segment header, the schema handshake, the commit protocol, the interned
+// name tables and every formatter. What lives here is only what a live timeline needs — the `[+SSSS.mmm]`
+// prefix, the depth indent, the forwarding of the target's own output into these streams, and the summary.
+//
+// ⭐⭐ **THE `monitor` TAIL IS THE CHILD'S COMMAND LINE, NOT THIS DRIVER'S.** `MaxonArgs.parse` stops
+// reading at the word `monitor` and files every later argument as a positional verbatim, so a child flag
+// this compiler happens to implement cannot be consumed on its way past and an unknown one cannot abort
+// the run. That is also what keeps `--filter=` from meaning two things: `spec-test`'s selects TESTS, and
+// the one read here selects an EVENT FAMILY.
+//
+// ⚠ **THE SEGMENT IS SEEDED BEFORE THE CHILD EXISTS.** `__ds_init` reads the magic, the monitor's schema
+// version, `buffer_size` and `start_timestamp` and arms itself before `main` runs — so a child spawned
+// against a half-written header attaches to nothing, silently. `DebugStreamDecoder.create` returns with
+// the header complete; the spawn follows it.
+#if compiler(shv2) and os(Windows)
+
+	// The one option this command takes, and the only argument shape that may precede the executable.
+	let FilterOptionPrefix = "--filter="
+
+	// How long to idle when the ring has nothing decodable — whether it is empty, or its head entry is
+	// reserved and its producer is still writing the payload.
+	let PollIntervalMs = 1
+
+	// ⭐ The monitor's OWN exit code when it refuses to decode a ring whose schema it does not speak. Distinct
+	// from the child's, which is what every successful run answers, and from 1, which is a command line this
+	// command could not act on.
+	let SchemaMismatchExit = 3 as ExitCode
+	let RefusedCommandExit = 1 as ExitCode
+
+	// A Win32 exit code is a DWORD, and `ExitCode` on this host is exactly that width — so the child's code
+	// travels through unchanged and the mask is the conversion, not a clamp.
+	let ProcessExitCodeMask = 0xFFFFFFFF
+
+	// The timestamp on the wire is a millisecond delta; the trace prints it as `+SSSS.mmm`.
+	let MillisecondsPerSecond = 1000
+
+	// DEPTH_INC / DEPTH_DEC nest the trace, and one level is this much indent.
+	let DepthIndentUnit = "  "
+
+	let BytesPerMegabyte = 1048576.0
+	let PercentScale = 100
+
+	// A byte count on its way through the megabyte division the summary reports. Unbounded above because it
+	// is a widened machine word and not a domain with a limit of its own.
+	typealias RingByteQuantity = float(0.0 to f64.max)
+
+	// Where in the `monitor` tail an argument sits.
+	typealias ArgumentIndex = int(0 to u32.max)
+
+	// Which of a child's two output streams a line came off. It is a PARAMETER rather than two near-identical
+	// loops because everything about forwarding a line is the same on both: the poll, its stopping rule, the
+	// unterminated tail and the newline.
+	enum ChildStream
+		stdout
+		stderr
+	end 'ChildStream'
+
+	/// `maxon monitor [--filter=mm|sched|log] <exe> [args...]`.
+	///
+	/// Every refusal here exits 1 and prints to stderr, so a caller reading only the exit code can tell a
+	/// command line this could not act on from a schema it could not decode (3) and from the child's own
+	/// answer (anything else).
+	export function runMonitor(args MaxonArgs) returns ExitCode
+		var filterSpelling = ""
+		var exeIndex = 0 as ArgumentIndex
+		for argument in args.paths 'eachLeadingOption'
+			if not argument.startsWith(FilterOptionPrefix) 'theExecutable'
+				break
+			end 'theExecutable'
+
+			filterSpelling = try CommandLine.optionValue(argument) otherwise ""
+			exeIndex = exeIndex + 1
+		end 'eachLeadingOption'
+
+		let spelling = try args.paths.get(exeIndex) otherwise 'noExecutable'
+			printError("{usageLine()}\n")
+			return RefusedCommandExit
+		end 'noExecutable'
+
+		// ⭐ VALIDATED AT THE COMMAND LINE rather than in the decode loop, where the only available behaviours
+		// would be to throw or to silently show EVERY event — which is the opposite of what was asked for.
+		let filter = parseFamilyFilter(filterSpelling)
+		match filter 'chosen'
+			all then break 'chosen'
+			only then break 'chosen'
+			unknown(named) then return refuseUnknownFilter(named)
+		end 'chosen'
+
+		// ⚠ **RESOLVED TO AN ABSOLUTE PATH, AND THE TRACE ITSELF DEPENDS ON IT.** The path handed to the spawn
+		// becomes the child's OWN `argv[0]`, so a program that reads its command line allocates a buffer whose
+		// SIZE is this spelling's length — and an `mm-trace` golden pins that number. Measured: monitoring
+		// `temp/x/out.exe` by a relative spelling shifted three `ElementBuffer` sizes by 26 bytes against the
+		// reference, which resolves the same way. The REFUSAL still names what was typed.
+		let target = try FilePath.from(spelling) otherwise return refuseMissingTarget(spelling)
+		if not File.exists(target) 'notThere'
+			return refuseMissingTarget(spelling)
+		end 'notThere'
+
+		let resolved = target.resolve(Directory.currentPath())
+
+		var decoder = try DebugStreamDecoder.create(resolved, filter: filter) otherwise (e) 'noRing'
+			printError("maxon monitor: {e.displayReason()}\n")
+			return RefusedCommandExit
+		end 'noRing'
+
+		var child = try spawnTarget(resolved, arguments: childArguments(args.paths, from: exeIndex + 1), segment: decoder.segmentName()) otherwise (e) 'noChild'
+			decoder.close()
+			printError("maxon monitor: could not spawn {spelling} ({e.displayReason()})\n")
+			return RefusedCommandExit
+		end 'noChild'
+
+		return watchTarget(decoder, child: child)
+	end 'runMonitor'
+
+	// ⭐ The timeline: drain, print, forward, repeat until the producer is gone and the ring is empty.
+	function watchTarget(decoder DebugStreamDecoder, child StreamingSubprocess) returns ExitCode
+		var draining = true
+		while draining 'timeline'
+			// ⛔ SAMPLED BEFORE THE DRAIN READS THE CURSORS. If the producer is already gone by this read, every
+			// store it will ever make is in the ring, so the cursors read next are FINAL. The other order lets a
+			// last event land after the check and be lost.
+			let producerExited = hasExited(child)
+			var idled = false
+
+			match decoder.drain(producerExited) 'status'
+				decoded(events) then printEvents(events)
+				idle then idled = true
+				finished then draining = false
+				schemaMismatch(message) then return refuseSchema(decoder, child: child, message: message)
+			end 'status'
+
+			// The child writes to its own pipes whether or not it is tracing, and a monitor that swallowed that
+			// would make a program's output depend on whether it was being watched. It happens on EVERY pass,
+			// including an idle one, so a program that prints without allocating is still forwarded promptly.
+			forwardChildOutput(child, waiting: false)
+
+			if idled 'nothingWasReadable'
+				// Either the ring is empty, or its head entry is reserved and its producer is mid-payload.
+				// Decoding it now would decode whatever bytes the ring last held at that offset.
+				sleep(PollIntervalMs)
+			end 'nothingWasReadable'
+		end 'timeline'
+
+		// The producer is gone and the ring is drained; the child's own runtime is the budget, so there is no
+		// deadline here to be exceeded by a program that simply takes a while to exit.
+		let childExit = try child.wait() otherwise (e) 'waitFailed'
+			printError("maxon monitor: waiting for the target failed ({e.displayReason()})\n")
+			child.release()
+			decoder.close()
+			return RefusedCommandExit
+		end 'waitFailed'
+
+		forwardChildOutput(child, waiting: true)
+		child.release()
+
+		reportSummary(decoder)
+		decoder.close()
+
+		return (childExit and ProcessExitCodeMask) as ExitCode
+	end 'watchTarget'
+
+	// The refusal path. The child is ENDED rather than left running blind into a ring nobody is draining, and
+	// its output is forwarded on the way out — this is the one path where the user is diagnosing a version
+	// mismatch and needs every line the target managed to produce.
+	function refuseSchema(decoder DebugStreamDecoder, child StreamingSubprocess, message String) returns ExitCode
+		printError("{message}\n")
+
+		// A deadline of one tick, because the point is the TERMINATION the timeout performs and not the wait.
+		_ = try child.waitWithTimeout(PollIntervalMs) otherwise 0
+		forwardChildOutput(child, waiting: true)
+		child.release()
+		decoder.close()
+
+		return SchemaMismatchExit
+	end 'refuseSchema'
+
+	function refuseUnknownFilter(named String) returns ExitCode
+		printError("Unknown --filter value '{named}'.\n{usageLine()}\n")
+		return RefusedCommandExit
+	end 'refuseUnknownFilter'
+
+	function refuseMissingTarget(spelling String) returns ExitCode
+		printError("Executable not found: {spelling}\n")
+		return RefusedCommandExit
+	end 'refuseMissingTarget'
+
+	function usageLine() returns String
+		return "Usage: maxon monitor [{FilterOptionPrefix}{familyChoiceList()}] <exe> [args...]"
+	end 'usageLine'
+
+	// ============================================================================
+	// The child
+	// ============================================================================
+
+	// Spawn the target into the ring. `inheritUpdating` and not `custom`: the program under a monitor must see
+	// the environment it would have seen without one, plus the single variable that names the segment.
+	function spawnTarget(target FilePath, arguments StringArray, segment String) returns StreamingSubprocess throws SubprocessError
+		let inheritCwd = try FilePath.from("") otherwise panic("MonitorCommand: the empty path is the 'inherit cwd' sentinel and must be spellable")
+
+		return try StreamingSubprocess.spawnWithEnvironment(Executable.path(target), arguments: arguments, workingDirectory: inheritCwd, environment: Environment.inheritUpdating([DsActivationEnvVar: segment]))
+	end 'spawnTarget'
+
+	// Everything after the executable, in the order typed. It is the CHILD's command line and reaches it
+	// untouched — this driver neither reads nor rewrites any of it.
+	function childArguments(tail SourcePathSpellingArray, from ArgumentIndex) returns StringArray
+		var argv = StringArray.create()
+		for (position, argument) in tail.withIterator() 'eachArgument'
+			if position.index() as ArgumentIndex >= from 'aChildArgument'
+				argv.push(argument)
+			end 'aChildArgument'
+		end 'eachArgument'
+
+		return argv
+	end 'childArguments'
+
+	function hasExited(child StreamingSubprocess) returns bool
+		return match child.pollExit() 'poll'
+			running gives false
+			exited gives true
+		end 'poll'
+	end 'hasExited'
+
+	// ⭐ Forward whatever the child has written, VERBATIM, into the matching stream of this process.
+	//
+	// ⛔ **EMPTINESS IS NOT THE STOPPING RULE, AND `LinePoll` IS WHY IT CANNOT BE.** A child's own blank line
+	// and a pipe with nothing in it are the same string once the terminator is off, so a loop keyed off the
+	// text drops every blank line the child writes — measured against the reference monitor, which forwards
+	// them. The poll's `none` is the only honest stopping rule.
+	//
+	// `waiting` is the difference between the two moments this is asked. During the timeline only what is
+	// already buffered is taken, so a pass never blocks. Once the child has been reaped the poll is followed by
+	// one blocking read, which is what collects a final line the child left with no terminator: the poll stops
+	// at a newline that never arrives.
+	function forwardChildOutput(child StreamingSubprocess, waiting bool)
+		for stream in ChildStream.allCases 'eachStream'
+			var buffered = true
+			while buffered 'untilNothingIsBuffered'
+				match pollChildLine(child, stream: stream) 'polled'
+					line(text) then emitChildLine(text, stream: stream)
+					none then buffered = false
+				end 'polled'
+			end 'untilNothingIsBuffered'
+
+			if waiting 'thenTheTail'
+				forwardUnterminatedTail(child, stream: stream)
+			end 'thenTheTail'
+		end 'eachStream'
+	end 'forwardChildOutput'
+
+	function pollChildLine(child StreamingSubprocess, stream ChildStream) returns LinePoll
+		return match stream 'which'
+			stdout gives child.tryReadStdoutLine()
+			stderr gives child.tryReadStderrLine()
+		end 'which'
+	end 'pollChildLine'
+
+	// ⭐ What the child wrote after its last newline. The poll above has already taken every COMPLETE line, so
+	// the blocking reader's empty answer can only be end of stream here — the ambiguity it carries everywhere
+	// else is gone by the time this is asked, and that ordering is what makes the read safe to key off.
+	//
+	// A read that refuses is an ended stream too: the child has been reaped before this is reached, and a
+	// broken pipe is what that looks like.
+	function forwardUnterminatedTail(child StreamingSubprocess, stream ChildStream)
+		let tail = match stream 'which'
+			stdout gives try child.readStdoutLine() otherwise ""
+			stderr gives try child.readStderrLine() otherwise ""
+		end 'which'
+
+		if not tail.isEmpty() 'thereWasOne'
+			emitChildLine(tail, stream: stream)
+		end 'thereWasOne'
+	end 'forwardUnterminatedTail'
+
+	function emitChildLine(line String, stream ChildStream)
+		match stream 'which'
+			stdout then print("{line}\n")
+			stderr then printError("{line}\n")
+		end 'which'
+	end 'emitChildLine'
+
+	// ============================================================================
+	// Rendering
+	// ============================================================================
+
+	// `[+SSSS.mmm] ` then the depth indent then the decoded line. The prefix is fixed-width so a reader's eye
+	// can find the payload column, which is also what lets the spec harness strip it by a single marker.
+	function printEvents(events DecodedEventArray)
+		for event in events 'eachEvent'
+			let seconds = event.timestampMs / MillisecondsPerSecond
+			let millis = event.timestampMs mod MillisecondsPerSecond
+			print("[+{seconds:04}.{millis:03}] {indentFor(event.depth)}{event.text}\n")
+		end 'eachEvent'
+	end 'printEvents'
+
+	function indentFor(depth TraceDepth) returns String
+		var indent = ""
+		for _ in 0 upto depth 'eachLevel'
+			indent.append(DepthIndentUnit)
+		end 'eachLevel'
+
+		return indent
+	end 'indentFor'
+
+	// ⭐ The closing summary, on STDERR — it is the monitor talking about the instrument, not the program's
+	// output, and a caller reading the trace on stdout must not have to filter it out.
+	//
+	// ⚠ It is printed only when SOMETHING happened. A run of a binary built without `--debugstream` has no
+	// events, no drops and no abandoned entries, and a line of zeroes would say the instrument had measured
+	// that program rather than that it never attached.
+	function reportSummary(decoder DebugStreamDecoder)
+		let total = decoder.totalEvents()
+		let dropped = decoder.droppedEvents()
+		let abandoned = decoder.abandonedCount()
+		if total == 0 and dropped == 0 and abandoned == 0 'nothingHappened'
+			return
+		end 'nothingHappened'
+
+		let peak = decoder.peakUsed()
+		let peakMb = (peak as RingByteQuantity) / BytesPerMegabyte
+		let bufferMb = (DsRingBytes as RingByteQuantity) / BytesPerMegabyte
+		let percent = peak * PercentScale / DsRingBytes
+
+		printError("{DebugStreamLinePrefix} {total} events, {dropped} dropped{abandonedNote(abandoned)}, peak buffer: {peakMb:.1} MB / {bufferMb:.1} MB ({percent}%)\n")
+	end 'reportSummary'
+
+	// ⚠ `abandoned` appears only when it is non-zero, and it appears LOUDLY when it is: it means the producer
+	// was killed mid-entry and that entry's payload is gone for good.
+	function abandonedNote(abandoned EventTally) returns String
+		if abandoned == 0 'noneLost'
+			return ""
+		end 'noneLost'
+
+		return ", {abandoned} abandoned (producer died mid-entry)"
+	end 'abandonedNote'
+#else
+
+	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT.** A DebugStream ring is a Win32 named section and the decoder
+	/// is built only where one exists, so this command has nothing to do on any other host. It still EXISTS
+	/// there: the driver dispatches on a command enum whose match is exhaustive, and a caller who typed
+	/// `monitor` is owed the reason rather than a usage listing that says nothing about their host.
+	export function runMonitor(args MaxonArgs) returns ExitCode
+		printError("maxon-shv2 monitor: unavailable on this host. The DebugStream ring is a Win32 named section and this compiler was built for a target with no such primitive, so the {args.paths.count()} argument(s) after `monitor` name a target nothing here can watch.\n")
+		return 1
+	end 'runMonitor'
+#endif

@@ -989,10 +989,19 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableA`, already in
 	// the band — both at the end of kernel32's run.
 	pipeline.stdModule.usesTerminalDetection = usage.usesTerminalDetection
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// neighbours. `__shm_create` needs `CreateFileMappingA` and `__shm_close` `UnmapViewOfFile`, both at the
+	// end of kernel32's run (see `isOptionalTrailingImport`).
+	pipeline.stdModule.usesSharedMemory = usage.usesSharedMemory
 	// ⭐ **AND THE FOURTH PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
 	// kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// neighbours. `__uptime_ms` needs `GetTickCount64`, which lives at the end of kernel32's run (see
+	// `isOptionalTrailingImport`) — and a monitor reaches it carrying no trace PRODUCER, so `debugStream`
+	// does not already answer for it.
+	pipeline.stdModule.usesUptimeClock = usage.usesUptimeClock
 	// ⭐ **AND THE FIFTH PRODUCER OF THAT BAND (G1)**, on the same seam and for the same measured reason as
 	// its four neighbours. The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableA`) and
 	// the machine's processor count (`GetActiveProcessorCount`), and its `TlsAlloc`/`TlsSetValue` pair sits at
@@ -1124,6 +1133,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// guard and the refcounted teardown), and it needs no ordering against the Array install below for the
 	// reason stated there.
 	installManagedSocketRuntime(pipeline.stdModule, usage: usage, target: project.target)
+
+	// The shared-memory runtime (`__shm_create`/`__shm_map`/…) — installed the same already-lowered way, on
+	// its own `usesSharedMemory` bit. It sits beside the three families above because it shares their helpers
+	// (the byte-element record builder and the forward copy), and it needs no ordering against the Array
+	// install below for the reason stated there.
+	installSharedMemoryRuntime(pipeline.stdModule, usage: usage)
 
 	// The command-line runtime (`__cl_count`/`__cl_arg`/`__cl_scan_one`) — installed the same already-lowered
 	// way, on its own `usesCommandLine` bit. It sits beside the two families above because it shares their

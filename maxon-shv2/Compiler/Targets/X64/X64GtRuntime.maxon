@@ -112,7 +112,7 @@ function emitGtMorestackVirtualAlloc(code ByteArray, iatRelocs RelocationArray)
 	encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)  // lpAddress = NULL
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: GtMoreNewSizeReg, wide: true)  // dwSize = new_size
 	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualAllocCommitAndReserve)
-	encodeMovRegImm32(code, dest: X64Register.r9, value: VirtualAllocPageReadWrite)
+	encodeMovRegImm32(code, dest: X64Register.r9, value: PageReadWriteProtection)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc))
 end 'emitGtMorestackVirtualAlloc'
 
@@ -641,6 +641,11 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// The terminal question, register-only. A harness asks it from its own main green thread before it
 		// prints anything, so it really is shimmed onto the system stack in practice.
 		GetFileType gives 0  // 1: hFile
+		// The named-section pair. `CreateFileMappingA` takes SIX arguments — four in registers and two on the
+		// stack — so it is the only one of this pair with a non-zero count, derived from the same constant
+		// `stdOpOutgoingArgBytes` reserves the frame with.
+		CreateFileMappingA gives CreateFileMappingStackArgWords  // 6: hFile, lpFileMappingAttributes, flProtect, dwMaximumSizeHigh, dwMaximumSizeLow, lpName
+		UnmapViewOfFile gives 0  // 1: lpBaseAddress
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
@@ -795,6 +800,10 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		TlsAlloc gives SyscallClass.schedulerBound
 		TlsSetValue gives SyscallClass.schedulerBound
 		freeaddrinfo gives SyscallClass.schedulerBound
+		// The named-section pair. Creating a section reaches the memory manager and can touch the page file,
+		// exactly as `OpenFileMappingA`/`MapViewOfFile` above; tearing a view down waits on nothing.
+		CreateFileMappingA gives SyscallClass.blocking
+		UnmapViewOfFile gives SyscallClass.schedulerBound
 	end 'k'
 end 'gtShimSyscallClassOf'
 

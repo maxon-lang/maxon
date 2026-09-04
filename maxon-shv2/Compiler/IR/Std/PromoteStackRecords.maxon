@@ -411,6 +411,7 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 		osEnvBlock to osEnvBlockFree gives BlockExit.notAValueReturn
 		loadAcquire or storeRelease gives BlockExit.notAValueReturn
 		osHandleFileType gives BlockExit.notAValueReturn
+		osCreateNamedSegment to osUnmapNamedSegment gives BlockExit.notAValueReturn
 	end 'term'
 end 'returnedValueOf'
 
@@ -456,6 +457,7 @@ type ConstructorScan
 			// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 			loadAcquire or storeRelease gives false
 			osHandleFileType gives false
+			osCreateNamedSegment to osUnmapNamedSegment gives false
 		end 'op'
 	end 'admit'
 
@@ -714,6 +716,7 @@ function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction
 			osEnvBlock to osEnvBlockFree then break 'op'
 			loadAcquire or storeRelease then break 'op'
 			osHandleFileType then break 'op'
+			osCreateNamedSegment to osUnmapNamedSegment then break 'op'
 		end 'op'
 	end 'eachOp'
 	return tracked
@@ -812,6 +815,7 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 		osEnvBlock to osEnvBlockFree then collectStdOpUses(op, referenced: readByOtherOps)
 		loadAcquire or storeRelease then collectStdOpUses(op, referenced: readByOtherOps)
 		osHandleFileType then collectStdOpUses(op, referenced: readByOtherOps)
+		osCreateNamedSegment to osUnmapNamedSegment then collectStdOpUses(op, referenced: readByOtherOps)
 	end 'shape'
 end 'scanOneOp'
 
@@ -935,6 +939,7 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 		osEnvBlock to osEnvBlockFree gives ConstructorCallSite.notAConstructorCall
 		loadAcquire or storeRelease gives ConstructorCallSite.notAConstructorCall
 		osHandleFileType gives ConstructorCallSite.notAConstructorCall
+		osCreateNamedSegment to osUnmapNamedSegment gives ConstructorCallSite.notAConstructorCall
 	end 'op'
 end 'constructorCallAt'
 
@@ -1148,6 +1153,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 		// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 		loadAcquire or storeRelease gives false
 		osHandleFileType gives false
+		osCreateNamedSegment to osUnmapNamedSegment gives false
 	end 'op'
 end 'opDropsAPromotedRecord'
 

@@ -1,0 +1,17 @@
+// The traced fixture. It ALLOCATES, so the ring carries `mm` events for the two decoders to compare, and
+// it PRINTS, so the same run also carries the child's own output for the two monitors to forward.
+//
+// ⛔ **THE BLANK LINE IS LOAD-BEARING.** A monitor reads its child's stdout a line at a time and a blank
+// line is the one whose text is indistinguishable from "the pipe had nothing" — MEASURED as a forwarder
+// that silently dropped it. Without it here the forwarding comparison is green over exactly the line
+// forwarding gets wrong.
+function main() returns ExitCode
+	var sb = StringBuilder.create()
+	sb.append("ab")
+	sb.append("cd")
+	let s = sb.build()
+	print("child-first\n")
+	print("\n")
+	print("child-last\n")
+	return s.byteLength() as ExitCode
+end 'main'

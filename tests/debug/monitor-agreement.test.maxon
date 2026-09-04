@@ -1,0 +1,487 @@
+// monitor-agreement.test.maxon — the two DebugStream ring CONSUMERS read one traced binary and agree.
+//
+// A `--debugstream` build emits a producer that writes fixed-size records into a ring in a named shared
+// section. `maxon monitor --filter=mm <exe>` is the other half: it creates the section, spawns the binary
+// into it, decodes every `mm` event and prints it, and exits with the CHILD's own code. shv2's spec runner
+// depends on that consumer for every `<!-- MmTrace -->` case it runs, so shv2 needs one of its own — and
+// the only way to know a second decoder reads the same wire format is to run BOTH over the SAME bytes.
+//
+// ⚠ **THE `bin/maxon` ARM IS A TRANSITION ORACLE AND RETIRES WITH THE BOOTSTRAP.** What this file gates is
+// AGREEMENT, which needs two decoders; once the bootstrap is retired there is one, and this case has no
+// subject left. Until then the bootstrap's decoder is the reference the new one is measured against, in
+// exactly the sense `tests/README.md` rule 6 means: a hand-written expectation would prove only that shv2
+// does what its author wrote down.
+//
+// ⛔ **THE COMPARISON IS BETWEEN THE TWO MONITORS, NEVER AGAINST A STORED TRANSCRIPT.** What the fixture
+// allocates is the memory manager's business and moves whenever `StringBuilder` or `Array` does; a golden
+// list of events here would go red for changes that have nothing to do with either decoder. The events are
+// normalized only where they carry a property of the RUN rather than of the program — the `[+SSSS.mmm]`
+// timestamp — and compared to each other.
+//
+// ⭐⭐ **A MONITOR'S STDOUT IS TWO HALVES AND BOTH ARE COMPARED.** The decoded events are one; the child's
+// OWN output, which a monitor forwards verbatim, is the other, and a decoder comparison is blind to it. The
+// fixture prints a BLANK line for that half's sake: it is the one line a forwarder that reads the empty
+// string as "the pipe had nothing" drops, silently, with every event still identical.
+//
+// ⛔ **TWO EMPTY LISTS MUST NOT READ AS AGREEMENT.** A monitor that attached to nothing, or decoded a
+// family it does not have, answers zero events, and so does its twin; the equality alone would be green.
+// The count is therefore asserted non-zero on BOTH sides before the lists are compared, and the exit code
+// is asserted first of all — a monitor that never ran the child cannot have read the child's ring.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
+// missing binary, an unspellable path, a spawn that never happened, a build that did not produce the
+// program. None of those is a decoder answering wrongly, and a report that made them read alike would send
+// a reader looking for a defect in the thing that never ran.
+//
+// ⛔ **THIS FILE'S PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, which is the working directory a test binary
+// inherits from `maxon test`. Everything handed to a child — the binaries, the source, the output — is made
+// absolute first, because a relative path resolves against the child's directory on POSIX and the parent's
+// on Windows.
+
+// Where the corpus lives and where a runnable copy is built, both relative to the checkout root. Staging
+// goes to gitignored `temp/`: a live `.maxon` under `tests/` is one `maxon fmt` over the checkout rewrites.
+let FixturesDirName = "tests/debug/fixtures"
+let FixtureProgramName = "trace"
+let StagingDirName = "temp/debug/monitor-agreement"
+
+// The stored-name mapping, `tests/README.md` rule 1: `<name>.fixture -> <name>`.
+let StoredFixtureSuffix = ".fixture"
+let StagedProgramFileName = "main.maxon"
+let BuiltProgramStem = "out"
+
+// The two binaries, relative to the checkout root and without their host suffix. The first is the compiler
+// under test AND the consumer under test; the second is the reference decoder.
+let TestedCompilerStem = "maxon-shv2/.maxon/maxon-shv2"
+let BootstrapMonitorStem = "bin/maxon"
+
+// The command line the traced program is built from: `build <staged>/main.maxon -o <staged>/out[.exe]
+// --debugstream`. Without the flag the binary emits no producer at all and every monitor reads an empty
+// ring — which is the one failure this file's non-zero count assertions exist to catch.
+let BuildCommandName = "build"
+let OutputOption = "-o"
+let DebugStreamFlag = "--debugstream"
+
+// The capture command, spelled as `SpecTestRunner.maxon` spells it.
+let MonitorSubcommand = "monitor"
+let MonitorMmFilterArg = "--filter=mm"
+
+// The prefix a monitor puts on every line it AUTHORS, `[+SSSS.mmm] `, and the payload prefix of a decoded
+// `mm` event. The timestamp is a property of the run and is stripped. The stamp is also what splits the two
+// halves of a monitor's stdout: a line carrying it is the monitor's, and the complement is the child's own
+// output forwarded into the same stream.
+let MonitorLinePrefix = "[+"
+let MonitorTimestampEnd = "] "
+let MmTraceEventPrefix = "mm_"
+
+// ⭐ **HOW FAR APART THE TWO MONITORS' FIRST EVENTS MAY BE STAMPED.** `[+SSSS.mmm]` is elapsed time since
+// THAT monitor attached, so both first events land a few tens of milliseconds into their own run whenever
+// each monitor seeded the segment header with the counter the producer subtracts from. The two runs are
+// sequential and each builds nothing, so the whole spread available to an honest pair is a spawn.
+//
+// ⛔ **RELATIVE TO EACH OTHER, NEVER AN ABSOLUTE CEILING.** A monitor that seeds the wrong counter reports
+// SYSTEM UPTIME, which on a freshly booted host is small — so a bound like "under a minute" would pass
+// there for exactly the wrong reason. Comparing the two monitors has no such blind spot.
+let AllowedTimestampSkewMs = 5000
+
+// The `[+SSSS.mmm]` stamp's own spelling: what separates its two halves, how many digits a millisecond is
+// written in, and the base they are written in.
+let TimestampFractionPoint = "."
+let TimestampStampHalves = 2
+let TimestampFractionDigits = 3
+let MillisecondsPerSecond = 1000
+let DecimalBase = 10
+
+// `'0'`'s ASCII code — the base a digit's value is measured from.
+//
+// ⛔ **SPELLED AS A NUMBER RATHER THAN AS `try '0'.asciiValue()`, WHICH THIS FILE MUST NOT CONTAIN.** The
+// bootstrap compiles this corpus too (`tests/README.md` rule: both compilers, same result), and a
+// character-literal RECEIVER makes its resolver silently lose the declarations that follow — measured here,
+// three functions defined later in this file became `E2004: Undefined function` with no error at the
+// construct itself. shv2 compiles it correctly; the corpus is written to the pair.
+let AsciiZeroDigit = 48
+
+// What the fixture returns, and therefore what a monitor must return: the monitor's exit code is the
+// CHILD's. `main` builds the 4-byte string "abcd" and answers its byte length.
+let FixtureExitCode = 4
+
+// Folds applied to a captured stream before it is read: CR, so a Windows console's line endings do not
+// decide whether two decoders agree.
+let CarriageReturn = "\r"
+let LineFeed = "\n"
+let PortablePathSeparator = "/"
+
+// A list of paths one directory walk produced. Stdlib's own `FilePathArray` is a member of `Directory` and
+// has no file-scope spelling.
+typealias FixturePathArray = Array with FilePath
+
+// Milliseconds a monitor reports since it attached. Deliberately WIDE: a monitor whose seed is not the
+// counter the producer subtracts from reports system uptime, and that reading is what this file exists to
+// catch rather than to make unrepresentable.
+typealias ElapsedMs = int(0 to u64.max)
+
+// One decimal digit's value.
+typealias DigitValue = int(0 to 9)
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'both monitors read one traced binary the same way'
+	let staged = stagedProgram()
+	buildTracedProgram(staged)
+
+	let referenceRun = runMonitor(hostBinaryPath(BootstrapMonitorStem), monitorLabel: BootstrapMonitorStem, staged: staged)
+	let referenceExit = referenceRun.exitCode()
+	try Expect.equal(referenceExit as AssertedInt, expected: FixtureExitCode, message: "the reference monitor `{BootstrapMonitorStem} {MonitorSubcommand}` did not answer the traced child's own exit code. A monitor that did not run the child cannot have read its ring, so nothing below this line would mean anything. It wrote to stderr: {referenceRun.stderr}")
+
+	let referenceEvents = decodedEvents(referenceRun)
+	try Expect.notEqual(referenceEvents.count() as AssertedInt, expected: 0, message: "the reference monitor decoded ZERO `{MmTraceEventPrefix}` events from a binary built with `{DebugStreamFlag}`. This is the positive control: without it two decoders that both read nothing would compare equal and this case would be green having measured nothing. It printed: {referenceRun.stdout}")
+
+	let testedRun = runMonitor(hostBinaryPath(TestedCompilerStem), monitorLabel: TestedCompilerStem, staged: staged)
+	let testedExit = testedRun.exitCode()
+	try Expect.equal(testedExit as AssertedInt, expected: FixtureExitCode, message: "`{TestedCompilerStem} {MonitorSubcommand} {MonitorMmFilterArg}` did not answer the traced child's own exit code. It printed: {testedRun.stdout} — and wrote to stderr: {testedRun.stderr}")
+
+	let testedEvents = decodedEvents(testedRun)
+	try Expect.notEqual(testedEvents.count() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {MonitorSubcommand}` decoded ZERO `{MmTraceEventPrefix}` events from the same binary the reference monitor read {referenceEvents.count()} out of. It printed: {testedRun.stdout}")
+
+	let tested = renderedLines(testedEvents)
+	let reference = renderedLines(referenceEvents)
+	try Expect.equal(tested, expected: reference, message: "the two monitors decoded the SAME ring differently. Both read one binary, one run each, with only the `{MonitorLinePrefix}SSSS.mmm{MonitorTimestampEnd}` timestamp stripped — so a difference here is one decoder disagreeing with the other about the wire format the producer writes, not a change in what the fixture allocates.")
+
+	// ⭐ **AND THE OTHER HALF OF A MONITOR'S STDOUT: THE CHILD'S OWN OUTPUT, FORWARDED.** A decoder comparison
+	// is blind to it — both event lists stay identical while a forwarder edits what the program printed — and
+	// the fixture's BLANK line is exactly the line a forwarder keyed off an empty string drops.
+	let referenceForwarded = forwardedChildLines(referenceRun)
+	try Expect.notEqual(referenceForwarded.count() as AssertedInt, expected: 0, message: "the reference monitor forwarded NONE of the child's own stdout, though the fixture prints three lines. This is the positive control for the comparison below: two monitors that both forwarded nothing compare equal. It printed: {referenceRun.stdout}")
+
+	let testedForwarded = renderedLines(forwardedChildLines(testedRun))
+	let expectedForwarded = renderedLines(referenceForwarded)
+	try Expect.equal(testedForwarded, expected: expectedForwarded, message: "the two monitors forwarded the child's OWN stdout differently. One binary, one run each, and a monitor relays what its child printed verbatim — so a difference here is one of them EDITING that output. A blank line is the one a reader that reads the empty string as `nothing was buffered` drops silently.")
+
+	// ⭐ **AND THE HALF THE COMPARISON ABOVE STRIPS.** The payloads agree whichever counter a monitor seeded
+	// the header with, because the producer writes them the same either way — so the stamp is the only place
+	// a disagreement about the CLOCK can show, and the equality above is blind to it by construction.
+	let referenceStampMs = firstEventTimestampMs(referenceRun, monitorLabel: BootstrapMonitorStem)
+	let testedStampMs = firstEventTimestampMs(testedRun, monitorLabel: TestedCompilerStem)
+	let skewMs = testedStampMs - referenceStampMs if testedStampMs > referenceStampMs else referenceStampMs - testedStampMs
+	try Expect.atMost(skewMs as AssertedInt, than: AllowedTimestampSkewMs, message: "the two monitors stamped their first `{MmTraceEventPrefix}` event {skewMs} ms apart — {BootstrapMonitorStem} said {referenceStampMs} ms and {TestedCompilerStem} said {testedStampMs} ms. `{MonitorLinePrefix}SSSS.mmm{MonitorTimestampEnd}` is elapsed time since THAT monitor attached, so a gap this size means one of them seeded the segment header's start timestamp with a counter the producer does not subtract from, and every line it printed carries that counter itself rather than an elapsed time.")
+end 'both monitors read one traced binary the same way'
+
+// ============================================================================================
+// STAGING AND SPAWNING
+// ============================================================================================
+
+// A runnable copy of the fixture program, absolute because it is handed to a child as its working
+// directory. The previous run's files go first: a stale `out.exe` would let a build that produced nothing
+// be monitored as though it had.
+function stagedProgram() returns FilePath
+	let staged = writableDir(StagingDirName)
+	purgeFilesIn(staged)
+	copyStagedTree(readableDir("{FixturesDirName}/{FixtureProgramName}"), into: staged)
+
+	return staged
+end 'stagedProgram'
+
+// Compile the staged program with the DebugStream producer in it. A build that did not succeed is the gate
+// being unable to run rather than a decoder answering wrongly, so it panics carrying the compiler's words.
+function buildTracedProgram(staged FilePath)
+	var arguments = StringArray.create()
+	arguments.push(BuildCommandName)
+	arguments.push(staged.join("{StagedProgramFileName}").toString())
+	arguments.push(OutputOption)
+	arguments.push(builtProgram(staged).toString())
+	arguments.push(DebugStreamFlag)
+
+	let run = spawn(hostBinaryPath(TestedCompilerStem), arguments: arguments, staged: staged, what: "the traced build")
+	if run.exitCode() != 0 'didNotBuild'
+		panic("monitor-agreement.test: the gate could not run — `{TestedCompilerStem} {BuildCommandName} … {DebugStreamFlag}` exited {run.exitCode()}, so there is no traced binary for either monitor to read. It wrote to stderr: {run.stderr}")
+	end 'didNotBuild'
+
+	if not File.exists(builtProgram(staged)) 'wroteNothing'
+		panic("monitor-agreement.test: the gate could not run — the traced build exited 0 and wrote no executable to {builtProgram(staged).toString()}.")
+	end 'wroteNothing'
+end 'buildTracedProgram'
+
+// Run the traced binary under one monitor and collect everything it said.
+function runMonitor(monitorBinary FilePath, monitorLabel String, staged FilePath) returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(MonitorSubcommand)
+	arguments.push(MonitorMmFilterArg)
+	arguments.push(builtProgram(staged).toString())
+
+	return spawn(monitorBinary, arguments: arguments, staged: staged, what: "the '{monitorLabel}' monitor")
+end 'runMonitor'
+
+// One child, run in the staging tree. A binary that is not there and a spawn that never happened both stop
+// the case running at all, so both panic naming what was being asked for.
+function spawn(binary FilePath, arguments StringArray, staged FilePath, what String) returns CollectedOutput
+	if not File.exists(binary) 'noBinary'
+		panic("monitor-agreement.test: the gate could not run — {what} needs a binary at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build both compilers first.")
+	end 'noBinary'
+
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = staged
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("monitor-agreement.test: the gate could not run — could not spawn {what} ({e.displayReason()}).")
+	end 'spawnFailed'
+end 'spawn'
+
+// Where the traced build lands, with the suffix spelled INTO the `-o` argument so the path handed to the
+// compiler and the path handed to a monitor are one spelling.
+function builtProgram(staged FilePath) returns FilePath
+	return staged.join("{BuiltProgramStem}{executableSuffix()}")
+end 'builtProgram'
+
+// A binary named from the checkout root, absolute and with the suffix this host can spawn.
+function hostBinaryPath(stem String) returns FilePath
+	let spelled = "{stem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("monitor-agreement.test: the gate could not run — '{spelled}' is not a spellable path")
+
+	return relative.resolve(Directory.currentPath())
+end 'hostBinaryPath'
+
+function executableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'executableSuffix'
+
+// ============================================================================================
+// READING A MONITOR'S OUTPUT
+// ============================================================================================
+
+// The `mm` events one monitor decoded, in the order it printed them, each stripped of the timestamp it was
+// authored with. Anything that is not an event of the family — the child's own forwarded stdout, a blank
+// line, a summary — is dropped by the same test, which is what makes this fold idempotent.
+function decodedEvents(run CollectedOutput) returns StringArray
+	var events = StringArray.create()
+
+	for rawLine in run.stdout.split(LineFeed) 'eachLine'
+		let payload = withoutMonitorTimestamp(rawLine.replace(CarriageReturn, with: ""))
+		if payload.startsWith(MmTraceEventPrefix) 'anEvent'
+			events.push(payload)
+		end 'anEvent'
+	end 'eachLine'
+
+	return events
+end 'decodedEvents'
+
+// One line without the `[+SSSS.mmm] ` a monitor authored it with. The elapsed time is a property of the RUN,
+// so two monitors can only be compared past it. Only the FIRST marker goes: a `] ` inside an event's own
+// payload is part of the event.
+function withoutMonitorTimestamp(line String) returns String
+	if not line.startsWith(MonitorLinePrefix) 'notAuthoredByAMonitor'
+		return line
+	end 'notAuthoredByAMonitor'
+
+	var cursor = try line.findFirst(MonitorTimestampEnd) otherwise return line
+	for _ in 0 upto MonitorTimestampEnd.count() 'eachMarkerGrapheme'
+		cursor = try line.indexAfter(cursor) otherwise return line
+	end 'eachMarkerGrapheme'
+
+	return line.slice(cursor, endIndex: line.endIndex())
+end 'withoutMonitorTimestamp'
+
+// ⭐ **THE FIRST `mm` EVENT'S OWN STAMP, IN MILLISECONDS.** The lists compared in the contract are stripped
+// of it because it is a property of the RUN; this reads exactly what that stripping discards.
+function firstEventTimestampMs(run CollectedOutput, monitorLabel String) returns ElapsedMs
+	for rawLine in run.stdout.split(LineFeed) 'eachLine'
+		let line = rawLine.replace(CarriageReturn, with: "")
+		if line.startsWith(MonitorLinePrefix) and withoutMonitorTimestamp(line).startsWith(MmTraceEventPrefix) 'anEvent'
+			return millisecondsIn(monitorTimestampText(line, monitorLabel: monitorLabel), monitorLabel: monitorLabel)
+		end 'anEvent'
+	end 'eachLine'
+
+	panic("monitor-agreement.test: the gate could not run — '{monitorLabel}' printed no `{MmTraceEventPrefix}` line carrying a `{MonitorLinePrefix}SSSS.mmm{MonitorTimestampEnd}` stamp, though the count asserted above says it decoded events. It printed: {run.stdout}")
+end 'firstEventTimestampMs'
+
+// The digits between `[+` and `] `. Both markers were established by the caller, so an absence here is the
+// instrument broken rather than a decoder answering wrongly.
+function monitorTimestampText(line String, monitorLabel String) returns String
+	var cursor = line.startIndex()
+	for _ in 0 upto MonitorLinePrefix.count() 'eachPrefixGrapheme'
+		cursor = try line.indexAfter(cursor) otherwise panic("monitor-agreement.test: the gate could not run — '{monitorLabel}' authored a line shorter than the `{MonitorLinePrefix}` it starts with: {line}")
+	end 'eachPrefixGrapheme'
+
+	let markerAt = try line.findFirst(MonitorTimestampEnd) otherwise panic("monitor-agreement.test: the gate could not run — '{monitorLabel}' authored a `{MonitorLinePrefix}` line with no `{MonitorTimestampEnd}` marker: {line}")
+
+	return line.slice(cursor, endIndex: markerAt)
+end 'monitorTimestampText'
+
+// `SSSS.mmm` as one whole number of milliseconds. A stamp that is not that shape is a monitor that changed
+// its output format, which no assertion below would report intelligibly — so the spelling is checked here.
+function millisecondsIn(stamp String, monitorLabel String) returns ElapsedMs
+	let halves = stamp.split(TimestampFractionPoint)
+	if halves.count() != TimestampStampHalves 'notSecondsAndMillis'
+		panic("monitor-agreement.test: the gate could not run — '{monitorLabel}' stamped an event `{stamp}`, which is not the `SSSS{TimestampFractionPoint}mmm` shape both monitors write.")
+	end 'notSecondsAndMillis'
+
+	let seconds = try halves.get(0) otherwise panic("monitor-agreement.test: a two-element split has a first element")
+	let millis = try halves.get(1) otherwise panic("monitor-agreement.test: a two-element split has a second element")
+	if millis.count() != TimestampFractionDigits 'notMilliseconds'
+		panic("monitor-agreement.test: the gate could not run — '{monitorLabel}' stamped an event `{stamp}`, whose fraction is {millis.count()} digits rather than the {TimestampFractionDigits} a millisecond is written in.")
+	end 'notMilliseconds'
+
+	return decimalValue(seconds, stamp: stamp, monitorLabel: monitorLabel) * MillisecondsPerSecond + decimalValue(millis, stamp: stamp, monitorLabel: monitorLabel)
+end 'millisecondsIn'
+
+// One half of the stamp as a number.
+function decimalValue(digits String, stamp String, monitorLabel String) returns ElapsedMs
+	if digits.isEmpty() 'noDigits'
+		panic("monitor-agreement.test: the gate could not run — '{monitorLabel}' stamped an event `{stamp}` with an empty half.")
+	end 'noDigits'
+
+	var value = 0
+	for c in digits 'eachCharacter'
+		if not Ascii.isDigit(c) 'notADigit'
+			panic("monitor-agreement.test: the gate could not run — '{monitorLabel}' stamped an event `{stamp}`, which is not written in digits.")
+		end 'notADigit'
+
+		value = value * DecimalBase + digitValue(c)
+	end 'eachCharacter'
+
+	return value
+end 'decimalValue'
+
+// A digit's value. The caller has already classified `c`, so the conversion cannot fail.
+function digitValue(c Character) returns DigitValue
+	let code = try c.asciiValue() otherwise panic("monitor-agreement.test: digitValue is reached only past an Ascii.isDigit test")
+
+	return code - AsciiZeroDigit
+end 'digitValue'
+
+// One list of lines as the text a failure report shows, so a disagreement is read as a diff rather than as
+// two array identities. Shared by both comparisons — the decoded events and the child's forwarded output —
+// because a list of lines renders the same way whoever wrote them.
+function renderedLines(lines StringArray) returns String
+	var rendered = ""
+	for line in lines 'eachLine'
+		rendered.append("{line}{LineFeed}")
+	end 'eachLine'
+
+	return rendered
+end 'renderedLines'
+
+// ⭐ **THE CHILD'S OWN STDOUT, WHICH A MONITOR FORWARDS VERBATIM RATHER THAN DECODES.** Every line a monitor
+// AUTHORED carries the `[+SSSS.mmm] ` stamp, so the complement is the child's — the half `decodedEvents`
+// drops.
+//
+// ⛔ **A BLANK LINE IS ONE OF THEM AND IT IS THE ONE FORWARDING GETS WRONG**: a reader that treats the empty
+// string as "the pipe had nothing" swallows it, and every event list stays identical while it does. That is
+// why the list is compared WHOLE rather than filtered to non-empty lines.
+function forwardedChildLines(run CollectedOutput) returns StringArray
+	var forwarded = StringArray.create()
+
+	for rawLine in run.stdout.split(LineFeed) 'eachLine'
+		let line = rawLine.replace(CarriageReturn, with: "")
+		if not line.startsWith(MonitorLinePrefix) 'theChildsOwn'
+			forwarded.push(line)
+		end 'theChildsOwn'
+	end 'eachLine'
+
+	// `split` leaves an empty element after a final newline, and every monitor's last write ends in one — so
+	// that element belongs to the split rather than to anything either of them printed.
+	if endsWithEmptyLine(forwarded) 'trailingNewline'
+		_ = try forwarded.pop() otherwise panic("monitor-agreement.test: a list that ends with an empty line is not empty")
+	end 'trailingNewline'
+
+	return forwarded
+end 'forwardedChildLines'
+
+function endsWithEmptyLine(lines StringArray) returns bool
+	if lines.isEmpty() 'nothingThere'
+		return false
+	end 'nothingThere'
+
+	let last = try lines.get(lines.count() - 1) otherwise panic("monitor-agreement.test: a non-empty list has a last element")
+
+	return last.isEmpty()
+end 'endsWithEmptyLine'
+
+// ============================================================================================
+// STAGING
+// ============================================================================================
+
+// Copy one stored tree into a runnable one, mapping every name on the way.
+function copyStagedTree(stored FilePath, into FilePath)
+	for entry in listing(stored) 'eachEntry'
+		let target = into.join("{storedToReal(entry.filename())}")
+		if Directory.isDirectory(entry) 'aDirectory'
+			if not Directory.create(target) 'couldNotCreate'
+				panic("monitor-agreement.test: the gate could not run — could not create the staging directory {target.toString()}.")
+			end 'couldNotCreate'
+
+			copyStagedTree(entry, into: target)
+			continue
+		end 'aDirectory'
+
+		let body = fileText(entry)
+		try File.writeText(target, content: body) otherwise panic("monitor-agreement.test: the gate could not run — could not stage {target.toString()}.")
+	end 'eachEntry'
+end 'copyStagedTree'
+
+// The stored-name mapping. A name without the marker is already what it will be called.
+function storedToReal(stored String) returns String
+	if not stored.endsWith(StoredFixtureSuffix) 'alreadyReal'
+		return stored
+	end 'alreadyReal'
+
+	let suffixStart = try stored.findLast(StoredFixtureSuffix) otherwise panic("monitor-agreement.test: the gate could not run — '{stored}' ends with {StoredFixtureSuffix} and yet does not contain it.")
+	return stored.slice(stored.startIndex(), endIndex: suffixStart)
+end 'storedToReal'
+
+// Delete every file under a directory, leaving the directories.
+function purgeFilesIn(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			purgeFilesIn(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("monitor-agreement.test: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
+	end 'eachEntry'
+end 'purgeFilesIn'
+
+// A directory this file's paths name, refused loudly when it is not there: every such refusal is the
+// working-directory contract in the header not being met.
+function readableDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("monitor-agreement.test: the gate could not run — '{spelled}' is not a spellable path")
+	if not Directory.isDirectory(path) 'notThere'
+		panic("monitor-agreement.test: the gate could not run — there is no directory at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
+	end 'notThere'
+
+	return path
+end 'readableDir'
+
+// A directory this run writes into, created ancestor by ancestor so a fresh checkout without `temp/` is not
+// a failure, and absolute because it is handed to a child process as its working directory.
+function writableDir(spelled String) returns FilePath
+	var prefix = ""
+	for component in spelled.split(PortablePathSeparator) 'eachComponent'
+		prefix = component if prefix.isEmpty() else "{prefix}{PortablePathSeparator}{component}"
+		let ancestor = try FilePath.from(prefix) otherwise panic("monitor-agreement.test: the gate could not run — '{prefix}' is not a spellable path")
+		if not Directory.create(ancestor) 'couldNotCreate'
+			panic("monitor-agreement.test: the gate could not run — could not create '{prefix}'. It is where the runnable copy is built; nothing can be staged without it.")
+		end 'couldNotCreate'
+	end 'eachComponent'
+
+	let path = try FilePath.from(spelled) otherwise panic("monitor-agreement.test: the gate could not run — '{spelled}' is not a spellable path")
+	return path.resolve(Directory.currentPath())
+end 'writableDir'
+
+// One file's bytes as text. A file that cannot be read is the instrument being broken: the corpus is
+// checked in and the staging tree was written by this process moments ago.
+function fileText(path FilePath) returns String
+	return try File.readText(path) otherwise panic("monitor-agreement.test: the gate could not run — could not read {path.toString()}.")
+end 'fileText'
+
+// What one directory holds.
+function listing(dir FilePath) returns FixturePathArray
+	return try Directory.list(dir) otherwise panic("monitor-agreement.test: the gate could not run — could not list {dir.toString()}")
+end 'listing'
