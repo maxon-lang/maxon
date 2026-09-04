@@ -3744,7 +3744,7 @@ function noVictimAtPeak(refusal RegAllocRefusalSite, func IrFunction, hasAuthor 
 	// is not an option that exists: the message names a source line the function does not have, and
 	// `defRangeOf` panics building it (RULE 3) rather than emitting one.
 	if not hasAuthor 'emittedByTheCompiler'
-		panic("noVictimAtPeak: '{String.from(func.name)}' is a function the COMPILER emitted — it has no source and so no author — yet `chooseVictim` refused every one of the {peak.pressure} {peak.witnessClass.name} value(s) at its FULL-POOL peak, under the forced bracket `relievePressure` retries such a function with. That bracket is total over the values a function defines: each has a store anchor (an op def or a phi block entry), and reloading every use makes it dead across the peak whatever `killsValueAtPeak` says. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `isSpillable` — look first at `storeFitsPool`, the one gate that can still refuse under a forced placement. It must never surface as E5001: there is nobody to address that error to, and no source span to anchor it at.")
+		panic("noVictimAtPeak: '{String.from(func.name)}' is a function the COMPILER emitted — it has no source and so no author — yet `chooseVictim` refused every one of the {peak.pressure} {peak.witnessClass.name} value(s) at its FULL-POOL peak, under the forced bracket `relievePressure` retries such a function with. That bracket is total over the values a function defines: each has a store anchor (an op def or a phi block entry), and reloading every use makes it dead across the peak whatever `killsValueAtPeak` says. Under a forced placement the only gate left is `hasStoreAnchor` — tier 4 takes anything memory already holds and tier 5 takes the rest — so refusing them all is a SPLITTER BUG in `hasStoreAnchor` or in `analyzePressure`'s live row. It must never surface as E5001: there is nobody to address that error to, and no source span to anchor it at.")
 	end 'emittedByTheCompiler'
 
 	// ⭐ **THE REFUSAL IS RECORDED AND THROWN, NEVER RENDERED HERE.** E5001 names a source span per
@@ -4507,19 +4507,25 @@ end 'zeroRow'
 //     load before each use. The re-relief half is a value tier 2 already spilled at a LATER peak, whose
 //     pre-peak use kept the original alive here — see `isForcedBracketVictim` for the measurement.
 //     Nothing is searched. See `SplitScope` and `noVictimAtPeak`.
+//  5. THE SPILL WHOSE STORE ANCHOR IS ITSELF OVER-POOL — tier 2 with `storeFitsPool` dropped and
+//     `killsValueAtPeak` left to `splitScopeAt` (tier 4's arrangement, for tier 4's reason: the FULL
+//     split reloads before EVERY use, so it kills whatever the eviction-point split cannot), reached
+//     only when tiers 1-4 are all empty. That gate defers a value on the promise of a later iteration,
+//     and the promise fails on a function whose pressure stays over the pool across the whole stretch
+//     that holds its defs: nothing is ever schedulable and a program that fits the machine is refused.
+//     See `isCrowdedStoreVictim`.
 //
 // Tier 3 is CONFINED-only, and so is tier 4's FULL-SPLIT half, because a FULL-pool peak that tier 2
 // cannot relieve by writing a NEW store is precisely the program E5001 exists to refuse: the loop's
 // genuine working set is larger than the machine, and reloading at every use inside the loop is the
 // per-iteration cost this design will not silently pay. That argument is about a LOOP, and it does not
-// reach a value whose def and every use are at depth 0 — which is why the re-relief half is not
-// confined to confined peaks.
+// reach a value whose def and every use are at depth 0 — which is why neither tier 4's re-relief half
+// nor tier 5 is confined to confined peaks.
 //
-// Within a tier the victim is the one with the FARTHEST next use (Belady/MIN). A spill additionally
-// needs its store to FIT the pool (`storeFitsPool`, `defLiveAfter[v] ≤ pool`): a value whose def-point
-// pressure exceeds the pool has no register-free anchor for its store YET — a spilled sibling must
-// free a register first, which a later iteration does. A remat has no store, and neither does the
-// re-relief of a value already in a slot, so neither carries that constraint.
+// Within a tier the victim is the one with the FARTHEST next use (Belady/MIN). Tiers 2 and 4 additionally
+// want the store to FIT the pool (`storeFitsPool`, `defLiveAfter[v] ≤ pool`), preferring a value whose def
+// point a later iteration need not revisit; tier 5 is where that preference gives way. A remat and the
+// re-relief of a value already in a slot write no store at all, so neither carries the constraint.
 //
 // The candidates are the SET BITS of the peak's live row, walked with `bitsetCollectRow` (which
 // yields them in ascending id order, so the strict-improvement tie-break below still resolves ties
@@ -4554,6 +4560,7 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 	var bestSpill = BeladyBest.create()
 	var bestFullRemat = BeladyBest.create()
 	var bestBracket = BeladyBest.create()
+	var bestCrowdedStore = BeladyBest.create()
 
 	for v in candidates 'eachValue'
 		if bitsetTest(usedAtPeak, base: 0, bit: v as BitIndex) 'consumedHere'
@@ -4587,7 +4594,9 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 			bestFullRemat.offer(v, nextUse: nu)
 		end 'fullConst' else if isForcedBracketVictim(index, liveness: liveness, valueId: v, placement: anchor.placement, pressure: scratch.pressure, poolSize: poolSize) 'bracketable'
 			bestBracket.offer(v, nextUse: nu)
-		end 'bracketable'
+		end 'bracketable' else if isCrowdedStoreVictim(index, valueId: v, placement: anchor.placement) 'anchorStillOverPool'
+			bestCrowdedStore.offer(v, nextUse: nu)
+		end 'anchorStillOverPool'
 	end 'eachValue'
 
 	if bestRemat.found 'haveRemat'
@@ -4605,6 +4614,9 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 		// asking it per candidate would be a walk bought for nothing.
 		return SpillChoice.spill(bestBracket.valueId, scope: splitScopeAt(index, topo: topo, valueId: bestBracket.valueId, anchor: anchor, reach: reach))
 	end 'haveBracket'
+	if bestCrowdedStore.found 'haveCrowdedStore'
+		return SpillChoice.spill(bestCrowdedStore.valueId, scope: splitScopeAt(index, topo: topo, valueId: bestCrowdedStore.valueId, anchor: anchor, reach: reach))
+	end 'haveCrowdedStore'
 	return SpillChoice.none
 end 'chooseVictim'
 
@@ -4675,11 +4687,14 @@ end 'nextUseAfterPeak'
 
 // True iff `valueId`'s def-point live-set fits the pool. The store ALWAYS anchors at the def (that
 // is the only point that dominates every reload — see the "STORE ANCHOR IS THE VALUE'S DEF" note),
-// and `defLiveAfter[v]` is the pressure exactly there, so `defLiveAfter[v] ≤ pool` IS "the store has
-// a register-free anchor". A value whose def point is still over-pool has no anchor YET: a spilled
-// sibling must free a register there first, which a later iteration does (a FULL-pool peak always
-// outranks a confined one, so by the time a confined peak is reached no point is over-pool at all and
-// this gate cannot refuse anything).
+// and `defLiveAfter[v]` is the pressure exactly there, so this asks whether the def point a store would
+// land at is one a later iteration must come back to anyway.
+//
+// ⚠ **IT IS A PREFERENCE, NOT A LEGALITY CONDITION**, and the tier order is what keeps that honest: tiers
+// 2 and 4 consult it to spend the cheap victims first, and TIER 5 spills without it when they are
+// exhausted. A store needs no register of its own — it reads a value the defining op has just put in one
+// — so a def point still over the pool costs only its own later relief, and refusing every candidate on
+// that ground refuses a program that fits the machine (`isCrowdedStoreVictim`).
 //
 // A value already IN a slot skips this gate entirely — its store exists and is not re-emitted.
 //
@@ -4777,7 +4792,8 @@ end 'isRematVictim'
 //                          over-approximations of "inside a loop" made while no depth was recorded for
 //                          a phi or an edge, and both were FALSE-E5001 generators. The fact is a
 //                          DEPTH — see `isColdSpillable`.
-//  3. `storeFitsPool`    — its store has a register-free anchor point.
+//  3. `storeFitsPool`    — its def point is not itself over-pool, so the store lands somewhere a later
+//                          iteration need not revisit. A PREFERENCE, and the one tier 5 spends last.
 //  4. `killsValueAtPeak` — the eviction-point split actually makes it DEAD at the peak. Without this
 //                          the splitter emits stores that relieve nothing (see `killsValueAtPeak`).
 //                          A value that fails HERE is not un-relievable — at a confined peak the FULL
@@ -4838,7 +4854,7 @@ end 'isFullRematVictim'
 //
 // Re-relieving one of those at its earliest peak rewrites every use after it — which is all of them —
 // and the peak falls. It is STRICTLY ADDITIVE: tiers run in order, so this arm is reached only when
-// tiers 1 and 2 found nothing, which is precisely the state that used to raise E5001. No program that
+// tiers 1 and 2 found nothing, which is otherwise precisely the state that raises E5001. No program that
 // compiles today can take a different decision because of it.
 function isForcedBracketVictim(index UseIndex, liveness LivenessResult, valueId ValueId, placement SpillPlacement, pressure PressureIndex, poolSize RegCount) returns bool
 	if not isSpillable(index, valueId: valueId, placement: placement) 'wrongShape'
@@ -4853,6 +4869,52 @@ function isForcedBracketVictim(index UseIndex, liveness LivenessResult, valueId 
 
 	return storeFitsPool(liveness, pressure: pressure, valueId: valueId, poolSize: poolSize)
 end 'isForcedBracketVictim'
+
+// Is `valueId` a TIER-5 victim — a value that still has a store anchor after tiers 1-4 have all declined
+// it? It is tier 2 with two gates gone: `storeFitsPool`, for the reason below, and `killsValueAtPeak`,
+// which `splitScopeAt` answers instead exactly as it does for tier 4 — the FULL split reloads before
+// EVERY use, so it kills across the peak whatever the eviction-point split leaves alive.
+//
+// ⭐⭐ **`storeFitsPool` IS A SCHEDULING PREFERENCE, NOT A LEGALITY CONDITION, AND WHEN IT REFUSES EVERY
+// CANDIDATE THE SCHEDULE HAS DEADLOCKED.** It defers a value whose def point is over-pool on the ground
+// that "a spilled sibling frees a register there first, which a later iteration does" — and that
+// argument holds only while some OTHER value's def point is already within the pool. A function whose
+// pressure stays over the pool across a contiguous stretch wide enough to contain the DEFS of every
+// value live at its peak has no such sibling: the peak outranks every def point (`peakOutranks` ranks by
+// pressure), so the later iteration the deferral counts on never runs, and a program that fits the
+// machine is refused.
+//
+// MEASURED on `MachOWriter.writeMachO` at x64's 14-GPR pool: 32 values live at one point, every one of
+// them cold-spillable, store-anchored and killed by the eviction split — and every one deferred, because
+// the cheapest def point among them already carried 15.
+//
+// The store needs no register of its own: `storeSlotReg slot, v` is spliced immediately after the op
+// that defines `v`, so it READS a value that op has just put in a register and defines nothing. A def
+// point still over the pool is a peak of its own, and the driver relieves it on a later iteration — the
+// loop runs until NO point overflows — so deferring the store buys nothing there either.
+//
+// STRICTLY ADDITIVE: the `else if` chain offers a value to the first tier that takes it, and this tier's
+// winner is consulted only after tiers 1-4 have all come back empty — which is precisely the state that
+// otherwise raises E5001. No program that compiles today can take a different decision because of it.
+//
+// ⛔ **IT DOES NOT MOVE THE E5001 CLIFF.** `isSpillable` still applies, so at a COLD peak the value's def
+// and every use must be at loop depth 0: there is no iteration, hence none of the per-iteration reload
+// cost Rule 2 refuses to pay behind the author's back. A value the LOOP carries is not cold-spillable and
+// this tier cannot reach it, so every committed loop overflow still refuses, byte for byte.
+function isCrowdedStoreVictim(index UseIndex, valueId ValueId, placement SpillPlacement) returns bool
+	if index.hasSpillStore(valueId) 'alreadyStored'
+		// Memory holds it; relieving it again is the re-relief tier 4 owns, and that tier has declined.
+		return false
+	end 'alreadyStored'
+	if not hasStoreAnchor(index, valueId: valueId) 'nowhereToPutTheStore'
+		// A LEGALITY condition, unlike the pressure at the anchor, and it must be asked here rather than
+		// inherited: the COLD shape test is about loop depth alone, and `storeFitsPool` — which carried
+		// this for tier 2, through the `NoStoreAnchorPressure` sentinel — is the gate this tier drops.
+		// Without it, malformed IR reaches `insertStore`'s panic instead of failing a gate.
+		return false
+	end 'nowhereToPutTheStore'
+	return isSpillable(index, valueId: valueId, placement: placement)
+end 'isCrowdedStoreVictim'
 
 // The narrowest split scope that leaves `valueId` DEAD across the peak: the eviction-point split when
 // it suffices, the full split when a before-peak use is still reachable from the peak (see
