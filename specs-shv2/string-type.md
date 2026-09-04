@@ -268,20 +268,6 @@ Hello, World!
 ```
 
 <!-- test: print-multiple-literals-and-global -->
-<!--
-	Foundation guard for the wasm print slice (Phase B builds on it): three DISTINCT literals
-	force three `.rdata` records + blobs + `buffer@0` fixups, so a fixup patched with the wrong
-	blob's address (swapped, or off by another blob's offset) prints the wrong bytes here; the
-	top-level `var` forces a `.data` segment ALONGSIDE the `.rdata` one, catching an overlap or a
-	dropped segment; and `main` calling `bump` exercises the wasm import-shift (a defined function
-	resolves to `WasmImportCount + position`, not its bare position, once print pushed the import
-	count to three). Deterministic exit (b - a - 5 = 15 - 10 - 5 = 0) plus exact stdout.
-
-	Runs on ALL targets (unrestricted). Its wasm run is the point (run-checked, no golden); arm64's
-	codegen golden is committed. NOTE its x64-windows golden must be authored on a Windows host — the
-	frontend's `os()` follows the host, so a macOS-authored x64 fragment would be wrong. That is the
-	standard cross-host golden convention (do not regenerate x64 goldens on macOS), not a run-gate.
--->
 ```maxon
 var total = 0
 
@@ -539,7 +525,6 @@ end 'main'
 ```
 
 <!-- test: find-last-not-found -->
-<!-- ⚠ THE BLOCKER PROSE THAT STOOD HERE IS RETIRED, AND SO IS THE FORM IT DESCRIBED. It claimed shv2 had no `if try <throwing call>` form for ANY callee and that `specs/if-try.md` was unported; both were already stale, and the bare form this case used to spell is now REFUSED IN BOTH COMPILERS (E3124) — `findLast` PRODUCES a `StringIndex`, and a produced value may not be dropped by a `try` that reads as though it were testing it. The case now binds the index and uses it, which is the migration the rule asks for -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"

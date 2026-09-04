@@ -1012,8 +1012,7 @@ typealias Integer = int(i64.min to i64.max)
 error E3004: specs/fragments/ternary-expression/ternary-expression.error.owned-string-arm-undeclared-call.test:3:25: call to undefined function 'undefinedThing'
 ```
 
-<!-- disabled-test: ternary-expression.ownership.result-stored-in-container -->
-<!-- needs a generic container typealias `Array with Kind` (E2015 "a typealias over 'identifier'"), unbuilt in shv2 — its own generics rung. (It ALSO merges a borrowed-aggregate arm with an owned one, which is now the clean E2015 reject of OPEN #14; the borrowed+owned merge stays deferred to cross-call consume at P1.5, so this shape needs BOTH generics and P1.5 to run.) -->
+<!-- test: ternary-expression.ownership.result-stored-in-container -->
 ### The merged result can be stored, and is owned exactly once when it is
 This is the shape that found the defect: a table fold choosing between an
 already-interned entry and a freshly remapped one, then storing the winner.
@@ -1071,7 +1070,7 @@ A ternary **chooses before it evaluates**. The arm the condition does not select
 run — not its calls, not its arithmetic, not its allocations. This is the whole point of the
 form: it is what lets a ternary act as a *guard*.
 
-```maxon
+```text
 return small if fits else (big as Small)   // never range-check-panics when it doesn't fit
 ```
 

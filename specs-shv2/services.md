@@ -3538,7 +3538,7 @@ end 'Echo'
 
 function main() returns ExitCode
 	let h = spawn Echo.create()
-	let out = try await h.say("hi") otherwise (e) 'gone'
+	let out = try await h.say("hi") otherwise 'gone'
 		return 9 as ExitCode
 	end 'gone'
 	print("{out}\n")
@@ -4370,7 +4370,9 @@ error E3098: <fragment>:21:5: a reply from 'Slow.value' always carries 'ServiceE
 ```
 
 <!-- disabled-test: error.a-generic-service-is-supported -->
-<!-- SV-later: per-instantiation companions -->
+<!-- MEASURED 2026-09-04: `E2015 — `spawn Box.create(…)` where `type Box` is generic`. A service's companions are
+     monomorphic (ONE union and ONE handle struct per service), so a generic service needs a companion pair per
+     instantiation. -->
 The monomorphic-companion limitation is a v1 limit, not a rule of the design.
 ```maxon
 type Box uses T
@@ -4396,7 +4398,9 @@ end 'main'
 ```
 
 <!-- disabled-test: error.a-value-sent-through-a-parameter-is-refused -->
-<!-- E2015-deferred: the transitive half of param-consume (PLAN.md's interprocedural fixpoint) -->
+<!-- MEASURED 2026-09-04: shv2 COMPILES the program clean where the case pins `E3138: 'buf' arrived as a parameter
+     and cannot be proven unique at the send`. The refusal needs a TRANSITIVE consume analysis, which is what the
+     prose above already describes as missing. -->
 ⚠ **THE SHAPE THIS CASE PINS IS A `String`, AND IT IS THE ONE THE SEND SITE CURRENTLY ACCEPTS.** A borrowed
 byte record is PROMOTED to a fresh owned copy at the send, which is sound — the service gets a record of its
 own — so the refusal below is what a TRANSITIVE consume analysis would let the compiler replace the copy

@@ -136,13 +136,6 @@ Stack trace:
 ```
 
 <!-- test: panic.two-distinct-messages -->
-<!--
-Two user panics with different messages. Each must land in its own label
-slot so whichever one fires prints the correct message. Canary for the
-panic-label-collision bug: if both panics shared a label, the
-second-registered data would be unreachable (or clobber the first) and
-runtime would print the wrong message.
--->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

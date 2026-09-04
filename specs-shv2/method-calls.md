@@ -477,15 +477,9 @@ error E3004: specs/fragments/method-calls/error-no-such-method-on-user-type.test
 ```
 
 <!-- disabled-test: error-no-such-method-on-stdlib-generic -->
-<!-- needs `Map`, which is PHASE 2 — settled in PLAN.md row P1.0c ("`Set`∈Phase 1, `Map`∈Phase 2"), and
-     shelved on the same grounds by `byte-string-literal.md`'s three "P2 Map" cases. It cannot ride this
-     port because the case asserts a diagnostic ABOUT a resolved stdlib generic instance, and shv2 does
-     not resolve one yet: measured twice on this tick, the bare-comma alias `Map with String, Count` is
-     `E2015 Unsupported: top-level ,` at 5:37 (shv2's spelling is the parenthesized `Map with (String,
-     Count)`, per R6), and with the parentheses supplied it gets one step further and dies at
-     `CountMap.create()`, which yields an `unknown` value — `E2015: a member access 'set' on a 'unknown'
-     value`. So there is no `Map` instance for a method lookup to fail ON, and the E4006-vs-E3004 stage
-     question this case exists to pin cannot even be asked. -->
+<!-- MEASURED 2026-09-04: `E3004: call to undefined function 'Map.set'` where the pin is `E4006: Type 'Map' has no
+     method named 'set'`. A method miss on a stdlib generic falls through to the free-function noun, which names a
+     symbol the author did not write. -->
 ```maxon
 
 typealias ExitCode = int(0 to 255)

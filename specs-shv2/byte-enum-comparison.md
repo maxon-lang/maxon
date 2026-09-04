@@ -175,8 +175,7 @@ end 'main'
 
 ### Enum Coerces As Return Value
 
-<!-- disabled-test: byte-enum-comparison.enum-coerces-as-return -->
-<!-- enum->byte RETURN coercion (a separate coercion mechanism; comparison/arg/array-element coercion works) -->
+<!-- test: byte-enum-comparison.enum-coerces-as-return -->
 ```maxon
 
 typealias Byte = int(0 to u8.max)

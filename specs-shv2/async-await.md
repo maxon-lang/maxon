@@ -1623,7 +1623,7 @@ end 'drainThunk'
 
 function main() returns ExitCode
 	let p = async drainThunk()
-	let lines = try await p otherwise (e) 'died'
+	let lines = try await p otherwise 'died'
 		return 1
 	end 'died'
 	print("{lines.count()} {try lines.get(0) otherwise "?"}\n")
@@ -1672,7 +1672,7 @@ function main() returns ExitCode
 	promises.push(async drainThunk(2))
 	var total = 0
 	for p in promises 'each'
-		let lines = try await p otherwise (e) 'died'
+		let lines = try await p otherwise 'died'
 			continue
 		end 'died'
 		total = total + lines.count()
@@ -1713,7 +1713,7 @@ end 'countThunk'
 
 function main() returns ExitCode
 	let p = async countThunk()
-	let n = try await p otherwise (e) 'died'
+	let n = try await p otherwise 'died'
 		return 1
 	end 'died'
 	print("{n}\n")

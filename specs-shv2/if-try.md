@@ -985,8 +985,7 @@ end 'main'
 1 2
 ```
 
-<!-- disabled-test: error.if-try-pure-result-is-not-saved-by-discard -->
-<!-- purity analysis (E3064) — shv2 has NO purity classification, so it cannot tell a pure callee from an impure one and accepts every `_` discard unconditionally. `docs/error-codes.txt` claims E3064 for csharp+selfhosted only, with no shv2 line, and the nine siblings in `discarded-results.md` are disabled for exactly this. The `if try` half of the rule IS live here — `error.if-try-discards-a-result` and its non-bool twin both run — so what is missing is only the purity question, not this rung's law -->
+<!-- test: error.if-try-pure-result-is-not-saved-by-discard -->
 `_` does not save a PURE callee, and that is the rule's point rather than a gap in it: a pure call
 whose answer nobody wants is the wrong call. The site has to bind the result and USE it, or ask a
 function that answers the question it actually has — `s.contains(x)` rather than a discarded

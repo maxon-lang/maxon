@@ -465,8 +465,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: top-level-constant -->
-<!-- a module-scope `let X = Enum.case`. ⚠ The old reason here — "reads a dotted name as a ranged-alias bound (E2010 'Expected min or max')" — went stale when top-level factory-call initializers landed: that misreading is now impossible, and the refusal names what a constant may contain. The LIVE blocker is narrower: an enum CASE is not among the foldable forms (a top-level `let`, a literal, an empty container, a `create()`-style factory, a sized type's `.min`/`.max`), so `Color.green` is a clean E2015. It unlocks when a constant initializer can fold an enum case to its ordinal. -->
+<!-- test: top-level-constant -->
 ```maxon
 enum Color
 	red
@@ -699,7 +698,8 @@ end 'main'
 ```
 
 <!-- disabled-test: string-comparison -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- MEASURED 2026-09-04: `error E3005: type mismatch: 'cannot compare String with int'`. A String-backed enum case
+     does not decay to its backing at the comparison door; the bootstrap accepts the program and answers 1. -->
 String-backed enum can be compared with string values.
 ```maxon
 enum ContentType
@@ -720,7 +720,8 @@ end 'main'
 ```
 
 <!-- disabled-test: char-comparison -->
-<!-- char-backed enum cases — `readEnumIntRawValue` refuses a character raw value outright (E2015); string and char backings are a later rung -->
+<!-- MEASURED 2026-09-04: `error E3005: type mismatch: 'cannot compare Character with int'`. A char-backed enum
+     case does not decay to its backing at the comparison door; the bootstrap accepts the program and answers 1. -->
 Character-backed enum can be compared with character values.
 ```maxon
 enum Escape
@@ -1228,7 +1229,8 @@ rather than silently slipping through. The accessors remain available to
 *observe* a case's name/position/backing as data (print, serialize, etc.).
 
 <!-- disabled-test: error.enum-accessor-comparison -->
-<!-- E3097 `SemanticEnumAccessorComparison` — shv2 does not emit it at all: `c.ordinal == 1` compiles and answers 1, where the oracle refuses the comparison outright and directs the author at `value == Type.case` -->
+<!-- MEASURED 2026-09-04: shv2 COMPILES `c.ordinal == 1` CLEAN; the bootstrap refuses it E3097. The refusal does
+     not exist here. -->
 ```maxon
 enum Color
 	red
@@ -1291,7 +1293,7 @@ end 'main'
 ```
 
 <!-- disabled-test: fromRawValue-float-backed -->
-<!-- `Enum.fromRawValue(...)` — the reverse lookup from a backing value to a case is not implemented (E3034 at the name) -->
+<!-- MEASURED 2026-09-04: `E2015 — `fromRawValue` on a float-backed enum`, for `fromRawValue-char-backed`'s reason. -->
 ```maxon
 enum Weights
 	light = 1.5
@@ -1312,7 +1314,8 @@ end 'main'
 ```
 
 <!-- disabled-test: fromRawValue-string-backed -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- MEASURED 2026-09-04: `E2015 — `fromRawValue` on a String-backed enum`, for `fromRawValue-char-backed`'s
+     reason. -->
 ```maxon
 enum Planet
 	earth = "Earth"
@@ -1332,7 +1335,9 @@ end 'main'
 ```
 
 <!-- disabled-test: fromRawValue-char-backed -->
-<!-- char-backed enum cases — `readEnumIntRawValue` refuses a character raw value outright (E2015); string and char backings are a later rung -->
+<!-- MEASURED 2026-09-04: `E2015 — `fromRawValue` on a char-backed enum`. The lookup searches the case TAGS, which
+     carry the declared raw values only for an int-backed or unnumbered enum, so a char/float/String backing has
+     nothing to search. The raw values have to be kept beside the tags. -->
 ```maxon
 enum Grade
 	excellent = 'A'
@@ -1407,7 +1412,8 @@ end 'main'
 ```
 
 <!-- disabled-test: error.fromRawValue-invalid-literal -->
-<!-- `Enum.fromRawValue(...)` — the reverse lookup from a backing value to a case is not implemented (E3034 at the name) -->
+<!-- MEASURED 2026-09-04: shv2 COMPILES a `fromRawValue(999)` whose literal names no case; the bootstrap folds the
+     argument and refuses E3034. shv2 has no compile-time raw-value fold at this door. -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -1415,7 +1421,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	let _s = try HttpStatus.fromRawValue(999) otherwise HttpStatus.ok
+	_ = try HttpStatus.fromRawValue(999) otherwise HttpStatus.ok
 	return 0
 end 'main'
 ```
@@ -1424,7 +1430,9 @@ error E3034: specs/fragments/constants/error.fromRawValue-invalid-literal.test:8
 ```
 
 <!-- disabled-test: error.fromRawValue-type-mismatch -->
-<!-- `Enum.fromRawValue(...)` — the reverse lookup from a backing value to a case is not implemented (E3034 at the name) -->
+<!-- MEASURED 2026-09-04: same CODE and same TEXT, ANCHOR ONLY — shv2 blames the offending ARGUMENT and the
+     bootstrap the member name. Which one the language pins is a ruling over every argument mismatch, not this
+     case's to take. -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -1432,7 +1440,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 function main() returns ExitCode
-	let _s = try HttpStatus.fromRawValue("404") otherwise HttpStatus.ok
+	_ = try HttpStatus.fromRawValue("404") otherwise HttpStatus.ok
 	return 0
 end 'main'
 ```

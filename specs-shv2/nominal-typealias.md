@@ -980,7 +980,6 @@ end 'main'
 
 <!-- test: a-narrowing-cast-keeps-its-guard -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-<!-- Native lanes only, for `ranged-typealias.md`'s `float-runtime-range-panic` reason: this case pins the panic MESSAGE and the BACKTRACE, which the wasm lane does not print. -->
 ```maxon
 typealias Wide = int(0 to u64.max)
 typealias Narrow = int(0 to 16)
@@ -1008,7 +1007,6 @@ Stack trace:
 
 <!-- test: an-arithmetic-result-is-unproven-and-still-guarded -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-<!-- Native lanes only, for `ranged-typealias.md`'s `float-runtime-range-panic` reason: this case pins the panic MESSAGE and the BACKTRACE, which the wasm lane does not print. -->
 `a + a2` is `Score`-typed, but the name is not a proof: 130 is outside `Score`, and the guard at the
 callee's entry still fires.
 ```maxon
@@ -1039,7 +1037,6 @@ Stack trace:
 
 <!-- test: an-adopted-result-in-a-packed-array-literal-is-still-guarded -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-<!-- Native lanes only, for `ranged-typealias.md`'s `float-runtime-range-panic` reason: this case pins the panic MESSAGE and the BACKTRACE, which the wasm lane does not print. -->
 `[s + 1, s + 2]` is an `Array with Small`, because its first element wears `Small` — and `Small` packs at
 one byte. The element wears the name without a proof, so it is converted into the slot through the same
 door a written cast uses, and the guard fires on 256 rather than storing it as 0.
@@ -1086,7 +1083,6 @@ end 'main'
 
 <!-- test: a-narrowing-return-keeps-its-guard -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-<!-- Native lanes only, for `ranged-typealias.md`'s `float-runtime-range-panic` reason: this case pins the panic MESSAGE and the BACKTRACE, which the wasm lane does not print. -->
 `return w` from a `returns Narrow` function is `return w as Narrow`, and a narrowing cast keeps its guard:
 360 is outside `Narrow`, and the `return` panics.
 ```maxon

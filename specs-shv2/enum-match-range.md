@@ -264,14 +264,6 @@ error E2027: specs/fragments/enum-match-range/error.enum-match-range.overlap.tes
 ```
 
 <!-- test: error.enum-match-range.not-exhaustive -->
-<!-- ⚠ RETRACTION from /specs, ONE WORD: canonical pins "match on enum 'Op'" for a scrutinee this very
-     program declares as `union Op`. shv2 reads the kind word from `EnumLayout.kindWord()`, so it says
-     "union", and that is the ratified spelling twice over: `enum-match-exhaustive/error.union-not-exhaustive`
-     is an shv2-authored case pinning `match on union 'Shape'` and recording the bootstrap's hardcoded
-     "enum" as a documented oracle divergence, and canonical ITSELF writes the noun for a union scrutinee
-     in `/specs/try-block.md` (`match on error union is not exhaustive`). Canonical's "enum" here is what a
-     compiler that hardcoded the noun happened to print, and it contradicts canonical's own try-block pin.
-     Nothing else in this file diverges. -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

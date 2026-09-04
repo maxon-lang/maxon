@@ -190,6 +190,8 @@ With runnext scheduling, the later-spawned file I/O fiber (#2) runs first,
 completing file_exists before the HTTP fiber (#1) begins net_connect.
 
 <!-- disabled-test: http-client.async-trace-interleave -->
+<!-- MEASURED 2026-09-04: stderr mismatch on the async trace. It ALSO opens a socket to a real external host, so it
+     owes a `<!-- network: live -->` marker before it can be a default-run case at all. -->
 <!-- AsyncTrace -->
 ```maxon
 function doHttp() returns ExitCode throws HttpError

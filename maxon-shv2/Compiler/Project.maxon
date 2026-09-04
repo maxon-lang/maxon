@@ -990,22 +990,22 @@ export enum UnusedBindingKind
 	// speak about one — that rule's filter is `binding.mutable`, which a `let` fails, so the split costs no
 	// test there.
 	immutableLocal
-	// ⭐ **THE OPTIONAL `(e)` OF A DIVERGENT `otherwise` — `otherwise (e) panic("…")` /
-	// `otherwise (e) throws E.case`, AND NOTHING ELSE.** It is checked where a body `let` deliberately is
-	// not, and the difference is that this binding is OPTIONAL: an author who declares one and never reads it
-	// wrote the parentheses for nothing, which is a different sentence from the general unused-`let` rule the
-	// kind above defers. `/specs/try-block-otherwise-divergent.md` states the rule for exactly this binding.
+	// ⭐ **THE OPTIONAL `( e )` OF A CATCHING FORM** — a divergent `otherwise (e) panic("…")`, an
+	// `otherwise (e) 'h' … end 'h'` block, and a catching `if`'s `else (e) 'err'` alike. It is checked where
+	// a body `let` deliberately is not, and the difference is that this binding is OPTIONAL: an author who
+	// declares one and never reads it wrote the parentheses for nothing, which is a different sentence from
+	// the general unused-`let` rule the kind above defers.
 	//
-	// ⚠⚠ **THE NAME IS THIS NARROW ON PURPOSE — IT IS ONE OF FOUR DOORS THAT DECLARE A CAUGHT ERROR, AND THE
-	// OTHER THREE ARE NOT CHECKED.** `otherwise (e) 'h' … end 'h'` (block form and single-call alike) and a
-	// catching `if`'s `else (e) 'err'` all bind one and all still accept it unread, which the ORACLE also
-	// does. A name like `caughtError` would read as a class and make the gap look like an oversight for
-	// someone to "finish" — widening the enrolment to `declareCaughtError` would newly refuse programs the
-	// oracle accepts, which is a rung and not a tidy-up.
+	// ⭐ **ONE KIND BECAUSE THERE IS ONE DOOR.** Every form declares its binding through
+	// `Parser.declareCaughtError`, which is where the enrolment lives, so no form can acquire a binding
+	// without acquiring the check with it.
+	caughtError
+	// ⭐ **A `match` ARM'S PAYLOAD BINDER — the `n` of `value(n) then …`.** An arm that names a payload it
+	// never reads meant `_`, which is the discard `declarePayloadBindings` already skips.
 	//
-	// ⚠ It is never `mutable`, so E3077's scan over this same list skips it without needing a kind test —
-	// the filter there is `binding.mutable`, and a caught error is bound immutably at every catching door.
-	divergentHandlerBinding
+	// ⚠ **ITS MUTABILITY IS THE SCRUTINEE'S, NOT THE AUTHOR'S**, which is why E3077's candidate test is this
+	// KIND and not `binding.mutable` — see `Parser.reportVarShouldBeLet`.
+	payloadBinding
 end 'UnusedBindingKind'
 
 // ⭐ **ONE DECLARATION THE UNUSED CHECK (E3012) MUST ACCOUNT FOR** — paired with the span of the NAME the
@@ -1017,9 +1017,8 @@ end 'UnusedBindingKind'
 // shadow is a different declaration with its own answer.
 //
 // The RANGE rides here and not on `VarInfo` because only these binding kinds are candidates: a self-field
-// alias, a payload binding, the destructuring temp and the module-storage stand-in all construct a
-// `VarInfo` and none of them is checked, so a declaration span on the record would be a column most
-// constructors fill with nothing.
+// alias, the destructuring temp and the module-storage stand-in all construct a `VarInfo` and none of them
+// is checked, so a declaration span on the record would be a column most constructors fill with nothing.
 //
 // ⭐ **E3077 WALKS THIS SAME LIST** (`Parser.reportVarShouldBeLet`), and that is the shape that makes the
 // precedence between the two rules structural rather than stated: "an unused `var` reports as UNUSED, not

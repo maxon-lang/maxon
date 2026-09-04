@@ -492,8 +492,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: assign-constants-enum-to-backing -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3005: <fragment>:12:2: cannot assign 'JsonByte' to variable 'b' of type 'int'`, from `aggregatesConflict` — a registered enum NAME against a ranged alias's empty one. shv2 has no enum-to-numeric decay at the assignment door, and it DOES admit one at the ARGUMENT door (measured: `take(JsonByte.lBracket)` into `take(b Byte)` compiles and prints 91). The two doors disagree by ACCIDENT, not by rule: TypeResolution has erased the enum to an integer by the time SemanticCheck asks. The bootstrap accepts the coercion far more broadly (measured: a backing-free `enum Color` into a `Byte` var prints the ordinal), while this spec's prose describes only the declared-backing case. Which breadth is the LANGUAGE's is a design question over the ONE authority all eight coercion doors share, so it is the coordinator's to rule and not this rung's to pick. -->
+<!-- test: assign-constants-enum-to-backing -->
 A constants-enum where its numeric backing type is declared coerces to the raw backing value.
 ```maxon
 
@@ -644,8 +643,7 @@ end 'main'
 error E3005: specs/fragments/assignment/error.wrong-enum-in-struct-literal-field-errors.test:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
-<!-- disabled-test: assign-enum-to-same-enum -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E2015: <fragment>:21:11: Unsupported: a field access through 'Holder.c', which is declared 'int' and not a struct` — a LEGAL program refused, and NOT by the assignment rule this case is filed under: `h.c = Color.green` and `c = Color.green` both compile (probed), and a local's `c.ordinal` answers correctly. The gap is `.ordinal` on an enum-typed FIELD. `enumOrdinalFieldAt` admits the accessor only when the base is a binding in this function's own scope, so the two-hop `h.c.ordinal` falls through to the field-chain walk and is refused as a hop through a non-struct field. Its own slice, alongside `.name`/`.rawValue`, which that same door refuses deliberately. -->
+<!-- test: assign-enum-to-same-enum -->
 The control: the same shape with the enum it declared. A rule that refused this would be worse than
 no rule.
 ```maxon

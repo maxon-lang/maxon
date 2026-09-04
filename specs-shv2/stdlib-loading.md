@@ -1067,23 +1067,26 @@ end 'main'
 25
 ```
 
-⚠ **WHAT LOADING `Range.maxon` DOES NOT BUY, MEASURED: `to` IN EXPRESSION POSITION.** `Range.maxon`'s own header
-describes it as producing *"first-class iterable values produced by `start to end` … used in expression
-position"*, and that syntax is **still `E2001`** on this tree — `let r = 3 to 7` does not parse. The
-desugaring of a `for … in` header remains the direct while-loop it always was. So the module is loaded and
-reachable **by name**, and the surface its own documentation advertises is a separate door that no row yet
-owns. Pinned here rather than left in a rung report, because the next reader of this section will otherwise
-assume the module delivers it.
+⭐ **WHAT LOADING `Range.maxon` BUYS BEYOND THE NAME: `to` IN EXPRESSION POSITION.** `Range.maxon`'s own
+header describes it as producing *"first-class iterable values produced by `start to end` … used in
+expression position"*, and the module is what makes that spelling mean something — the parser constructs the
+declaration this file loads. In a `for … in` header the keyword stays the direct while-loop desugaring it
+always was, which is why this case binds the range instead. Pinned here because it is the surface the
+module's own documentation advertises, and a load that did not deliver it would be a load of a name alone.
 
-<!-- test: stdlib-loading.error.range-is-not-yet-constructible-from-to-in-expression-position -->
+<!-- test: stdlib-loading.range-is-constructible-from-to-in-expression-position -->
 ```maxon
 function main() returns ExitCode
 	let r = 3 to 7
-	return 0
+	var sum = 0
+	for x in r 'walk'
+		sum = sum + x
+	end 'walk'
+	return sum as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2001: <fragment>:3:12: unexpected token: 'to'
+```exitcode
+25
 ```
 
 ## `stdlib/Json.maxon` — what W69 unblocked, and the control that proves it is not inert

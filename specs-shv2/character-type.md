@@ -171,7 +171,6 @@ end 'main'
 ```
 
 <!-- test: character-to-string -->
-<!-- P1.2 String - `print` and string interpolation -->
 ### Character to String Conversion
 
 ```maxon
@@ -593,7 +592,6 @@ end 'main'
 ```
 
 <!-- test: escape-sequences -->
-<!-- P1.2 `Character.bytes()` + String interpolation. Escape DECODING itself already works - char-literal-to-int.md's `char-literal-escape-coercion` case covers it; what is missing is the Character type this case measures the escapes' byte length with -->
 ### Escape Sequences in Character
 
 ```maxon
@@ -620,7 +618,6 @@ end 'main'
 ```
 
 <!-- test: ascii-value-letter -->
-<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Letter
 
 ```maxon
@@ -639,7 +636,6 @@ end 'main'
 ```
 
 <!-- test: ascii-value-digit -->
-<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Digit
 
 ```maxon
@@ -658,7 +654,6 @@ end 'main'
 ```
 
 <!-- test: ascii-value-lowercase -->
-<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Lowercase
 
 ```maxon
@@ -677,7 +672,6 @@ end 'main'
 ```
 
 <!-- test: ascii-value-space -->
-<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Space
 
 ```maxon
@@ -696,7 +690,6 @@ end 'main'
 ```
 
 <!-- test: ascii-value-newline -->
-<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Newline Escape
 
 ```maxon
@@ -715,7 +708,6 @@ end 'main'
 ```
 
 <!-- test: ascii-value-non-ascii -->
-<!-- `try` IN CONDITION POSITION as a SUCCESS TEST, in the form the rule leaves standing: `asciiValue()` PRODUCES a value, so the bare `if try c.asciiValue()` this pair used to spell is now E3124 in both compilers — it dropped the byte while reading as though the byte were what the `if` tested. Bound and used, the case still pins what it always pinned: the five sibling `ascii-value-*` cases pin the value returned for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead and the branch is not taken -->
 ### ASCII Value for Non-ASCII Returns Error
 
 ```maxon
@@ -732,7 +724,6 @@ end 'main'
 ```
 
 <!-- test: ascii-value-emoji -->
-<!-- `try` IN CONDITION POSITION as a SUCCESS TEST, in the form the rule leaves standing: `asciiValue()` PRODUCES a value, so the bare `if try c.asciiValue()` this pair used to spell is now E3124 in both compilers — it dropped the byte while reading as though the byte were what the `if` tested. Bound and used, the case still pins what it always pinned: the five sibling `ascii-value-*` cases pin the value returned for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead and the branch is not taken -->
 ### ASCII Value for Emoji Returns Error
 
 ```maxon
@@ -776,16 +767,9 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Charac
 ```
 
 <!-- disabled-test: error.otherwise-out-of-range -->
-<!-- A SYNTHESIZED RANGED ALIAS CARRIES NO RANGE — re-measured 2026-08-05 (A5m-ab), and the marker
-     that stood here was wrong. `Character.asciiValue()` now EXISTS and its five sibling cases are
-     green; what this one needs is the alias `AsciiValue = int(0 to 127)` the message names, and
-     shv2's `__char_ascii` returns a bare `int`. The alias is declared in `stdlib/Character.maxon`,
-     a module shv2 cannot load, so it is answered the way `HashValue`/`Codepoint` are — by
-     `isSynthesizedIntAliasName`, which erases the name to `integer` and DROPS the range. Giving a
-     synthesized alias its range is filed as its own rung in `IrInterface.isSynthesizedIntAliasName`'s
-     header, together with the two other silences it causes; the ranged-alias half of `otherwise` is
-     built and pinned by `ranged-typealias/error.otherwise-outside-ranged-return`. Under the marker
-     above this case FAILS "expected a compile error but compilation succeeded" — measured. -->
+<!-- MEASURED 2026-09-04: shv2 COMPILES `try c.asciiValue() otherwise -1` CLEAN, so a value outside its ranged
+     type's domain reaches the merge. The bootstrap refuses it. An `otherwise` fallback is not range-checked
+     against the try's result type here, and that is a soundness hole rather than a diagnostic gap. -->
 ### Otherwise value must be within ranged type bounds
 
 ```maxon
@@ -800,7 +784,6 @@ error E3005: specs/fragments/character-type/error.otherwise-out-of-range.test:4:
 ```
 
 <!-- test: match-escape-character -->
-<!-- P1.1 `match` -->
 ### Match with Escape Character Literals
 
 Character match patterns must correctly handle escape sequences like `'\n'`, `'\t'`, `'\r'`, and `'\\'`.

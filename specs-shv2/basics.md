@@ -69,16 +69,6 @@ error E3002: Function 'main' must return ExitCode
 ```
 
 <!-- disabled-test: disabled-marker-is-honored -->
-<!-- This case is the marker's OWN GATE, and it is the one case in the tree that must
-     stay disabled. Its expectation is DELIBERATELY WRONG: the program returns 0 and the
-     pin says 1, so if `disabled-test:` were ever ignored this case would RUN and take the
-     suite red — loudly, not silently. It also proves the second half of the contract, that
-     a disabled case mints NO `.test` golden, because `fragments/` stays clean across a
-     full run.
-     ⚠ The premise is a CONTRADICTION, never a missing feature. It used to be "shv2 has
-     no String yet, so it cannot compile", which went stale the moment P1.2 landed: the
-     program compiled and ran fine, so an ignored marker would have gone through GREEN and
-     the gate had been inert ever since. A wrong answer cannot go stale. -->
 ```maxon
 function main() returns ExitCode
 	return 0

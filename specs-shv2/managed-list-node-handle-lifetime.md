@@ -1016,7 +1016,8 @@ a heap string long enough not to be inline
 ```
 
 <!-- disabled-test: an-element-holding-a-handle-into-its-own-chain-leaks -->
-<!-- W138 review, MEASURED: exit 101. The retain cycle PLAN's W138 row named as the trap to measure before building, and it IS reachable: E4014 refuses `Cell -> CellNode -> Cell` in the type graph, but it does NOT traverse an EXISTENTIAL, so a `Backref`-typed field whose conformer holds the handle closes the loop. Controls: retargeting to a handle-free conformer exits with the tag and no leak, and a handle into a DIFFERENT chain exits with the tag and no leak — so the 101 is the cycle and not a refcount imbalance. FILED AS W144. Re-measured under the second W138 ruling (refcounted nodes): unchanged at 101, with both controls still clean, and the same cycle spelled WITHOUT a node handle (an existential holding the chain itself) leaks identically on a pre-W138 compiler — so this is a pre-existing class, not something either W138 design created -->
+<!-- MEASURED 2026-09-04: exit 101 where the case pins 1 — the LEAK GATE fires. The case is about an element
+     holding a handle into its own chain, and shv2 leaks it rather than reporting the cycle. -->
 A chain whose element can reach a handle into that same chain is a retain cycle, and refcounting cannot
 collect one. The type-graph cycle check (E4014) refuses the direct spelling and does not see this one.
 ```maxon

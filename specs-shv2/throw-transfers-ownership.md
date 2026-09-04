@@ -30,7 +30,6 @@ and the no-binding `otherwise` form decrefs once to release the transfer.
 ## Tests
 
 <!-- test: propagate-throw-through-local-struct -->
-<!-- ENABLED by #64 (P1.5, 2026-07-23): `run()` throws its own `pendingError` through a BORROWED `self`. The throw now transfers the box by RETAIN (`retainThrownField` increfs it, leaving the field slot intact) rather than the nulling MOVE an OWNED-LOCAL container uses — so the caller's box stays live and the refcount balances at one free, with no cross-call move tracking. Applies the #40 retain-promotion thesis to the throw error channel; see `boxed-union-field-throw-borrowed-self` below for the property that distinguishes it from a move (the caller re-reads the field after catching). Predecessors that had to land first: P1.4b wave 2c (the boxed-union struct FIELD — construct/reassign/scope-exit-drop/owned-local move-out) and #65 implicit-self (the bare `bump()` call in `run()`). -->
 ### Propagating a heap-allocated error through a function holding a local struct
 
 A function creates a local struct, calls a method that throws an

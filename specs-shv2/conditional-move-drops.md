@@ -470,7 +470,7 @@ end 'step'
 
 function run(k Code) returns ExitCode
 	var a = build(1)
-	let v = try step(k) otherwise (e) 'bad'
+	let v = try step(k) otherwise 'bad'
 		let u = a
 		print("handed={u}\n")
 		return 2
@@ -517,7 +517,7 @@ end 'step'
 
 function run(k Code) returns ExitCode
 	var a = build(1)
-	try step(k) otherwise (e) 'bad'
+	try step(k) otherwise 'bad'
 		let u = a
 		print("moved={u}\n")
 	end 'bad'

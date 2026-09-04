@@ -343,7 +343,6 @@ error E3008: specs/fragments/export-keyword/error.non-exported-function-cross-fi
 ```
 
 <!-- test: error.typealias-with-unknown-element-type -->
-<!-- shv2 raises its OWN registered code for this fact: E3011 `SemanticUnknownType` ("a named type resolves to no declared type") is what `docs/error-codes.txt` gives that meaning, and it is the code `TypeResolution` and both `as`-cast sites already raise for it. The oracle spends E2003 (`ParserExpectedType` — "a type was required here and the token stream had something else") because its parser reaches the fact first; using that number here would give one number two meanings. The anchor is the ARGUMENT's own first token rather than the oracle's one-past-the-end column. -->
 ```maxon
 typealias BadArray = Array with UnknownType
 
@@ -463,7 +462,6 @@ end 'main'
 ```
 
 <!-- test: error.non-exported-typealias-cross-file -->
-<!-- export visibility + E3062 unused-typealias -->
 ```maxon
 // --- file: types.maxon
 typealias InternalScore = int(0 to 100)

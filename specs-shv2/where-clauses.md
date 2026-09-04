@@ -1040,17 +1040,8 @@ error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be co
 ```
 
 <!-- disabled-test: witness-mutation-of-let-argument-refused -->
-<!-- P1.7a-witness-mutation: E3019 is never ASKED at a witness dispatch. `parseWitnessMethodOnValue`
-     fills `argImmutableNames` and discards it, because the mutation summary is keyed by CALLEE and a
-     witness dispatch has no single callee to ask — under dictionary-passing any conformer could be the
-     impl. Answering it needs a design ruling (mutability declared on the interface method, or the union
-     over every registered conformer), so it is a rung of its own, not a fix smuggled into 2b-vi.
-     MEASURED on `main` @153d04620 AND on this branch, identically: the program below compiles with NO
-     diagnostic and exits 9 — the `let` array really is grown, and the caller sees the grown array with
-     its count and elements intact. So this is an OVER-ACCEPTANCE, not a miscompile and not memory-
-     unsafe; that is why it could be deferred at all. The blame position below is the one the transitive
-     rule produces for the concrete case (`specs-shv2/parameter-mutation.md` transitive-let-array-error)
-     and is PROJECTED, not observed — no compiler emits it yet. Re-derive it when the rung lands. -->
+<!-- MEASURED 2026-09-04: shv2 COMPILES the program CLEAN where the case expects a refusal. A witness-dispatched
+     method that mutates through a `let` argument is not caught. -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1224,16 +1215,6 @@ nothing.
 IT DOES NOT GET DELETED.** It has two jobs and only the first one retires.
 
 <!-- test: where-clauses.error.witness-return-generic-instance -->
-<!-- interface-return-generic-instance: WHAT THE E3011 ACTUALLY IS, and what unblocks it. An interface
-     requirement's types are stored as rendered source strings and `renderDeclaredTypeName` spells a generic
-     instance as its CANONICAL INSTANCE NAME, but `Parser.interfaceReturnMaxonType` — which turns that string
-     back into a type at the dispatch — has no generic-instance arm: its `named` fallback interns
-     `Array_Integer` and the resolver has never heard of it.
-     ⚠ NO ORACLE: the bootstrap refuses this program in every declaration order with `E4006 Primitive type
-     'int' has no method named 'make'`, because it has no parse-time witness dispatch at all (it
-     monomorphizes). Unblocking it needs a canonical-instance-NAME -> `GenericInstanceId` door that
-     `ProgramSignatures` does not have, plus a ruling on how a witness dispatch adopts a MANAGED
-     generic-instance result — its own rung, not a line here. -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -2301,10 +2282,8 @@ end 'main'
 Using a type that doesn't implement Hashable as a Map key should produce a compile error:
 
 <!-- disabled-test: where-clauses.constraint-violation -->
-<!-- P1.x-Map: `Map`'s ASSOCIATED TYPES. MEASURED: `error E2055: <fragment>:9:20: Type 'Map' has no
-     associated types` — shv2 synthesizes no `Map`, so `Map with (NotHashable, Integer)` is refused
-     before any constraint is checked and the expected E3017 never gets the chance to fire. R8 does not
-     touch which types exist. -->
+<!-- MEASURED 2026-09-04: shv2 emits the pinned E3017 AND a second one for `Equatable`, the constraint `Hashable`
+     itself requires. One root cause, two lines — the transitive super-interface should not be reported separately. -->
 
 ```maxon
 
@@ -2329,12 +2308,6 @@ error E3017: specs/fragments/where-clauses/where-clauses.constraint-violation.te
 A user-defined generic type can use where clauses:
 
 <!-- test: where-clauses.user-defined -->
-<!-- ⚠ ENABLED BY A5o, BUT NOT FIXED BY IT — the disable was STALE. Its note recorded
-     `a member access 'value' on a 'int' value` for `h.item.value()`, i.e. the missing per-instance
-     field type at an instantiation site. A4i landed exactly that (`declaredSlotType` at
-     `instanceSubstitutedType`) and nobody re-ran the case. MEASURED both ways at A5o: exit 10 on the
-     PRE-A5o binary as well as the post one, so the credit belongs to the field-read retype, not to the
-     call-result one. This is what a disabled case costs — it pins nothing while it waits. -->
 
 ```maxon
 
@@ -2381,8 +2354,6 @@ end 'main'
 A type parameter can require multiple interface conformance:
 
 <!-- test: where-clauses.multiple-interfaces -->
-<!-- ⚠ The same stale disable as `where-clauses.user-defined`, one line further out, and re-measured
-     with it: exit 30 on the PRE-A5o binary too. -->
 
 ```maxon
 

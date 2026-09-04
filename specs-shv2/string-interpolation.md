@@ -1715,7 +1715,9 @@ Maxon's `String` doesn't overload `+`; string concatenation is done through inte
 of crashing in the binop constructor.
 
 <!-- disabled-test: error.plus-on-string -->
-<!-- ⚠ NOT A MISSING REFUSAL — A DIFFERENT ONE. MEASURED 2026-08-13 on this exact program: shv2 says `error E2004: …:4:12: Cannot operate on String and String`, canonical says `error E3005: …:5:12: operator '+' is not defined for type 'String'`. So the program IS refused, at the same column, and what differs is the CODE and the SENTENCE: shv2 reports it through the general binary-operand rule (`ParseError.nonNumericOperands`), canonical through a String-specific one. Giving `String` its own arm is a change to a diagnostic family pinned live by 20+ committed expectations across `bool-int-type-discipline`, `character-type`, `cross-file-signatures` and `generic-types` (`Cannot operate on <a> and <b>`), which is a rung of its own and is not what a format specifier unblocks. -->
+<!-- MEASURED 2026-09-04: `E2004: Cannot operate on String and String` where the pin is `E3005: operator '+' is not
+     defined for type 'String'`. Same verdict, and shv2's code and noun are both the wrong ones: this is a TYPE
+     rule, not an undefined name. -->
 ```maxon
 function main() returns ExitCode
 	let a = "foo"

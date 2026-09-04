@@ -3412,7 +3412,7 @@ function main() returns ExitCode
 	let bx = AlphaBox.create(Alpha.create(9))
 	if let got = try bx.fetch() 'ok'
 		print("v={got.a}\n")
-	end 'ok' else (e) 'bad'
+	end 'ok' else 'bad'
 		print("boom\n")
 	end 'bad'
 	return 0
@@ -3575,7 +3575,7 @@ end 'make'
 function forkTemp(f bool) returns Integer
 	if let got = try make(f).fetch() 'ok'
 		return got.a
-	end 'ok' else (e) 'bad'
+	end 'ok' else 'bad'
 		return 1
 	end 'bad'
 end 'forkTemp'

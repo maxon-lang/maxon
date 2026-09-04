@@ -260,7 +260,6 @@ end 'main'
 ```
 
 <!-- test: ranges.character-range -->
-<!-- ⭐ A GENUINE `Character` RANGE — re-measured 2026-08-05 (A5m-ab), and every claim the old note carried is now false. It said shv2 had no `Character` type and that a char literal was an INT, so this case passed only because it COUNTS iterations and `'a'..'z'` as codepoints counts 26 the same way, and that it was "left disabled deliberately" — while the marker above already read `test:`. All three are gone: `Character` exists, every character literal materializes as one (`Parser.parseCharLiteral`), and `parseForStatement` builds a real Character range (both bounds coerced to codepoints through `integerizedOperand`, the ELEMENT minted per trip by `__char_from_cp`). The trip count is still 26; its twin `character-range-print`, which looks at the VALUE, is the one that pins the element type -->
 ```maxon
 function main() returns ExitCode
 		var count = 0
@@ -275,16 +274,6 @@ end 'main'
 ```
 
 <!-- test: ranges.character-range-print -->
-<!-- ⭐⭐ THE CASE THAT PINS THE ELEMENT TYPE, and it now reads what the spec wants — re-measured
-     2026-08-05 (A5m-ab). Under the WIDTH RULE `'a' to 'e'` was a range of INTEGERS: a single-byte
-     character literal materialized as an integer literal (`decodeCharLiteral`'s `byte` arm), so the loop
-     variable was an int and printed as one — measured at P1.8 Slice E as `97 98 99 100 101` where the
-     spec wants `a b c d e`. The unblock condition that note named — a range whose ELEMENT TYPE is
-     `Character` — is what A5m-ab built: `Parser.parseForStatement` reads BOTH bounds' tags before
-     coercing, and a pair of character literals makes a CHARACTER range (`isCharacterRange`). The bounds
-     go through the ordinary `integerizedOperand` door to become codepoints, so the loop is the counted
-     integer range it always was, and the ELEMENT is minted per trip from the counter by
-     `__char_from_cp`. ⚠ BOTH bounds or neither: `for i in 'a' to n` is an integer range from 97 -->
 ```maxon
 function main() returns ExitCode
 		for c in 'a' to 'e' 'loop'
@@ -304,8 +293,7 @@ d
 e
 ```
 
-<!-- disabled-test: ranges.create-iterator -->
-<!-- MEASURED 2026-08-06 (BATCH32), flipped and run: `error E2010: Expected ')' but got 'upto'` at 3:19. The blocker is a PARSER restriction (a range is not accepted as a parenthesised/value operand); the first-class `Range` VALUE + iterator protocol sits BEHIND it and stays unmeasured, because the parse never reaches it. NOT the tuple gap: `specs-shv2/tuples.md` runs 44/44. -->
+<!-- test: ranges.create-iterator -->
 A range used outside a for-in header is a first-class value with `createIterator()`.
 ```maxon
 function main() returns ExitCode
@@ -321,8 +309,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: ranges.inclusive-create-iterator -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'to'` at 3:19, the same parser restriction as `ranges.create-iterator` in the inclusive spelling. NOT the tuple gap. -->
+<!-- test: ranges.inclusive-create-iterator -->
 `to` produces an inclusive Range — `createIterator()` visits the endpoint.
 ```maxon
 function main() returns ExitCode
@@ -338,8 +325,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: ranges.with-iterator -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'upto'` at 3:24. The previous reason blamed tuples (`withIterator()` yields `(Iterator, Element)`); shv2 HAS tuples and this case never reaches them, stopping at the same parser restriction as its siblings. -->
+<!-- test: ranges.with-iterator -->
 `(start upto end).withIterator()` exposes the underlying iterator inside the loop.
 ```maxon
 function main() returns ExitCode
@@ -358,8 +344,7 @@ end 'main'
 2:12
 ```
 
-<!-- disabled-test: ranges.empty-create-iterator-throws -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'upto'` at 3:19, the same parser restriction. NOT the tuple gap. -->
+<!-- test: ranges.empty-create-iterator-throws -->
 An empty exclusive range fails to construct an iterator.
 ```maxon
 function main() returns ExitCode
@@ -371,8 +356,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: ranges.empty-inclusive-create-iterator-throws -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'to'` at 3:19, the same parser restriction. NOT the tuple gap. -->
+<!-- test: ranges.empty-inclusive-create-iterator-throws -->
 An empty inclusive range (end < start) also throws.
 ```maxon
 function main() returns ExitCode
@@ -384,8 +368,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: ranges.let-binding -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E2001: unexpected token: 'upto'` at 3:13, a range is not a value the binder accepts. Same restriction one door over. NOT the tuple gap. -->
+<!-- test: ranges.let-binding -->
 A range can be bound to a variable and iterated via the standard for-in path.
 ```maxon
 function main() returns ExitCode

@@ -137,7 +137,6 @@ end 'main'
 
 
 <!-- test: basic-with-stdlib-ir -->
-<!-- IncludeStdlibIr -->
 ```maxon
 function main() returns ExitCode
 	let result = Math.pow(2.0, exponent: 3.0)

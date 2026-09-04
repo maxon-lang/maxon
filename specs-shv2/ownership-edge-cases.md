@@ -1248,7 +1248,6 @@ end 'main'
 ```
 
 <!-- test: rc-char-single-alloc-freed -->
-<!-- beyond P1.2: Character type not yet in shv2 -->
 Single character allocated and freed in the same function scope; Character + child __ManagedMemory both cleaned up.
 ```maxon
 function main() returns ExitCode
@@ -1261,7 +1260,6 @@ end 'main'
 ```
 
 <!-- test: rc-char-alias-incref -->
-<!-- beyond P1.2: Character type not yet in shv2 -->
 Aliasing a character increfs it; both variables share the same Character object.
 ```maxon
 function main() returns ExitCode
@@ -1275,7 +1273,6 @@ end 'main'
 ```
 
 <!-- test: rc-char-reassign-decrefs-old -->
-<!-- beyond P1.2: Character type not yet in shv2 -->
 Reassigning a character var decrefs and frees the old Character (with its managed child) before storing the new one.
 ```maxon
 function main() returns ExitCode
@@ -1289,7 +1286,6 @@ end 'main'
 ```
 
 <!-- test: rc-char-return-transfers-ownership -->
-<!-- beyond P1.2: Character type not yet in shv2 -->
 Returning a character from a function transfers ownership to the caller.
 ```maxon
 function makeChar() returns Character
@@ -1306,7 +1302,6 @@ end 'main'
 ```
 
 <!-- test: rc-char-inner-block-freed -->
-<!-- beyond P1.2: Character type not yet in shv2 -->
 A character created in an inner if-block is freed when that block exits.
 ```maxon
 function main() returns ExitCode
@@ -1323,7 +1318,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-primitive-freed -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 A tuple of primitives is heap-allocated and freed at scope exit.
 ```maxon
 function main() returns ExitCode
@@ -1336,7 +1330,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-alias-incref -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Aliasing a tuple increfs it; both variables share the same tuple object.
 ```maxon
 function main() returns ExitCode
@@ -1350,7 +1343,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-reassign-decrefs-old -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Reassigning a tuple var decrefs the old tuple before storing the new one.
 ```maxon
 function main() returns ExitCode
@@ -1364,7 +1356,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-with-string-freed -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 A tuple containing a managed type (String); the destructor must cascade to decref the String field.
 ```maxon
 function main() returns ExitCode
@@ -1377,7 +1368,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Returning a tuple hands the caller a fully-owned value, with no reference left behind for
 either side to release twice or forget to release once.
 
@@ -1404,7 +1394,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-destructuring-cleanup -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Destructuring a tuple frees the tuple wrapper while the bindings remain live.
 ```maxon
 function main() returns ExitCode
@@ -1418,7 +1407,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-with-struct-freed -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 A tuple containing a user-defined struct; the destructor cascades through the tuple into the struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1468,7 +1456,6 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-return-destructure-no-crash -->
-<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Returning a tuple from a function and destructuring it must not crash. Currently the cleanup code attempts to decref the already-freed tuple, causing a segfault.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1630,7 +1617,6 @@ end 'main'
 ```
 
 <!-- test: rc-char-to-string-interpolation -->
-<!-- beyond P1.2: Character type not yet in shv2 -->
 Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
 ```maxon
 function main() returns ExitCode
@@ -1648,7 +1634,6 @@ A
 ```
 
 <!-- test: rc-match-char-range-cleanup -->
-<!-- beyond P1.2: Character type not yet in shv2 -->
 Using character range patterns in a match statement must clean up all allocated Characters. Currently the range bound Characters leak.
 ```maxon
 function main() returns ExitCode

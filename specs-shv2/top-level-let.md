@@ -362,8 +362,7 @@ end 'main'
 92
 ```
 
-<!-- disabled-test: from-literal-initializer -->
-<!-- MEASURED 2026-08-06 (BATCH32 review), flipped and run: `error E2004: <fragment>:1:12: Undefined constant 'FilePath'`. The previous reason named a P1.2 String gap and was FALSE on every count — the SAME two lines inside a function compile and print `test.txt` (probed), so `from`, `print` and `.toString()` all work. The blocker is MODULE SCOPE alone: the global-constant folder has no `Type from "literal"` construction, so it reads `FilePath` as a constant NAME and finds none. It sits with this file's other module-scope initializer gaps, not with String. -->
+<!-- test: from-literal-initializer -->
 Top-level let with `Type from "literal"` syntax (runtime-initialized via `__module_init`).
 ```maxon
 let path = FilePath from "test.txt"
@@ -435,7 +434,8 @@ export let ROOT = 10
 ```
 
 <!-- disabled-test: error.circular-dependency-cross-file -->
-<!-- MEASURED 2026-08-06 (BATCH32): the cycle IS detected — `error E2012: api/<fragment>:10:12: Circular dependency detected among global constants: A, B` — but shv2 emits ONE of canonical's two diagnostics. Canonical folds each file in its own perspective, so each participating file reports the cycle from its own side (`B, A` from `app/main.maxon` as well); shv2 folds the whole program once and reports the cycle once. How many times one cycle is worth reporting is a diagnostic-multiplicity ruling, not a missing detection. -->
+<!-- MEASURED 2026-09-04: shv2 reports the cycle ONCE, from the file that closed it; the pin carries TWO E2012
+     lines, one per participating file. Whether a cycle is reported per file or per cycle is a ruling. -->
 A cycle among top-level constants is reported as a circular dependency even when the cycle spans
 files. Each participating file folds its own constants, so each reports the cycle it is in, naming
 the file that closes it from that file's side. Before constant resolution became order-independent

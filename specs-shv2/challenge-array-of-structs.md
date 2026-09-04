@@ -66,8 +66,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: array-of-structs-with-enum-field -->
-<!-- `.rawValue` through a FIELD CHAIN (`item.color.rawValue`) — shv2 refuses a further field access on a scalar-typed field (E2015); an enum-field-access gap, orthogonal to arrays -->
+<!-- test: array-of-structs-with-enum-field -->
 ```maxon
 // Regression test: structs with enum fields stored correctly in arrays
 // Previously, 8-byte structs were stored by pointer instead of by value

@@ -716,7 +716,6 @@ end 'main'
 ```
 
 <!-- test: static-var-bool-adjacent-globals -->
-<!-- P1.2 String — the `print` builtin -->
 Bool global followed by non-zero global must not bleed adjacent data.
 
 ```maxon
@@ -2062,7 +2061,6 @@ error E2013: <fragment>:5:2: cannot assign to immutable variable: 'origin'
 ```
 
 <!-- test: top-level-let-struct-reassign-error -->
-<!-- P1.1 structs — the `let` holds a `Point.create(...)`, a runtime initializer -->
 Reassigning an immutable top-level `let` struct variable should error.
 ```maxon
 typealias SmallInt = int(0 to u8.max)

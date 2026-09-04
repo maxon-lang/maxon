@@ -216,7 +216,10 @@ not interchangeable. Passing the wrong one is always a mistake, and is rejected
 rather than reinterpreted.
 
 <!-- disabled-test: builtins-type.error.bits-to-float-float-arg -->
-<!-- E3005 voice: shv2 says "'__Builtins.bitsToFloat' requires a int, but its argument is float" at the CALLEE column; the oracle says "type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'float'" at the ARGUMENT column. Same verdict, same code, different voice — aligning `ParseError.builtinOperandType` moves every `__Builtins.*` and `subp*` refusal at once and is pinned by builtins-clock.md, builtins-sleep.md, console-stdin.md and process-executable-path.md, so it is its own rung -->
+<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
+     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
+     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
+     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
 A `float` argument to `bitsToFloat` is almost always a `floatToBits` that was
 meant instead.
 ```maxon
@@ -230,7 +233,10 @@ error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-flo
 ```
 
 <!-- disabled-test: builtins-type.error.bits-to-float-managed-arg -->
-<!-- E3005 voice: shv2 says "'__Builtins.bitsToFloat' requires a int, but its argument is float" at the CALLEE column; the oracle says "type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'float'" at the ARGUMENT column. Same verdict, same code, different voice — aligning `ParseError.builtinOperandType` moves every `__Builtins.*` and `subp*` refusal at once and is pinned by builtins-clock.md, builtins-sleep.md, console-stdin.md and process-executable-path.md, so it is its own rung -->
+<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
+     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
+     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
+     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
 A managed value is a heap pointer, and a heap pointer is not a float's bit
 pattern. This one matters most: the pointer shares the integer representation,
 so before the check existed this program compiled clean and bitcast the String's
@@ -246,7 +252,10 @@ error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-man
 ```
 
 <!-- disabled-test: builtins-type.error.bits-to-float-bool-arg -->
-<!-- E3005 voice: shv2 says "'__Builtins.bitsToFloat' requires a int, but its argument is float" at the CALLEE column; the oracle says "type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'float'" at the ARGUMENT column. Same verdict, same code, different voice — aligning `ParseError.builtinOperandType` moves every `__Builtins.*` and `subp*` refusal at once and is pinned by builtins-clock.md, builtins-sleep.md, console-stdin.md and process-executable-path.md, so it is its own rung -->
+<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
+     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
+     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
+     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
 ```maxon
 function main() returns ExitCode
 	let v = __Builtins.bitsToFloat(true)
@@ -258,7 +267,10 @@ error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-boo
 ```
 
 <!-- disabled-test: builtins-type.error.float-to-bits-int-arg -->
-<!-- E3005 voice: shv2 says "'__Builtins.bitsToFloat' requires a int, but its argument is float" at the CALLEE column; the oracle says "type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'float'" at the ARGUMENT column. Same verdict, same code, different voice — aligning `ParseError.builtinOperandType` moves every `__Builtins.*` and `subp*` refusal at once and is pinned by builtins-clock.md, builtins-sleep.md, console-stdin.md and process-executable-path.md, so it is its own rung -->
+<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
+     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
+     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
+     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
 The mirror rejection: `floatToBits` takes the float, not the pattern.
 ```maxon
 function main() returns ExitCode

@@ -485,10 +485,11 @@ end 'main'
 <!-- test: a-closure-with-a-block-keyword-parameter-inside-an-arm-body -->
 A closure literal inside a match arm spells `function (…) gives`, which is the shape of a payload-carrying
 case arm — so the walk's name verdict for that `function` token is "a name", and it must STILL record the
-closure's parameters as declared names: `while` here is a parameter, not the opener of a block that never
+closure's parameters as declared names: `if` here is a parameter, not the opener of a block that never
 closes. Miscounted, the sweep's depth never returns to zero and the union declared after `classify` is
-lost. (An unread closure parameter is not refused; a bare read of a block keyword is —
-`keyword-as-a-declared-name.md` — so the parameter stays unread.)
+lost. The parameter is also READ, which E3012 requires of every closure parameter: `if` is one of the two
+block keywords a bare read is legal for, because their position tests already answer no for an operand
+(`keyword-as-a-declared-name.md`).
 ```maxon
 typealias Idx = int(0 to 100)
 typealias Step = function(Idx) returns Idx
@@ -504,7 +505,7 @@ end 'apply'
 
 function classify(m Marker, seed Idx) returns Idx
 	var total = match m 'm'
-		function gives apply(function(while Idx) gives 38, x: seed)
+		function gives apply(function(if Idx) gives 33 + if, x: seed)
 		other gives 0
 	end 'm'
 

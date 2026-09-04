@@ -364,7 +364,6 @@ error E2026: specs/fragments/enum-match-exhaustive/error.enum-not-exhaustive.tes
 ```
 
 <!-- test: error.union-not-exhaustive -->
-<!-- The diagnostic must say "union", not "enum" — shv2 reads the kind word from EnumLayout.kindWord(). The bootstrap hardcodes "enum" here (a documented oracle divergence), so this case is shv2-authored, not a /specs port. -->
 ```maxon
 union Shape
 	circle
@@ -385,7 +384,6 @@ error E2026: specs/fragments/enum-match-exhaustive/error.union-not-exhaustive.te
 ```
 
 <!-- test: error.enum-not-exhaustive-lists-every-missing-case -->
-<!-- ⚠ THE ONLY CASE THAT PINS THE SEPARATOR. Every other `missing:` golden in this suite names exactly ONE case, so the `", "` that joins them (`Parser.appendCommaSeparated`) is unreachable from them — a join that punctuated the list any other way, or that dropped the first or last entry, would leave the whole suite green. Three missing cases, not two, so an off-by-one in the join shows up as a wrong list rather than a plausible one. -->
 ```maxon
 enum Color
 		red

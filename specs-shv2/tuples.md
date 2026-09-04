@@ -181,7 +181,6 @@ end 'main'
 ```
 
 <!-- test: for-destructuring-map -->
-<!-- needs `Map`, which is the FOLLOW-ON rung: `MapIterator.current()` returns a genuine tuple, so Map is sequenced AFTER tuples and cannot be unlocked here. Not a tuple gap. -->
 ```maxon
 function main() returns ExitCode
 	let m = ["a": 10, "b": 32]
@@ -197,7 +196,8 @@ end 'main'
 ```
 
 <!-- disabled-test: small-tuple-return-allocates-nothing -->
-<!-- needs the TWO-REGISTER VALUE-TUPLE ABI, which is the FOLLOW-ON rung. shv2 has NO multi-register or hidden-pointer return path on any target (one GPR, R8/x0, every aggregate a heap pointer), so the register-pair return is a new calling convention on x64 + arm64 + wasm, not a pass. Every other tuple case asserts an exit code, which heap-allocated tuples satisfy — v1 ships tuples heap-always and passes them. ⚠ The mm-trace half is NO LONGER a blocker: capture mode landed with `/spec-port mm-trace`, and `for-in-over-map-allocates-no-tuple` below carries a live ```mm-trace golden. That golden records one heap `__Tuple2` per iteration, which is this same ABI gap seen from the other side. -->
+<!-- MEASURED 2026-09-04: ```mm-trace mismatch — shv2's allocation trace for a small tuple return does not match
+     the pinned sequence. The case is about a tuple returned in registers allocating nothing. -->
 <!-- MmTrace -->
 A returned tuple of exactly two primitive fields totalling <= 16 bytes is a VALUE: it comes back
 in two registers rather than a heap record, so the call allocates nothing. The only allocation
@@ -370,7 +370,6 @@ end 'main'
 ```
 
 <!-- test: for-in-over-map-allocates-no-tuple -->
-<!-- needs `Map`, which is the FOLLOW-ON rung: `MapIterator.current()` returns a genuine tuple, so Map is sequenced AFTER tuples and cannot be unlocked here. Not a tuple gap. -->
 ⛔⛔ **THE ALLOCATION PROPERTY THIS CASE IS NAMED FOR WAS PINNED BY NOTHING FROM THE DAY IT WAS PORTED,
 AND IS PINNED AGAIN NOW.** It arrived carrying a `<!-- MmTrace -->` directive and an ```mm-trace block
 listing every allocation the Map machinery makes, and its own prose said *"the golden is the pin"* — but
@@ -525,10 +524,6 @@ end 'main'
 ```exitcode
 2
 ```
-
-<!-- The cases below are shv2's OWN, appended after the byte-identical port of `/specs/tuples.md` above. -->
-<!-- Each pins a construct this rung ENABLES that the ported half does not reach: the lexer's tuple-index -->
-<!-- rule, the two element shapes v1 paid for, the injective name join, and the rejections. -->
 
 <!-- test: nested-tuple-chained-access -->
 `t.0.1` reaches the second element of a NESTED tuple. It is the case the lexer had to be taught: a

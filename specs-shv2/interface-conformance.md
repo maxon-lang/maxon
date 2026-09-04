@@ -362,7 +362,9 @@ end 'main'
 ```
 
 <!-- disabled-test: builtin-interface-user-code -->
-<!-- P1.7a-s2: generic type params (`uses Element`) + `__ManagedMemory` + the `BuiltinArrayLiteral` builtin interface -->
+<!-- MEASURED 2026-09-04: `E3005: Cannot return 'ByteArray' from function declared to return
+     'MyCollection_Te051b2272b3afaf0'`. A user interface instantiated over a builtin container does not accept the
+     builtin's own instance as a conformer at the return door. -->
 ```maxon
 type MyCollection uses Element implements BuiltinArrayLiteral
 	var managed as __ManagedMemory
@@ -533,7 +535,6 @@ error E3012: specs/fragments/interface-conformance/non-interface-method-on-confo
 
 
 <!-- test: interface-method-local-var-still-errors -->
-<!-- E3012 exists for PARAMETERS (ff9c825fa) but not yet for LOCALS, and this case asserts the LOCAL half — an unused `let` inside an interface method, which the waiver must not cover. Unblocked by `unused-variables.md` (whitelist 170), not by this file. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

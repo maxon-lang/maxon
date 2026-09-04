@@ -201,13 +201,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: sizeof.byte -->
-<!-- WRONG ANSWER, NOT A MISSING FEATURE — board row `S2v`. shv2 answers 8; canonical and the C#
-     oracle both answer 1. It is not a `byte` special case: shv2 reports a MACHINE WORD for every
-     ranged type (`byte` 8, `int(0 to 255)` 8, `ExitCode` 8, `int(i64.min to i64.max)` 8) where the
-     oracle reports the STORAGE width (1, 1, 4, 8). Only `bool` agrees, at 1.
-     `LayoutDescriptor.maxon:296-301` documents the machine-word answer as deliberate — which is why
-     this is filed for a ruling-grade rung and not patched here. Re-enable at `S2v`. -->
+<!-- test: sizeof.byte -->
 ```maxon
 function main() returns ExitCode
 	return sizeof(byte)

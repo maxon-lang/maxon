@@ -1646,7 +1646,6 @@ error E3005: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-container-errors -->
-<!-- P1.5-A2 (closures + escape) -->
 A CONTAINER's element block is heap memory that outlives the frame, so a capturing closure
 put into an array or map literal is refused at the element that carries the environment.
 ```maxon
@@ -1972,7 +1971,6 @@ end 'main'
 
 <!-- test: first-class-function.capturing-closure-bound-outside-loop-called-inside -->
 <!-- targets: arm64-macos, arm64-linux, wasm32-wasi -->
-<!-- x64 OMITTED — a REGISTER-POOL restriction, the only kind of technical reason a marker may state: this exact two-int interpolation in a loop (`print("i={i} -> {r}\n")` + `acc = acc + r`) needs 18 simultaneously-live values > x64's 14-register pool, so BOTH x64 targets refuse it at compile time with E5001. A PRE-EXISTING x64 register-allocator / interpolation-lowering limit, PROVEN closure-independent (the same body with a plain `let r = i + 5` instead of a closure E5001s identically), and its own interpolation-pressure rung. Everything with a wider pool runs it: AAPCS64's 30-register file holds the same 18 values with room to spare (measured on arm64-macos — exit 35, all five stdout lines), and wasm's stack machine has no register cap at all. x64 env-drop-timing is covered by `-rebound-in-loop` and `-called-from-nested-block`, both green there. -->
 The shape people actually write, and the one the two tests around it both miss: the closure is
 bound OUTSIDE the loop and called INSIDE it, so ONE environment must survive being read on many
 iterations. `capturing-closure-rebound-in-loop` binds afresh each iteration and never carries an
@@ -3548,7 +3546,7 @@ end 'useEater'
 
 function main() returns ExitCode
 	let mk = function() gives Color.blue
-	let et = function(c Color) gives 40
+	let et = function(c Color) gives 40 if c == Color.green else 0
 	print("{useMaker(mk)} {useEater(et)}\n")
 	return 0
 end 'main'

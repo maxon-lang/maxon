@@ -28,7 +28,9 @@ binding retains its type and can be used normally.
 ## Tests
 
 <!-- disabled-test: error.dispatch-interface-payload -->
-<!-- interface types — shv2 has none (`interface Speaker` is E3011 Unknown type 'Speaker'), so there is no interface-typed payload to refuse and shv2 claims no E4006 -->
+<!-- MEASURED 2026-09-04: shv2 refuses the DECLARATION (`E2015` at the payload, with the fat-pointer reason) where
+     the pin refuses the DISPATCH (`E4006` at the use). shv2's refusal is earlier and better-reasoned; which site
+     the language blames is a ruling. -->
 Binding an interface-typed union payload and dispatching a method on it is
 rejected with E4006 — the binding has no witness to dispatch against.
 ```maxon

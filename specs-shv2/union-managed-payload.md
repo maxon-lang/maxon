@@ -397,8 +397,9 @@ a returned-arm payload string, long enough to be a real heap allocation
 
 <!-- test: borrowed-bind-in-an-arm-that-breaks -->
 The third arm exit: a `break` out of an enclosing loop drops the retained binding
-through the LOOP's floor. The arm binds but never prints, so nothing but the leak gate
-can tell the drop happened — which is exactly the point.
+through the LOOP's floor. An arm is ONE statement, so a `break` cannot also read its
+binding — the arm reads it and falls through to the arm that breaks, which is the same
+exit edge. Nothing but the leak gate can tell the drop happened.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Round = int(0 to 100)
@@ -410,14 +411,15 @@ end 'M'
 
 function show(m M) returns Integer
 	var i = 0 as Round
+	var seen = 0 as Integer
 	while i < 10 'spin'
 		match m 'k'
-			silent then return 0
-			text(s) then break 'spin'
+			text(s) then seen = s.byteLength() and fallthrough
+			silent then break 'spin'
 		end 'k'
 		i = i + 1
 	end 'spin'
-	return 5
+	return 5 if seen > 0 else 0
 end 'show'
 
 function main() returns ExitCode
@@ -482,7 +484,7 @@ end 'R'
 function first(r R) returns String
 	return match r 's'
 		one(a) gives a
-		three(a, b, c) gives a
+		three(a, b, c) gives a if b.byteLength() > 0 and c.byteLength() > 0 else ""
 	end 's'
 end 'first'
 
@@ -755,11 +757,11 @@ function mixed(borrowed M) returns Integer
 	let owned = M.text("a locally built payload string long enough for the heap")
 	let a = match owned 'o'
 		silent gives 0
-		text(s) gives 1
+		text(s) gives 1 if s.byteLength() > 0 else 0
 	end 'o'
 	let b = match borrowed 'b'
 		silent gives 0
-		text(t) gives 2
+		text(t) gives 2 if t.byteLength() > 0 else 0
 	end 'b'
 	return a + b
 end 'mixed'
@@ -823,7 +825,7 @@ function scan(m M) returns Integer
 	while i < 5 'spin'
 		let n = match m 'k'
 			silent gives 0
-			text(s) gives 1
+			text(s) gives 1 if s.byteLength() > 0 else 0
 		end 'k'
 		if n == 0 'stop'
 			return 0
@@ -863,14 +865,14 @@ end 'M'
 function inner(m M) returns Integer
 	return match m 'k'
 		silent gives 0
-		text(s) gives 3
+		text(s) gives 3 if s.byteLength() > 0 else 0
 	end 'k'
 end 'inner'
 
 function outer(m M) returns Integer
 	let first = match m 'k'
 		silent gives 0
-		text(s) gives 4
+		text(s) gives 4 if s.byteLength() > 0 else 0
 	end 'k'
 	return first + inner(m)
 end 'outer'
@@ -906,7 +908,7 @@ end 'M'
 function pick(m M) returns String
 	return match m 'k'
 		one(a) gives a
-		two(b) gives "a rebuilt literal give long enough to be a heap string"
+		two gives "a rebuilt literal give long enough to be a heap string"
 		none gives "a third literal give also long enough to be a heap string"
 	end 'k'
 end 'pick'
@@ -948,7 +950,7 @@ function both(o Outer, i Inner) returns Integer
 		blank gives 0
 		holds(label) gives match i 'y'
 			quiet gives 1
-			loud(word) gives 2
+			loud(word) gives 2 if word.byteLength() > 0 and label.byteLength() > 0 else 0
 		end 'y'
 	end 'x'
 end 'both'
@@ -982,7 +984,7 @@ function depth(m M) returns Integer
 		silent gives 0
 		text(s) gives match m 'again'
 			silent gives 1
-			text(t) gives 6
+			text(t) gives 6 if t.byteLength() > 0 and s.byteLength() > 0 else 0
 		end 'again'
 	end 'k'
 end 'depth'
@@ -1012,7 +1014,7 @@ end 'M'
 function peek(m M) returns Integer
 	return match m 'k'
 		silent gives 0
-		text(s) gives 11
+		text(s) gives 11 if s.byteLength() > 0 else 0
 	end 'k'
 end 'peek'
 
@@ -1132,7 +1134,7 @@ end 'B'
 function both(a A, b B) returns Integer
 	let x = match a 'x'
 		none gives 0
-		one(s) gives 5
+		one(s) gives 5 if s.byteLength() > 0 else 0
 	end 'x'
 	let y = match b 'y'
 		none gives 0
@@ -1739,15 +1741,16 @@ end 'M'
 function show(m M) returns Integer
 	var i = 0 as Round
 	var n = 0 as Integer
+	var seen = 0 as Integer
 	while i < 200 'spin'
 		i = i + 1
 		match m 'k'
-			silent then n = n + 1
-			text(s) then continue
+			text(s) then seen = s.byteLength() and fallthrough
+			silent then continue
 		end 'k'
 		n = n + 2
 	end 'spin'
-	return n
+	return n if seen > 0 else 99
 end 'show'
 
 function main() returns ExitCode
@@ -1781,11 +1784,12 @@ union M
 end 'M'
 
 function show(m M) returns Integer throws Boom
+	var seen = 0 as Integer
 	match m 'k'
-		silent then return 0
-		text(s) then throw Boom.bad
+		text(s) then seen = s.byteLength() and fallthrough
+		silent then throw Boom.bad
 	end 'k'
-	return 3
+	return 3 if seen > 0 else 0
 end 'show'
 
 function main() returns ExitCode
@@ -1819,15 +1823,16 @@ end 'M'
 function show(m M) returns Integer
 	var i = 0 as Round
 	var n = 0 as Integer
+	var seen = 0 as Integer
 	while i < 200 'spin'
 		match m 'k'
-			silent then n = n + 1
-			text(s) then break 'k'
+			text(s) then seen = s.byteLength() and fallthrough
+			silent then break 'k'
 		end 'k'
 		n = n + 7
 		i = i + 1
 	end 'spin'
-	return n
+	return n if seen > 0 else 0
 end 'show'
 
 function main() returns ExitCode
@@ -1951,7 +1956,7 @@ end 'UHold'
 function main() returns ExitCode
 	let u = UHold.holds(BoxA.create(1))
 	match u 'm'
-		holds(inner) then return 6
+		holds(inner) then return 6 if inner.label.byteLength() > 0 else 0
 	end 'm'
 end 'main'
 ```

@@ -615,7 +615,7 @@ end 'makeWrap'
 function pick() returns Wide
 	let w = makeWrap()
 	let xs = match w 'k'
-		held(h) gives A
+		held(h) gives A if h.name.byteLength() > 0 else B
 		nothing gives B
 	end 'k'
 	return try xs.get(0) otherwise 0

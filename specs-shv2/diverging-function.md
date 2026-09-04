@@ -103,7 +103,7 @@ function drain(fail bool) returns Integer throws DrainError
 end 'drain'
 
 function main() returns ExitCode
-	let lines = try drain(false) otherwise (e) 'workerDied'
+	let lines = try drain(false) otherwise 'workerDied'
 		abortOnDeadWorker(7)
 	end 'workerDied'
 	return lines + 1
@@ -136,7 +136,7 @@ function drain(fail bool) returns Integer throws DrainError
 end 'drain'
 
 function main() returns ExitCode
-	let lines = try drain(true) otherwise (e) 'workerDied'
+	let lines = try drain(true) otherwise 'workerDied'
 		abortOnDeadWorker(7)
 	end 'workerDied'
 	return lines + 1

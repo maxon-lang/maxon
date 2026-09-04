@@ -443,7 +443,9 @@ end 'main'
 ```
 
 <!-- disabled-test: error.associated-value-positional-second-arg -->
-<!-- shv2 REFUSES this program, with its OWN registered code and wording: `E2053` "the second and later arguments must be named ('name: value')", anchored on the offending ARGUMENT (:11:31) rather than on the call (:11:11). Same rule, same program refused — a code/anchor difference, not a missing check. Aligning the two on one number and one anchor is a diagnostic-parity rung, not this one. -->
+<!-- MEASURED 2026-09-04: shv2 refuses it as `E2053: the second and later arguments must be named ('name: value')`
+     where the pin is `E3005: Second and subsequent arguments must be named`. Same rule, a dedicated CODE against a
+     general one — a ruling, not a gap. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -463,7 +465,9 @@ error E3005: specs/fragments/enum-full/error.associated-value-positional-second-
 ```
 
 <!-- disabled-test: error.associated-value-unknown-param -->
-<!-- shv2 REFUSES this program with a CORRECT diagnostic in different words: `E3018` "type 'TwoParts' has no field named 'z'", at the oracle's own :11:31. The oracle spends `E3003` ("unknown parameter name: 'z'") because it reads a payload label as a call parameter; shv2 reads it as the payload FIELD it is. A code/wording difference, not a missing check — diagnostic parity is its own rung. -->
+<!-- MEASURED 2026-09-04: shv2 answers `E3018: type 'TwoParts' has no field named 'z'` where the pin is `E3003:
+     unknown parameter name: 'z'`. A union case's payload parameters are not FIELDS, so shv2's noun is wrong here
+     even though its verdict is right. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -885,7 +889,8 @@ error E3034: specs/fragments/enum-full/error.unknown-enum-case.test:8:11: unknow
 ```
 
 <!-- disabled-test: error.associated-value-wrong-count -->
-<!-- shv2 REFUSES this program at the FIRST rule it breaks: `Result.success(1, 2)` writes an unlabelled second argument, so `E2053` "the second and later arguments must be named" fires (:11:29) before any count check. The oracle refuses it for the identical reason under `E3005`. A code/anchor difference, not a missing check. -->
+<!-- MEASURED 2026-09-04: `E2053` against the pinned `E3005`, exactly as
+     `error.associated-value-positional-second-arg` — one ruling covers both. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1012,7 +1017,9 @@ end 'main'
 ```
 
 <!-- disabled-test: error.match-enum-wrong-binding-count -->
-<!-- shv2 REFUSES this program with the right FACT under the catch-all code: `E2015` "case 'value' of `union Container` binds more payloads than the 1 it declares" (:12:12). `E3035` `SemanticEnumBindingCountMismatch` is the registered code for exactly that fact and shv2 does not yet claim it — promoting the refusal from E2015 to its own code is a diagnostic-parity rung. -->
+<!-- MEASURED 2026-09-04: shv2 answers `E2015 Unsupported: case 'value' of `union Container` binds more payloads
+     than the 1 it declares` where the pin is `E3035: wrong binding count`. The message is the better one and the
+     CODE is the wrong band: E2015 says the compiler cannot do this, and this program is simply wrong. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1361,8 +1368,7 @@ end 'main'
 error E3034: specs/fragments/enum-full/error.fromRawValue-associated-values.test:11:15: unknown union case: 'fromRawValue'
 ```
 
-<!-- disabled-test: enum-member-constant -->
-<!-- A `let` CONSTANT member inside an enum body (`let Default = Color.Green`). The enum body reads only cases and, since D1, methods; a member constant is `E2010` at the parse. -->
+<!-- test: enum-member-constant -->
 ```maxon
 enum Color
 	Red

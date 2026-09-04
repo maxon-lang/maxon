@@ -432,7 +432,10 @@ error E2015: <fragment>:40:30: Unsupported: no requirement named 'equals' is pro
 ```
 
 <!-- disabled-test: element-payload-through-a-shared-body-return-over-the-enclosing-parameter -->
-<!-- the rung that SUBSTITUTES a shared body's inner-GENERIC-alias return at the concrete caller -->
+<!-- MEASURED 2026-09-04: `E2015 — no requirement named 'equals' is provided by the constraints on type parameter
+     'Element'`. A method call on a constrained type parameter dispatches through the witness table, so it has to
+     be a requirement the constraint declares; the case reaches `equals` through a shared body's return over the
+     ENCLOSING parameter, which the constraint set does not carry. -->
 The same program as the case above, as it must eventually RUN. `IntBag` binds `Element` to `Integer`, so
 `copy()`'s `Array with (Box with Element)` is an `Array with (Box with Integer)` at this receiver and `e.v`
 is an `Integer` — `.equals(91)` is then the ordinary builtin conformance the control case pins, and the

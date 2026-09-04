@@ -1897,7 +1897,9 @@ function main() returns ExitCode
 	var i = 0 as Code
 	while i < 4 'loop'
 		try risky(i) otherwise (e) 'h'
-			acc = acc + 1
+			match e 'f'
+				broken then acc = acc + 1
+			end 'f'
 		end 'h'
 		i = i + 1
 	end 'loop'
@@ -1959,7 +1961,9 @@ function main() returns ExitCode
 	var acc = 0 as Code
 	if acc < 5 'guard'
 		try risky(3) otherwise (e) 'h'
-			acc = 7
+			match e 'f'
+				broken then acc = 7
+			end 'f'
 		end 'h'
 		acc = acc + 1
 	end 'guard'

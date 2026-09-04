@@ -1416,15 +1416,6 @@ end 'main'
 ```
 
 <!-- test: match-range.character -->
-<!-- ⭐ A GENUINE `Character` RANGE PATTERN — the unblock condition this note used to carry IS NOW MET
-     (re-measured 2026-08-05, A5m-ab). What stood here said a SINGLE-BYTE literal was an `int` under the
-     WIDTH RULE, so `let c = 'G'` bound an int, `'a' to 'z'` was an INTEGER range, and these three
-     PASSED for the wrong reason — testing integer ranges and never a Character. The width rule is
-     GONE: every character literal materializes as a `Character` (`Parser.parseCharLiteral`), so the
-     scrutinee is a Character and the arms are Character bounds. A Character `match` keeps the linear
-     compare chain rather than the interval plan (`matchUsesIntervalPlan`), and the compares are
-     `Character`'s own ordering (A5m-c, `__char_cmp`) — the same mechanism `match-character-range`
-     beside this one pins. These three now reach what their names claim. -->
 ```maxon
 function main() returns ExitCode
 	let c = 'G'
@@ -1441,15 +1432,6 @@ end 'main'
 ```
 
 <!-- test: match-range.character-lowercase -->
-<!-- ⭐ A GENUINE `Character` RANGE PATTERN — the unblock condition this note used to carry IS NOW MET
-     (re-measured 2026-08-05, A5m-ab). What stood here said a SINGLE-BYTE literal was an `int` under the
-     WIDTH RULE, so `let c = 'G'` bound an int, `'a' to 'z'` was an INTEGER range, and these three
-     PASSED for the wrong reason — testing integer ranges and never a Character. The width rule is
-     GONE: every character literal materializes as a `Character` (`Parser.parseCharLiteral`), so the
-     scrutinee is a Character and the arms are Character bounds. A Character `match` keeps the linear
-     compare chain rather than the interval plan (`matchUsesIntervalPlan`), and the compares are
-     `Character`'s own ordering (A5m-c, `__char_cmp`) — the same mechanism `match-character-range`
-     beside this one pins. These three now reach what their names claim. -->
 ```maxon
 function main() returns ExitCode
 	let c = 'm'
@@ -1465,15 +1447,6 @@ end 'main'
 ```
 
 <!-- test: match-range.character-digit -->
-<!-- ⭐ A GENUINE `Character` RANGE PATTERN — the unblock condition this note used to carry IS NOW MET
-     (re-measured 2026-08-05, A5m-ab). What stood here said a SINGLE-BYTE literal was an `int` under the
-     WIDTH RULE, so `let c = 'G'` bound an int, `'a' to 'z'` was an INTEGER range, and these three
-     PASSED for the wrong reason — testing integer ranges and never a Character. The width rule is
-     GONE: every character literal materializes as a `Character` (`Parser.parseCharLiteral`), so the
-     scrutinee is a Character and the arms are Character bounds. A Character `match` keeps the linear
-     compare chain rather than the interval plan (`matchUsesIntervalPlan`), and the compares are
-     `Character`'s own ordering (A5m-c, `__char_cmp`) — the same mechanism `match-character-range`
-     beside this one pins. These three now reach what their names claim. -->
 ```maxon
 function main() returns ExitCode
 	let c = '7'
@@ -1928,7 +1901,9 @@ end 'main'
 ### Default Throws on Non-Enum Match
 
 <!-- disabled-test: match-statements.default-throws-non-enum -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- MEASURED 2026-09-04: `E2015 — a declaration of the type name 'StringError', which the compiler owns`. The case
+     declares its own `StringError`, and shv2 has no namespace to tell a user declaration of a compiler-owned name
+     apart from the compiler's. -->
 ```maxon
 typealias Integer = int(0 to 100)
 

@@ -905,6 +905,11 @@ error E3012: specs/fragments/self-type-member-expression/parameter-named-Self-do
 ### A CLOSURE parameter named `Self` does not capture `Self.`
 A third door onto the same scope test — the closure's own parameter scope rather than the method's — so a
 guard placed on the method path alone would leave this one misreading.
+
+⭐ **IT PINS `E3012` RATHER THAN THE EXIT CODE, for the reason its method-level twin above does**: `Self`
+alone is a TYPE in every expression position, so the parameter can be declared and never read, and an
+unread closure parameter is E3012. What SURVIVES is the resolution under the shadow — E3012 is semantic,
+so reaching it proves `Self.make(35)` bound the TYPE rather than the parameter.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -916,7 +921,7 @@ type Gate
 	end 'make'
 
 	export function twin() returns Num
-		let f = function(Self Num) gives Self.make(41).n + 1
+		let f = function(Self Num) gives Self.make(35).n + 7
 		return f(7)
 	end 'twin'
 end 'Gate'
@@ -925,8 +930,8 @@ function main() returns ExitCode
 	return Gate.make(0).twin()
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3012: <fragment>:12:20: unused variable: 'Self'
 ```
 
 <!-- test: managed-payload-through-Self-under-a-Self-named-parameter -->

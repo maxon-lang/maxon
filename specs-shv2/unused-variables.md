@@ -56,7 +56,6 @@ error E3012: specs/fragments/unused-variables/unused-var.test:4:6: unused variab
 ```
 
 <!-- test: unused-let -->
-<!-- unused BODY `let`s. shv2 checks body `var`s (E3077 owes that half — an unmentioned `var` reports as unused rather than as should-be-let); the `let` half is its own rung, and its cost is EXPRESSIVENESS rather than tidiness: MEASURED, it refuses 82 cases of this suite whose shape IS the test — a leak gate binds an owned value and deliberately never touches it, so scope exit is the only thing that can free it, and `register-pressure` needs a def that is never read. The E2001/E3064 reason this note used to give was the ORACLE's and does not transfer: shv2 has no purity analysis, so `_ = <any call>` is already legal here -->
 ```maxon
 
 function main() returns ExitCode
@@ -120,7 +119,6 @@ end 'main'
 ```
 
 <!-- test: tuple-destructuring-unused -->
-<!-- TUPLE-DESTRUCTURING bindings — `let (a, b) = …` binds through a path that mints no unused candidate. Its own rung -->
 ```maxon
 
 typealias Small = int(0 to 100)
@@ -139,7 +137,6 @@ error E3012: specs/fragments/unused-variables/tuple-destructuring-unused.test:10
 ```
 
 <!-- test: multiple-unused-first-reported -->
-<!-- two unused BODY `let`s — the same missing rung as `unused-let` above. (The "first reported" property itself is already live: `reportUnusedBindings` scans `unusedCandidates` in declaration order and returns on the first hit, and `unused-var` above now exercises it for a `var`.) -->
 ```maxon
 
 function main() returns ExitCode
@@ -215,8 +212,7 @@ end 'main'
 error E3012: specs/fragments/unused-variables/unused-for-range-variable.test:5:6: unused variable: 'i'
 ```
 
-<!-- disabled-test: unused-match-binding -->
-<!-- MATCH PAYLOAD bindings — `value(n)` binds through `createPayloadBinding`, which mints no unused candidate. Its own rung -->
+<!-- test: unused-match-binding -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -282,8 +278,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: unused-closure-param -->
-<!-- CLOSURE PARAMETERS — `parseClosureExpression` deliberately drains no E3012 (`Parser.maxon`, the "NO E3012 DRAIN HERE" note), so a closure's own candidates are collected and discarded. Its own rung -->
+<!-- test: unused-closure-param -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -340,8 +335,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: unused-otherwise-binding -->
-<!-- `otherwise (e)` ERROR bindings — the handler's binding mints no unused candidate. Its own rung -->
+<!-- test: unused-otherwise-binding -->
 The `(e)` binding on `try expr otherwise (e) 'h' ... end 'h'` is a local variable.
 Declaring it without referencing it inside the handler body is a compile error.
 ```maxon

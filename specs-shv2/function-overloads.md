@@ -230,21 +230,6 @@ error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.t
 ```
 
 <!-- test: a-void-overload-beside-a-value-one-resolves-by-argument -->
-<!-- W49 wave 4 REFUSED THIS PROGRAM AND IT IS NOW THE RIGHT ANSWER. What the refusal was about is worth
-keeping: the declaration sweep recorded ONE return type per NAME, LAST-WINS, so it recorded the `String` of
-the second declaration; `mintCallResult` typed EVERY call to `emit` as a String and `enrolOwnedCallTemp`
-enrolled the scope-exit drop a managed result owes. This call resolves to the VOID member a whole pass later,
-so the drop was spent on a register the callee never wrote. MEASURED before the refusal existed: this exact
-program compiled clean and died with an ACCESS VIOLATION (0xC0000005).
-
-WHAT MAKES THAT HAZARD STRUCTURALLY IMPOSSIBLE IS NOT A REFUSAL BUT THE SWEEP: it now publishes each
-declaration's PARAMETER TYPES beside its return type (`ProgramSignatures.OverloadedDecl`), so `emit(true)` is
-typed from the member a `bool` argument means -- the void one -- and there is no managed result for a drop to
-be enrolled against at all. The bug was never "these overloads disagree"; it was one return type per NAME.
-
-Both `exitcode` AND `stdout` are pinned: an unpinned exit code is never checked, so a stdout-only case would
-pass while leaking. MEASURED against the bootstrap on the ranged-alias spelling of this program
-(`emit(tag Integer)`, which is what its bare `int` has to become there): `flag true`, exit 0. -->
 ```maxon
 function emit(flag bool)
 	print("flag {flag}\n")
@@ -268,17 +253,6 @@ flag true
 ```
 
 <!-- test: a-value-overload-beside-a-void-one-declared-last-resolves-by-argument -->
-<!-- The MIRROR of the case above, and the NEGATIVE CONTROL for it -- the direction whose failure was a LEAK
-rather than a crash. The sweep recorded the void member (it is declared last), so the call to the VALUE member
-was typed `void`, no drop was enrolled, and the `+1` the `String` member returns would have leaked. Pinned so
-that the pair is one guarded fact rather than one guarded half, and the `exitcode` block is what catches it:
-a leaked record makes the process exit 101.
-
-THE CALL USES ITS RESULT, AND THAT IS THE ORACLE'S REQUIREMENT RATHER THAN THIS RULE'S. shv2 compiles the
-bare `emit(1)` statement and exits 0 with no leak; the bootstrap refuses it as `E3064: result of pure
-function 'emit$tag' must be used`, and it refuses the same program with `emit` declared ONCE -- so that
-divergence is about discarded pure results and not about overloads. Reading the result keeps both compilers
-on one program. MEASURED against the bootstrap on the ranged-alias spelling: `tag1`, exit 0. -->
 ```maxon
 function emit(tag Integer) returns String
 	return "tag{tag}"
@@ -302,20 +276,6 @@ tag1
 ```
 
 <!-- test: error.overload-redeclared-with-the-same-parameters -->
-<!-- A REDECLARED OVERLOAD IS REFUSED BY NAME, AND THE NAME E3006 QUOTES IS A MINTED ONE — so the diagnostic
-has to say what the author actually wrote. `pick(x Integer)` takes the bare name; `pick(x bool)` is minted
-`pick#bool`; the second `pick(x bool)` matches an already-registered signature, so
-`Parser.overloadMemberHoldingSignature` hands it the INCUMBENT'S name and the two land on one key. MEASURED
-before this pin, and the reason it exists: the refusal read `Duplicate function 'pick#bool'` — the canonical
-plain sentence, whose slot `duplicate-functions.md` fills only with names a declaration wrote, quoting a
-symbol that appears nowhere in the program. The sort in `ParseStaging.duplicateFunctionMessage` was an
-ENUMERATION of the two contested kinds and this kind is neither, so it fell through to the one sentence that
-promises the name is greppable. It now tests the PROPERTY — is this the written name? — and a minted name
-nobody classifies lands here.
-
-⚠ The bootstrap does NOT refuse this program at all; it compiles it, reporting only the unused-variable
-warnings. shv2 is deliberately stricter — a duplicate is a duplicate — so there is no oracle to match on the
-wording, only the canonical rule about whose names may fill that slot. -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -388,10 +348,6 @@ end 'main'
 ```
 
 <!-- test: string-contains-char -->
-<!-- W49 wave 4 UNLOCKED THIS. It was disabled because `String.contains` was a SYNTHESIZED arm that served
-the `String` form only, so `text.contains('e')` was `E3005: 'contains' requires a String`. Retiring the
-member onto `stdlib/String.maxon:455,464` makes it an ordinary DECLARED overload set, which is exactly what
-`resolveOverloadedCalls` has always been able to pick from. -->
 ```maxon
 function main() returns ExitCode
 	let text = "hello"

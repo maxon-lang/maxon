@@ -299,7 +299,7 @@ union M
 	export function spin(d Depth) returns Integer
 		return match self 'k'
 			silent gives 0
-			text(s) gives 1 + self.spin((d - 1) if d > 0 else 0) if d > 0 else 1
+			text(s) gives 1 + self.spin((d - 1) if d > 0 else 0) if d > 0 and s.byteLength() > 0 else 1
 		end 'k'
 	end 'spin'
 end 'M'

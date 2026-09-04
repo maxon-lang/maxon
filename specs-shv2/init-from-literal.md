@@ -131,7 +131,9 @@ len: 0
 ```
 
 <!-- disabled-test: init-from-char-literal-basic -->
-<!-- InitableFromCharLiteral — a DISTINCT conformance from the string one (its `init` takes a Character, so the arm cannot be widened, it needs its own), plus a `Character`-typed struct field. No consumer in the stdlib cone; needs its own rung -->
+<!-- MEASURED 2026-09-04: `E2004: Undefined variable 'CharWrapper'` at the `CharWrapper from 'X'` site. The
+     literal-init construct resolves its type for a String literal (`FilePath from "…"` passes) and not for a
+     CHARACTER one — `InitableFromCharLiteral` has no door. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

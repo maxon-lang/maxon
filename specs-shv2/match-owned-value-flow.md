@@ -125,13 +125,13 @@ into first.
 ⚠ The break is LABELLED, and it must be. An unlabelled `break` in a match arm exits
 the MATCH, not the loop (`specs/match-statements.md`'s "## Break" section), so the
 loop-floor drop this case exists to pin is only reached by naming the loop. Written
-unlabelled — as it was, against a parser that had not yet implemented match targeting
-and so read it as a loop exit — nothing in the body can ever change `result`, and the
-program is an INFINITE LOOP by inspection: its expected exit of 7 was only reachable
-via the bug. ⚠ The bootstrap is NOT an oracle for the unlabelled spelling and was not
-consulted as one: it refuses this program outright with `E3012 unused variable: 'n'`,
-a lint shv2 does not have. This case is `specs-shv2`-only; there is no canonical
-`specs/match-owned-value-flow.md` for it to have diverged from.
+unlabelled, nothing in the body can ever change `result` and the program is an INFINITE
+LOOP by inspection: its expected exit of 7 would be reachable only via a parser that read
+an unlabelled `break` as a loop exit.
+
+The arm DISCARDS its payload. An Integer payload retains nothing, so the binding was never
+this case's subject — the TEMPORARY BOX's drop on the break edge is — and naming a payload
+no arm reads is `E3012 unused variable`, which both compilers refuse.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -145,7 +145,7 @@ function main() returns ExitCode
 	while result > 0 'loop'
 		match Num.val(1) 'check'
 			zero then return 0
-			val(n) then break 'loop'
+			val then break 'loop'
 		end 'check'
 	end 'loop'
 	return result
@@ -169,7 +169,7 @@ end 'Num'
 function main() returns ExitCode
 	match Num.val(5) 'check'
 		zero then print("z")
-		val(n) then print("v")
+		val then print("v")
 	end 'check'
 	return 0
 end 'main'

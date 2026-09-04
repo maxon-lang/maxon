@@ -534,6 +534,8 @@ end 'main'
 ```
 
 <!-- disabled-test: shift-by-negative-runtime-count-panics -->
+<!-- MEASURED 2026-09-04: exit 0 where the case pins 1. `emitGuardedShift` SATURATES a negative count instead of
+     raising, so the answer is defined and the DIAGNOSTIC is what is missing. Go, and the bootstrap, panic. -->
 ⚠ BLOCKED ON THE SHIFT GUARD RAISING. Go: "if the shift count is negative at run time, a run-time
 panic occurs". The bootstrap does exactly that (`specs/bitwise-operators.md` pins it). **maxon-shv2
 does not yet**: `emitGuardedShift` saturates the count instead, so the answer is defined and the

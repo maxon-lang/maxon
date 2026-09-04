@@ -1124,7 +1124,8 @@ error E3057: <fragment>:15:13: throwing division requires try: wrap it as `try (
 ```
 
 <!-- disabled-test: force-segfault -->
-<!-- P1.2 heap + __Builtins -->
+<!-- MEASURED 2026-09-04: `E3004: call to undefined function '__Builtins.forceSegfault'`. The intrinsic does not
+     exist in shv2, so neither this case nor its `force-segfault-macos` twin can run. -->
 <!-- targets: x64-windows -->
 ### Deliberate access violation produces a clean panic with backtrace
 ```maxon
@@ -1145,7 +1146,9 @@ Stack trace:
 ```
 
 <!-- disabled-test: force-segfault-macos -->
-<!-- Beyond: arm64-macos target -->
+<!-- MEASURED 2026-09-04 alongside `force-segfault`: `__Builtins.forceSegfault` does not exist in shv2. ⚠ The
+     marker below restricts this case to arm64-macOS, so it does NOT run on an x64-windows host and its absence
+     from a FAIL list is not a pass — it is disabled on its sibling's measurement. -->
 <!-- targets: arm64-macos -->
 ### Deliberate access violation produces a clean panic (arm64-macOS)
 ```maxon

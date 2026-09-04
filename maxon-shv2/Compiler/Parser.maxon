@@ -6388,6 +6388,23 @@ let NanosPerMillisecond = 1000000
 // per declaration it sees, and the parse contributes one per declaration it registers. There is no check
 // available for it — SemanticCheck cannot tell a source-written `__` callee from a compiler-emitted one,
 // which is this whole function's reason for existing — so it is stated at both ends instead.
+// ⭐ **DID THE COMPILER SPELL THE CALLEE'S HEAD?** — the provenance question the shadow-mint exemption
+// asks, over the two mints that join a RESOLVED type name to something: a method dispatch's receiver type
+// (`p.join(…)` ⇒ `__FilePath.join`) and a range operator's stdlib type (`a upto b` ⇒ `__OpenRange.create`).
+// A roster rather than `!= notMinted` for `mintSpellsTheWholeCallee`'s reason: the arms that mint a `__`
+// HELPER name are a different fact and must not be swept in by a negation.
+function mintHeadIsTheCompilers(mint CalleeMint) returns bool
+	return match mint 'm'
+		notMinted gives false
+		primitiveStatic gives false
+		paramDefaultHelper gives false
+		stringLiteralInit gives false
+		fieldDefaultHelper gives false
+		resolvedTypeQualifier gives true
+		rangeOperator gives true
+	end 'm'
+end 'mintHeadIsTheCompilers'
+
 function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, mint CalleeMint, signatures ProgramSignatures) throws ParseError
 	// ⭐ **ASKED ONCE AND CARRIED, NOT ASKED AGAIN TO EXPLAIN (W55).** The gate used to refuse on
 	// `isCompilerInternalCallee` — an OR over two clauses — and then hand the message a reason derived
@@ -6483,7 +6500,7 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 	//
 	// The disjunction is first because both halves are single compares while `isMintedStdlibShadowCallee` is
 	// the allocating table scan this function's own header keeps off the common path.
-	if (isStdlibSource or mint == CalleeMint.resolvedTypeQualifier) and signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
+	if (isStdlibSource or mintHeadIsTheCompilers(mint)) and signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
 		return
 	end 'theCompilersOwnMint'
 
@@ -6940,6 +6957,10 @@ end 'quadArgs'
 // because nothing outside this file names them; a second `b"create"` in `SignatureIndex` would be exactly the
 // drift the block above exists to prevent, one file over.
 export let CreateMethod = b"create"
+
+// The two `stdlib/Range.maxon` types an out-of-header `to` / `upto` constructs — inclusive and half-open.
+let RangeTypeName = b"Range"
+let OpenRangeTypeName = b"OpenRange"
 let ArrayPushMethod = b"push"
 let ArrayCapacityMethod = b"capacity"
 let ArrayResizeMethod = b"resize"
@@ -27148,9 +27169,10 @@ export type Parser
 				parameter gives true
 				loopVariable gives false
 				mutableLocal to immutableLocal gives false
-				// A divergent `otherwise`'s `(e)` is the author's own and OPTIONAL — no contract can force it
-				// to be declared, so there is nothing for the interface waiver to excuse.
-				divergentHandlerBinding gives false
+				// A catching form's `(e)` and a `match` arm's payload binder are the author's own and OPTIONAL
+				// — no contract can force either to be declared, so there is nothing for the interface waiver
+				// to excuse.
+				caughtError to payloadBinding gives false
 			end 'candidateKind'
 			if waivable and self.parametersAreInterfaceDictated(methodName) 'contractDictatedTheList'
 				continue
@@ -27168,11 +27190,10 @@ export type Parser
 	// "E3012 takes precedence" (`unused-takes-precedence`: `var x = 10` + `return 0` is the unused
 	// diagnostic, not this one). Both reference compilers order the two exactly this way.
 	//
-	// ⭐ **THE CANDIDATE TEST IS `binding.mutable`, WHICH IS EXACTLY "THE AUTHOR WROTE `var`"** — not a kind
-	// match, and deliberately: a parameter is immutable (`ParametersAreMutable` is false) and a `for`
-	// element is bound `mutable: false`, so the property already separates the kinds and cannot drift from
-	// them the way an enumerated list of exempt kinds would. A future mutable binding kind is checked the
-	// day it becomes mutable, which is the day the rule starts applying to it.
+	// ⭐ **THE CANDIDATE TEST IS THE KIND `mutableLocal`, WHICH IS EXACTLY "THE AUTHOR WROTE `var`".** The
+	// binding's own `mutable` bit is NOT that question and cannot be made into it: a `match` arm's payload
+	// binder takes its mutability from the SCRUTINEE (`declarePayloadBindings`), so a writable `value(n)` the
+	// arm never reassigns would be told to "use `let`" for a `var` its author never wrote.
 	//
 	// ⚠ **A `var` NOTHING MENTIONED IS SKIPPED RATHER THAN REPORTED, and that is not the same as the
 	// precedence above.** The precedence covers one function reaching both rules; this covers the SECOND
@@ -27185,7 +27206,7 @@ export type Parser
 		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 		for candidateIndex in 0 upto self.unusedCandidates.count() 'eachCandidate'
 			let candidate = try self.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")
-			if not candidate.binding.mutable 'notAVar'
+			if candidate.kind != UnusedBindingKind.mutableLocal 'notAVar'
 				continue
 			end 'notAVar'
 
@@ -35709,7 +35730,7 @@ export type Parser
 		end 'bindingForm'
 
 		if self.at(TokenKind.charLiteral) 'blockForm'
-			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
+			return try self.parseOtherwiseBlock(func, binder: CaughtErrorBinder.create(EmptySourceText, hasBinding: false, anchor: self.current()), flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
 		end 'blockForm'
 
 		// ⭐ **THE NON-BLOCK FORMS DISCARD THE CAUGHT ERROR, SO ITS BOX MUST DROP HERE.** `otherwise ignore`,
@@ -36040,7 +36061,7 @@ export type Parser
 		// refuses the keyword first — which is exactly why the hole was invisible to the receiver rule.
 		try self.requireUnreservedName(eNameTok, declaredName: eNameTok.value)
 		try self.consume(TokenKind.rightParen)
-		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, errorType: errorType, form: form)
+		return try self.parseOtherwiseBlock(func, binder: CaughtErrorBinder.create(eNameTok.value, hasBinding: true, anchor: eNameTok), flag: flag, errorType: errorType, form: form)
 	end 'parseOtherwiseBinding'
 
 	// ⭐ **ENROL A CAUGHT BOXED ERROR AS OWNED.** The flag IS the box pointer (the throw ENCODE wrote it
@@ -36083,29 +36104,46 @@ export type Parser
 	//
 	// The caller has already opened the scope frame the binding lands in, and owns the matching
 	// `ownedFloor` / `popScope` / `dropArmScopedOwned` — this routine only declares.
-	function declareCaughtError(flag ValueId, errorType MaxonType, bindingName ByteArray, hasBinding bool, form CaughtErrorForm, anchor Token) throws ParseError
+	function declareCaughtError(flag ValueId, errorType MaxonType, binder CaughtErrorBinder, form CaughtErrorForm) throws ParseError
+		try self.bindCaughtError(flag, errorType: errorType, binder: binder, form: form)
+		if not binder.hasBinding 'nothingDeclared'
+			return
+		end 'nothingDeclared'
+
+		// ⭐⭐ **E3012 — A DECLARED-BUT-UNREAD `( e )` IS REFUSED, AT EVERY DOOR THAT DECLARES ONE.** The
+		// binding is optional; declaring one and never reading it says the author meant to use the error and
+		// did not, and the oracle refuses it at all three catching forms. The enrolment sits at this door
+		// rather than at those forms because this is the one site that is COMPLETE: a fourth catching form
+		// cannot acquire a binding without coming through here.
+		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(binder.name), nameRange: SourceRange.ofToken(binder.anchor), kind: UnusedBindingKind.caughtError))
+	end 'declareCaughtError'
+
+	// The three-way decode of a caught error into its binding — a synthesized error union's raw flag, a boxed
+	// union's pointer, or a scalar enum's decoded ordinal. Split out of `declareCaughtError` so that its
+	// early exits cannot skip the enrolment that follows them.
+	function bindCaughtError(flag ValueId, errorType MaxonType, binder CaughtErrorBinder, form CaughtErrorForm) throws ParseError
 		let caughtUnion = caughtErrorUnionMatch(form)
 		if errorUnionIsSynthesized(caughtUnion) 'aSynthesizedUnion'
-			try self.declareErrorUnionBinding(flag, info: requireErrorUnionInfo(caughtUnion), bindingName: bindingName, hasBinding: hasBinding, anchor: anchor)
+			try self.declareErrorUnionBinding(flag, info: requireErrorUnionInfo(caughtUnion), bindingName: binder.name, hasBinding: binder.hasBinding, anchor: binder.anchor)
 			return
 		end 'aSynthesizedUnion'
 
 		if self.throwsTypeIsBoxedUnion(errorType) 'boxedError'
 			var eBinding = VarInfo.createValueBinding(EmptySourceText, varType: errorType, mutable: false, boundValue: flag)
-			if hasBinding 'nameBoxedE'
-				eBinding = try self.scope.declareValueBinding(bindingName, varType: errorType, mutable: false, value: flag, brandId: UnnamedTypeId) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
+			if binder.hasBinding 'nameBoxedE'
+				eBinding = try self.scope.declareValueBinding(binder.name, varType: errorType, mutable: false, value: flag, brandId: UnnamedTypeId) otherwise throw ParseError.localShadowsSelfField(String.from(binder.name), typeName: String.from(self.enclosingType), line: binder.anchor.line, column: binder.anchor.column)
 			end 'nameBoxedE'
 			self.enrollCaughtBox(flag, eType: errorType, binding: eBinding)
 			return
 		end 'boxedError'
 
-		if not hasBinding 'scalarUnnamed'
+		if not binder.hasBinding 'scalarUnnamed'
 			return
 		end 'scalarUnnamed'
 
-		let eValue = self.decodeScalarCaughtError(flag, errorType: errorType, anchor: anchor)
-		_ = try self.scope.declareValueBinding(bindingName, varType: errorType, mutable: false, value: eValue, brandId: UnnamedTypeId) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
-	end 'declareCaughtError'
+		let eValue = self.decodeScalarCaughtError(flag, errorType: errorType, anchor: binder.anchor)
+		_ = try self.scope.declareValueBinding(binder.name, varType: errorType, mutable: false, value: eValue, brandId: UnnamedTypeId) otherwise throw ParseError.localShadowsSelfField(String.from(binder.name), typeName: String.from(self.enclosingType), line: binder.anchor.line, column: binder.anchor.column)
+	end 'bindCaughtError'
 
 	// ⭐ **A SCALAR ENUM ERROR'S VALUE, RECOVERED FROM THE FLAG.** The flag carries `ordinal + bias`
 	// (`ErrorFlagOrdinalBias`, the encode's own reservation of 0 for "no error in flight"), so the decode is
@@ -36209,7 +36247,7 @@ export type Parser
 	// The caught error is recovered by the shared `declareCaughtError` — the same decode `if try … else (e)`
 	// runs — in a fresh scope frame opened before the body and drained after it. Both forms are
 	// E2049 in a match arm (the block label is where the arm-body single-statement rule is violated).
-	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, errorType MaxonType, form CaughtErrorForm) returns TryHandler throws ParseError
+	function parseOtherwiseBlock(func IrFunction, binder CaughtErrorBinder, flag ValueId, errorType MaxonType, form CaughtErrorForm) returns TryHandler throws ParseError
 		if not self.at(TokenKind.charLiteral) 'noLabel'
 			let tok = self.current()
 			throw ParseError.matchMissingBlockId(tok.line, column: tok.column)
@@ -36231,7 +36269,7 @@ export type Parser
 		let ownedFloor = self.ownedBindings.count()
 		self.scope.pushScope()
 
-		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, form: form, anchor: labelTok)
+		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
 
 		// ⭐ **E3084's BRACKET.** A BLOCK-form handler is reached by every routed edge, so one that never
 		// `match`es on its binding has silently swallowed every error the body could raise; the single-call
@@ -36240,7 +36278,7 @@ export type Parser
 		// block inside this handler asks its own and gives this one back untouched.
 		let savedBindingName = self.tryBindingName
 		let savedBindingMatched = self.tryBindingMatched
-		self.tryBindingName = tryBlockBindingToMatch(form, bindingName: bindingName, hasBinding: hasBinding)
+		self.tryBindingName = tryBlockBindingToMatch(form, bindingName: binder.name, hasBinding: binder.hasBinding)
 		self.tryBindingMatched = false
 		let unionBindingDepth = self.errorUnionBindings.count()
 
@@ -36751,16 +36789,7 @@ export type Parser
 		let ownedFloor = self.ownedBindings.count()
 		let unionBindingDepth = self.errorUnionBindings.count()
 		self.scope.pushScope()
-		try self.declareCaughtError(flag, errorType: errorType, bindingName: binder.name, hasBinding: binder.hasBinding, form: CaughtErrorForm.blockForm(errorUnion), anchor: binder.anchor)
-
-		// ⭐ **E3012 — A DECLARED-BUT-UNREAD `(e)` IS REFUSED, and the spec asks for it by name.** The binding
-		// is optional; declaring one and never reading it says the author meant to use the error and did not.
-		// It is enrolled as its own candidate KIND because a body `let` deliberately is not one
-		// (`UnusedBindingKind.mutableLocal` carries the measured 82-case reason) — this is the one binding
-		// `/specs/try-block-otherwise-divergent.md` states the rule for, not the general unused-`let` rung.
-		if binder.hasBinding 'checkedForUse'
-			self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(binder.name), nameRange: SourceRange.ofToken(binder.anchor), kind: UnusedBindingKind.divergentHandlerBinding))
-		end 'checkedForUse'
+		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: CaughtErrorForm.blockForm(errorUnion))
 
 		// ⚠ **A SYNTHESIZED UNION'S BOX IS RELEASED HERE FOR THE REASON A `default` ARM'S IS.** Over a union
 		// the binding owns nothing at all — the flag is an ordinal on some incoming edges and a box POINTER on
@@ -40508,14 +40537,10 @@ export type Parser
 			// spells, parsed by the same routine, because it is the same grammar over the same caught flag.
 			binder = try self.parseOptionalCaughtErrorBinder(self.current())
 		end 'openElse'
-		let bindingName = binder.name
-		let hasBinding = binder.hasBinding
-		let anchor = binder.anchor
-
 		// The decode (and, for a boxed error, the enrolment) belongs at the TOP of the error edge — before a
 		// nested `else if`'s own condition, and before the written body's first statement.
 		self.currentBlock = elseBlock
-		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, form: form, anchor: anchor)
+		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
 
 		var elseEnd = elseBlock
 		if elseWritten 'writtenBody'
@@ -40523,7 +40548,7 @@ export type Parser
 		end 'writtenBody'
 
 		self.scope.popScope()
-		self.dropArmScopedOwned(ownedFloor, exitBlock: elseEnd, anchor: anchor)
+		self.dropArmScopedOwned(ownedFloor, exitBlock: elseEnd, anchor: binder.anchor)
 		return elseEnd
 	end 'parseCatchingElseBody'
 
@@ -40651,6 +40676,7 @@ export type Parser
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 		try self.requireCaughtResultIsSpokenFor(result, target: target, binder: binder, tryTok: tryTok)
+		try self.recordCatchingDiscard(binder, opFloor: targetOpFloor)
 
 		// ⭐ **A MANAGED SUCCESS VALUE IS OWNED ON THE THEN EDGE ALONE, so it leaves the pending-temp list
 		// here** — the same removal `desugarTry` makes at its fork, and for the same reason: on the error edge
@@ -40666,6 +40692,36 @@ export type Parser
 		let test = try self.emitCompare(flag, rhs: zero, op: MaxonCmpOp.eq, opTok: tryTok)
 		return IfCondition.tryCatch(test, result: result, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
 	end 'parseCatchingCondition'
+
+	// ⭐⭐ **`if let _ = try f()` IS AN EXPLICIT DISCARD, AND A PURE CALLEE'S RESULT MAY NOT BE ONE (E3064).**
+	// The binder says the author saw the result and chose to drop it — precisely what `_ = f()` says one
+	// statement shape over — so it files the SAME site through the SAME door, and
+	// `SemanticCheck.checkDiscardedResults` reaches the same verdict off the same effect summary rather than
+	// this door deciding purity for itself.
+	//
+	// A NAMED binding is a use and files nothing; a bare `if try f()` has no result to discard at all, which
+	// is E3124's own refusal one function up.
+	function recordCatchingDiscard(binder IfBinder, opFloor OpIndex) throws ParseError
+		match binder 'b'
+			none then return
+			binding(nameIndex, _) then try self.recordDiscardedBinderResult(nameIndex, opFloor: opFloor)
+		end 'b'
+	end 'recordCatchingDiscard'
+
+	// The arm body above, as a routine because a `match` arm is one statement and this is three. The anchor
+	// is the `_` itself — where the author decided to take nothing — exactly as `_ = f()` anchors at its `_`.
+	//
+	// ⚠ **THE PRODUCER IS FOUND BY THE `tryCall` WALK, NOT BY THE LAST-OP PROBE.** The target has already
+	// been rewritten (`rewriteLastCallToTryCall`) by the time this runs, and `directCallDefining` answers
+	// only for a plain `call` — so the probe every other discard door uses returns "not a call" here.
+	function recordDiscardedBinderResult(nameIndex TokenIndex, opFloor OpIndex) throws ParseError
+		let nameTok = self.tokenAt(nameIndex)
+		if not nameTok.value.equals(DiscardBindingName) 'aNamedBinding'
+			return
+		end 'aNamedBinding'
+
+		self.recordDiscardOf(try self.throwingCallThisStatementMade(opFloor), anchor: nameTok, door: DiscardDoor.explicitDiscard)
+	end 'recordDiscardedBinderResult'
 
 	// Parse the then branch's body, giving a catching `if`'s success value the home its condition could not.
 	function parseIfThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, cond IfCondition, binder IfBinder, anchor Token) returns IrBlock throws ParseError
@@ -41248,7 +41304,7 @@ export type Parser
 		let sourceOpFloor = self.artifact.module.ops.count()
 		// `var` for the ONE rewrite a collection source can undergo: a `Map` is replaced by its materialized
 		// entries below, which is what makes every question after this point an ARRAY's question.
-		var source = try self.parseExpression(func, block: block)
+		var source = try self.parseExpression(func, block: block, rangeIsAValue: false)
 
 		// `to` / `upto` after the first expression is what makes this a RANGE. The operator's token INDEX
 		// is carried (not the `Token` itself — a `var` may not alias an immutable aggregate binding,
@@ -41283,7 +41339,7 @@ export type Parser
 			src.testAnchorIndex = self.pos
 			self.advance()
 			let limitStart = self.pos
-			src.limit = try self.parseExpression(func, block: self.currentBlock)
+			src.limit = try self.parseExpression(func, block: self.currentBlock, rangeIsAValue: false)
 			let bothWereCharacters = self.tagOf(source) == ValueTypeTag.character and self.tagOf(src.limit) == ValueTypeTag.character
 			source = try self.integerizedOperand(source, expected: ValueTypeTag.integer, start: sourceStart, pastEnd: src.testAnchorIndex)
 			src.limit = try self.integerizedOperand(src.limit, expected: ValueTypeTag.integer, start: limitStart, pastEnd: self.pos)
@@ -47445,6 +47501,11 @@ export type Parser
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, offset: offset, valueType: payloadValueTypeOf(class, declared: declared), storage: storage, range: range)
 			var bindingInfo = try self.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: scrutMutable and payloadBindingAcceptsWrites(class), value: loaded, scrutBox: scrutBox, slotOffset: offset, storage: storage) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
+
+			// ⭐ **E3012 — AN ARM THAT NAMES A PAYLOAD IT NEVER READS MEANT `_`.** The discard is the spelling
+			// for a payload the arm does not want, and it is already skipped above, so a NAME here is a claim
+			// the arm makes about needing the value.
+			self.unusedCandidates.push(UnusedBindingCandidate.create(bindingInfo, nameRange: range, kind: UnusedBindingKind.payloadBinding))
 			// ⭐⭐ **A GREEN-THREAD PAYLOAD IS MOVED OUT AT THE BIND, AND THERE IS NO BORROWED TWIN.** The
 			// managed arm below has two shapes — move out of a box this frame owns, or RETAIN out of one it
 			// only borrows — and the second cannot exist for a promise: a retain needs a second reference and
@@ -49030,9 +49091,9 @@ export type Parser
 	// `parseTernaryExpression` can lift the arm's ops off the unconditional path into the true branch — only
 	// the SELECTED arm may run) and the pre-arm MOVE state (rewound onto the false arm). `captureMoveMark`
 	// runs only when an owned binding is in scope; scalar code shares the empty mark and pays nothing.
-	function parseExpression(func IrFunction, block IrBlock) returns ValueId throws ParseError
+	function parseExpression(func IrFunction, block IrBlock, rangeIsAValue bool = true) returns ValueId throws ParseError
 		self.currentBlock = block
-		return try self.parseValueExpression(func)
+		return try self.parseValueExpression(func, rangeIsAValue: rangeIsAValue)
 	end 'parseExpression'
 
 	// The climber PLUS the trailing inline conditional, over `self.currentBlock` as it already stands —
@@ -49043,7 +49104,7 @@ export type Parser
 	// They still need the ternary, though (`f(a if c else b)`, `T{x: a if c else b}`, `(a if c else b)`),
 	// so the hook lives HERE, below the seed, and those sites call this directly. The mark is recorded off
 	// the current block so `parseTernaryExpression` detaches the true arm from wherever control actually is.
-	function parseValueExpression(func IrFunction) returns ValueId throws ParseError
+	function parseValueExpression(func IrFunction, rangeIsAValue bool = true) returns ValueId throws ParseError
 		let block = self.currentBlock
 
 		// ⭐ **THE E3019 BLAME NAME IS CLEARED HERE, at the one door every value expression enters through.**
@@ -49085,7 +49146,21 @@ export type Parser
 			preMoveMark = self.captureMoveMark()
 		end 'moveStateToRewind'
 
-		let value = try self.parseBinary(func, minPrec: OrPrecedence)
+		var value = try self.parseBinary(func, minPrec: OrPrecedence)
+
+		// ⭐⭐ **`a to b` / `a upto b` IS A RANGE VALUE EVERYWHERE BUT A `for … in` HEADER.** The keyword is
+		// the counted loop's there and only there — that form allocates nothing and has no per-iteration
+		// error path — so the header asks for an expression that stops short of it (`rangeIsAValue: false`)
+		// and reads the operator itself. Every other position gets the stdlib `Range`/`OpenRange` the two
+		// compilers share, which is why `(1 upto 4).createIterator()` needs nothing here beyond the
+		// construction: the iterator protocol, the empty-range throw and the inclusive/exclusive difference
+		// are all stated in `stdlib/Range.maxon`.
+		//
+		// It binds LOOSER than the climber and TIGHTER than the inline conditional, so `1 upto n + 1` is one
+		// range over a computed bound and `r if c else s` selects between two ranges.
+		if rangeIsAValue and (self.at(TokenKind.to) or self.at(TokenKind.upto)) 'rangeValue'
+			value = try self.emitRangeValue(func, lo: value)
+		end 'rangeValue'
 
 		if self.at(TokenKind.if) 'ternary'
 			// The TRUE arm's blame, taken while its own tokens are still the ones the cursor last moved over
@@ -49095,6 +49170,37 @@ export type Parser
 
 		return value
 	end 'parseValueExpression'
+
+	// ⭐⭐ **BUILD THE `Range` / `OpenRange` A RANGE OPERATOR DENOTES.** Entered with the cursor ON the
+	// keyword and the lower bound already emitted.
+	//
+	// It goes through the stdlib type's own `create` rather than building the record here, so what a range
+	// IS lives in Maxon in one place: the two types differ only in which endpoint they store, and only
+	// `stdlib/Range.maxon` knows that. The bounds are checked by that signature — a `RangeBound` is an
+	// integer — so no bound rule is restated at this door.
+	//
+	// ⚠ **THE TYPE NAME IS THE SHADOW-RENAMED ONE.** A user program declaring its own `type Range` moves
+	// the stdlib's into the reserved space, and `a upto b` must still mean the stdlib's — the author named
+	// no type here, so nothing they wrote can be shadowed by what they declared.
+	function emitRangeValue(func IrFunction, lo ValueId) returns ValueId throws ParseError
+		let rangeTok = self.current()
+		let exclusive = rangeTok.kind == TokenKind.upto
+		self.advance()
+		let hi = try self.parseBinary(func, minPrec: OrPrecedence)
+
+		var typeName = RangeTypeName
+		if exclusive 'halfOpen'
+			typeName = OpenRangeTypeName
+		end 'halfOpen'
+
+		let range = SourceRange.ofToken(rangeTok)
+		// `var` on all three: `emitCall` grows the argument columns in lockstep when the callee defaults an
+		// argument the call omits, so they are its output as well as its input.
+		var args = pairArgs(lo, second: hi)
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: range)
+		return try self.emitCall(qualifiedMethodName(self.signatures.stdlibShadowRenameOf(typeName), methodName: CreateMethod), anchor: rangeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: rangeTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.rangeOperator)
+	end 'emitRangeValue'
 
 	// ⭐ **THE INLINE CONDITIONAL `<t> if <c> else <f>` (P1.5-A2c).** Called with the TRUE arm already
 	// parsed (into `startBlock` since the mark) and the current token at `if`. Two obligations shape it:
@@ -53158,8 +53264,35 @@ export type Parser
 			// file-local interner, unlike the `structRef` arm above.
 			return self.signatures.genericInstanceBoxSize(genericInstanceIdOf(t)) as ParsedInt
 		end 'instance'
+		// ⭐ **`sizeof(byte)` IS ONE, AND THE SPELLING ARRIVES HERE AS A BARE NAME.** shv2 has no `byte`
+		// keyword (`ByteTypeName`), so it resolves to no declaration and reaches the tag table below as
+		// `named`, which sizes a machine word. `specs/sizeof.md` says one byte and both reference compilers
+		// answer one.
+		if tag == ValueTypeTag.named and self.namesTheBytePrimitive(t) 'aBytePrimitive'
+			return BytePrimitiveSizeBytes as ParsedInt
+		end 'aBytePrimitive'
+
 		return primitiveTypeByteSize(tag) as ParsedInt
 	end 'concreteSizeofBytes'
+
+	// Whether a `named` type is the bare `byte` primitive rather than a DECLARATION of that spelling. A
+	// program is free to declare `typealias byte = …` or `enum byte`, and then the size is that
+	// declaration's — the primitive is only what the name means when nothing else claims it.
+	function namesTheBytePrimitive(t MaxonType) returns bool
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("namesTheBytePrimitive: a `named` operand's id is not in this file's interner — `parseTypeReference` interned it there")
+		if not name.equals(ByteTypeName) 'notTheSpelling'
+			return false
+		end 'notTheSpelling'
+
+		if self.signatures.containsEnumFor(name, readerFilePath: self.filePath) 'aDeclaredEnum'
+			return false
+		end 'aDeclaredEnum'
+
+		return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'alias'
+			declared gives false
+			undeclared gives true
+		end 'alias'
+	end 'namesTheBytePrimitive'
 
 	// The full box byteSize of a declared struct, by its interned name id (a `structRef` operand's id is
 	// against THIS file's interner, so it resolves through the file table, not the merged one).
@@ -73900,10 +74033,13 @@ export type Parser
 		// BEFORE the restore below — because it reads the accumulators the body filled, which the restore is
 		// about to swap back. Same call `parseFunction` makes at its own end, for the same reason.
 		self.commitRangeChecks(closureName)
-		// ⚠ **NO E3012 DRAIN HERE.** A closure's parameter list is `specs/unused-variables.md`'s subject, not
-		// `unused-parameters.md`'s; the closure's own candidates are collected and ISOLATED (see the save
-		// block) purely so they cannot be reported against the enclosing function, which declared none of
-		// them. The rung that ports that spec adds the drain on this line.
+		// ⭐ **THE CLOSURE'S OWN E3012/E3077 DRAIN.** Its candidates are ISOLATED (see the save block) so they
+		// cannot be reported against the enclosing function, which declared none of them — and drained HERE,
+		// before the restore hands that list back. The two scans run in the same order they do at a declared
+		// function's `end`, which is the precedence between the rules.
+		if not self.reportUnusedBindings(closureName) 'nothingUnused'
+			self.reportVarShouldBeLet()
+		end 'nothingUnused'
 
 		// --- Restore the enclosing function's parse context. ---
 		_ = try self.closureCaptureScopes.pop() otherwise panic("parseClosureExpression: closureCaptureScopes underflow — the enclosing scope pushed at entry is missing")

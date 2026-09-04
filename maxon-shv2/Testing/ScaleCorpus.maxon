@@ -5019,7 +5019,11 @@ function tryCoOwnSite(index KnobIndex, spelling TryCoOwnSpelling, throwsHere boo
 	body.append("\t\tif let {stem}c{index} = try {stem}b{index}.fetch({live}) '{stem}ok{index}'\n")
 	body.append("\t\t\tacc = acc + ({stem}c{index}{spelling.readText})\n")
 	body.append("\t\tend '{stem}ok{index}' else ({stem}err{index}) '{stem}bad{index}'\n")
-	body.append("\t\t\tacc = acc + {TryCoOwnElseArmValue}\n")
+	// ⚠ The caught error is MATCHED rather than ignored: a declared-but-unread `( e )` is E3012, so a
+	// generator that binds one and drops it emits a rung that does not compile.
+	body.append("\t\t\tmatch {stem}err{index} '{stem}m{index}'\n")
+	body.append("\t\t\t\tbad then acc = acc + {TryCoOwnElseArmValue}\n")
+	body.append("\t\t\tend '{stem}m{index}'\n")
 	body.append("\t\tend '{stem}bad{index}'\n")
 	body.append("\t\tacc = acc{neutralizeText(tryCoOwnPick(throwsHere, taken: TryCoOwnElseArmValue, untaken: spelling.okValue))}\n")
 	body.append(accProbe("\t\t"))

@@ -1362,7 +1362,6 @@ end 'main'
 
 
 <!-- test: interface-field-pass-as-arg -->
-<!-- SLICE 2 / OWNERSHIP: an interface-typed FIELD needs the 16-byte carve-out PLUS witness-based destruction. Every conformer in shv2 is a heap struct and `__destruct_<T>` is STATIC dispatch, so a fat pointer cannot name its own destructor: a borrow model use-after-frees and an owning model has nothing to call. The measured cheapest mechanism is a `destroyFunc` word replacing the always-zero `parentTablePtr@8` in the witness table, plus a `__drop_existential(witness, value)` runtime. Slice 2. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1524,7 +1523,6 @@ end 'main'
 ```
 
 <!-- test: interface-self-field-passed-as-arg -->
-<!-- SLICE 2 / OWNERSHIP: the same carve-out + witness destruction as `interface-field-pass-as-arg`, and this case is the one that PROVES a borrow model is unsound — it stores a TEMPORARY (`Holder.create(Marker.create(9))`) into an interface field, so nothing else keeps the conformer alive. Slice 2. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1576,7 +1574,6 @@ end 'main'
 ```
 
 <!-- test: interface-borrowed-field-drop-in-loop -->
-<!-- SLICE 2 / OWNERSHIP: an interface-typed field read in a loop, whose drop must fire once per iteration through a destructor the fat pointer has to carry. Same missing mechanism as the two above. Slice 2. -->
 ```maxon
 typealias StrArray = Array with String
 typealias Tag = int(0 to u64.max)

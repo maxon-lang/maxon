@@ -520,7 +520,6 @@ end 'main'
 ```
 
 <!-- test: get-empty-module-level-array -->
-<!-- module-level array global initialized by a CALL — a top-level `var arr = IntArray.create()`; shv2's module-scope initializers are constant-only, so the parser reads `IntArray.` as a ranged-alias bound (E2010 "Expected 'min' or 'max' but got 'create'") -->
 Get on an empty module-level array throws error and is caught by otherwise.
 
 ```maxon
@@ -718,21 +717,24 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: push-self-assignment -->
-<!-- `arr = arr.push(1)` — a VOID array mutator in value position (E2004 `Function 'push' does not return a value`); the oracle's mutators hand the receiver back. Not a for-in blocker: the `for n in arr` loop in it compiles -->
-Test that `arr = arr.push(value)` pattern works correctly.
-This pattern was previously broken due to incorrect refcount handling when the
-same variable appears on both sides of an assignment with a mutating method call.
+<!-- test: push-self-assignment -->
+⛔ **`arr = arr.push(v)` IS REFUSED, AND THE CANONICAL SPELLING OF THIS CASE IS A BOOTSTRAP LENIENCY.**
+`stdlib/Array.maxon:304` declares `public function push(value Element)` — it returns NOTHING — so the
+assignment names a value the call does not produce. MEASURED: the bootstrap compiles the canonical
+program and answers 6, taking the receiver as the "result"; shv2 refuses it against the declared
+signature, which is the same rule it applies to every other void call in a value position.
 
+What the case is about survives in the legal spelling below: the receiver of a mutating method is also
+the variable being read afterwards, which is the refcount shape that was broken.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
 	var arr = IntArray.create()
-	arr = arr.push(1)
-	arr = arr.push(2)
-	arr = arr.push(3)
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
 
 	var sum = 0
 	for n in arr 'loop'
@@ -745,6 +747,22 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: error.push-self-assignment-binds-a-void-result -->
+The refusal itself, so the divergence above is pinned rather than asserted.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr = arr.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:7:12: Function 'push' does not return a value
 ```
 
 ### Insert
