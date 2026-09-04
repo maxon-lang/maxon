@@ -448,6 +448,15 @@ export union ParseError implements Error
 	// **E3097** — `==`/`!=` against an enum or union value's `.name`/`.ordinal`/`.rawValue`. See
 	// `Parser.requireNotAnEnumAccessorComparison` for why the accessor is the wrong thing to compare.
 	enumAccessorComparison(member String, op String, line LineNumber, column ColumnNumber)
+	// **E3086** — a struct literal left one or more fields with no value from any of the THREE sources the
+	// language offers (`/specs/field-initialization.md`): the literal itself, a declared default, or a
+	// `self.<field> = …` in a static factory. The message names all three, because which one an author
+	// reaches for is theirs to choose.
+	fieldsNotInitialized(typeName String, fields String, plural bool, line LineNumber, column ColumnNumber)
+	// **E3086** — a factory's `Self{…}` took a field from a deferred assignment that does NOT reach it on
+	// every path. A different fault from the one above with a different cure, so a different sentence: the
+	// assignment exists and the author has to make it unconditional.
+	fieldsNotDefinitelyAssigned(typeName String, fields String, firstField String, plural bool, line LineNumber, column ColumnNumber)
 	// ⭐ **TWO OPERANDS OF ONE NON-NUMERIC TYPE, which is a different mistake from a MIXED pair.** The
 	// commonest of them is `a + b` over two `String`s reaching for concatenation, and "cannot operate on
 	// String and String" is true while saying nothing: what the author needs told is that the OPERATOR is
@@ -3804,6 +3813,54 @@ let MethodArgListOffset = 2 as TokenIndex
 // three sites can pass is non-empty (an enum case name is an identifier, the discard is `_`, and a rendered
 // method signature always carries at least `name() returns T`), so no parallel `isFirst` flag is needed to
 // tell the first append from a later one.
+// The hidden slot a deferred field is held in. Spelled once, because three readers ask for it — the
+// declaration, the write, and the `if`/loop carried-variable scan that must see the write as a write.
+function nascentSelfSlotName(fieldName ByteArray) returns ByteArray
+	return "{NascentSelfSlotPrefix}{String.from(fieldName)}".toByteArray()
+end 'nascentSelfSlotName'
+
+// `Parser.nascentWriteReaches` asks about a whole block rather than a prefix of one. A position no write can
+// hold, so the two questions need no second parameter to tell them apart.
+let NascentWholeBlock = 0 as ElementIndex
+
+// `'x', 'y'` — the field list E3086 quotes. One renderer, because the two shapes of that diagnostic must
+// spell a list of names the same way.
+function quotedNameList(names ByteArrayArray) returns String
+	var list = ""
+	for name in names 'each'
+		list = appendCommaSeparated(list, item: "'{String.from(name)}'")
+	end 'each'
+
+	return list
+end 'quotedNameList'
+
+// Does this op transfer control to `target`? EXHAUSTIVE over `MaxonOp`, so a terminator appended to the
+// dialect is classified here rather than silently reading as "no successor" — which in a dataflow meeting by
+// intersection is not a missed edge but a WRONG proof.
+function nascentOpBranchesTo(op MaxonOp, target BlockId) returns bool
+	return match op 'k'
+		branch(targetBlockId) gives targetBlockId == target
+		condBranch(_, thenBlockId, elseBlockId) gives thenBlockId == target or elseBlockId == target
+		switch(_, denseTargetBlockIds, defaultBlockId) gives defaultBlockId == target or blockIdsInclude(denseTargetBlockIds, target: target)
+		call to compare gives false
+		globalAddr to constArrayLiteral gives false
+		witnessDispatch to serviceReplyCell gives false
+	end 'k'
+end 'nascentOpBranchesTo'
+
+// Is `target` one of a `switch`'s dense arm targets? A `match` names its arms this way, so a dispatch's
+// edges are as real as an `if`'s and a walk that missed them would prove a field assigned in one arm was
+// assigned in all of them.
+function blockIdsInclude(ids BlockIdArray, target BlockId) returns bool
+	for id in ids 'each'
+		if id == target 'thisOne'
+			return true
+		end 'thisOne'
+	end 'each'
+
+	return false
+end 'blockIdsInclude'
+
 export function appendCommaSeparated(list String, item String) returns String
 	if list.isEmpty() 'firstItem'
 		return item
@@ -5108,6 +5165,32 @@ end 'shortCircuitOperator'
 // CALLER's: there is one table per Parser and one on `ProgramSignatures`, and which one a type belongs to
 // is a fact only the caller has. `constantValueTypeIn` below is the one door that does that interning, and
 // it names the table in its signature so no caller can mint into a table its reader cannot read.
+// ⭐ **WHAT A DEFERRED FIELD'S SLOT OPENS HOLDING — or that the field owns heap and gets no slot.** The
+// placeholder is a value on the paths that do not assign, so it must be one the scope exit can leave alone:
+// every trivial scalar is, and nothing else is. A `named` field is a ranged INT alias and its placeholder is
+// the plain integer the alias is one of — the same join a `var i = 0` and a later `as Round` value make.
+union NascentSlotPlaceholder
+	value(valueType MaxonType)
+	ownsHeap
+end 'NascentSlotPlaceholder'
+
+function nascentSlotPlaceholderType(tag ValueTypeTag) returns NascentSlotPlaceholder
+	return match tag 'kind'
+		boolean gives NascentSlotPlaceholder.value(MaxonType.boolean)
+		float gives NascentSlotPlaceholder.value(MaxonType.float)
+		integer gives NascentSlotPlaceholder.value(MaxonType.integer)
+		named gives NascentSlotPlaceholder.value(MaxonType.integer)
+		exitCode gives NascentSlotPlaceholder.value(MaxonType.integer)
+		structRef to string gives NascentSlotPlaceholder.ownsHeap
+		function gives NascentSlotPlaceholder.ownsHeap
+		typeParameter to genericInstance gives NascentSlotPlaceholder.ownsHeap
+		character gives NascentSlotPlaceholder.ownsHeap
+		interfaceRef gives NascentSlotPlaceholder.ownsHeap
+		unresolved gives NascentSlotPlaceholder.ownsHeap
+		void gives NascentSlotPlaceholder.ownsHeap
+	end 'kind'
+end 'nascentSlotPlaceholderType'
+
 // Does an enum's declared backing produce values of `tag`? Only the two BYTE-RECORD backings answer true,
 // and that is the whole of the question `enumCaseAtItsBacking` asks: an `integer` backing needs no coercion
 // (the tag IS the raw value), and the rest name domains a comparison never reaches with a byte record on
@@ -9528,6 +9611,47 @@ end 'EnumAccessorRead'
 
 typealias EnumAccessorReadArray = Array with EnumAccessorRead
 
+// ⭐⭐ **ONE `self.<field> = …` WRITE INSIDE A STATIC FACTORY, IN THE BLOCK IT HAPPENED IN.** A factory may
+// defer a field to an assignment (`/specs/field-initialization.md`'s third rule), and the language then owes
+// a proof that every deferred field is assigned on EVERY path reaching the `Self{…}` that consumes it. The
+// proof is a forward dataflow, and this is its GEN set — recorded as the body is parsed, because that is the
+// one moment the block and the position within it are both in hand.
+type NascentSelfWrite
+	export let field as ByteArray
+	export let block as BlockId
+	// How many ops the block already held. A write and a literal in ONE block are ordered by this and by
+	// nothing else — the dataflow answers only which fields reach the block's ENTRY.
+	export let position as ElementIndex
+
+	export static function create(field ByteArray, block BlockId, position ElementIndex) returns NascentSelfWrite
+		return Self{field: field, block: block, position: position}
+	end 'create'
+end 'NascentSelfWrite'
+
+typealias NascentSelfWriteArray = Array with NascentSelfWrite
+
+// ⭐ **ONE `Self{…}` THAT TOOK A FIELD FROM A DEFERRED ASSIGNMENT** — the CHECK the dataflow discharges. It
+// carries the fields it took (never the ones the literal spelled, which need no proof), so the diagnostic
+// names exactly what the author has to fix.
+type NascentSelfCheck
+	export let fields as ByteArrayArray
+	export let typeName as ByteArray
+	export let block as BlockId
+	export let position as ElementIndex
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(fields ByteArrayArray, typeName ByteArray, block BlockId, position ElementIndex, line LineNumber, column ColumnNumber) returns NascentSelfCheck
+		return Self{fields: fields, typeName: typeName, block: block, position: position, line: line, column: column}
+	end 'create'
+end 'NascentSelfCheck'
+
+typealias NascentSelfCheckArray = Array with NascentSelfCheck
+
+// The prefix a deferred field's hidden slot is named under. A `__` name, so `requireUnreservedName` already
+// keeps every user declaration out of the space and no program can spell one.
+let NascentSelfSlotPrefix = "__self_"
+
 
 // What `Parser.enumAccessorReadOf` found. A union rather than a bool-plus-out-parameter for the ordinary
 // reason: the MEMBER only exists when there was a read, and the two answers must not be representable apart.
@@ -13914,6 +14038,17 @@ export type Parser
 	// across would refuse a comparison in a program that has no accessor in it at all. Empty for every
 	// function that reads none, which is almost all of them.
 	var enumAccessorReads as EnumAccessorReadArray
+
+	// ⭐ **IS THIS BODY A STATIC FACTORY — a `static function` of a `type`, returning that type?** The one
+	// declaration shape in which `self.<field> = …` means anything: there is no receiver, and what the
+	// assignment describes is the value the `Self{…}` below it will be. Everywhere else `self` outside an
+	// instance method stays E2001.
+	var inNascentSelfFactory as bool
+	// This factory's deferred writes and the literals that consumed them — the GEN sets and the checks of
+	// the definite-assignment dataflow (`validateNascentSelfAssignments`). Both are empty for every body
+	// that defers nothing, which is every body but a factory written this way.
+	var nascentSelfWrites as NascentSelfWriteArray
+	var nascentSelfChecks as NascentSelfCheckArray
 	// ⭐ **THE ONE EMPTY CONSUME LIST EVERY MARK OF A PROMISE-FREE PATH SHARES** — `emptyMoveMark`'s economy
 	// applied to the third column, and it is what keeps this whole mechanism free for the programs that have
 	// no promises in them. A mark is read-only, so one immortal empty list can stand in for all of them
@@ -14433,6 +14568,9 @@ export type Parser
 			functionMintedValueAliases: false,
 			promiseConsumes: PromiseConsumeRecordArray.create(),
 			enumAccessorReads: EnumAccessorReadArray.create(),
+			inNascentSelfFactory: false,
+			nascentSelfWrites: NascentSelfWriteArray.create(),
+			nascentSelfChecks: NascentSelfCheckArray.create(),
 			sharedEmptyPromiseConsumes: PromiseConsumeRecordArray.create(),
 			referencedNames: ByteArrayArray.create(),
 			mutabilityExercisedNames: ByteArrayArray.create(),
@@ -26435,6 +26573,12 @@ export type Parser
 		// decision is made, and re-armed per function so a previous method's answer cannot stand in for this one.
 		self.functionCarriesLayoutParam = needsLayoutParam
 		self.functionCarriesFixedElementCountParam = needsCountParam
+		// ⭐ **THE ONE DECLARATION SHAPE `self.<field> = …` MEANS ANYTHING IN.** A `static function` of a
+		// `type` returning that type is the factory `/specs/field-initialization.md`'s third rule is about:
+		// there is no receiver, so the assignment cannot be a store — it names the value the `Self{…}` below
+		// it will BE. An `enum`/`union` has no fields to defer, and everywhere else `self` outside an
+		// instance method stays E2001.
+		self.inNascentSelfFactory = not takesReceiver and not self.enclosingType.isEmpty() and not self.enclosingTypeIsEnum and self.returnsEnclosingType(returnType)
 		self.functionDroppedOpaqueWithoutDescriptor = false
 		self.functionStoredOpaqueWithoutDescriptor = false
 
@@ -26488,6 +26632,10 @@ export type Parser
 		// Re-created for the reason directly above: an accessor read is keyed on a `ValueId`, and this body's
 		// values reuse the previous one's numbers.
 		self.enumAccessorReads = EnumAccessorReadArray.create()
+		// Re-created for that reason one dimension over: a deferred write is keyed on a `BlockId`, and block
+		// ids restart with each function.
+		self.nascentSelfWrites = NascentSelfWriteArray.create()
+		self.nascentSelfChecks = NascentSelfCheckArray.create()
 		// Re-created for the same reason, one step further out: a name mentioned in the PREVIOUS function
 		// would excuse a candidate of that name here. The name-scoped half is bounded to ONE function,
 		// exactly as the oracle's per-function `_referencedVars` is.
@@ -26753,8 +26901,10 @@ export type Parser
 			// parseStatements threads a "current block" that control-flow statements can
 			// move forward (an `if` leaves subsequent statements in its continuation block),
 			// so the block it RETURNS — not `entry` — is the one control falls out of.
+			try self.declareNascentSelfSlots(func, block: entry, nameTok: nameTok)
 			var bodyEnd = try self.parseStatements(func, block: entry)
 			try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
+			try self.validateNascentSelfAssignments(func)
 			try self.requireDescriptorForOpaqueDrops(nameTok.value, line: nameTok.line, column: nameTok.column)
 			// ⚠ The BARE name off the token, not `sourceName` and not `name`: the interface-requirement waiver
 			// matches against the requirement an `interface` body spells, which is the method name alone.
@@ -28108,6 +28258,8 @@ export type Parser
 		self.ownedBindings = VarInfoArray.create()
 		self.promiseConsumes = PromiseConsumeRecordArray.create()
 		self.enumAccessorReads = EnumAccessorReadArray.create()
+		self.nascentSelfWrites = NascentSelfWriteArray.create()
+		self.nascentSelfChecks = NascentSelfCheckArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.lastRuntimeReadValid = false
@@ -44606,6 +44758,15 @@ export type Parser
 			// and this loop visits every token of every construct extent in the program. Called unguarded it
 			// would mint an empty array per token — see this header's own note on the Θ(bindings × constructs)
 			// probe that was removed from here for exactly that kind of cost.
+			// ⭐⭐ **A DEFERRED FIELD'S WRITE IS `self . <name> =`, WHICH THIS SCAN CANNOT SEE AS `identifier =`
+			// EITHER.** It reassigns the hidden slot `parseNascentSelfAssignment` holds the field in, and a
+			// branch that writes one must carry it exactly as a branch writing a `var` does. Left out, the two
+			// arms of an `if` mint no header phi and the merge reads a value neither arm defines — MEASURED:
+			// `seedInUse: value 3 is live-in to block 0 but was never colored`.
+			if self.nascentSelfAssignmentAt(i) 'aDeferredFieldWrite'
+				self.collectCarriedPositions(positions, name: nascentSelfSlotName(self.tokenAt((i + 2) as TokenIndex).value))
+			end 'aDeferredFieldWrite'
+
 			let equalsIndex = self.tupleAssignEqualsAt(i)
 			if equalsIndex != i 'aTupleAssignmentOpensHere'
 				for nameIndex in self.tupleAssignTargetIndices(i, equalsIndex: equalsIndex) 'eachTarget'
@@ -54789,6 +54950,9 @@ export type Parser
 
 		let layout = try self.requireConstructible(typeTok)
 
+		// ⭐ **E3086 ANCHORS ON THE `{`, WHERE THE MISSING FIELD WOULD BE WRITTEN** — not on the type name,
+		// which is not the thing that is wrong. Both reference compilers point here.
+		let lbraceTok = self.current()
 		try self.consume(TokenKind.leftBrace)
 		// Parallel to the LAYOUT, not to the source: `fieldValues[i]` is the value for the field the
 		// type declares at `i`, whatever position the literal wrote it in. `filled` is what turns an
@@ -54853,10 +55017,55 @@ export type Parser
 			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok))
 		end 'theEmptyContainer'
 
-		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: typeTok)
+		self.fillFromNascentSelfSlots(layout, fieldValues: fieldValues, filled: filled, fieldBareLocal: fieldBareLocal, anchor: lbraceTok)
+		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: lbraceTok)
 
 		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
 	end 'parseStructLiteral'
+
+	// ⭐⭐ **THE THIRD SOURCE OF A SLOT'S VALUE (`/specs/field-initialization.md`, rule 3): a `self.<field> = …`
+	// THIS FACTORY RAN EARLIER.** Asked after the literal's own fields and after the declared defaults, and
+	// before `requireAllFieldsInitialized`, which is the precedence the spec states — the literal always
+	// wins, and a deferred assignment is what a slot neither of them filled falls back to.
+	//
+	// ⚠ **IT FILLS, AND THE PROOF IS OWED SEPARATELY.** Whether the assignment REACHES this literal on every
+	// path is a question about control flow, and the parse is in the middle of the body — so the site is
+	// recorded and `validateNascentSelfAssignments` discharges it once the blocks exist.
+	//
+	// ⚠ The slot is a bare LOCAL, so the field is marked `fieldBareLocal`: a managed field would be moved out
+	// of it, which is exactly what the literal spelling of the same value does. (No managed field reaches
+	// here today — `declareNascentSelfSlots` opens no slot for one — but the mark is the honest description
+	// of where the value came from, not a bet on which types arrive.)
+	function fillFromNascentSelfSlots(layout StructLayout, fieldValues ValueIdArray, filled BoolArray, fieldBareLocal BoolArray, anchor Token)
+		if not self.inNascentSelfFactory 'notAFactory'
+			return
+		end 'notAFactory'
+
+		var deferred = ByteArrayArray.create()
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let wasFilled = try filled.get(i) otherwise panic("fillFromNascentSelfSlots: filled.get OOB at {i} — the columns are sized to the layout's field count")
+			if wasFilled 'alreadyGiven'
+				continue
+			end 'alreadyGiven'
+
+			let fieldName = try layout.fieldNames.get(i) otherwise panic("fillFromNascentSelfSlots: fieldNames.get OOB at {i}")
+			let slotName = nascentSelfSlotName(fieldName)
+			if not self.scope.contains(slotName) 'notDeferred'
+				continue
+			end 'notDeferred'
+
+			try fieldValues.set(i, value: self.scope.getInfo(slotName).boundValue) otherwise panic("fillFromNascentSelfSlots: fieldValues.set OOB at {i}")
+			try filled.set(i, value: true) otherwise panic("fillFromNascentSelfSlots: filled.set OOB at {i}")
+			try fieldBareLocal.set(i, value: true) otherwise panic("fillFromNascentSelfSlots: fieldBareLocal.set OOB at {i}")
+			deferred.push(fieldName)
+		end 'eachField'
+
+		if deferred.count() == 0 'nothingDeferred'
+			return
+		end 'nothingDeferred'
+
+		self.nascentSelfChecks.push(NascentSelfCheck.create(deferred, typeName: layout.name, block: self.currentBlock.id, position: self.currentBlock.opRefs.count(), line: anchor.line, column: anchor.column))
+	end 'fillFromNascentSelfSlots'
 
 	// ⭐⭐ **`<InnerAlias>{}` IS THE ALIAS'S EMPTY CONTAINER — the very value `<InnerAlias>.create()` builds**
 	// (S2i). A TOTAL router, so a form nobody thought about meets a sentence naming what it is rather than
@@ -55545,15 +55754,193 @@ export type Parser
 	// Reports the FIRST omitted field, in declaration order, so the message is a function of the
 	// type rather than of a hash walk.
 	function requireAllFieldsInitialized(layout StructLayout, filled BoolArray, anchor Token) throws ParseError
+		var unfilled = ByteArrayArray.create()
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let wasFilled = try filled.get(i) otherwise panic("requireAllFieldsInitialized: filled.get OOB at {i} — the column is sized to the layout's field count")
 			if wasFilled 'given'
 				continue
 			end 'given'
-			let fieldName = try layout.fieldNames.get(i) otherwise panic("requireAllFieldsInitialized: fieldNames.get OOB at {i}")
-			throw ParseError.fieldNotInitialized(String.from(layout.name), fieldName: String.from(fieldName), line: anchor.line, column: anchor.column)
+			unfilled.push(try layout.fieldNames.get(i) otherwise panic("requireAllFieldsInitialized: fieldNames.get OOB at {i}"))
 		end 'eachField'
+
+		if unfilled.count() == 0 'everySlotHasAValue'
+			return
+		end 'everySlotHasAValue'
+
+		// ⭐ **EVERY UNFILLED FIELD IN ONE SENTENCE, not the first one.** They are one edit for the author —
+		// a literal that omits two slots is fixed by writing both — and reporting the first would make the
+		// second a surprise on the next compile.
+		throw ParseError.fieldsNotInitialized(String.from(layout.name), fields: quotedNameList(unfilled), plural: unfilled.count() > 1, line: anchor.line, column: anchor.column)
 	end 'requireAllFieldsInitialized'
+
+	// ⭐⭐ **THE PROOF A DEFERRED FIELD OWES: it is assigned on EVERY path reaching the literal that takes
+	// it** (`/specs/field-initialization.md`, rule 3). A forward dataflow over the blocks the body actually
+	// built, meeting at joins by INTERSECTION — which is what makes a single-branch write and a loop-only
+	// write not count, while a write in both arms of an `if` does.
+	//
+	// ⭐ **IT READS THE PARSE'S OWN CFG AND MODELS NOTHING.** The GEN sets were recorded as the writes
+	// happened (`NascentSelfWrite`) and the successors come off each block's terminator, so a construct that
+	// branches in a way this pass has never heard of is still analysed correctly — the alternative, a second
+	// token-level model of control flow, is a model that can disagree with the one the program compiled to.
+	//
+	// ⚠ **IT IS QUADRATIC IN THIS FUNCTION'S BLOCK COUNT, DELIBERATELY.** Predecessors are found by scanning
+	// for them rather than indexed, because the pass runs only for a factory that defers a field — no other
+	// body in any program reaches it — and a CSR graph built per such function would cost more than it saves.
+	function validateNascentSelfAssignments(func IrFunction) throws ParseError
+		if self.nascentSelfChecks.count() == 0 'nothingDeferred'
+			return
+		end 'nothingDeferred'
+
+		let fields = self.nascentSelfFieldRoster()
+		let blockCount = func.blockRefs.count()
+		let width = fields.count()
+
+		// `entryIn` starts EMPTY at the entry block and FULL everywhere else, which is the initial condition an
+		// intersection dataflow needs: a block whose predecessors have not been visited must not yet constrain
+		// anything, and the entry block has none to be constrained by.
+		var entryIn = BoolArray.create()
+		var exitOut = BoolArray.create()
+		for b in 0 upto blockCount 'seedBlocks'
+			for f in 0 upto width 'seedFields'
+				entryIn.push(b > 0)
+				exitOut.push(b > 0 or self.nascentWriteReaches(func, blockOrdinal: b, field: try fields.get(f) otherwise panic("validateNascentSelfAssignments: fields.get OOB at {f}"), position: NascentWholeBlock))
+			end 'seedFields'
+		end 'seedBlocks'
+
+		var changed = true
+		while changed 'fixpoint'
+			changed = false
+			for b in 1 upto blockCount 'eachBlock'
+				for f in 0 upto width 'eachField'
+					let field = try fields.get(f) otherwise panic("validateNascentSelfAssignments: fields.get OOB at {f}")
+					let reaching = self.nascentReachesEveryPredecessor(func, blockOrdinal: b, field: f, width: width, exitOut: exitOut)
+					let slot = b * width + f
+					if (try entryIn.get(slot) otherwise panic("validateNascentSelfAssignments: entryIn.get OOB at {slot}")) == reaching 'settled'
+						continue
+					end 'settled'
+
+					try entryIn.set(slot, value: reaching) otherwise panic("validateNascentSelfAssignments: entryIn.set OOB at {slot}")
+					try exitOut.set(slot, value: reaching or self.nascentWriteReaches(func, blockOrdinal: b, field: field, position: NascentWholeBlock)) otherwise panic("validateNascentSelfAssignments: exitOut.set OOB at {slot}")
+					changed = true
+				end 'eachField'
+			end 'eachBlock'
+		end 'fixpoint'
+
+		for check in self.nascentSelfChecks 'eachSite'
+			try self.reportNascentSelfCheck(func, check: check, fields: fields, width: width, entryIn: entryIn)
+		end 'eachSite'
+	end 'validateNascentSelfAssignments'
+
+	// Does `field` reach the ENTRY of block `b` on every predecessor edge? A block with no predecessor at all
+	// is unreachable code, and an unreachable literal owes no proof — so it answers `true` rather than
+	// constraining anything.
+	function nascentReachesEveryPredecessor(func IrFunction, blockOrdinal ElementIndex, field ElementIndex, width ElementIndex, exitOut BoolArray) returns bool
+		let target = self.nascentBlockIdAt(func, ordinal: blockOrdinal)
+		var sawOne = false
+		var everyOne = true
+		for p in 0 upto func.blockRefs.count() 'eachPossiblePredecessor'
+			if not self.nascentBranchesTo(func, fromOrdinal: p, target: target) 'notAPredecessor'
+				continue
+			end 'notAPredecessor'
+
+			sawOne = true
+			if not (try exitOut.get(p * width + field) otherwise panic("nascentReachesEveryPredecessor: exitOut.get OOB")) 'missesOnThisEdge'
+				everyOne = false
+			end 'missesOnThisEdge'
+		end 'eachPossiblePredecessor'
+
+		return everyOne if sawOne else true
+	end 'nascentReachesEveryPredecessor'
+
+	// Does the block at `fromOrdinal` transfer to `target`? Read off its TERMINATOR and its conditional-branch
+	// body op, plus the fall-through edge to the next block in layout order — the three ways a block in this
+	// tier names a successor.
+	function nascentBranchesTo(func IrFunction, fromOrdinal ElementIndex, target BlockId) returns bool
+		let block = try self.artifact.module.blocks.get(try func.blockRefs.get(fromOrdinal) otherwise panic("nascentBranchesTo: blockRefs.get OOB at {fromOrdinal}")) otherwise panic("nascentBranchesTo: blockRef not in module.blocks")
+		if block.hasTerminatorOp() and nascentOpBranchesTo(try self.artifact.module.ops.get(block.terminatorIndex()) otherwise panic("nascentBranchesTo: terminator op not in module.ops"), target: target) 'viaTerminator'
+			return true
+		end 'viaTerminator'
+
+		if block.hasCondBranchOp() and nascentOpBranchesTo(try self.artifact.module.ops.get(block.condBranchIndex()) otherwise panic("nascentBranchesTo: condBranch op not in module.ops"), target: target) 'viaCondBranch'
+			return true
+		end 'viaCondBranch'
+
+		if not blockFallsThrough(block.terminator) 'noFallThroughEdge'
+			return false
+		end 'noFallThroughEdge'
+
+		let next = (fromOrdinal + 1) as ElementIndex
+		return next < func.blockRefs.count() and self.nascentBlockIdAt(func, ordinal: next) == target
+	end 'nascentBranchesTo'
+
+	function nascentBlockIdAt(func IrFunction, ordinal ElementIndex) returns BlockId
+		return (try self.artifact.module.blocks.get(try func.blockRefs.get(ordinal) otherwise panic("nascentBlockIdAt: blockRefs.get OOB at {ordinal}")) otherwise panic("nascentBlockIdAt: blockRef not in module.blocks")).id
+	end 'nascentBlockIdAt'
+
+	// Was `field` written in block `blockOrdinal` at or before `position`? `NascentWholeBlock` asks about the
+	// block entire, which is the GEN set the dataflow needs; a real position asks about the prefix a literal
+	// sits at the end of.
+	function nascentWriteReaches(func IrFunction, blockOrdinal ElementIndex, field ByteArray, position ElementIndex) returns bool
+		let id = self.nascentBlockIdAt(func, ordinal: blockOrdinal)
+		for write in self.nascentSelfWrites 'eachWrite'
+			if write.block == id and write.field.equals(field) and (position == NascentWholeBlock or write.position <= position) 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachWrite'
+
+		return false
+	end 'nascentWriteReaches'
+
+	// Every field this body deferred, once each — the dataflow's column set.
+	function nascentSelfFieldRoster() returns ByteArrayArray
+		var roster = ByteArrayArray.create()
+		for write in self.nascentSelfWrites 'eachWrite'
+			if not namesInclude(roster, name: write.field) 'newField'
+				roster.push(write.field)
+			end 'newField'
+		end 'eachWrite'
+
+		return roster
+	end 'nascentSelfFieldRoster'
+
+	// One literal's verdict: every field it took must reach it — through the block's entry, or through a
+	// write earlier in the block itself.
+	function reportNascentSelfCheck(func IrFunction, check NascentSelfCheck, fields ByteArrayArray, width ElementIndex, entryIn BoolArray) throws ParseError
+		var missing = ByteArrayArray.create()
+		for taken in check.fields 'eachTakenField'
+			if self.nascentFieldReachesCheck(func, check: check, field: taken, fields: fields, width: width, entryIn: entryIn) 'assigned'
+				continue
+			end 'assigned'
+
+			missing.push(taken)
+		end 'eachTakenField'
+
+		if missing.count() == 0 'everyFieldProven'
+			return
+		end 'everyFieldProven'
+
+		throw ParseError.fieldsNotDefinitelyAssigned(String.from(check.typeName), fields: quotedNameList(missing), firstField: String.from(try missing.get(0) otherwise panic("reportNascentSelfCheck: missing.get(0) on a non-empty list")), plural: missing.count() > 1, line: check.line, column: check.column)
+	end 'reportNascentSelfCheck'
+
+	function nascentFieldReachesCheck(func IrFunction, check NascentSelfCheck, field ByteArray, fields ByteArrayArray, width ElementIndex, entryIn BoolArray) returns bool
+		for b in 0 upto func.blockRefs.count() 'eachBlock'
+			if self.nascentBlockIdAt(func, ordinal: b) != check.block 'notTheSiteBlock'
+				continue
+			end 'notTheSiteBlock'
+
+			if self.nascentWriteReaches(func, blockOrdinal: b, field: field, position: check.position) 'writtenAbove'
+				return true
+			end 'writtenAbove'
+
+			for f in 0 upto width 'eachColumn'
+				if (try fields.get(f) otherwise panic("nascentFieldReachesCheck: fields.get OOB at {f}")).equals(field) 'thisColumn'
+					return try entryIn.get(b * width + f) otherwise panic("nascentFieldReachesCheck: entryIn.get OOB")
+				end 'thisColumn'
+			end 'eachColumn'
+		end 'eachBlock'
+
+		panic("nascentFieldReachesCheck: the literal's block is not in this function's own block list, or field '{String.from(field)}' is absent from a roster built out of the very writes that produced it")
+	end 'nascentFieldReachesCheck'
 
 	// Emit the box: allocate, then fill every slot. `fieldValues` is parallel to the LAYOUT.
 	//
@@ -70751,12 +71138,153 @@ export type Parser
 		let fieldTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 
+		// ⭐⭐ **IN A STATIC FACTORY THERE IS NO RECEIVER AND THIS IS NOT A STORE.** It DEFERS the field: the
+		// value is held in a hidden slot until the `Self{…}` this factory returns consumes it. See
+		// `parseNascentSelfAssignment`.
+		if self.inNascentSelfFactory 'aDeferredField'
+			try self.parseNascentSelfAssignment(func, selfTok: selfTok, fieldTok: fieldTok)
+			return
+		end 'aDeferredField'
+
 		// The receiver first, so `self.x = 1` in a `static function` reports what is actually wrong
 		// rather than tripping over the enclosing type's layout.
 		let receiver = try self.requireReceiverValue(selfTok)
 		let layout = try self.enclosingLayout(selfTok)
 		try self.emitCheckedSelfFieldStore(func, block: block, receiver: receiver, layout: layout, index: try self.requireFieldIndex(layout, fieldTok: fieldTok), fieldTok: fieldTok, range: SourceRange.between(selfTok, last: fieldTok))
 	end 'parseExplicitSelfFieldAssignment'
+
+	// ⭐⭐ **`self.<field> = <expr>` IN A STATIC FACTORY — THE THIRD WAY A FIELD GETS ITS VALUE**
+	// (`/specs/field-initialization.md`, rule 3). There is no receiver and no box: the value is bound to a
+	// HIDDEN LOCAL, and the `Self{…}` this factory returns takes it from there.
+	//
+	// ⭐ **THE SLOT IS AN ORDINARY LOCAL, WHICH IS THE WHOLE IMPLEMENTATION.** A `var` shv2 already carries
+	// through every merge it has — an `if`'s two arms give it a block argument, a loop carries it — so
+	// "which value does the literal see?" is answered by the machinery that answers it for `var acc`, and
+	// nothing here re-derives control flow. A MANAGED value is enrolled owned at its declaration exactly as
+	// `var s = "…"` is, so a path that assigns and returns without a literal drops it at the scope exit.
+	//
+	// ⇒ what is left over is only the SECOND question — is it assigned on every path that reaches the
+	// literal? — and that is `validateNascentSelfAssignments`, after the body, over the blocks the parse
+	// actually built.
+	function parseNascentSelfAssignment(func IrFunction, selfTok Token, fieldTok Token) throws ParseError
+		let layout = try self.enclosingLayout(selfTok)
+		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
+		let fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
+
+		let valueStart = self.pos
+		let parsed = try self.parseExpression(func, block: self.currentBlock)
+		// The coercion is the LITERAL's, through the same door — `self.v = 3` into a `float` field holds the
+		// widened f64, exactly as `Self{v: 3}` stores one, because the two spellings fill one slot.
+		let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, anchor: fieldTok)
+		let sourceName = self.rhsRootLocalName(valueStart)
+		let sourceReadsAField = self.rhsSpanReadsAField(valueStart)
+
+		let slotTok = self.nascentSelfSlotToken(fieldTok)
+		if not self.scope.contains(slotTok.value) 'noSlotForThisField'
+			throw ParseError.unsupported("deferring field '{String.from(fieldTok.value)}' of `type {String.from(layout.name)}` to a `self.{String.from(fieldTok.value)} = …` assignment — the field's type owns heap, and a deferred slot holds its value across control flow with no place to release it on a path that assigns and then leaves without building the `Self\{…\}`. Give the field in the literal instead", line: fieldTok.line, column: fieldTok.column)
+		end 'noSlotForThisField'
+
+		self.nascentSelfWrites.push(NascentSelfWrite.create(fieldTok.value, block: self.currentBlock.id, position: self.currentBlock.opRefs.count()))
+		try self.reassignBindingValue(func, binding: self.scope.getInfo(slotTok.value), nameTok: slotTok, value: value, rhsBareLocalName: sourceName if not sourceReadsAField else EmptySourceText)
+	end 'parseNascentSelfAssignment'
+
+	// ⭐⭐ **A DEFERRED FIELD'S SLOT IS OPENED AT THE TOP OF THE BODY, BEFORE ANY BLOCK IS — and that is the
+	// whole reason `if … self.v = 1 … else … self.v = 2 … end` then reaches the `Self{…}` with a phi.** A
+	// binding declared inside a branch leaves scope at that branch's `end` and is carried by nothing; one
+	// declared here is an ordinary function-scope `var`, and every merge shv2 already has carries it — the
+	// `if`'s block argument, the loop header's, the match's. Nothing about control flow is re-derived.
+	//
+	// ⚠ **THE SET COMES FROM A TOKEN SCAN, because a declaration cannot wait for the write that needs it.**
+	// It looks for `self . <name> =` and nothing else — the same four tokens the assignment door consumes —
+	// so a body that defers nothing pays one scan of its own tokens and declares nothing.
+	//
+	// ⚠ **A FIELD WHOSE TYPE OWNS HEAP GETS NO SLOT, and the assignment door refuses it by name.** The slot
+	// would hold a managed value across control flow with no owner: a path that assigns and then `throw`s
+	// leaks it, and a placeholder for the paths that do not assign is a null the scope exit would release.
+	// The literal spelling (`Self{name: …}`) has neither problem and is the cure the message names.
+	function declareNascentSelfSlots(func IrFunction, block IrBlock, nameTok Token) throws ParseError
+		if not self.inNascentSelfFactory 'notAFactory'
+			return
+		end 'notAFactory'
+
+		// ⚠ **THE ENTRY BLOCK IS SEEDED HERE AND NOT INHERITED.** This runs BEFORE `parseStatements`, which is
+		// what sets `currentBlock` for the body — so without this the placeholders are emitted into whatever
+		// block the PREVIOUS function ended on, and the entry block reads a value defined in another function.
+		// MEASURED: `seedInUse: value 3 is live-in to block 0 but was never colored`.
+		self.currentBlock = block
+
+		let layout = try self.enclosingLayout(nameTok)
+		let bodyStart = self.pos
+		let bodyEnd = self.bodyEndTokenIndex(bodyStart)
+		let range = SourceRange.ofToken(nameTok)
+
+		var i = bodyStart
+		while i < bodyEnd 'scan'
+			if self.nascentSelfAssignmentAt(i) 'aDeferredWrite'
+				try self.declareOneNascentSelfSlot(func, layout: layout, fieldTok: self.tokenAt((i + 2) as TokenIndex), range: range)
+			end 'aDeferredWrite'
+			i = (i + 1) as TokenIndex
+		end 'scan'
+	end 'declareNascentSelfSlots'
+
+	// Is the four-token run at `index` a deferred field write — `self . <name> =`? The same shape
+	// `parseExplicitSelfFieldAssignment` consumes, asked of the token stream so the slot can exist before the
+	// statement is reached.
+	function nascentSelfAssignmentAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.self and self.kindAt((index + 1) as TokenIndex) == TokenKind.dot and self.kindAt((index + 2) as TokenIndex) == TokenKind.identifier and self.kindAt((index + 3) as TokenIndex) == TokenKind.equals
+	end 'nascentSelfAssignmentAt'
+
+	// One slot, declared once however many times the body assigns the field. A name the layout does not
+	// declare is left alone: the real parse reports it (E3018) at the write, where the token is.
+	function declareOneNascentSelfSlot(func IrFunction, layout StructLayout, fieldTok Token, range SourceRange) throws ParseError
+		let slotTok = self.nascentSelfSlotToken(fieldTok)
+		if self.scope.contains(slotTok.value) 'alreadyOpen'
+			return
+		end 'alreadyOpen'
+
+		let index = layout.indexOfField(fieldTok.value)
+		if index >= layout.fieldCount() 'noSuchField'
+			return
+		end 'noSuchField'
+
+		try self.declareNascentSlotForField(func, layout: layout, index: index, slotTok: slotTok, range: range)
+	end 'declareOneNascentSelfSlot'
+
+	// One slot, once its field is known to exist. Split off because a `match` arm is one statement.
+	function declareNascentSlotForField(func IrFunction, layout StructLayout, index FieldIndex, slotTok Token, range SourceRange) throws ParseError
+		let placeholder = nascentSlotPlaceholderType(maxonTypeTag(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)))
+		match placeholder 'kind'
+			ownsHeap then return
+			value(valueType) then try self.declareInitializedBinding(func, nameTok: slotTok, value: self.emitLiteral(0, valueType: valueType, range: range), sourceName: EmptySourceText, sourceReadsAField: false, mutable: true)
+		end 'kind'
+	end 'declareNascentSlotForField'
+
+	// The token index of this body's own `end` — the first block closer the scan reaches at depth zero.
+	function bodyEndTokenIndex(bodyStart TokenIndex) returns TokenIndex
+		self.buildBlockExtentIndex()
+		let count = self.tokens.count()
+		var depth = 0
+		var i = bodyStart
+		while i < count 'scan'
+			if self.opensBlockAt(i) 'opens'
+				depth = depth + 1
+			end 'opens' else if self.closesBlockAt(i) 'closes'
+				if depth == 0 'ourOwnEnd'
+					return i
+				end 'ourOwnEnd'
+				depth = depth - 1
+			end 'closes'
+			i = (i + 1) as TokenIndex
+		end 'scan'
+
+		return count as TokenIndex
+	end 'bodyEndTokenIndex'
+
+	// The hidden slot's name token — the field's own, renamed into the reserved space. It carries the FIELD's
+	// line and column, so anything that anchors on the binding points at what the author wrote.
+	function nascentSelfSlotToken(fieldTok Token) returns Token
+		return Token.create(TokenKind.identifier, line: fieldTok.line, column: fieldTok.column, value: nascentSelfSlotName(fieldTok.value))
+	end 'nascentSelfSlotToken'
 
 	// `p.x = <expr>` — write field `x` of the box `p` points at. The exact mirror of
 	// `parseFieldAccess`: the same three tokens resolved through the same two steps (which type is
@@ -73805,6 +74333,9 @@ export type Parser
 		let savedOwnedBindings = self.ownedBindings
 		let savedPromiseConsumes = self.promiseConsumes
 		let savedEnumAccessorReads = self.enumAccessorReads
+		let savedInNascentSelfFactory = self.inNascentSelfFactory
+		let savedNascentSelfWrites = self.nascentSelfWrites
+		let savedNascentSelfChecks = self.nascentSelfChecks
 		let savedUnusedCandidates = self.unusedCandidates
 		let savedMintedValueAliases = self.functionMintedValueAliases
 		let savedReferencedNames = self.referencedNames
@@ -73987,6 +74518,11 @@ export type Parser
 		self.promiseConsumes = PromiseConsumeRecordArray.create()
 		// Fresh, and RESTORED below, for the same reason: an accessor read is keyed on a `ValueId`.
 		self.enumAccessorReads = EnumAccessorReadArray.create()
+		// ⭐ A CLOSURE IS NOT A FACTORY, whatever it was written inside: it declares its own body, returns its
+		// own value, and the `Self{…}` a factory's deferred fields belong to is not in it. Restored below.
+		self.inNascentSelfFactory = false
+		self.nascentSelfWrites = NascentSelfWriteArray.create()
+		self.nascentSelfChecks = NascentSelfCheckArray.create()
 		// A closure declares its own parameters and its body sees none of the enclosing function's bindings,
 		// so it owes its own E3012 accounting — drained under its own name below, before the restore.
 		self.unusedCandidates = UnusedBindingCandidateArray.create()
@@ -74273,6 +74809,9 @@ export type Parser
 		self.ownedBindings = savedOwnedBindings
 		self.promiseConsumes = savedPromiseConsumes
 		self.enumAccessorReads = savedEnumAccessorReads
+		self.inNascentSelfFactory = savedInNascentSelfFactory
+		self.nascentSelfWrites = savedNascentSelfWrites
+		self.nascentSelfChecks = savedNascentSelfChecks
 		self.unusedCandidates = savedUnusedCandidates
 		self.functionMintedValueAliases = savedMintedValueAliases
 		// ⭐ **A CAPTURE IS A MENTION IN THE ENCLOSING FUNCTION** — the oracle's own restore step

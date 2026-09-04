@@ -430,7 +430,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3086: <fragment>:8:22: field 'b' of 'Pair' is not initialized by this literal, and it has no default value
+error E3086: <fragment>:8:22: Field 'b' of type 'Pair' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
 ### A struct-literal initializer's field must suit the slot it fills

@@ -241,11 +241,7 @@ end 'main'
 error E2015: specs/fragments/field-initialization/type-parameter-field-literal-default-errors.test:5:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
 ```
 
-<!-- disabled-test: empty-literal-no-defaults-errors -->
-<!-- MEASURED 2026-09-04. shv2's E3086 is accurate for a compiler with no static-factory `self.field` assignment —
-     `field 'y' of 'P' is not initialized by this literal, and it has no default value` — while the pinned message
-     offers that third cure. The two move together: this wording becomes true the day
-     `factory-self-assign-straight-line` compiles. -->
+<!-- test: empty-literal-no-defaults-errors -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -268,11 +264,7 @@ end 'main'
 error E3086: specs/fragments/field-initialization/empty-literal-no-defaults-errors.test:10:14: Fields 'x', 'y' of type 'P' are not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
-<!-- disabled-test: missing-field-errors -->
-<!-- MEASURED 2026-09-04. shv2's E3086 is accurate for a compiler with no static-factory `self.field` assignment —
-     `field 'y' of 'P' is not initialized by this literal, and it has no default value` — while the pinned message
-     offers that third cure. The two move together: this wording becomes true the day
-     `factory-self-assign-straight-line` compiles. -->
+<!-- test: missing-field-errors -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -295,11 +287,7 @@ end 'main'
 error E3086: specs/fragments/field-initialization/missing-field-errors.test:10:14: Field 'y' of type 'P' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
-<!-- disabled-test: missing-non-exported-errors -->
-<!-- MEASURED 2026-09-04. shv2's E3086 is accurate for a compiler with no static-factory `self.field` assignment —
-     `field 'y' of 'P' is not initialized by this literal, and it has no default value` — while the pinned message
-     offers that third cure. The two move together: this wording becomes true the day
-     `factory-self-assign-straight-line` compiles. -->
+<!-- test: missing-non-exported-errors -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -322,11 +310,7 @@ end 'main'
 error E3086: specs/fragments/field-initialization/missing-non-exported-errors.test:10:14: Field 'hidden' of type 'Q' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
-<!-- disabled-test: factory-self-assign-straight-line -->
-<!-- MEASURED 2026-09-04: `error E2001: 'self' can only be used inside instance methods`. A static factory
-     assigning `self.<field>` before `return Self{}` is a language feature shv2 does not have — the bootstrap
-     compiles the straight-line form and answers 42. It needs definite-assignment analysis over the static's own
-     control flow, which is exactly what this file's two `-errors` cases pin. -->
+<!-- test: factory-self-assign-straight-line -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -351,11 +335,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: factory-self-assign-both-branches -->
-<!-- MEASURED 2026-09-04: `error E2001: 'self' can only be used inside instance methods`. A static factory
-     assigning `self.<field>` before `return Self{}` is a language feature shv2 does not have — the bootstrap
-     compiles the straight-line form and answers 42. It needs definite-assignment analysis over the static's own
-     control flow, which is exactly what this file's two `-errors` cases pin. -->
+<!-- test: factory-self-assign-both-branches -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -382,11 +362,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: factory-self-assign-one-branch-errors -->
-<!-- MEASURED 2026-09-04: `error E2001: 'self' can only be used inside instance methods`. A static factory
-     assigning `self.<field>` before `return Self{}` is a language feature shv2 does not have — the bootstrap
-     compiles the straight-line form and answers 42. It needs definite-assignment analysis over the static's own
-     control flow, which is exactly what this file's two `-errors` cases pin. -->
+<!-- test: factory-self-assign-one-branch-errors -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -411,11 +387,7 @@ end 'main'
 error E3086: specs/fragments/field-initialization/factory-self-assign-one-branch-errors.test:12:14: field 'value' of type 'Broken' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths
 ```
 
-<!-- disabled-test: factory-self-assign-loop-only-errors -->
-<!-- MEASURED 2026-09-04: `error E2001: 'self' can only be used inside instance methods`. A static factory
-     assigning `self.<field>` before `return Self{}` is a language feature shv2 does not have — the bootstrap
-     compiles the straight-line form and answers 42. It needs definite-assignment analysis over the static's own
-     control flow, which is exactly what this file's two `-errors` cases pin. -->
+<!-- test: factory-self-assign-loop-only-errors -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -442,11 +414,7 @@ end 'main'
 error E3086: specs/fragments/field-initialization/factory-self-assign-loop-only-errors.test:14:14: field 'value' of type 'LoopOnly' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths
 ```
 
-<!-- disabled-test: factory-multiple-returns -->
-<!-- MEASURED 2026-09-04: `error E2001: 'self' can only be used inside instance methods`. A static factory
-     assigning `self.<field>` before `return Self{}` is a language feature shv2 does not have — the bootstrap
-     compiles the straight-line form and answers 42. It needs definite-assignment analysis over the static's own
-     control flow, which is exactly what this file's two `-errors` cases pin. -->
+<!-- test: factory-multiple-returns -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

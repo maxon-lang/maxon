@@ -130,6 +130,18 @@ end 'Terminator'
 // one place, whichever half a caller holds. A caller that may NOT hold the block is why they exist: reading
 // a block out of `module.blocks` is a BORROW of that module (E3070), so a pass that writes while it walks
 // copies the slot out and asks these (see `LowerMaxonToStd`'s block walk).
+// Does control leave this block by falling into the NEXT one in layout order? The third way a block names
+// a successor, beside its terminator op and its conditional-branch op — and the one no op records, which is
+// why a CFG walk has to ask the slot.
+export function blockFallsThrough(terminator Terminator) returns bool
+	return match terminator 'check'
+		fallthrough gives true
+		unset gives false
+		dead gives false
+		opIndex gives false
+	end 'check'
+end 'blockFallsThrough'
+
 module function terminatorNamesAnOp(terminator Terminator) returns bool
 	return match terminator 'check'
 		unset to fallthrough gives false
