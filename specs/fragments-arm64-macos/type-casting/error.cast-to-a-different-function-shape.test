@@ -1,0 +1,22 @@
+// Test: error.cast-to-a-different-function-shape
+typealias Integer = int(i64.min to i64.max)
+typealias Predicate = function(Integer) returns bool
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function apply(p Predicate, n Integer) returns Integer
+	return 1 if p(n) else 0
+end 'apply'
+
+function main() returns ExitCode
+	let f = twice as Predicate
+	return apply(f, n: 3)
+end 'main'
+---
+MaxoncStderr: ```
+error E2003: specs/fragments/type-casting/error.cast-to-a-different-function-shape.test:14:19: Expected type name after 'as'
+```
+---
+---

@@ -1,0 +1,173 @@
+// Test: cast-to-another-alias-of-the-same-generic-instance
+typealias Integer = int(i64.min to i64.max)
+typealias Ints = Array with Integer
+typealias AlsoInts = Array with Integer
+
+function total(xs Ints) returns Integer
+	var sum = 0
+	for x in xs 'each'
+		sum = sum + x
+	end 'each'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	var xs = AlsoInts.create()
+	xs.push(20)
+	xs.push(22)
+	return total(xs as Ints)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @total(xs: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-24]
+    arm64.b total.each_0.header
+  each_0.header:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne total.each_0
+    arm64.b total.each_0.exit
+  each_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #24]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x4, [x3, #0]
+    arm64.mul x5, x0, x2
+    arm64.add x6, x4, x5
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-32]
+    arm64.ldr x8, [x29, #-32]
+    arm64.ldr x9, [x29, #-8]
+    arm64.add x10, x9, x8
+    arm64.str x10, [x29, #-8]
+    arm64.b total.each_0.incr
+  each_0.incr:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-24]
+    arm64.b total.each_0.header
+  each_0.exit:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq total.__skip_guarded_35
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label total.__skip_guarded_35
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl AlsoInts.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #20
+    arm64.bl AlsoInts.push
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #22
+    arm64.bl AlsoInts.push
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl total
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #255
+    arm64.cmp x0, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_14
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_AlsoInts(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_AlsoInts.slice_cleanup_0
+    arm64.b __destruct_AlsoInts.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_AlsoInts.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_AlsoInts.__skip_guarded_9
+    arm64.b __destruct_AlsoInts.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_AlsoInts.free_buf_0
+    arm64.b __destruct_AlsoInts.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_AlsoInts.raw_free_0
+    arm64.b __destruct_AlsoInts.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_AlsoInts.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_AlsoInts.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

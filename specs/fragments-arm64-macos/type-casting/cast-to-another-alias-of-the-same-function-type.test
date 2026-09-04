@@ -1,0 +1,66 @@
+// Test: cast-to-another-alias-of-the-same-function-type
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function apply(f UnaryOp, n Integer) returns Integer
+	return f(n)
+end 'apply'
+
+function main() returns ExitCode
+	let f = twice as UnaryOp
+	return apply(f, n: 21)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @twice(n: i64) -> i64 {
+  entry:
+    arm64.mov x1, #2
+    arm64.mul x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @apply(f: i64, __env_f: i64, n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.str x0, [x29, #-8]
+    arm64.mov x9, x0
+    arm64.mov x0, x2
+    arm64.blr x9
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_func x0, twice
+    arm64.mov x1, #0
+    arm64.mov x2, #21
+    arm64.bl apply
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_15
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---
