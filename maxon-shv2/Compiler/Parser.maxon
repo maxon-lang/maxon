@@ -3539,7 +3539,7 @@ export let U64MaxBound = u64.max as ParsedInt
 // ⚠ It is NOT one of `SignatureIndex`'s `DeclShape`/`TypeShape` discriminators and must not be given a number
 // out of that space: those tag WHAT KIND of declaration is being folded into the whole-program hash, and this
 // marks a position INSIDE one declaration's own sub-digest, which is built before any of them is reached.
-let FunctionAliasParamBoundary = 1 as ContentHash
+let FunctionAliasParamBoundary = 1 as HashDigest
 
 // Every unsigned type's lower bound. One constant, not four: `u8.min` and `u64.min`
 // are the same zero, and a per-type spelling would only invite them to drift apart.
@@ -23149,7 +23149,7 @@ export type Parser
 		// ⭐⭐ **THE ONE PARAMETER FACT BOTH PASSES CAN MINT — see `FunctionTypeAlias.paramSpelling`.** Folded
 		// UNCONDITIONALLY, outside every `recordSignature` gate below, because the SWEEP's copy is the only one
 		// the whole-program index ever receives and the hash is the only thing this is for.
-		var paramSpelling = fnvOffsetBasis()
+		var paramSpelling = Hasher.empty()
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
 				let paramAnchor = self.tokenAt(self.pos)
@@ -23165,7 +23165,7 @@ export type Parser
 				// NOT fix it: a punctuator's text is empty (see `mixWrittenTokens`). It is folded AFTER each
 				// parameter rather than between them so the count of boundaries IS the count of parameters, which
 				// the tolerant sweep can supply without a counter it does not keep.
-				paramSpelling = mix(self.mixWrittenTokens(paramSpelling, from: paramStart, to: self.pos), value: FunctionAliasParamBoundary)
+				paramSpelling = Hasher.combined(self.mixWrittenTokens(paramSpelling, from: paramStart, to: self.pos), value: FunctionAliasParamBoundary)
 				if recordSignature 'collectParam'
 					// ⭐ REFUSED HERE, and `recordSignature` is what keeps the tolerant declaration sweep out of it: the
 					// sweep passes `false` and must never veto, exactly as it must not for the six sibling positions.
@@ -23258,7 +23258,7 @@ export type Parser
 	// token range in this file and it re-inserts the `.` explicitly for exactly this reason** — the codebase
 	// had already learned this, and the first version of this walk was the one that did not compensate. See
 	// `FunctionAliasParamBoundary` for the collision that cost.
-	function mixWrittenTokens(state ContentHash, from TokenIndex, to TokenIndex) returns ContentHash
+	function mixWrittenTokens(state HashDigest, from TokenIndex, to TokenIndex) returns HashDigest
 		var out = state
 		for i in from upto to 'eachToken'
 			out = mixBytes(out, bytes: self.tokenAt(i).value)

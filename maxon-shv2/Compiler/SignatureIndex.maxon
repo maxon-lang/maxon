@@ -61,41 +61,41 @@
 // Small distinct constants, NOT the enums' ordinals: an ordinal is not a value in Maxon, and — the
 // real reason — a hash that moved when an enum's arms were REORDERED would invalidate every parse
 // memo in the project for a change that means nothing.
-let ReturnShapeVoid = 1 as ContentHash
-let ReturnShapeValue = 2 as ContentHash
-let TypeShapeBoolean = 3 as ContentHash
-let TypeShapeInteger = 4 as ContentHash
-let TypeShapeFloat = 5 as ContentHash
-let TypeShapeNamed = 6 as ContentHash
-let TypeShapeExitCode = 7 as ContentHash
-let TypeShapeUnresolved = 8 as ContentHash
+let ReturnShapeVoid = 1 as HashDigest
+let ReturnShapeValue = 2 as HashDigest
+let TypeShapeBoolean = 3 as HashDigest
+let TypeShapeInteger = 4 as HashDigest
+let TypeShapeFloat = 5 as HashDigest
+let TypeShapeNamed = 6 as HashDigest
+let TypeShapeExitCode = 7 as HashDigest
+let TypeShapeUnresolved = 8 as HashDigest
 
 // A ranged typealias's declaration, mixed into the same hash as a function's. Its own
 // discriminator, so a file that replaces a function with an alias of the same name moves the hash
 // rather than colliding two differently-shaped declarations on it.
-let DeclShapeAlias = 9 as ContentHash
+let DeclShapeAlias = 9 as HashDigest
 
 // A declared struct type's shape discriminator — `DeclShapeAlias`'s twin, for its reason: a name
 // that stops being a `typealias` and starts being a `type` must move the hash, not collide on it.
-let DeclShapeStruct = 14 as ContentHash
+let DeclShapeStruct = 14 as HashDigest
 
 // A declared enum/union's shape discriminator — `DeclShapeStruct`'s twin, for its reason: a name
 // that stops being a `type` and starts being an `enum` must move the hash rather than collide.
-let DeclShapeEnum = 20 as ContentHash
+let DeclShapeEnum = 20 as HashDigest
 
 // Whether a declared type is a `union` (vs an `enum`), mixed into the hash beside its name. Two
 // distinct constants because the only thing separating a payload-free union from an enum is the
 // diagnostic WORDING, and a reader that meets a non-exhaustive match must re-parse — and so print
 // "union" rather than "enum" — when `enum` becomes `union`.
-let EnumKindEnum = 21 as ContentHash
-let EnumKindUnion = 22 as ContentHash
+let EnumKindEnum = 21 as HashDigest
+let EnumKindUnion = 22 as HashDigest
 
 // Whether any case of a declared enum/union WROTE a raw value (W81) — two distinct constants, mixed beside
 // the kind above and for exactly its reason: the two shapes are otherwise indistinguishable to this hash, and
 // what separates them is how a reading file renders an interpolated value of the type. See
 // `EnumLayout.declaresRawValues`.
-let EnumAutoTagged = 101 as ContentHash
-let EnumDeclaresRawValues = 102 as ContentHash
+let EnumAutoTagged = 101 as HashDigest
+let EnumDeclaresRawValues = 102 as HashDigest
 
 // ⭐ **HOW A DECLARED ENUM'S TAGS ARE TO BE READ** (`EnumBacking`), mixed beside the case list for
 // `EnumKindEnum`'s reason one step sharper: the two backings can produce the SAME tag column
@@ -103,17 +103,17 @@ let EnumDeclaresRawValues = 102 as ContentHash
 // invisible to every reading file's parse memo — while it changes what those files compile `"{z}"` and
 // `z * 2.0` to. Three constants because there are three states and `unresolved` (an enum with no cases
 // yet) is one of them.
-let EnumBackingUnresolved = 67 as ContentHash
-let EnumBackingInteger = 68 as ContentHash
-let EnumBackingFloat = 69 as ContentHash
-let EnumBackingString = 79 as ContentHash
-let EnumBackingCharacter = 80 as ContentHash
-let EnumBackingFunctionRef = 81 as ContentHash
-let EnumBackingStructRecord = 82 as ContentHash
+let EnumBackingUnresolved = 67 as HashDigest
+let EnumBackingInteger = 68 as HashDigest
+let EnumBackingFloat = 69 as HashDigest
+let EnumBackingString = 79 as HashDigest
+let EnumBackingCharacter = 80 as HashDigest
+let EnumBackingFunctionRef = 81 as HashDigest
+let EnumBackingStructRecord = 82 as HashDigest
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
 // without being given a hash constant here — which is exactly how the string and character ones arrived.
-function enumBackingDiscriminator(backing EnumBacking) returns ContentHash
+function enumBackingDiscriminator(backing EnumBacking) returns HashDigest
 	return match backing 'b'
 		unresolved gives EnumBackingUnresolved
 		integer gives EnumBackingInteger
@@ -130,28 +130,28 @@ end 'enumBackingDiscriminator'
 // down to the CONSTANTS this column holds, so `add = Meta{value: 1}` edited to `Meta{value: 2}` changes what
 // every other file emits while that file's own bytes never move — the staleness `mixEnumCase`'s raw-value
 // line already exists to catch, for the one backing whose value is not in `caseRawValues` at all.
-let EnumBackingFieldSlot = 83 as ContentHash
+let EnumBackingFieldSlot = 83 as HashDigest
 
 // The ENUM-CASE form of such a field's value (`Priority.low`), separated from the LITERAL form so
 // `Priority.low` and the bare number `0` cannot fold alike — they are resolved by different rules and one
 // of them moves when `Priority`'s case list is edited.
-let EnumBackingFieldEnumCase = 84 as ContentHash
+let EnumBackingFieldEnumCase = 84 as HashDigest
 
 // The NESTED STRUCT form (`inner: Inner{value: 1}`), separated from the other two for their reason: it holds
 // a type NAME where the enum-case form holds two, and an entry that owns a group must not fold like a leaf
 // that happens to carry the same bytes.
-let EnumBackingFieldNestedStruct = 88 as ContentHash
+let EnumBackingFieldNestedStruct = 88 as HashDigest
 
 // ⭐ Which LITERAL a backing field was written as. `1` and `1.0` carry the same `ParsedInt`, and they
 // type-check differently against the field's declared type — so without this they fold alike and a file that
 // edits one into the other leaves every reader's parse memo standing. `enumBackingDiscriminator`'s reason,
 // one column further in, and a `match` for the same reason: a fourth literal kind cannot be added without
 // being given a number here.
-let EnumBackingLiteralInteger = 85 as ContentHash
-let EnumBackingLiteralFloat = 86 as ContentHash
-let EnumBackingLiteralBoolean = 87 as ContentHash
+let EnumBackingLiteralInteger = 85 as HashDigest
+let EnumBackingLiteralFloat = 86 as HashDigest
+let EnumBackingLiteralBoolean = 87 as HashDigest
 
-function enumBackingLiteralDiscriminator(kind EnumBackingLiteralKind) returns ContentHash
+function enumBackingLiteralDiscriminator(kind EnumBackingLiteralKind) returns HashDigest
 	return match kind 'k'
 		integerLiteral gives EnumBackingLiteralInteger
 		floatLiteral gives EnumBackingLiteralFloat
@@ -163,7 +163,7 @@ end 'enumBackingLiteralDiscriminator'
 // moves the hash rather than being absorbed by the first. Its own discriminator for `DeclShapeStruct`'s
 // reason: the list is a distinct fact from the case or field list beside it. The KIND it hangs off is
 // already in the hash (`DeclShapeEnum` / `DeclShapeStruct`), so one discriminator serves both.
-let DeclShapeDeclaredConformance = 55 as ContentHash
+let DeclShapeDeclaredConformance = 55 as HashDigest
 
 // One `with <TypeArg>` an `implements` clause BINDS (conditional extensions). ⚠ It needs a discriminator of
 // its OWN, and sharing the one above would be a live collision rather than a tidiness point:
@@ -181,7 +181,7 @@ let DeclShapeDeclaredConformance = 55 as ContentHash
 // ⚠ The BATCH22 commit message says `recordEnum` mixes both "four lines apart"; it does not — `recordEnum`
 // mixes the backing and `DeclShapeDeclaredConformance`. Corrected here rather than left standing, because a
 // WHY that names the wrong site is what the next reader would check against.
-let DeclShapeConformanceBinding = 72 as ContentHash
+let DeclShapeConformanceBinding = 72 as HashDigest
 
 // ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS AND
 // BOTH HALVES.** The reason the list must ride is the same on each and it is `recordStruct`'s rule: a
@@ -190,10 +190,10 @@ let DeclShapeConformanceBinding = 72 as ContentHash
 // for a `type` it decides which INTERFACE EXTENSION methods that type has at all, which is a whole set of
 // functions appearing in or vanishing from the program — and, through the `with` BINDINGS, which of a
 // CONDITIONAL extension's methods survive its `where` clause. `shape` names which half is being mixed.
-function mixDeclaredConformances(state ContentHash, conformsTo ByteArrayArray, shape ContentHash) returns ContentHash
+function mixDeclaredConformances(state HashDigest, conformsTo ByteArrayArray, shape HashDigest) returns HashDigest
 	var out = state
 	for name in conformsTo 'eachConformance'
-		out = mixBytes(mix(out, value: shape), bytes: name)
+		out = mixBytes(Hasher.combined(out, value: shape), bytes: name)
 	end 'eachConformance'
 	return out
 end 'mixDeclaredConformances'
@@ -206,10 +206,10 @@ end 'mixDeclaredConformances'
 // Without it `[[X], [Y]]` and `[[X, Y], []]` hash identically — two different programs (one binds `Y` at the
 // second interface, the other binds it at the first), and a reader served the wrong memo would substitute
 // one conformer's associated type for another's.
-function mixConformanceBindings(state ContentHash, bindings ConformanceBindingArray) returns ContentHash
+function mixConformanceBindings(state HashDigest, bindings ConformanceBindingArray) returns HashDigest
 	var out = state
 	for perInterface in bindings 'eachConformance'
-		out = mixDeclaredConformances(mix(out, value: perInterface.count()), conformsTo: perInterface, shape: DeclShapeConformanceBinding)
+		out = mixDeclaredConformances(Hasher.combined(out, value: perInterface.count()), conformsTo: perInterface, shape: DeclShapeConformanceBinding)
 	end 'eachConformance'
 	return out
 end 'mixConformanceBindings'
@@ -218,18 +218,18 @@ end 'mixConformanceBindings'
 // load-bearing rather than tidy: `named(Point)` and `structRef(Point)` carry the same NAME and mean
 // different things in every reader — one is a ranged int, the other a pointer — so a hash that
 // could not tell them apart would hand a reader a memo built under the wrong one.
-let TypeShapeStructRef = 15 as ContentHash
+let TypeShapeStructRef = 15 as HashDigest
 
 // The `MaxonType.string` arm's discriminator (P1.2 wave A). Distinct like every other shape: a
 // `String` return type hashes differently from an `int` one, so a memo built under one cannot be
 // served for the other.
-let TypeShapeString = 23 as ContentHash
+let TypeShapeString = 23 as HashDigest
 
 // A FUNCTION value's type shape (P1.5-A1) — so a `returns UnaryOp` return type hashes distinctly. Its
 // own discriminator for `TypeShapeStructRef`'s reason. (A function type reaches the SCANNED signature
 // path only if a future producer stores one; the sweep records a function-alias reference as `named`
 // until the alias is known, so today this arm is exhaustiveness insurance, hashed not panicked.)
-let TypeShapeFunction = 29 as ContentHash
+let TypeShapeFunction = 29 as HashDigest
 
 // A TYPE-PARAMETER reference's shape (P1.6-A) — `get() returns T` hashes distinctly. Its TOKEN is
 // mixed after the shape (W14: a digest of `(declaring type, parameter name)`, so mixing it IS mixing
@@ -237,18 +237,18 @@ let TypeShapeFunction = 29 as ContentHash
 // `uses A, B`'s `returns A` and `returns B` hash apart, and so do two DIFFERENT types' first
 // parameters, which the position it replaced hashed alike. A distinct prime for `TypeShapeStructRef`'s
 // reason.
-let TypeShapeTypeParameter = 31 as ContentHash
+let TypeShapeTypeParameter = 31 as HashDigest
 
 // A GENERIC-INSTANCE's shape (P1.6-A) — a `returns IntBox` hashes distinctly. The BASE name and each
 // ARG's shape are mixed after it (names, never ids), so `Box with Integer` and `Box with Bool` hash
 // apart. A distinct prime for `TypeShapeStructRef`'s reason.
-let TypeShapeGenericInstance = 37 as ContentHash
+let TypeShapeGenericInstance = 37 as HashDigest
 
 // A `Character`'s shape (P1.8 slice B) — a builtin with no name to mix, exactly like `TypeShapeString`.
 // A DISTINCT prime from it, and that is the whole point: a Character and a String share a RECORD but not
 // a TYPE, so `returns String` and `returns Character` must hash apart or a signature change between them
 // would serve a stale parse from every other file's memo.
-let TypeShapeCharacter = 41 as ContentHash
+let TypeShapeCharacter = 41 as HashDigest
 
 // An EXISTENTIAL's shape (P1.7a-existentials slice 1) — the INTERFACE's name is mixed after it, so
 // `returns Producer` and `returns Consumer` hash apart. A DISTINCT prime from `TypeShapeStructRef`, and
@@ -256,7 +256,7 @@ let TypeShapeCharacter = 41 as ContentHash
 // sharing the prime would make `returns Backend` (the interface) and a hypothetical `returns Backend` (a
 // struct of that name) hash identically — and a declaration that changed which one the name denotes would
 // serve every other file a stale parse whose dispatch is a witness slot rather than a direct call.
-let TypeShapeInterfaceRef = 43 as ContentHash
+let TypeShapeInterfaceRef = 43 as HashDigest
 
 // A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
 // struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
@@ -264,60 +264,60 @@ let TypeShapeInterfaceRef = 43 as ContentHash
 // a global's would let an edit that swaps one for the other land on the hash the other already
 // occupied. What rides is ACCEPTANCE — `var count` → `let count` must turn every other file's
 // `c.count = 5` into E2013, and a reader whose memo did not move would go on compiling it.
-let FieldShapeMutable = 16 as ContentHash
-let FieldShapeImmutable = 17 as ContentHash
+let FieldShapeMutable = 16 as HashDigest
+let FieldShapeImmutable = 17 as HashDigest
 
 // Whether a field declares a DEFAULT, mixed beside the payload when it does. Two constants and not
 // one, because "has no default" must hash differently from "defaults to 0" — the payload alone
 // cannot say so, and those two declarations accept different programs (`Self{}` is E3086 under the
 // first and legal under the second).
-let FieldShapeNoDefault = 18 as ContentHash
-let FieldShapeDefaulted = 19 as ContentHash
+let FieldShapeNoDefault = 18 as HashDigest
+let FieldShapeDefaulted = 19 as HashDigest
 
 // ⭐ A field whose default is an ARBITRARY EXPRESSION (S2f) — a THIRD constant beside those two, for their
 // exact reason one step out: a field that gains an expression default accepts programs the other two do
 // not (`Self{}` is legal, and the box holds a freshly-called value rather than a folded constant), so it
 // must hash differently from both. It rides ALONE — see `mixFieldDefault` for why the expression must not.
-let FieldShapeDefaultHelper = 75 as ContentHash
+let FieldShapeDefaultHelper = 75 as HashDigest
 
 // ⭐ Whether a LITERAL default's number was written with a leading minus — two constants beside the pair
 // above for their exact reason, one step further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the same kind
 // of negative `ParsedInt` and accept different programs (the first is E3005 in an `int(0 to u64.max)` field
 // and the second is not, `FieldDefault.literal`), so the payload alone cannot discriminate them and an edit
 // between the two spellings must move every reader's memo.
-let FieldDefaultWrittenNegative = 110 as ContentHash
-let FieldDefaultWrittenPlain = 111 as ContentHash
+let FieldDefaultWrittenNegative = 110 as HashDigest
+let FieldDefaultWrittenPlain = 111 as HashDigest
 
 // The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
 // not. Their own discriminators for `DeclShapeAlias`'s reason — a name that stops being a function
 // and starts being a constant must move the hash rather than collide.
-let ConstShapeValue = 10 as ContentHash
-let ConstShapeNoValue = 11 as ContentHash
+let ConstShapeValue = 10 as HashDigest
+let ConstShapeNoValue = 11 as HashDigest
 
 // The THIRD shape a top-level constant's answer hashes under (P1.7a): it folded to a managed LITERAL.
 // Its own discriminator for `ConstShapeValue`'s reason — a `let X = 0` that becomes `let X = "0"` must
 // move the hash, and the payload alone cannot say so (the bytes `"0"` and the number 0 are different
 // facts that a shared shape would let collide).
-let ConstShapeManagedValue = 45 as ContentHash
+let ConstShapeManagedValue = 45 as HashDigest
 
 // Which managed literal a constant folded to, mixed beside its bytes (P1.7a). Two constants because a
 // `String` and an `Array with Byte` over the SAME bytes are different types with different records, so
 // a reader that saw one must re-parse when it becomes the other.
-let ManagedShapeString = 46 as ContentHash
-let ManagedShapeByteArray = 47 as ContentHash
+let ManagedShapeString = 46 as HashDigest
+let ManagedShapeByteArray = 47 as HashDigest
 
 // The FOURTH shape a top-level binding's answer hashes under (P1.7 slice 2b): it folded to an ARRAY
 // LITERAL. Its own discriminator for `ConstShapeManagedValue`'s reason — `let X = "ab"` becoming
 // `let X = [1, 2]` turns every reader's materialized literal into a `.data` load, and nothing else on
 // the hash says so.
-let ConstShapeArrayValue = 48 as ContentHash
+let ConstShapeArrayValue = 48 as HashDigest
 
 // Which ELEMENT type an array literal folded to, mixed beside its label (P1.7 slice 2b). Two constants
 // for `ManagedShapeString`/`ManagedShapeByteArray`'s reason: `Array with Integer` and `Array with String`
 // are different types, and a reader types its load from the instance this picks.
-let ArrayElementShapeInteger = 49 as ContentHash
-let ArrayElementShapeString = 50 as ContentHash
-let ArrayElementShapeEnumCase = 107 as ContentHash
+let ArrayElementShapeInteger = 49 as HashDigest
+let ArrayElementShapeString = 50 as HashDigest
+let ArrayElementShapeEnumCase = 107 as HashDigest
 
 // The FIFTH shape a top-level binding's answer hashes under (spec-port `ownership`): it folded to a
 // CONTAINER FACTORY CALL. Its own discriminator for `ConstShapeArrayValue`'s reason — `var g = [1, 2]`
@@ -328,7 +328,7 @@ let ArrayElementShapeEnumCase = 107 as ContentHash
 // is a function of what else the program happened to intern, so hashing one would invalidate every reader's
 // memo whenever an unrelated instance appeared ahead of it. The mangled name is a function of the type
 // alone, which is exactly what a reader depends on.
-let ConstShapeContainerValue = 70 as ContentHash
+let ConstShapeContainerValue = 70 as HashDigest
 
 // A top-level binding that folded to a USER STATIC FACTORY CALL (spec-port `map-struct-bytearray`). Its
 // own discriminator for `ConstShapeContainerValue`'s reason, one step further: `var db = IntArray.create()`
@@ -337,7 +337,7 @@ let ConstShapeContainerValue = 70 as ContentHash
 //
 // ⚠ What rides beside it is the CALLEE's mangled `Type.method` name — a function of the source alone, for
 // the reason stated above — and deliberately not the arguments, which reach only `__module_init`.
-let ConstShapeFactoryValue = 71 as ContentHash
+let ConstShapeFactoryValue = 71 as HashDigest
 
 // A top-level binding that folded to a BOXED UNION'S PAYLOAD-FREE CASE. Its own discriminator for
 // `ConstShapeContainerValue`'s reason: `let t = MaxonType.unresolved` becoming `let t = SomeOther.case`
@@ -351,7 +351,7 @@ let ConstShapeFactoryValue = 71 as ContentHash
 // ⚠ **108 BECAUSE IT IS PAST THE MAXIMUM, not because a gap was picked.** The header above records three
 // duplicate claims in this space and predicts a fourth that nothing can refuse; taking a number above every
 // existing one is the only choice a reader can verify without trusting a census.
-let ConstShapeBoxedUnionValue = 108 as ContentHash
+let ConstShapeBoxedUnionValue = 108 as HashDigest
 
 // ⛔⛔ **`ConstShapeCharacterSetValue` HELD 103 AND WENT AT W129 WITH THE OUTCOME IT DISCRIMINATED, BUT ITS
 // LESSON IS THE NUMBER SPACE AND THAT DOES NOT GO WITH IT.** It held **72** — `DeclShapeConformanceBinding`'s
@@ -371,8 +371,8 @@ let ConstShapeBoxedUnionValue = 108 as ContentHash
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
 // becomes the other. Without these, changing `let` to `var` would leave every reader's memo
 // valid and every reader still inlining a number that now has storage behind it.
-let DeclShapeConstant = 12 as ContentHash
-let DeclShapeMutable = 13 as ContentHash
+let DeclShapeConstant = 12 as HashDigest
+let DeclShapeMutable = 13 as HashDigest
 
 // A function's PER-PARAMETER CONSUME BITS (P1.4a wave 2), mixed into the hash beside its name so a
 // cross-file caller re-parses when a callee's consume set changes. What rides is ACCEPTANCE and OWNERSHIP:
@@ -381,9 +381,9 @@ let DeclShapeMutable = 13 as ContentHash
 // reader whose memo did not move would keep the old drop behaviour, a double-free or a leak. Its own
 // discriminator for `DeclShapeAlias`'s reason. `ConsumeBitSet`/`ConsumeBitClear` distinguish a set bit
 // from a clear one so "param 0 consumed, param 1 not" hashes differently from the reverse.
-let DeclShapeParamConsume = 24 as ContentHash
-let ConsumeBitSet = 25 as ContentHash
-let ConsumeBitClear = 26 as ContentHash
+let DeclShapeParamConsume = 24 as HashDigest
+let ConsumeBitSet = 25 as HashDigest
+let ConsumeBitClear = 26 as HashDigest
 
 // A function's `throws E` clause discriminator (P1.4b). Its own discriminator for `DeclShapeAlias`'s
 // reason: a callee that GAINS or CHANGES a throws type changes whether each call site needs a `try`
@@ -391,25 +391,25 @@ let ConsumeBitClear = 26 as ContentHash
 // callee's throws clause does. Only THROWING functions are recorded (absence = non-throwing default),
 // exactly as `recordParamConsume` records only consuming ones — so a non-throwing function costs no
 // hash movement.
-let DeclShapeThrows = 27 as ContentHash
+let DeclShapeThrows = 27 as HashDigest
 
 // A function that NEVER RETURNS (G17) — `DeclShapeThrows`' discriminator one fact over, and its own for the
 // same reason: a callee that gains or loses divergence changes whether a bare call to it ENDS ITS CALLER'S
 // BLOCK, so a caller's parse memo must move when the callee's body stops (or starts) being able to return.
 // Only a proved-diverging declaration is recorded, so every ordinary function costs no hash movement.
-let DeclShapeDiverges = 107 as ContentHash
+let DeclShapeDiverges = 107 as HashDigest
 
 // A function that can only ever THROW (G18) — `DeclShapeDiverges`' second way out, and its own tag for
 // the identical reason: a callee that gains or loses the property changes whether a PROPAGATING `try`
 // statement on it ENDS ITS CALLER'S BLOCK, so a caller's parse memo must move with it. Only a proved
 // always-throwing declaration is recorded, so every ordinary function costs no hash movement.
-let DeclShapeAlwaysThrows = 108 as ContentHash
+let DeclShapeAlwaysThrows = 108 as HashDigest
 
 // ⭐ A function whose every `return` hands back a FRESH RECORD (SV1) — the two above's third sibling, and its
 // own tag for their reason one fact over: a callee that gains or loses the property changes whether a SEND may
 // MOVE its result to another green thread, so a caller's parse memo must move with it. Only a proved
 // fresh-returning declaration is recorded, so every ordinary function costs no hash movement.
-let DeclShapeReturnsFreshRecord = 109 as ContentHash
+let DeclShapeReturnsFreshRecord = 109 as HashDigest
 
 // ⭐ A declared RETURN TYPE's pre-erasure SPELLING (A2j / A2m) — the `DeclaredSurface` word `mixDeclaration`
 // folds in beside the return type. It is the one declaration fact `mixReturnType` structurally cannot carry:
@@ -417,77 +417,77 @@ let DeclShapeReturnsFreshRecord = 109 as ContentHash
 // spellings moves the return TYPE not at all while changing which member roster every caller's `let m = f()`
 // may then reach. A DISCRIMINATOR plus the word, rather than a tag pair, because A2m made the fact a word
 // and not a bit: mixing the word alone would let a plain surface (0) collide with the seed.
-let ReturnShapeSurface = 56 as ContentHash
+let ReturnShapeSurface = 56 as HashDigest
 
 // ⭐ A declared struct FIELD's pre-erasure SPELLING (A2j / A2m) — `ReturnShapeSurface`'s twin, one
 // declaration kind over, and load-bearing for the identical reason: `var buf as __ManagedMemory` and
 // `var buf as ByteArray` fold identically through `mixField`'s type, while a read of that field reaches a
 // different roster. Mixed by `mixField`, so it rides `recordStruct`'s one hash write like every other
 // per-field fact.
-let FieldShapeSurface = 58 as ContentHash
+let FieldShapeSurface = 58 as HashDigest
 
 // ⭐ ONE union case PAYLOAD SLOT (BATCH22) — the discriminator that opens a payload's contribution to
 // `mixEnumCase`, so a payload's NAME cannot be absorbed by the case name it follows and a case that GAINED a
 // slot cannot collide with the one it grew from. `DeclShapeDeclaredConformance`'s reason, one column over.
-let PayloadShapeSlot = 73 as ContentHash
+let PayloadShapeSlot = 73 as HashDigest
 
 // ⭐ A union PAYLOAD's pre-erasure SPELLING (BATCH22) — `FieldShapeSurface`'s twin at the fifth declared
 // position, load-bearing for the identical reason: `mem(m __ManagedMemory)` and `mem(m ByteArray)` fold
 // identically through `mixPayloadField`'s type, while the `match` binding out of them reaches a different
 // member roster.
-let PayloadShapeSurface = 74 as ContentHash
+let PayloadShapeSurface = 74 as HashDigest
 
 // A FUNCTION typealias's shape discriminator (P1.5-A1) — `DeclShapeAlias`'s twin, for its reason: a name
 // that stops being a ranged alias and becomes a function one, or whose function return type changes,
 // changes what a caller binding a value of it compiles to, so a caller's parse memo must move with it.
-let DeclShapeFunctionAlias = 28 as ContentHash
+let DeclShapeFunctionAlias = 28 as HashDigest
 
 // A generic-instance TYPEALIAS's shape discriminator (P1.6-A) — `DeclShapeAlias`'s twin. `IntBox =
 // Box with Integer` changing base or args changes what `IntBox.create(…)` resolves to and type-checks
 // against in ANY file, so a reader's parse memo must move with it.
-let DeclShapeGenericAlias = 30 as ContentHash
+let DeclShapeGenericAlias = 30 as HashDigest
 
 // A declared generic type's TYPE-PARAMETER shape discriminator (P1.6-A). A change to `type Box uses T`'s
 // param list — a rename or, load-bearingly, a change in COUNT — changes which `Box with …` instantiations
 // are the right arity in any file, so a reader's parse memo must move with the count.
-let DeclShapeTypeParam = 32 as ContentHash
+let DeclShapeTypeParam = 32 as HashDigest
 
 // A declared generic type's `where`-CONSTRAINT shape discriminator (P1.7a slice 2a). A change to `type Box
 // uses T where T is Digest`'s constraint list — an interface swapped, added, or dropped — changes which
 // `Box with …` instantiations are LEGAL (E3017) in any file and which witness table each dispatch reads, so
 // a reader's parse memo must move with it. The `DeclShapeTypeParam` twin for the constraint half.
-let DeclShapeWhereConstraint = 44 as ContentHash
+let DeclShapeWhereConstraint = 44 as HashDigest
 
 // A constructor parameter's TYPE-PARAMETER-FEED shape discriminators (P1.6-B2). Which type-parameter
 // position a parameter feeds decides whether a caller consumes a managed argument there, so a change to a
 // constructor's feed map must move a caller's parse memo — the consume twin of `ConsumeBitSet`/`Clear`.
-let FeedShapeFeeds = 38 as ContentHash
-let FeedShapeNone = 39 as ContentHash
+let FeedShapeFeeds = 38 as HashDigest
+let FeedShapeNone = 39 as HashDigest
 
 // The feed's SINK (W10). It decides whether the CALLEE is enrolled owner of the fed parameter, and whether a
 // BORROWED argument at that position is retained or given a scope lifetime — two different emitted programs
 // for the same position, so a change to it must move a caller's parse memo exactly as the position does.
-let FeedSinkConstructedValueShape = 76 as ContentHash
-let FeedSinkCalleeStorageShape = 77 as ContentHash
+let FeedSinkConstructedValueShape = 76 as HashDigest
+let FeedSinkCalleeStorageShape = 77 as HashDigest
 
 // A generic type's INNER ranged typealias shape discriminator (P1.6-C) — `DeclShapeAlias`'s twin, for its
 // reason: a change to `type Wrapper`'s `typealias Idx` (its range, or whether it exists) changes what
 // `Instance.Idx` resolves and type-checks against in ANY file, so a reader's parse memo must move with it.
-let DeclShapeInnerAlias = 40 as ContentHash
+let DeclShapeInnerAlias = 40 as HashDigest
 
 // An `interface` DECLARATION's shape discriminator (R7 for its `uses` arity, R8 for its requirements) —
 // `DeclShapeTypeParam`'s twin, and load-bearing for exactly its reason. The arity decides how many arguments
 // an unparenthesized `implements I with A, B` binds (`Parser.interfaceUsesArity`), so adding or removing a
 // `uses` name changes what a conformance in ANY file PARSES — the comma after an argument stops being another
 // argument and becomes another interface. A reader that did not re-parse would go on binding the old count.
-let DeclShapeInterface = 51 as ContentHash
+let DeclShapeInterface = 51 as HashDigest
 
 // One interface METHOD's shape discriminator (R8) — `DeclShapeInterface`'s per-requirement twin, and its own
 // so that moving a requirement between two interfaces moves the hash. A witness dispatch in any file reads
 // this method's slot index, result type, formals and ABI (`Parser.findWitnessDispatchCandidates`) and bakes all of them
 // into its own emitted code, so a change here has to re-parse every reader. See `recordInterfaceDeclaration`
 // for which fields ride and which deliberately do not.
-let DeclShapeInterfaceMethod = 52 as ContentHash
+let DeclShapeInterfaceMethod = 52 as HashDigest
 
 // One `extends` PARENT NAME's shape discriminator (R10c) — `DeclShapeInterfaceMethod`'s twin, and its own
 // for that twin's reason: a witness dispatch numbers its slot against the interface's TRANSITIVE requirement
@@ -495,7 +495,7 @@ let DeclShapeInterfaceMethod = 52 as ContentHash
 // file has already baked into its emitted code. Only the NAME is mixed — the parent's own requirements reach
 // this hash through the parent's own `recordInterfaceDeclaration`, one hash being folded over every
 // declaration in the program.
-let DeclShapeInterfaceParent = 60 as ContentHash
+let DeclShapeInterfaceParent = 60 as HashDigest
 
 // Does a declaration carry a hidden `self`? — a PRESENCE PAIR for `mixThrowsClause`'s reason and not a
 // marker on the receiverless arm alone: both kinds are possible in every position that mixes it, so a hash
@@ -511,8 +511,8 @@ let DeclShapeInterfaceParent = 60 as ContentHash
 //
 // The receiverless arm covers a top-level free function as well as a `static` method, which is why the pair
 // is named for the RECEIVER rather than for the keyword.
-let ReceiverShapeAbsent = 61 as ContentHash
-let ReceiverShapePresent = 62 as ContentHash
+let ReceiverShapeAbsent = 61 as HashDigest
+let ReceiverShapePresent = 62 as HashDigest
 
 // ⭐ A function's PER-PARAMETER DEFAULTS (BATCH2 slice 4), mixed into the hash beside its name for
 // `DeclShapeParamConsume`'s reason and with the identical PRESENCE-PAIR shape. What rides is what a CALL
@@ -526,11 +526,11 @@ let ReceiverShapePresent = 62 as ContentHash
 // its path, so a declaration that changes `= __line__` to `= __file__`, or either to an ordinary
 // expression, changes what every caller emits while the callers' own bytes stay put. That is exactly the
 // condition this hash exists for, and a shared "has a default" bit would fail it silently.
-let DeclShapeParamDefault = 63 as ContentHash
-let DefaultBitSet = 64 as ContentHash
-let DefaultBitClear = 65 as ContentHash
-let DefaultBitCallerLine = 99 as ContentHash
-let DefaultBitCallerFile = 100 as ContentHash
+let DeclShapeParamDefault = 63 as HashDigest
+let DefaultBitSet = 64 as HashDigest
+let DefaultBitClear = 65 as HashDigest
+let DefaultBitCallerLine = 99 as HashDigest
+let DefaultBitCallerFile = 100 as HashDigest
 
 // ⭐ A method's OPAQUE (bare type-parameter) PARAMETER POSITIONS (ARRR), mixed for `DeclShapeParamConsume`'s
 // reason and carrying exactly what a CALL SITE compiles to: which `uses` slot a parameter names decides
@@ -545,7 +545,7 @@ let DefaultBitCallerFile = 100 as ContentHash
 // consequence is a reader served a memo from a program it no longer describes. Nothing pinned it because a
 // collision needs the two shapes to line up positionally as well; the number is simply wrong, so it is
 // corrected rather than left for the day it lines up. The renumber invalidates every memo once, harmlessly.
-let DeclShapeOpaqueParams = 89 as ContentHash
+let DeclShapeOpaqueParams = 89 as HashDigest
 
 // ⭐ A function's per-parameter BY-REFERENCE columns (PBR-2), mixed for `DeclShapeParamConsume`'s reason and
 // carrying the strongest thing in this table: the callee's ABI. A parameter that GAINS a reassignment turns
@@ -555,19 +555,19 @@ let DeclShapeOpaqueParams = 89 as ContentHash
 // position), and the two columns ride separately because `isByRef` combines them with a whole-program gate
 // that a single merged bit could not express. The PRESENCE PAIR distinguishes "param 0 by-ref, param 1 not"
 // from the reverse, exactly as `ConsumeBitSet`/`ConsumeBitClear` do.
-let DeclShapeParamByRef = 90 as ContentHash
-let ByRefBitSet = 91 as ContentHash
-let ByRefBitClear = 92 as ContentHash
+let DeclShapeParamByRef = 90 as HashDigest
+let ByRefBitSet = 91 as HashDigest
+let ByRefBitClear = 92 as HashDigest
 
 // The three `ForwardCall` shapes and the three `DeclCallability` answers, as distinct hash marks — a
 // declaration that MOVES into or out of a type body, and a call that gains or loses a receiver, each change
 // an ABI without changing a parameter name, so both must move the memo key.
-let BareCallShape = 93 as ContentHash
-let ReceiverCallShape = 94 as ContentHash
-let SelfCallShape = 95 as ContentHash
-let RootFreeFunctionDecl = 96 as ContentHash
-let RoutableFreeFunctionDecl = 97 as ContentHash
-let MethodDecl = 98 as ContentHash
+let BareCallShape = 93 as HashDigest
+let ReceiverCallShape = 94 as HashDigest
+let SelfCallShape = 95 as HashDigest
+let RootFreeFunctionDecl = 96 as HashDigest
+let RoutableFreeFunctionDecl = 97 as HashDigest
+let MethodDecl = 98 as HashDigest
 
 // ⭐ A function's IMMUTABLE-GLOBAL-RETURN raw material (W117), mixed for `DeclShapeParamConsume`'s reason.
 // A body that starts or stops returning a `let` global — or starts returning what some OTHER function
@@ -575,7 +575,7 @@ let MethodDecl = 98 as ContentHash
 // only this hash can carry it. The declaring FILE rides because the same spelling resolves to different
 // declarations from different files (`declFor` probes file-scoped before bare), so two identical bodies in
 // two files genuinely state two different facts.
-let DeclShapeGlobalAliasReturn = 104 as ContentHash
+let DeclShapeGlobalAliasReturn = 104 as HashDigest
 
 // ⭐ A free function's NAMESPACE-QUALIFIED SPELLING (N1b) — `utils.helper` for a `helper` declared in
 // `utils/`. Its own discriminator for `DeclShapeAlias`'s reason, and load-bearing for a reason NO other
@@ -584,7 +584,7 @@ let DeclShapeGlobalAliasReturn = 104 as ContentHash
 // whether another file's `utils.helper()` resolves at all — so without this the reader's parse memo would
 // survive an edit that changes what the reader compiles to. The bare name rides through `record`; only the
 // qualified spelling can carry the directory.
-let DeclShapeNamespaceQualifiedFunction = 66 as ContentHash
+let DeclShapeNamespaceQualifiedFunction = 66 as HashDigest
 
 // ⭐ A `<Conformer>.<method>` PUBLISHED BY EXTENSIONS IN MORE THAN ONE FILE (X-contains) — the entry above's
 // property one declaration kind over, and load-bearing for the same reason. The contest decides the
@@ -592,7 +592,7 @@ let DeclShapeNamespaceQualifiedFunction = 66 as ContentHash
 // a fact about WHICH FILES declare the name rather than about any one file's bytes: moving an `extension`
 // from one file to another can start or end a contest without changing what either declaration SAYS. The
 // bare name rides through `record`; only this can carry the contest.
-let DeclShapeContestedExtensionMethod = 78 as ContentHash
+let DeclShapeContestedExtensionMethod = 78 as HashDigest
 
 // ⭐ A FREE FUNCTION whose registration base a SECOND FILE OF ITS OWN DIRECTORY declares — the entry above's
 // property one declaration kind over, and load-bearing for the same reason. The contest decides the
@@ -600,7 +600,7 @@ let DeclShapeContestedExtensionMethod = 78 as ContentHash
 // turns on WHICH FILES declare the base rather than on what any one of them SAYS: moving a `function` from
 // one file of a directory to another can start or end the contest with every `record` call byte-identical.
 // The base rides through `record`; only this can carry the contest.
-let DeclShapeCrossFileOverloadedFreeFunction = 105 as ContentHash
+let DeclShapeCrossFileOverloadedFreeFunction = 105 as HashDigest
 
 // ⭐⭐ **A `<Conformer>.<method>` A LISTED STDLIB `extension` DECLARES AND A USER FILE DECLARES TOO
 // (W188)** — the entry above's SIBLING, and deliberately not the same shape. That one says *"two
@@ -617,21 +617,21 @@ let DeclShapeCrossFileOverloadedFreeFunction = 105 as ContentHash
 // visible here only because a text conflict happened to land on the same line; had the two entries been ten
 // lines apart, git would have merged them clean and the tree would carry two facts under one mark. ⇒ `W127`'s
 // cure is a DERIVED tag space, and this is the second measurement arguing for it.
-let DeclShapeStdlibExtensionMethodBeatenByUser = 106 as ContentHash
+let DeclShapeStdlibExtensionMethodBeatenByUser = 106 as HashDigest
 
 // ⭐ **THE WHOLE-PROGRAM RE-READ OF ONE `implements` CLAUSE (W95)** — its own discriminator, and not
 // `DeclShapeDeclaredConformance`, because the two are mixed at DIFFERENT MOMENTS over the same declaration:
 // `recordStruct` mixes what the sweep could prove, and `refoldConformanceClause` mixes what the complete
 // index re-read. Sharing one shape would let a clause whose extent CHANGED between the two hash as a clause
 // that was read once and correctly — which is exactly the memo staleness this re-read exists to close.
-let DeclShapeRefoldedConformance = 91 as ContentHash
+let DeclShapeRefoldedConformance = 91 as HashDigest
 
 // A `throws` clause's PRESENCE discriminators (R8) — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
 // throws clause enters a content hash; before it existed the only mixer recorded THROWING clauses alone, where
 // absence was itself the fact and no `none` marker was needed.
-let ThrowsShapeNone = 53 as ContentHash
-let ThrowsShapeThrowing = 54 as ContentHash
+let ThrowsShapeNone = 53 as HashDigest
+let ThrowsShapeThrowing = 54 as HashDigest
 
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
@@ -3123,7 +3123,7 @@ export typealias TypeParamPositionArray = Array with TypeParamPosition
 // Do not narrow it, and note that a collision is DETECTED rather than assumed:
 // `ProgramSignatures.recordTypeParamToken` stops the compile on one.
 export function typeParamTokenFor(declaringTypeName ByteArray, paramName ByteArray) returns TypeParamId
-	return mixBytes(mixBytes(fnvOffsetBasis(), bytes: declaringTypeName), bytes: paramName)
+	return mixBytes(mixBytes(Hasher.empty(), bytes: declaringTypeName), bytes: paramName)
 end 'typeParamTokenFor'
 
 // ⭐ **WHICH POSITION IN `declarationName`'s OWN `uses` LIST THE TOKEN `token` NAMES — the door for a caller
@@ -3231,7 +3231,7 @@ end 'FeedSink'
 
 // The content-hash discriminator of one feed sink — the enum's own spelling for `mixTypeParamFeed`, kept beside
 // the enum so a third sink cannot be added without a discriminator of its own.
-function feedSinkShape(sink FeedSink) returns ContentHash
+function feedSinkShape(sink FeedSink) returns HashDigest
 	return match sink 'sink'
 		constructedValue gives FeedSinkConstructedValueShape
 		calleeStorage gives FeedSinkCalleeStorageShape
@@ -3560,7 +3560,7 @@ end 'forwardCallName'
 // The shape as a value that can be COMPARED and HASHED — what the memo fold and the per-body edge
 // de-duplication both need, neither of which dispatches on the arm. A `throughSelf` folds its type name in
 // too, because `self.f()` in two different types states two different edges.
-function forwardCallShapeMark(call ForwardCall) returns ContentHash
+function forwardCallShapeMark(call ForwardCall) returns HashDigest
 	return match call 'c'
 		bare gives BareCallShape
 		throughAReceiver gives ReceiverCallShape
@@ -3580,11 +3580,11 @@ end 'forwardCallsAreEqual'
 
 // One declaration's callability, folded into the memo hash — the twin of `forwardCallShapeMark` on the
 // declaration side, and a `match` so a fourth answer fails to compile here rather than hashing as a third.
-function foldCallability(state ContentHash, callability DeclCallability) returns ContentHash
+function foldCallability(state HashDigest, callability DeclCallability) returns HashDigest
 	return match callability 'c'
-		bareCallOnly gives mix(state, value: RootFreeFunctionDecl)
-		bareCallOrDirectoryRoute gives mix(state, value: RoutableFreeFunctionDecl)
-		methodOf(typeName) gives mixBytes(mix(state, value: MethodDecl), bytes: typeName)
+		bareCallOnly gives Hasher.combined(state, value: RootFreeFunctionDecl)
+		bareCallOrDirectoryRoute gives Hasher.combined(state, value: RoutableFreeFunctionDecl)
+		methodOf(typeName) gives mixBytes(Hasher.combined(state, value: MethodDecl), bytes: typeName)
 	end 'c'
 end 'foldCallability'
 
@@ -3940,7 +3940,7 @@ export typealias ParamDefaultProducerArray = Array with ParamDefaultProducer
 // The content-hash mark one slot's producer folds in — see `DeclShapeParamDefault` for why the four answers
 // are four marks. A free function because a `match` is the whole body and `recordParamDefaults` is inside a
 // loop that has no room for one.
-function defaultProducerMark(producer ParamDefaultProducer) returns ContentHash
+function defaultProducerMark(producer ParamDefaultProducer) returns HashDigest
 	return match producer 'produces'
 		required gives DefaultBitClear
 		callerLine gives DefaultBitCallerLine
@@ -6121,12 +6121,12 @@ end 'surfaceSubtreeSize'
 // surface is the one declaration fact `mixType` structurally cannot carry: `__ManagedMemory` and `ByteArray`
 // fold to the identical `genericInstance`, so an edit between the two spellings would move no memo key while
 // changing which member roster every caller's calls reach.
-function mixSurface(state ContentHash, surface DeclaredSurface) returns ContentHash
+function mixSurface(state HashDigest, surface DeclaredSurface) returns HashDigest
 	var h = state
 	for node in surface 'eachNode'
-		h = mix(h, value: node)
+		h = Hasher.combined(h, value: node)
 	end 'eachNode'
-	return mix(h, value: surface.count())
+	return Hasher.combined(h, value: surface.count())
 end 'mixSurface'
 
 // The node index tuple slot `slot` starts at — node 0's first child, advanced past each earlier sibling's
@@ -7039,7 +7039,7 @@ end 'tupleTypeNameHeadOf'
 // appear, which is a real loss of detail at nesting depth ≥ 2 — bought with the asymptote above, and paid
 // only by nested tuples, since a depth-1 tuple's name is unchanged to the byte.
 //
-// ⭐ **THE DIGEST IS `ContentHash`'s FNV-1a, NOT A SECOND HAND-ROLLED HASH.** `mixBytes` takes the
+// ⭐ **THE DIGEST IS `Hasher`'s FNV-1a, NOT A SECOND HAND-ROLLED HASH.** `mixBytes` takes the
 // `ByteArray` a name already is (no `String` round-trip), folds a trailing LENGTH TAG so a prefix cannot
 // alias its extension, and runs in `int(0 to u64.max)` where the multiply WRAPS rather than traps — the one
 // arithmetic property a cross-target-identical digest needs, already shipping on every target because the
@@ -7048,14 +7048,8 @@ end 'tupleTypeNameHeadOf'
 // can hit. Do not shorten it to make a golden prettier; `recordTupleElementToken` panics on a collision, and
 // that panic is a compile that STOPS.
 //
-// ⚠⚠ **THIS RUNG MADE THE COMPILER A SECOND PARTY TO `fnvOffsetBasis`, AND THAT CHANGES WHAT EDITING IT
-// COSTS.** `ContentHash.maxon`'s own header records that its offset basis was WRONG for months
-// (`0xCBF86344…` for `0xCBF29CE4…`) and nothing noticed, because *"a content-addressed cache key only has to
-// be stable, and a wrong basis is perfectly stable"* — it was caught only when a second implementation had
-// to produce the same number. That is no longer the situation: this digest is baked into committed goldens
-// and into emitted symbols on every target, so **changing the basis or the prime now renames every nested
-// tuple in the tree**. It is a strengthening (the constant finally has a second party checking it), but it
-// is a constraint that did not exist before W14b and is recorded here because nothing else records it.
+// ⚠ The basis and prime are baked into committed goldens and into emitted symbols on every target:
+// changing either renames every nested tuple in the tree.
 //
 // The rendering is HEX, the same `0-9a-f` the compiler already spells a machine value in. The alphabet is
 // what matters and hex satisfies it exactly: no `.`, so a token cannot hold the element separator, and no
@@ -7075,7 +7069,7 @@ end 'tupleTypeNameHeadOf'
 // descriptor label must never come "from a gid number ... a build-order artifact". Since W14b this token is
 // not one, which is why that header's tuple exception is gone rather than merely narrowed.
 function tupleElementTokenFor(name ByteArray) returns ByteArray
-	let digest = mixBytes(fnvOffsetBasis(), bytes: name)
+	let digest = mixBytes(Hasher.empty(), bytes: name)
 	return overloadRegistrationName(tupleTypeNameHeadOf(name), suffix: "{digest:x}".toByteArray())
 end 'tupleElementTokenFor'
 
@@ -8766,10 +8760,10 @@ end 'builtinInterfaceDeclIndices'
 // possible in the positions this is asked from and a hash that mixed nothing for `none` would let a
 // requirement LOSE its `throws` without any reader's memo moving — and the ABI a witness dispatch picks is
 // exactly that fact (`WitnessDispatchTarget.throwsClause`).
-function mixThrowsClause(state ContentHash, clause ThrowsClause) returns ContentHash
+function mixThrowsClause(state HashDigest, clause ThrowsClause) returns HashDigest
 	return match clause 'k'
-		none gives mix(state, value: ThrowsShapeNone)
-		throwing(throwsName) gives mixBytes(mix(state, value: ThrowsShapeThrowing), bytes: throwsName.toByteArray())
+		none gives Hasher.combined(state, value: ThrowsShapeNone)
+		throwing(throwsName) gives mixBytes(Hasher.combined(state, value: ThrowsShapeThrowing), bytes: throwsName.toByteArray())
 	end 'k'
 end 'mixThrowsClause'
 
@@ -8779,8 +8773,8 @@ end 'mixThrowsClause'
 // against the TYPES, so renaming a formal in file A changes what `f(x, other: y)` means in file B. The COUNT
 // leads because arity alone decides E3036 at every dispatch; per-slot markers are unnecessary because
 // `mixBytes` already carries a length tag, which is what keeps `("ab","c")` apart from `("a","bc")`.
-function mixInterfaceFormals(state ContentHash, names ByteArrayArray, types ByteArrayArray) returns ContentHash
-	var out = mix(state, value: names.count())
+function mixInterfaceFormals(state HashDigest, names ByteArrayArray, types ByteArrayArray) returns HashDigest
+	var out = Hasher.combined(state, value: names.count())
 	for i in 0 upto names.count() 'eachFormal'
 		let name = try names.get(i) otherwise panic("mixInterfaceFormals: names.get OOB at {i} below count {names.count()}")
 		let typeName = try types.get(i) otherwise panic("mixInterfaceFormals: types.get OOB at {i} — an InterfaceMethodSig's paramNames and paramTypeNames are parallel by construction ({names.count()} names, {types.count()} types)")
@@ -10109,7 +10103,7 @@ export type ProgramSignatures
 	// untouched. Only this hash can carry that. Measured, not assumed: with the warm-rebuild gate's
 	// declaration probe pointed at a constant, a 7 → 8 edit re-parses every file in the project; the
 	// gate's `invalidation` property is what keeps it that way.
-	export var hash as ContentHash
+	export var hash as HashDigest
 	// ⭐ **THE NAMES OF EVERY MANAGED TOP-LEVEL BINDING IN THE PROGRAM** — `let` AND `var` (P1.7a / P1.7
 	// slice 2a) — written once per managed binding by `settleManagedValue`, read once per probe by
 	// `Parser.managedTopLevelReceiverAt`. It covers both kinds because the evaluator settles both the same
@@ -10415,7 +10409,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -11319,7 +11313,7 @@ export type ProgramSignatures
 		// `ByteArray.init` — per DECLARATION, for a fact that changes per FILE. The hash still distinguishes two
 		// files stating identical bodies, which is the whole reason the file rides.
 		if globalAliasReturns.count() > 0 'thisFileStatesOne'
-			self.hash = mixBytes(mix(self.hash, value: DeclShapeGlobalAliasReturn), bytes: filePath.toString().toByteArray())
+			self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeGlobalAliasReturn), bytes: filePath.toString().toByteArray())
 		end 'thisFileStatesOne'
 
 		for entry in globalAliasReturns 'eachGlobalAliasReturn'
@@ -12007,7 +12001,7 @@ export type ProgramSignatures
 			let incumbentIsStdlib = self.stdlibPublishedExtensionMethods.contains(qualified)
 			if incumbentIsStdlib != isStdlibSource 'oneSideIsTheCorpus'
 				self.stdlibExtensionMethodsBeatenByUser.insert(qualified)
-				self.hash = mixBytes(mix(self.hash, value: DeclShapeStdlibExtensionMethodBeatenByUser), bytes: qualified)
+				self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeStdlibExtensionMethodBeatenByUser), bytes: qualified)
 				if isStdlibSource 'theCorpusArrivedSecond'
 					return true
 				end 'theCorpusArrivedSecond'
@@ -12019,7 +12013,7 @@ export type ProgramSignatures
 			end 'oneSideIsTheCorpus'
 
 			self.contestedExtensionMethods.insert(qualified)
-			self.hash = mixBytes(mix(self.hash, value: DeclShapeContestedExtensionMethod), bytes: qualified)
+			self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeContestedExtensionMethod), bytes: qualified)
 			return false
 		end 'anExtensionAlreadyPublishedIt'
 
@@ -12091,14 +12085,14 @@ export type ProgramSignatures
 	// answer" the sweep's over-approximation rests on.
 	function recordParamConsume(name ByteArray, info ParamConsumeInfo)
 		self.funcParamConsumes.upsert(name, value: info)
-		var state = mixBytes(mix(self.hash, value: DeclShapeParamConsume), bytes: name)
+		var state = mixBytes(Hasher.combined(self.hash, value: DeclShapeParamConsume), bytes: name)
 		// The param NAMES ride too: a rename changes which labelled argument a caller slots to a consumed
 		// position, so a caller's memo must move when they do (`transferConsumedArgs` slots against them
 		// through `argSlotPosition`).
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamConsume: paramNames.get OOB at {i} despite i < count")
 			let bit = info.isConsumed(i)
-			state = mix(mixBytes(state, bytes: paramName), value: ConsumeBitSet if bit else ConsumeBitClear)
+			state = Hasher.combined(mixBytes(state, bytes: paramName), value: ConsumeBitSet if bit else ConsumeBitClear)
 		end 'eachName'
 		// The TYPE-PARAMETER FEEDS ride too (P1.6-B2): which position a parameter feeds decides whether a
 		// caller consumes a managed argument there, so a change to it must move the caller's parse memo. Only a
@@ -12116,10 +12110,10 @@ export type ProgramSignatures
 	// discriminator (so a parameter that GAINED a feed hashes distinctly from one that never had one). The SINK
 	// rides because the two sinks emit different programs for the same position (W10): one enrols the callee
 	// owner, the other leaves ownership with the constructed value.
-	function mixTypeParamFeed(state ContentHash, feed TypeParamFeed) returns ContentHash
+	function mixTypeParamFeed(state HashDigest, feed TypeParamFeed) returns HashDigest
 		return match feed 'f'
-			feeds(position, sink) gives mix(mix(mix(state, value: FeedShapeFeeds), value: position), value: feedSinkShape(sink))
-			none gives mix(state, value: FeedShapeNone)
+			feeds(position, sink) gives Hasher.combined(Hasher.combined(Hasher.combined(state, value: FeedShapeFeeds), value: position), value: feedSinkShape(sink))
+			none gives Hasher.combined(state, value: FeedShapeNone)
 		end 'f'
 	end 'mixTypeParamFeed'
 
@@ -12179,15 +12173,15 @@ export type ProgramSignatures
 		self.funcParamReassigns.upsert(name, value: info)
 		self.sawParamReassignment = self.sawParamReassignment or info.reassignsAnyParam()
 
-		var state = mixBytes(mix(self.hash, value: DeclShapeParamByRef), bytes: name)
+		var state = mixBytes(Hasher.combined(self.hash, value: DeclShapeParamByRef), bytes: name)
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamReassign: paramNames.get OOB at {i} despite i < count")
 			// BOTH columns ride, UN-COMBINED: whether a forward is live is a whole-program fact that is not this
 			// entry's to state, and folding the combined answer would hash two different declarations alike
 			// whenever the forwarding happened to be dead.
 			state = mixBytes(state, bytes: paramName)
-			state = mix(state, value: ByRefBitSet if bitAt(info.direct, index: i) else ByRefBitClear)
-			state = mix(state, value: ByRefBitSet if bitAt(info.forwarded, index: i) else ByRefBitClear)
+			state = Hasher.combined(state, value: ByRefBitSet if bitAt(info.direct, index: i) else ByRefBitClear)
+			state = Hasher.combined(state, value: ByRefBitSet if bitAt(info.forwarded, index: i) else ByRefBitClear)
 		end 'eachName'
 		// The forwarding EDGES ride too, and they must: a body that starts or stops handing a parameter to a
 		// reassigning name changes its OWN ABI without changing one byte of any caller. The BARE name rides for
@@ -12201,7 +12195,7 @@ export type ProgramSignatures
 			// two bodies differing only in a receiver state different things and must not hash alike. The `self.`
 			// arm's TYPE rides inside the name it is folded through (`targetsOf` joins the same two halves).
 			state = mixBytes(state, bytes: forwardCallName(call))
-			state = mixBytes(mix(state, value: forwardCallShapeMark(call)), bytes: forwardCallSelfType(call))
+			state = mixBytes(Hasher.combined(state, value: forwardCallShapeMark(call)), bytes: forwardCallSelfType(call))
 		end 'eachEdge'
 		self.hash = state
 	end 'recordParamReassign'
@@ -12216,7 +12210,7 @@ export type ProgramSignatures
 
 		// The declaring FILE is NOT folded here — `foldFile` folds it once for the whole file, because that is
 		// the granularity the fact has. See there.
-		var state = mixBytes(mix(self.hash, value: DeclShapeGlobalAliasReturn), bytes: name)
+		var state = mixBytes(Hasher.combined(self.hash, value: DeclShapeGlobalAliasReturn), bytes: name)
 		for returned in info.returnedNames 'eachName'
 			state = mixBytes(state, bytes: returned)
 		end 'eachName'
@@ -12227,7 +12221,7 @@ export type ProgramSignatures
 			// three call shapes reach different nodes, so two bodies differing only in a receiver state
 			// different things and must not hash alike.
 			state = mixBytes(state, bytes: forwardCallName(call))
-			state = mixBytes(mix(state, value: forwardCallShapeMark(call)), bytes: forwardCallSelfType(call))
+			state = mixBytes(Hasher.combined(state, value: forwardCallShapeMark(call)), bytes: forwardCallSelfType(call))
 		end 'eachEdge'
 		self.hash = state
 	end 'recordGlobalAliasReturn'
@@ -12581,7 +12575,7 @@ export type ProgramSignatures
 		end 'anotherDeclarationOfThisName'
 
 		self.funcParamDefaults.upsert(name, value: info)
-		var state = mixBytes(mix(self.hash, value: DeclShapeParamDefault), bytes: name)
+		var state = mixBytes(Hasher.combined(self.hash, value: DeclShapeParamDefault), bytes: name)
 		// The param NAMES ride for `recordParamConsume`'s reason — a rename changes which labelled argument
 		// slots to a defaulted position — and the per-position presence bit rides because it is what decides
 		// whether a caller's short call is legal at all.
@@ -12596,7 +12590,7 @@ export type ProgramSignatures
 		// which is the `var`-payload mistake one registry over.
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamDefaults: paramNames.get OOB at {i} despite i < count")
-			state = mix(mixBytes(state, bytes: paramName), value: defaultProducerMark(info.producerFor(i)))
+			state = Hasher.combined(mixBytes(state, bytes: paramName), value: defaultProducerMark(info.producerFor(i)))
 		end 'eachName'
 		self.hash = state
 	end 'recordParamDefaults'
@@ -12747,7 +12741,7 @@ export type ProgramSignatures
 		// The THROWS TYPE NAME rides too — a callee that changes which error it throws changes what type a
 		// caller's `(e)` binding recovers — and it rides through the SHARED `mixThrowsClause`, so a function's
 		// clause and an interface requirement's clause enter the hash the one way.
-		self.hash = mixThrowsClause(mixBytes(mix(self.hash, value: DeclShapeThrows), bytes: name), clause: clause)
+		self.hash = mixThrowsClause(mixBytes(Hasher.combined(self.hash, value: DeclShapeThrows), bytes: name), clause: clause)
 	end 'recordThrows'
 
 	// ⭐⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT WHAT THEY THROW? — the question
@@ -12775,13 +12769,13 @@ export type ProgramSignatures
 	// two ways differ only in WHICH call shape reads them back, which is a property of the door and not of the
 	// recording — so a second copy of these four lines would be two chances to forget the tally, and the tally
 	// is the half that carries the safe direction.
-	function recordSweptBodyFact(name ByteArray, marked DeclaredBodyFactNameSet, counts FunctionDeclarationCountMap, shape ContentHash)
+	function recordSweptBodyFact(name ByteArray, marked DeclaredBodyFactNameSet, counts FunctionDeclarationCountMap, shape HashDigest)
 		if marked.contains(name) 'anotherSuchDeclarationOfThisName'
 			self.noteRepeatedDeclaration(counts, name: name)
 		end 'anotherSuchDeclarationOfThisName'
 
 		marked.insert(name)
-		self.hash = mixBytes(mix(self.hash, value: shape), bytes: name)
+		self.hash = mixBytes(Hasher.combined(self.hash, value: shape), bytes: name)
 	end 'recordSweptBodyFact'
 
 	// ⭐⭐ **DOES A CALL TO THIS NAME NEVER COME BACK? — the door `Parser.terminateAfterDivergingCall` asks
@@ -12927,15 +12921,15 @@ export type ProgramSignatures
 			self.interfaceNamesInDeclOrder.push(iface.name)
 		end 'firstDeclarationOfThisName'
 
-		self.hash = mix(mixBytes(mix(self.hash, value: DeclShapeInterface), bytes: iface.name), value: iface.associatedTypeNames.count())
+		self.hash = Hasher.combined(mixBytes(Hasher.combined(self.hash, value: DeclShapeInterface), bytes: iface.name), value: iface.associatedTypeNames.count())
 		for parentName in iface.extendsInterfaces 'eachParent'
-			self.hash = mixBytes(mix(self.hash, value: DeclShapeInterfaceParent), bytes: parentName)
+			self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeInterfaceParent), bytes: parentName)
 		end 'eachParent'
 		for method in iface.methods 'eachMethod'
-			self.hash = mixBytes(mixBytes(mix(self.hash, value: DeclShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
+			self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
 			self.hash = mixInterfaceFormals(self.hash, names: method.paramNames, types: method.paramTypeNames)
 			self.hash = mixThrowsClause(self.hash, clause: method.throwsClause)
-			self.hash = mix(self.hash, value: ReceiverShapeAbsent if method.isStatic else ReceiverShapePresent)
+			self.hash = Hasher.combined(self.hash, value: ReceiverShapeAbsent if method.isStatic else ReceiverShapePresent)
 		end 'eachMethod'
 	end 'recordInterfaceDeclaration'
 
@@ -13068,14 +13062,14 @@ export type ProgramSignatures
 
 		self.structTypes.upsert(layout.name, value: layout)
 
-		var state = mixBytes(mix(self.hash, value: DeclShapeStruct), bytes: layout.name)
+		var state = mixBytes(Hasher.combined(self.hash, value: DeclShapeStruct), bytes: layout.name)
 		// The type PARAMETERS ride the hash (P1.6-A): a change to `uses T` — a rename, or a change in
 		// COUNT — changes which `Box with …` instantiations are the right arity in any file, so a reader's
 		// parse memo must move with it. Mixed BEFORE the fields (a field's `typeParameter(token)` is only
 		// meaningful against this list).
 		for i in 0 upto layout.typeParamCount() 'eachTypeParam'
 			let paramName = try layout.typeParamNames.get(i) otherwise panic("ProgramSignatures.recordStruct: typeParamNames.get OOB at {i}")
-			state = mixBytes(mix(state, value: DeclShapeTypeParam), bytes: paramName)
+			state = mixBytes(Hasher.combined(state, value: DeclShapeTypeParam), bytes: paramName)
 		end 'eachTypeParam'
 		// The `where` constraints ride the hash (P1.7a slice 2a): a change to `where T is Digest` changes
 		// which `Box with …` are legal (E3017) and which witness table a dispatch reads in any file, so a
@@ -13083,7 +13077,7 @@ export type ProgramSignatures
 		// mixed, in list order — the witness-slot order depends on that order too.
 		for i in 0 upto layout.whereConstraintCount() 'eachConstraint'
 			let constraint = try layout.whereConstraints.get(i) otherwise panic("ProgramSignatures.recordStruct: whereConstraints.get OOB at {i}")
-			state = mixBytes(mix(mix(state, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex), bytes: constraint.interfaceName)
+			state = mixBytes(Hasher.combined(Hasher.combined(state, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex), bytes: constraint.interfaceName)
 		end 'eachConstraint'
 		// The `implements` list rides too — see `mixDeclaredConformances`. For a `type` it decides which
 		// INTERFACE EXTENSION methods the type has, so adding or removing a name here adds or removes whole
@@ -13123,7 +13117,7 @@ export type ProgramSignatures
 	function recordEnum(layout EnumLayout, declaredByTheCorpus bool)
 		upsertDeclaredEnum(self.enumTypes, layout: layout, declaredByTheCorpus: declaredByTheCorpus)
 
-		var state = mix(mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum), value: enumBackingDiscriminator(layout.backing))
+		var state = Hasher.combined(Hasher.combined(mixBytes(Hasher.combined(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum), value: enumBackingDiscriminator(layout.backing))
 		// ⭐⭐ **THE BACKING STRUCT'S NAME, WHICH THE DISCRIMINATOR ABOVE CANNOT CARRY.** `Meta` and `Other`
 		// are both `structRecord`, so the backing bit says only THAT a struct backs the cases, never WHICH —
 		// and which one it is decides what every reading file compiles a `.rawValue.<field>` to, because the
@@ -13141,7 +13135,7 @@ export type ProgramSignatures
 		// a file interpolating one of them compiles `green` for the first and `1` for the second: a warm
 		// rebuild across that edit would have served a parse of the reading file that renders the other one.
 		// A per-DECLARATION fact, so it rides here beside the struct name and not in `mixEnumCase`.
-		state = mix(state, value: EnumDeclaresRawValues if layout.declaresRawValues else EnumAutoTagged)
+		state = Hasher.combined(state, value: EnumDeclaresRawValues if layout.declaresRawValues else EnumAutoTagged)
 		// The `implements` list rides for the field list's reason (A1s wave 2) — see `mixDeclaredConformances`,
 		// which states it once for both declaration kinds.
 		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo, shape: DeclShapeDeclaredConformance)
@@ -13208,9 +13202,9 @@ export type ProgramSignatures
 		// ⭐ The BASE SPELLING rides in the SAME word (W43), for the element spelling's exact reason: it decides
 		// the member SURFACE every declared position naming this alias wears, and `mixType` cannot carry it —
 		// `__ManagedMemory with T` and `Array with T` fold to one `genericInstance`. A separate bit rather than
-		// a second `mix`, so a declaration that changes only its base's SPELLING still moves the hash.
-		let sizeBits = entry.fixedSize as ContentHash
-		var state = mix(mix(mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: entry.spellingBits()), value: sizeBits)
+		// a second fold, so a declaration that changes only its base's SPELLING still moves the hash.
+		let sizeBits = entry.fixedSize as HashDigest
+		var state = Hasher.combined(Hasher.combined(mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: entry.spellingBits()), value: sizeBits)
 		for arg in args 'eachHash'
 			state = self.mixType(state, t: arg)
 		end 'eachHash'
@@ -13390,11 +13384,11 @@ export type ProgramSignatures
 	// Fold one case's NAME, TAG and PAYLOAD SLOTS into the enum's hash. Split out so the SIGNED tag
 	// (`ParsedInt`) crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultPayload`
 	// have the same two lines for the same reason (the bootstrap rejects the cast as unneeded, E3010, when
-	// it is written inline as a nested `mix` argument).
-	function mixEnumCase(state ContentHash, layout EnumLayout, index CaseIndex) returns ContentHash
+	// it is written inline as a nested `Hasher.combined` argument).
+	function mixEnumCase(state HashDigest, layout EnumLayout, index CaseIndex) returns HashDigest
 		let named = mixBytes(state, bytes: layout.caseNameAt(index))
-		let tagBits = layout.tagOfIndex(index) as ContentHash
-		var folded = mix(named, value: tagBits)
+		let tagBits = layout.tagOfIndex(index) as HashDigest
+		var folded = Hasher.combined(named, value: tagBits)
 
 		// ⚠ **A RAW VALUE THE TAG DOES NOT CARRY MUST RIDE SEPARATELY** — `a = "x"` and `a = "y"` fold to the
 		// identical name + tag + backing, which is the same blind spot the backing discriminator above exists
@@ -13432,21 +13426,21 @@ export type ProgramSignatures
 	// being true when a case's entries became a TREE held flat (`EnumBackingField`): `Outer.create(Inner.
 	// create(1), flag: true)` and a shape whose two entries sit in the other group write the same labels and
 	// the same numbers in the same order and mean different things.
-	function mixEnumBackingFields(state ContentHash, layout EnumLayout, index CaseIndex) returns ContentHash
+	function mixEnumBackingFields(state HashDigest, layout EnumLayout, index CaseIndex) returns HashDigest
 		var folded = state
 		for field in layout.backingFieldsAt(index) 'eachField'
-			let slotted = mix(folded, value: EnumBackingFieldSlot)
+			let slotted = Hasher.combined(folded, value: EnumBackingFieldSlot)
 			let labelled = mixBytes(slotted, bytes: field.name)
-			let placed = mix(mix(labelled, value: field.position), value: field.group)
+			let placed = Hasher.combined(Hasher.combined(labelled, value: field.position), value: field.group)
 			match field.value 'value'
 				// The literal's KIND rides beside its bits: `1` and `1.0` are different declarations that fold
 				// to the same `ParsedInt` (`floatLiteralBits(0.0)` is 0), and they type-check differently.
-				literal(bits, kind) then folded = mix(mix(placed, value: bits), value: enumBackingLiteralDiscriminator(kind))
-				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(mix(placed, value: EnumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
+				literal(bits, kind) then folded = Hasher.combined(Hasher.combined(placed, value: bits), value: enumBackingLiteralDiscriminator(kind))
+				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(Hasher.combined(placed, value: EnumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
 				// The nested struct's own NAME, because it is checked against the field's declared type and a
 				// case naming a different one is a different declaration (`enumBackingNamedValueSuitsDomain`).
 				// Its constants ride as the entries of the group it owns, folded by this same loop.
-				nestedStruct(structName) then folded = mixBytes(mix(placed, value: EnumBackingFieldNestedStruct), bytes: structName)
+				nestedStruct(structName) then folded = mixBytes(Hasher.combined(placed, value: EnumBackingFieldNestedStruct), bytes: structName)
 			end 'value'
 		end 'eachField'
 
@@ -13463,22 +13457,22 @@ export type ProgramSignatures
 	// ⚠ **AND THE SPELLING RIDES BESIDE THE TYPE, for `FieldShapeSurface`'s reason** (this rung's own fact):
 	// `__ManagedMemory` and `ByteArray` fold to the identical `genericInstance` through `mixType`, while a
 	// binding destructured out of the two reaches a different member roster.
-	function mixPayloadField(state ContentHash, field PayloadField) returns ContentHash
-		let named = self.mixType(mixBytes(mix(state, value: PayloadShapeSlot), bytes: field.name), t: field.declaredType)
-		return mixSurface(mix(named, value: PayloadShapeSurface), surface: field.declaredSurface)
+	function mixPayloadField(state HashDigest, field PayloadField) returns HashDigest
+		let named = self.mixType(mixBytes(Hasher.combined(state, value: PayloadShapeSlot), bytes: field.name), t: field.declaredType)
+		return mixSurface(Hasher.combined(named, value: PayloadShapeSurface), surface: field.declaredSurface)
 	end 'mixPayloadField'
 
 	// Fold EVERYTHING the compiler reads off field `index` into the index's hash. See `recordStruct`
 	// for why each fact must ride, and why they must all ride from one place.
-	function mixField(state ContentHash, layout StructLayout, index FieldIndex) returns ContentHash
+	function mixField(state HashDigest, layout StructLayout, index FieldIndex) returns HashDigest
 		let fieldName = try layout.fieldNames.get(index) otherwise panic("ProgramSignatures.mixField: fieldNames.get OOB at {index}")
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.mixField: fieldTypes.get OOB at {index} — the field columns fell out of lockstep")
 
 		let named = self.mixType(mixBytes(state, bytes: fieldName), t: fieldType)
-		let withMutability = mix(named, value: FieldShapeMutable if layout.fieldIsMutable(index) else FieldShapeImmutable)
+		let withMutability = Hasher.combined(named, value: FieldShapeMutable if layout.fieldIsMutable(index) else FieldShapeImmutable)
 		// The declared SPELLING (A2j / A2m) — the one fact here `mixType` structurally cannot carry, since
 		// `__ManagedMemory` and `ByteArray` fold to the identical `genericInstance`. See `FieldShapeSurface`.
-		let withSpelling = mixSurface(mix(withMutability, value: FieldShapeSurface), surface: layout.fieldDeclaredSurface(index))
+		let withSpelling = mixSurface(Hasher.combined(withMutability, value: FieldShapeSurface), surface: layout.fieldDeclaredSurface(index))
 		return self.mixFieldDefault(withSpelling, defaultValue: layout.fieldDefault(index))
 	end 'mixField'
 
@@ -13497,11 +13491,11 @@ export type ProgramSignatures
 	// is the field's declared type, mixed by `mixField`'s own `mixType`. What is left is the presence BIT —
 	// a field that gained an expression default must hash differently from one with none and from one with
 	// a literal — which is this constant.
-	function mixFieldDefault(state ContentHash, defaultValue FieldDefault) returns ContentHash
+	function mixFieldDefault(state HashDigest, defaultValue FieldDefault) returns HashDigest
 		return match defaultValue 'shape'
-			none gives mix(state, value: FieldShapeNoDefault)
+			none gives Hasher.combined(state, value: FieldShapeNoDefault)
 			literal(payload, tag, writtenNegative) gives self.mixDefaultLiteral(state, payload: payload, tag: tag, writtenNegative: writtenNegative)
-			helper gives mix(state, value: FieldShapeDefaultHelper)
+			helper gives Hasher.combined(state, value: FieldShapeDefaultHelper)
 		end 'shape'
 	end 'mixFieldDefault'
 
@@ -13509,7 +13503,7 @@ export type ProgramSignatures
 	// arrives as a bound PARAMETER: it is SIGNED (`ParsedInt` — and a float default's is a bit
 	// pattern that routinely has its top bit set) while the hash domain is unsigned, so it crosses
 	// by an explicit cast, and that cast needs a local. `recordAlias` has the same two lines for the
-	// same reason: written inline as an argument to a nested `mix`, the bootstrap misreads it as
+	// same reason: written inline as an argument to a nested `Hasher.combined`, the bootstrap reads it as
 	// already-hashed and rejects the cast as unneeded (E3010) — a false positive that costs nothing
 	// to route around.
 	//
@@ -13528,12 +13522,12 @@ export type ProgramSignatures
 	// whether the source wrote a minus, which is what decides whether the default fits an
 	// `int(0 to u64.max)` field (`FieldDefault.literal`). Editing one spelling into the other must
 	// invalidate the memo, so it is mixed.
-	function mixDefaultLiteral(state ContentHash, payload ParsedInt, tag ValueTypeTag, writtenNegative bool) returns ContentHash
-		let payloadBits = payload as ContentHash
+	function mixDefaultLiteral(state HashDigest, payload ParsedInt, tag ValueTypeTag, writtenNegative bool) returns HashDigest
+		let payloadBits = payload as HashDigest
 		let sign = FieldDefaultWrittenNegative if writtenNegative else FieldDefaultWrittenPlain
 		// A field default names no TYPE — this door is the three-literal question its header describes, and
 		// the `named` arm `mixValueTag` grew is the top-level evaluator's alone.
-		return mix(mix(self.mixValueTag(mix(state, value: FieldShapeDefaulted), tag: tag, typeName: EmptySourceText), value: payloadBits), value: sign)
+		return Hasher.combined(Hasher.combined(self.mixValueTag(Hasher.combined(state, value: FieldShapeDefaulted), tag: tag, typeName: EmptySourceText), value: payloadBits), value: sign)
 	end 'mixDefaultLiteral'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
@@ -13551,11 +13545,11 @@ export type ProgramSignatures
 		_ = self.typeAliases.record(alias)
 
 		// The bounds are SIGNED (`ParsedInt`) and the hash domain is UNSIGNED, so each crosses by an
-		// explicit cast. Bound to locals rather than written inline: as arguments to a nested `mix`
-		// the bootstrap misreads them as already-hashed and rejects the casts as unneeded (E3010) —
-		// a false positive, and one that costs nothing to route around.
-		let low = alias.low as ContentHash
-		let high = alias.high as ContentHash
+		// explicit cast. Bound to locals rather than written inline: as arguments to a nested
+		// `Hasher.combined` the bootstrap misreads them as already-hashed and rejects the casts as
+		// unneeded (E3010) — a false positive, and one that costs nothing to route around.
+		let low = alias.low as HashDigest
+		let high = alias.high as HashDigest
 
 		// ⭐ **VISIBILITY RIDES FOR THE RANGE'S OWN REASON, now that P1.9 made it load-bearing** (review):
 		// widening a range changes what a `shr` on a value of the alias means, and adding or removing
@@ -13568,10 +13562,10 @@ export type ProgramSignatures
 		// modifier a user writes, and `module typealias Score` vs `export typealias Score` is a different answer
 		// to another file's `as Score` — so the two tiers must key different parses. The ordinal is used rather
 		// than a second bit because it is what a tier IS; a fourth case rides automatically.
-		let exported = tierOrdinal(alias.visibility) as ContentHash
+		let exported = tierOrdinal(alias.visibility) as HashDigest
 
-		let named = mixBytes(mix(self.hash, value: DeclShapeAlias), bytes: alias.name)
-		self.hash = mix(mix(mix(named, value: low), value: high), value: exported)
+		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeAlias), bytes: alias.name)
+		self.hash = Hasher.combined(Hasher.combined(Hasher.combined(named, value: low), value: high), value: exported)
 	end 'recordAlias'
 
 	// Add one INNER ranged typealias (P1.6-C) under its BASE-QUALIFIED name AND fold it into the hash —
@@ -13584,11 +13578,11 @@ export type ProgramSignatures
 		self.innerAliases.upsert(qualified, value: alias)
 
 		// Bound to locals for `recordAlias`'s reason (the bootstrap's E3010 false positive on an inline cast).
-		let low = alias.low as ContentHash
-		let high = alias.high as ContentHash
+		let low = alias.low as HashDigest
+		let high = alias.high as HashDigest
 
-		let named = mixBytes(mix(self.hash, value: DeclShapeInnerAlias), bytes: qualified)
-		self.hash = mix(mix(named, value: low), value: high)
+		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeInnerAlias), bytes: qualified)
+		self.hash = Hasher.combined(Hasher.combined(named, value: low), value: high)
 	end 'recordInnerAlias'
 
 	// ⭐⭐ **WHAT THE PRE-PASS KNOWS ABOUT AN `extension` BODY'S RANGED NESTED ALIASES *BEFORE* ANY VERDICT IS
@@ -13747,7 +13741,7 @@ export type ProgramSignatures
 			end 'sameFileOrAlreadyKnown'
 
 			self.crossFileOverloadedFreeFunctions.insert(base)
-			self.hash = mixBytes(mix(self.hash, value: DeclShapeCrossFileOverloadedFreeFunction), bytes: base)
+			self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeCrossFileOverloadedFreeFunction), bytes: base)
 			return
 		end 'thisDirectoryAlreadyDeclaresIt'
 
@@ -14203,7 +14197,7 @@ export type ProgramSignatures
 	// spelling alone and `DeclShapeNamespaceQualifiedFunction` for why it must ride the hash at all.
 	function recordNamespaceQualifiedFunction(qualifiedName ByteArray)
 		self.namespaceQualifiedFunctions.insert(qualifiedName)
-		self.hash = mixBytes(mix(self.hash, value: DeclShapeNamespaceQualifiedFunction), bytes: qualifiedName)
+		self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeNamespaceQualifiedFunction), bytes: qualifiedName)
 	end 'recordNamespaceQualifiedFunction'
 
 	// Add one FUNCTION typealias to the index AND fold it into the hash — the one write, for
@@ -14226,8 +14220,8 @@ export type ProgramSignatures
 	// (`Parser.readFunctionTypeAlias`), which is why it is here to be read.
 	function recordFunctionTypeAlias(alias FunctionTypeAlias)
 		self.functionTypeAliases.upsert(alias.name, value: alias)
-		let named = mixBytes(mix(self.hash, value: DeclShapeFunctionAlias), bytes: alias.name)
-		self.hash = mix(self.mixAliasReturnSlot(named, alias: alias), value: alias.paramSpelling)
+		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeFunctionAlias), bytes: alias.name)
+		self.hash = Hasher.combined(self.mixAliasReturnSlot(named, alias: alias), value: alias.paramSpelling)
 	end 'recordFunctionTypeAlias'
 
 	// ⭐⭐ **ONE STORED SIGNATURE SLOT FOLDED INTO THE HASH, AND ITS ARMS ARE `maxonTypeOfStoredTypeName`'s ARMS
@@ -14261,10 +14255,10 @@ export type ProgramSignatures
 	//
 	// ⚠ **THE `typeParameter` HALF IS CORRECT RAW AND STAYS RAW**, for `mixType`'s own stated reason: a W14
 	// token is a digest of two source NAMES, not an intern-order id, so mixing it IS mixing those names.
-	function mixAliasReturnSlot(state ContentHash, alias FunctionTypeAlias) returns ContentHash
-		let tagged = mixBytes(mix(state, value: alias.returnTag.rawValue as ContentHash), bytes: alias.returnTypeName)
+	function mixAliasReturnSlot(state HashDigest, alias FunctionTypeAlias) returns HashDigest
+		let tagged = mixBytes(Hasher.combined(state, value: alias.returnTag.rawValue as HashDigest), bytes: alias.returnTypeName)
 		match aliasSlotIdentity(alias.returnTag, typeParamToken: alias.returnTypeParamToken, genericInstanceId: alias.returnGenericInstanceId, slotName: alias.returnTypeName) 'identity'
-			typeParamToken(token) then return mix(tagged, value: token)
+			typeParamToken(token) then return Hasher.combined(tagged, value: token)
 			genericInstance(id) then return self.mixGenericInstance(tagged, id: id)
 			nameOnly then return tagged
 		end 'identity'
@@ -16205,7 +16199,7 @@ export type ProgramSignatures
 	// `export let MAGIC = 42` to `43` would re-parse the declaring file and hand every reader a memo
 	// with 42 still baked into it. (`QueryEngine.parseMemoKey` is the other half — see the `hash`
 	// field.)
-	function mixConstant(state ContentHash, decl TopLevelDecl) returns ContentHash
+	function mixConstant(state HashDigest, decl TopLevelDecl) returns HashDigest
 		let keyed = mixBytes(self.mixMutability(state, mutable: decl.mutable), bytes: decl.storageKey)
 		match decl.outcome 'o'
 			value(payload, tag, typeName) then return self.mixDeclAnswer(keyed, decl: decl, payload: payload, tag: tag, typeName: typeName)
@@ -16213,7 +16207,7 @@ export type ProgramSignatures
 			// re-materializes the literal from exactly these bytes, so `export let G = "a"` → `"b"` changes
 			// what every OTHER file compiles to while their own bytes never move. The KIND rides too: the
 			// same bytes as a `String` and as a `b"…"` produce different records and different types.
-			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(mix(keyed, value: ConstShapeManagedValue), kind: kind), bytes: bytes)
+			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(Hasher.combined(keyed, value: ConstShapeManagedValue), kind: kind), bytes: bytes)
 			// ⭐ **AN ARRAY BINDING MIXES ITS ELEMENT KIND AND ITS LABEL, AND NOT ITS ELEMENTS** (P1.7 slice
 			// 2b) — `mixDeclAnswer`'s `var` branch, for the identical reason and now for a `let` too. An array
 			// binding is STORED whichever keyword declared it, so every reader emits `globalAddr <label>` +
@@ -16223,11 +16217,11 @@ export type ProgramSignatures
 			// the load is typed with, and `[1]` becoming `["a"]` retypes every use — and the LABEL, which is
 			// the slot the emitted `globalAddr` names. Mixing the elements too would be SOUND and WRONG: the
 			// "sound, and useless" key that re-parses the program on every keystroke in any initializer.
-			arrayValue(elements, element) then return mixBytes(self.mixArrayElementKind(mix(keyed, value: ConstShapeArrayValue), element: element, enumName: constArrayLiteralEnumName(elements)), bytes: decl.dataLabel)
+			arrayValue(elements, element) then return mixBytes(self.mixArrayElementKind(Hasher.combined(keyed, value: ConstShapeArrayValue), element: element, enumName: constArrayLiteralEnumName(elements)), bytes: decl.dataLabel)
 			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE AND ITS LABEL** — the array-literal arm's two facts,
 			// with the instance stated outright instead of inferred from an element kind. There are no
 			// elements to leave out.
-			containerValue(giid, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
+			containerValue(giid, _) then return mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
 			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS ROOT CALLEE AND ITS LABEL, AND NOT ITS ARGUMENTS** — the
 			// array-literal arm's rule, applied to the one initializer that calls. Every reader emits
 			// `globalAddr <label>` + `loadIndirect`, byte-identical whichever arguments the call passes, so
@@ -16240,19 +16234,19 @@ export type ProgramSignatures
 			// ⭐ A STRUCT-LITERAL global (W116) mixes the STRUCT NAME in the callee's place, and its fields in
 			// the arguments' — i.e. not at all — because the two facts a reader depends on are the same two:
 			// the name fixes the slot's type, and `Pair{a: 1}` becoming `Pair{a: 2}` moves no reader's bytes.
-			factoryValue(calls, root, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeFactoryValue), bytes: constFactoryCallHashName(factoryCallAt(calls, id: root))), bytes: decl.dataLabel)
+			factoryValue(calls, root, _) then return mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeFactoryValue), bytes: constFactoryCallHashName(factoryCallAt(calls, id: root))), bytes: decl.dataLabel)
 			// ⭐ **A BOXED UNION'S PAYLOAD-FREE CASE MIXES ITS UNION AND ITS LABEL, AND NOT ITS CASE** — the
 			// array-literal arm's rule again. The union NAME fixes the slot's type and so every reader's
 			// `match`; the LABEL is the slot the emitted `globalAddr` names. The CASE reaches only
 			// `__module_init`, which is rebuilt from this arena whenever this query misses, so mixing it would
 			// re-parse every reader of a global whose emitted bytes did not move.
-			boxedUnionValue(typeName, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeBoxedUnionValue), bytes: typeName), bytes: decl.dataLabel)
+			boxedUnionValue(typeName, _) then return mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeBoxedUnionValue), bytes: typeName), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
 			// mixed: the build fails either way, and no reader's code depends on which diagnostic it
 			// failed with.
-			failed to poisoned then return mix(keyed, value: ConstShapeNoValue)
+			failed to poisoned then return Hasher.combined(keyed, value: ConstShapeNoValue)
 			pending to evaluating then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` folds the hash only after every walk has finished")
 		end 'o'
 	end 'mixConstant'
@@ -16264,27 +16258,27 @@ export type ProgramSignatures
 	// hash can carry it, and without it every reader would keep a memo that inlines a number the
 	// declaration no longer promises. (`ProgramSignatures.hash`'s field comment is the whole argument;
 	// this is the second fact it applies to.)
-	function mixMutability(state ContentHash, mutable bool) returns ContentHash
-		return mix(state, value: DeclShapeMutable if mutable else DeclShapeConstant)
+	function mixMutability(state HashDigest, mutable bool) returns HashDigest
+		return Hasher.combined(state, value: DeclShapeMutable if mutable else DeclShapeConstant)
 	end 'mixMutability'
 
 	// Mix a managed constant's KIND (P1.7a). Its own discriminator per kind, so `let G = "ab"` and a
 	// hypothetical byte-string of the same bytes hash apart — they materialize different records and
 	// give the reader a different TYPE, which is exactly the acceptance a stale memo would keep.
-	function mixManagedKind(state ContentHash, kind ManagedConstKind) returns ContentHash
+	function mixManagedKind(state HashDigest, kind ManagedConstKind) returns HashDigest
 		return match kind 'k'
-			string gives mix(state, value: ManagedShapeString)
-			byteArray gives mix(state, value: ManagedShapeByteArray)
+			string gives Hasher.combined(state, value: ManagedShapeString)
+			byteArray gives Hasher.combined(state, value: ManagedShapeByteArray)
 		end 'k'
 	end 'mixManagedKind'
 
 	// Mix an array binding's ELEMENT kind (P1.7 slice 2b) — `mixManagedKind`'s twin, and its own
 	// discriminator per kind for the same reason: `Array with Integer` and `Array with String` are different
 	// types, so every reader's load is typed differently and a memo that did not move would keep the old one.
-	function mixArrayElementKind(state ContentHash, element ConstArrayElementKind, enumName ByteArray) returns ContentHash
+	function mixArrayElementKind(state HashDigest, element ConstArrayElementKind, enumName ByteArray) returns HashDigest
 		return match element 'e'
-			integer gives mix(state, value: ArrayElementShapeInteger)
-			string gives mix(state, value: ArrayElementShapeString)
+			integer gives Hasher.combined(state, value: ArrayElementShapeInteger)
+			string gives Hasher.combined(state, value: ArrayElementShapeString)
 			// ⛔⛔ **THE ENUM'S NAME IS MIXED, AND LEAVING IT OUT IS A STALE-CACHE BUG RATHER THAN A COARSE
 			// KEY.** This arm's two neighbours can hash a shape alone because their kind IS their element type;
 			// `enumCase` is a FAMILY, and `Array with Reg` and `Array with CharClass` are different types with
@@ -16293,7 +16287,7 @@ export type ProgramSignatures
 			// name is the only thing standing between two enum arrays — without it, editing `[Reg.rcx]` to
 			// `[CharClass.other]` keeps the kind and keeps the label, and every reader is answered from the
 			// other's parse.
-			enumCase gives mixBytes(mix(state, value: ArrayElementShapeEnumCase), bytes: enumName)
+			enumCase gives mixBytes(Hasher.combined(state, value: ArrayElementShapeEnumCase), bytes: enumName)
 		end 'e'
 	end 'mixArrayElementKind'
 
@@ -16322,12 +16316,12 @@ export type ProgramSignatures
 	// whenever any global's initial value moved, which is precisely the "sound, and useless"
 	// failure `verify-warm-rebuild`'s property (b) exists to reject — the composite-source-hash key
 	// wearing a different hat. `globalValueEditIsLocal` is the probe that keeps this honest.
-	function mixDeclAnswer(state ContentHash, decl TopLevelDecl, payload ParsedInt, tag ValueTypeTag, typeName ByteArray) returns ContentHash
+	function mixDeclAnswer(state HashDigest, decl TopLevelDecl, payload ParsedInt, tag ValueTypeTag, typeName ByteArray) returns HashDigest
 		if not decl.mutable 'constantInlinesItsValue'
 			return self.mixConstantValue(state, payload: payload, tag: tag, typeName: typeName)
 		end 'constantInlinesItsValue'
 
-		return mixBytes(self.mixValueTag(mix(state, value: ConstShapeValue), tag: tag, typeName: typeName), bytes: decl.dataLabel)
+		return mixBytes(self.mixValueTag(Hasher.combined(state, value: ConstShapeValue), tag: tag, typeName: typeName), bytes: decl.dataLabel)
 	end 'mixDeclAnswer'
 
 	// The TAG rides the hash beside the payload: a `boolean` 1 and an `integer` 1 are the same number
@@ -16338,8 +16332,8 @@ export type ProgramSignatures
 	// bools; `foldIntCompare` yields a bool; `binOpResultTag` yields one of the two given two of the
 	// two). Hashing them "just in case" would be inventing a key for a value that cannot exist, and
 	// the day one can, this is where it must be decided rather than defaulted.
-	function mixConstantValue(state ContentHash, payload ParsedInt, tag ValueTypeTag, typeName ByteArray) returns ContentHash
-		return mix(self.mixValueTag(mix(state, value: ConstShapeValue), tag: tag, typeName: typeName), value: payload as ContentHash)
+	function mixConstantValue(state HashDigest, payload ParsedInt, tag ValueTypeTag, typeName ByteArray) returns HashDigest
+		return Hasher.combined(self.mixValueTag(Hasher.combined(state, value: ConstShapeValue), tag: tag, typeName: typeName), value: payload as HashDigest)
 	end 'mixConstantValue'
 
 	// Mix a FOLDED LITERAL's TAG. Shared by both arms of `mixDeclAnswer`, so a `let` and a `var`
@@ -16374,11 +16368,11 @@ export type ProgramSignatures
 	// `mixType` already gives a float from the `MaxonType` side: the two functions hash one lattice
 	// from two directions, and a float that hashed differently depending on which door it came
 	// through is a cache that answers a stale parse for a changed file.
-	function mixValueTag(state ContentHash, tag ValueTypeTag, typeName ByteArray) returns ContentHash
+	function mixValueTag(state HashDigest, tag ValueTypeTag, typeName ByteArray) returns HashDigest
 		match tag 'k'
-			integer then return mix(state, value: TypeShapeInteger)
-			boolean then return mix(state, value: TypeShapeBoolean)
-			float then return mix(state, value: TypeShapeFloat)
+			integer then return Hasher.combined(state, value: TypeShapeInteger)
+			boolean then return Hasher.combined(state, value: TypeShapeBoolean)
+			float then return Hasher.combined(state, value: TypeShapeFloat)
 			// ⭐⭐ **`named` IS REACHABLE NOW, AND THE NAME RIDES WITH THE SHAPE.** This arm used to panic on
 			// the premise that *"a constant's type is inferred from a bare initializer, so it is never a
 			// ranged alias (that needs an `as` cast, P1.9)"* — true of a ranged alias, and falsified by a
@@ -16390,7 +16384,7 @@ export type ProgramSignatures
 			// tag 0 — so `let a = Reg.rcx` and `let a = CharClass.other` would hash IDENTICALLY on shape plus
 			// payload alone, and a file edited from one to the other would be answered from the other's parse.
 			// That is exactly the failure this function's own header names two arms down.
-			named then return mixBytes(mix(state, value: TypeShapeNamed), bytes: typeName)
+			named then return mixBytes(Hasher.combined(state, value: TypeShapeNamed), bytes: typeName)
 			exitCode to void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 			// A struct is unreachable here for `globalStdType`'s reason and one more: the only way to
 			// build one is `T.create(…)`, and a CALL in a top-level initializer is E2045 in every
@@ -17504,7 +17498,7 @@ export type ProgramSignatures
 			layout.recordConformances(clause.names, bindings: clause.bindings)
 		end 'aType'
 
-		let named = mixBytes(mix(self.hash, value: DeclShapeRefoldedConformance), bytes: site.declName)
+		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeRefoldedConformance), bytes: site.declName)
 		self.hash = mixConformanceBindings(mixDeclaredConformances(named, conformsTo: clause.names, shape: DeclShapeDeclaredConformance), bindings: clause.bindings)
 	end 'refoldConformanceClause'
 
@@ -28744,61 +28738,61 @@ export type ProgramSignatures
 	// on a method decides whether a bare `helper()` in ANOTHER file's `extension` body resolves — and, when it
 	// does, whether the call carries the enclosing `self` — so the answer is baked into that file's memoized
 	// parse and the key that memo is validated against has to move with it.
-	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool, opaqueParams OpaqueParamInfo) returns ContentHash
+	function mixDeclaration(state HashDigest, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool, opaqueParams OpaqueParamInfo) returns HashDigest
 		let named = self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
-		let tiered = mix(mixSurface(mix(named, value: ReturnShapeSurface), surface: declaredSurface), value: tierOrdinal(visibility) as ContentHash)
-		return mixOpaqueParams(mix(tiered, value: ReceiverShapePresent if takesReceiver else ReceiverShapeAbsent), opaqueParams: opaqueParams)
+		let tiered = Hasher.combined(mixSurface(Hasher.combined(named, value: ReturnShapeSurface), surface: declaredSurface), value: tierOrdinal(visibility) as HashDigest)
+		return mixOpaqueParams(Hasher.combined(tiered, value: ReceiverShapePresent if takesReceiver else ReceiverShapeAbsent), opaqueParams: opaqueParams)
 	end 'mixDeclaration'
 
 	// ⭐ The opaque-parameter half of a declaration's hash (ARRR) — see `DeclShapeOpaqueParams` for what a
 	// reader copies out of it. A declaration that takes no bare type parameter mixes NOTHING, so every
 	// program without a generic type hashes exactly as it did before this rung: absence is the answer here
 	// too, and `recordThrows` skips a non-throwing clause for the same reason.
-	function mixOpaqueParams(state ContentHash, opaqueParams OpaqueParamInfo) returns ContentHash
+	function mixOpaqueParams(state HashDigest, opaqueParams OpaqueParamInfo) returns HashDigest
 		if not opaqueParams.declaresATypeParameterParam() 'takesNoBareTypeParameter'
 			return state
 		end 'takesNoBareTypeParameter'
 
-		var mixed = mix(state, value: DeclShapeOpaqueParams)
+		var mixed = Hasher.combined(state, value: DeclShapeOpaqueParams)
 		for i in 0 upto opaqueParams.paramNames.count() 'eachSlot'
 			let paramName = try opaqueParams.paramNames.get(i) otherwise panic("mixOpaqueParams: paramNames.get OOB at {i} despite i < count")
-			mixed = mix(mixBytes(mixed, bytes: paramName), value: opaqueParams.positionAt(i))
+			mixed = Hasher.combined(mixBytes(mixed, bytes: paramName), value: opaqueParams.positionAt(i))
 		end 'eachSlot'
-		return mix(mixed, value: opaqueParams.typeParamCount)
+		return Hasher.combined(mixed, value: opaqueParams.typeParamCount)
 	end 'mixOpaqueParams'
 
-	function mixReturnType(state ContentHash, returnType MaxonReturnType) returns ContentHash
+	function mixReturnType(state HashDigest, returnType MaxonReturnType) returns HashDigest
 		return match returnType 'r'
-			void gives mix(state, value: ReturnShapeVoid)
-			value(inner) gives self.mixType(mix(state, value: ReturnShapeValue), t: inner)
+			void gives Hasher.combined(state, value: ReturnShapeVoid)
+			value(inner) gives self.mixType(Hasher.combined(state, value: ReturnShapeValue), t: inner)
 		end 'r'
 	end 'mixReturnType'
 
-	function mixType(state ContentHash, t MaxonType) returns ContentHash
+	function mixType(state HashDigest, t MaxonType) returns HashDigest
 		return match t 'r'
-			boolean gives mix(state, value: TypeShapeBoolean)
-			integer gives mix(state, value: TypeShapeInteger)
-			float gives mix(state, value: TypeShapeFloat)
-			named(id) gives mixBytes(mix(state, value: TypeShapeNamed), bytes: self.nameOfId(id))
-			exitCode gives mix(state, value: TypeShapeExitCode)
+			boolean gives Hasher.combined(state, value: TypeShapeBoolean)
+			integer gives Hasher.combined(state, value: TypeShapeInteger)
+			float gives Hasher.combined(state, value: TypeShapeFloat)
+			named(id) gives mixBytes(Hasher.combined(state, value: TypeShapeNamed), bytes: self.nameOfId(id))
+			exitCode gives Hasher.combined(state, value: TypeShapeExitCode)
 			// `Parser.parseTypeReference` produces only `named` and the three primitive keywords, so
 			// a SCANNED signature can never carry `unresolved` — TypeResolution is what mints those,
 			// and it runs long after this. The arm exists because the match is exhaustive, and it
 			// hashes rather than panicking so that a future producer of `unresolved` signatures is a
 			// cache-key question, not a crash.
-			unresolved gives mix(state, value: TypeShapeUnresolved)
+			unresolved gives Hasher.combined(state, value: TypeShapeUnresolved)
 			// A struct reference, which a scanned signature very much CAN carry: `static function
 			// create(…) returns Self` inside `type Point` is recorded as `structRef(Point)` by
 			// `Parser.parseTypeReference`, so every declared factory in the program hashes through
 			// here. Its own shape (see `TypeShapeStructRef`) and then its NAME — never its id, for
 			// `mixDeclaration`'s reason.
-			structRef(id) gives mixBytes(mix(state, value: TypeShapeStructRef), bytes: self.nameOfId(id))
+			structRef(id) gives mixBytes(Hasher.combined(state, value: TypeShapeStructRef), bytes: self.nameOfId(id))
 			// A `String` (P1.2 wave A) — its own shape, and no name to mix (a builtin carries none). A
 			// signature declaring `returns String` hashes distinctly from every other return type.
-			string gives mix(state, value: TypeShapeString)
+			string gives Hasher.combined(state, value: TypeShapeString)
 			// A FUNCTION value (P1.5-A1) — its own shape, then its governing NAME (never its id, for
 			// `mixDeclaration`'s reason).
-			function(id) gives mixBytes(mix(state, value: TypeShapeFunction), bytes: self.nameOfId(id))
+			function(id) gives mixBytes(Hasher.combined(state, value: TypeShapeFunction), bytes: self.nameOfId(id))
 			// A TYPE-PARAMETER reference (P1.6-A) — its own shape, then its TOKEN. ⚠ **THE ONE ARM THAT MIXES
 			// AN `id` RATHER THAN A NAME, AND SINCE W14 IT DOES SO FOR A BETTER REASON.** `mixDeclaration`'s
 			// rule is names-never-ids because an INTERN-ORDER id shifts when an unrelated file declares
@@ -28810,24 +28804,24 @@ export type ProgramSignatures
 			//
 			// ⚠ W14 therefore invalidates every warm parse memo ONCE. The query cache is in-memory only
 			// (`QueryDatabase`), so there is no on-disk artifact to migrate.
-			typeParameter(id) gives mix(mix(state, value: TypeShapeTypeParameter), value: id)
+			typeParameter(id) gives Hasher.combined(Hasher.combined(state, value: TypeShapeTypeParameter), value: id)
 			// A GENERIC INSTANCE (P1.6-A) — its own shape, then its base NAME (never its id) and each ARG's
 			// shape (recursed), so `Box with Integer` and `Box with Bool` hash apart. `mixGenericInstance`
 			// reads the `(baseId, args)` payload out of THIS index's own registry.
-			genericInstance(id) gives self.mixGenericInstance(mix(state, value: TypeShapeGenericInstance), id: id)
+			genericInstance(id) gives self.mixGenericInstance(Hasher.combined(state, value: TypeShapeGenericInstance), id: id)
 			// A `Character` (P1.8 slice B) — its own shape, and no name to mix. It hashes DISTINCTLY from
 			// `string`: the two share a record but not a type (see `TypeShapeCharacter`).
-			character gives mix(state, value: TypeShapeCharacter)
+			character gives Hasher.combined(state, value: TypeShapeCharacter)
 			// An EXISTENTIAL — its own shape, then the INTERFACE's name (never its id, for `mixDeclaration`'s
 			// reason). A signature declaring `returns Producer` must hash apart from one declaring
 			// `returns Consumer`: the two pick different witness slots at every dispatch of the result.
-			interfaceRef(id) gives mixBytes(mix(state, value: TypeShapeInterfaceRef), bytes: self.nameOfId(id))
+			interfaceRef(id) gives mixBytes(Hasher.combined(state, value: TypeShapeInterfaceRef), bytes: self.nameOfId(id))
 		end 'r'
 	end 'mixType'
 
 	// Fold a generic instance's base name and args into the hash — the recursive half of `mixType`'s
 	// `genericInstance` arm, split out because it decodes the registry and folds a list.
-	function mixGenericInstance(state ContentHash, id GenericInstanceId) returns ContentHash
+	function mixGenericInstance(state HashDigest, id GenericInstanceId) returns HashDigest
 		var out = mixBytes(state, bytes: self.nameOfId(self.genericInstances.instanceBaseId(id)))
 		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
 			out = self.mixType(out, t: arg)

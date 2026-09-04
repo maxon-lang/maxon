@@ -5,7 +5,7 @@
 // `QueryDatabase` carries a single `currentRevision` counter that `fileChanged`
 // bumps and that every memo stamps `computedAt`/`verifiedAt` against; validity
 // is "walk my deps, are their inputs unchanged since I ran". shv2 replaces that
-// shared counter with a per-file `ContentHash`: each memo stamps the hash of the
+// shared counter with a per-file content hash: each memo stamps the hash of the
 // input it was derived from (`keyHash`), and a memo is valid iff that stored
 // hash still equals the input's current hash. This is **parallel-safe** — there
 // is no shared mutable counter for concurrent per-file parse tasks to contend
@@ -39,9 +39,9 @@
 // Per-file memo: the tokenized form, stamped with the source hash it came from.
 export type TokenMemo
 	export var value as TokenArray
-	export var keyHash as ContentHash
+	export var keyHash as HashDigest
 
-	export static function create(value TokenArray, keyHash ContentHash) returns TokenMemo
+	export static function create(value TokenArray, keyHash HashDigest) returns TokenMemo
 		return Self{value: value, keyHash: keyHash}
 	end 'create'
 end 'TokenMemo'
@@ -50,9 +50,9 @@ end 'TokenMemo'
 // contributions), stamped with the source hash it came from.
 export type ParseMemo
 	export var value as FileParseArtifact
-	export var keyHash as ContentHash
+	export var keyHash as HashDigest
 
-	export static function create(value FileParseArtifact, keyHash ContentHash) returns ParseMemo
+	export static function create(value FileParseArtifact, keyHash HashDigest) returns ParseMemo
 		return Self{value: value, keyHash: keyHash}
 	end 'create'
 end 'ParseMemo'
@@ -69,10 +69,10 @@ end 'ParseMemo'
 // single body was edited — see ProgramSignatures.hash.
 export type SignatureMemo
 	export var value as ProgramSignatures
-	export var keyHash as ContentHash
+	export var keyHash as HashDigest
 	export var computed as bool
 
-	export static function create(value ProgramSignatures, keyHash ContentHash, computed bool) returns SignatureMemo
+	export static function create(value ProgramSignatures, keyHash HashDigest, computed bool) returns SignatureMemo
 		return Self{value: value, keyHash: keyHash, computed: computed}
 	end 'create'
 
@@ -92,10 +92,10 @@ end 'SignatureMemo'
 // legitimate value, so a bool flag, not a hash sentinel, marks emptiness).
 export type ModuleMemo
 	export var value as MaxonModule
-	export var keyHash as ContentHash
+	export var keyHash as HashDigest
 	export var computed as bool
 
-	export static function create(value MaxonModule, keyHash ContentHash, computed bool) returns ModuleMemo
+	export static function create(value MaxonModule, keyHash HashDigest, computed bool) returns ModuleMemo
 		return Self{value: value, keyHash: keyHash, computed: computed}
 	end 'create'
 
@@ -191,7 +191,7 @@ export union SharedMemoMiss implements Error
 	notHeld
 end 'SharedMemoMiss'
 
-export typealias SharedFileMemoMap = Map with (ContentHash, SharedFileMemo)
+export typealias SharedFileMemoMap = Map with (HashDigest, SharedFileMemo)
 
 // The byte-contents this compile is willing to hand to the process-wide memo — filled by
 // `StdlibLoader.loadStdlibSources`, which is the one place that knows a file came out of an
@@ -201,15 +201,15 @@ export typealias SharedFileMemoMap = Map with (ContentHash, SharedFileMemo)
 // lives for the life of the WORKER, so admitting every file would grow the store by one entry per
 // spec fragment — thousands of arrays nothing will ever read again. The stdlib's fifty-odd files
 // are re-lexed by every compile, so they are exactly the set worth keeping.
-export typealias ContentHashSet = Set with ContentHash
+export typealias HashDigestSet = Set with HashDigest
 
 // A source file input: its content plus the content hash all per-file memos key
 // against. The hash is computed once, at `fileChanged` time.
 export type SourceFileEntry
 	export var content as String
-	export var contentHash as ContentHash
+	export var contentHash as HashDigest
 
-	export static function create(content String, contentHash ContentHash) returns SourceFileEntry
+	export static function create(content String, contentHash HashDigest) returns SourceFileEntry
 		return Self{content: content, contentHash: contentHash}
 	end 'create'
 end 'SourceFileEntry'
@@ -231,13 +231,13 @@ export type QueryDatabase
 	// The composite whole-program source hash, MEMOIZED — every whole-program memo keys on it, and
 	// since the signature index landed it is asked once per FILE, which made re-folding it O(files²).
 	// `fileChanged` is its only invalidator (see QueryEngine.compositeSourceHash).
-	export var compositeHash as ContentHash
+	export var compositeHash as HashDigest
 	export var compositeHashValid as bool
 
-	// The byte-contents `StdlibLoader` marked worth sharing process-wide (see `ContentHashSet`).
+	// The byte-contents `StdlibLoader` marked worth sharing process-wide (see `HashDigestSet`).
 	// Per-`Project` because the answer is "did THIS compile load the file from `stdlib/`"; the store
 	// it admits into is the process's (`QueryEngine.sharedFileMemos`).
-	export var shareableTokenHashes as ContentHashSet
+	export var shareableTokenHashes as HashDigestSet
 
 	// Per-file memo caches (absence = not cached; validity via keyHash compare).
 	export var tokenCache as TokenCacheMap
@@ -297,7 +297,7 @@ export type QueryDatabase
 			sourceFiles: SourceFileMap.create(),
 			sourcePaths: FilePathArray.create(),
 			compositeHash: 0, compositeHashValid: false,
-			shareableTokenHashes: ContentHashSet.create(),
+			shareableTokenHashes: HashDigestSet.create(),
 			tokenCache: TokenCacheMap.create(),
 			activeTokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),

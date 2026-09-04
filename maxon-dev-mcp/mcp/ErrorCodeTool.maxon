@@ -34,9 +34,6 @@
 // `Byte` / `ByteArray` come from `File.maxon`'s exported aliases — see `Util.maxon`.
 typealias CodeNumber = int(1000 to 9999)
 
-// 64-bit unsigned FNV-1a state. The arithmetic wraps, which is what FNV is.
-typealias RegistryHash = int(0 to u64.max)
-
 // The authored registry. Read here ONLY as bytes, to hash — never parsed.
 let ErrorCodeRegistryPath = "docs/error-codes.txt"
 
@@ -144,34 +141,13 @@ end 'clampToCodeRange'
 // implementations cannot quietly hold different opinions the way two parsers did. And if
 // they somehow did, the failure is a REFUSAL — the hashes would never match and this tool
 // would answer nothing — not a wrong answer delivered with confidence.
-function registryHash(bytes ByteArray) returns RegistryHash
-	// 0xCBF29CE484222325, rebuilt from halves: the literal is outside Maxon's signed
-	// integer-literal range (the same trick maxon-shv2/Compiler/ContentHash.maxon uses).
-	//
-	// Copied from that file, WITH ITS BUG: its high half read 0xCBF86344, so it had never
-	// been computing FNV-1a. Nothing caught it in shv2 because a cache key only has to be
-	// stable, and a wrong basis is stable. It surfaced here within minutes, because here
-	// the number has to match one that C# computes — which is the argument for this design
-	// in miniature: a fact TWO parties must agree on is a fact that gets checked.
-	let high = 3421674724 as RegistryHash
-	let low = 2216829733 as RegistryHash
-	let prime = 1099511628211 as RegistryHash
-
-	var h = (high shl 32) or low
-	let n = bytes.count()
-	for i in 0 upto n 'each'
-		let b = try bytes.get(i) otherwise 'gErr'
-			panic("registryHash: bytes.get OOB — i bounded by n")
-		end 'gErr'
-		h = h xor (b as RegistryHash)
-		h = h * prime
-	end 'each'
-	return h
+//
+// No length tag: C# folds the bytes and stops, so this folds the bytes and stops.
+function registryHash(bytes ByteArray) returns HashDigest
+	var hasher = Hasher.create()
+	hasher.combine(bytes)
+	return hasher.finalize()
 end 'registryHash'
-
-function formatRegistryHash(h RegistryHash) returns String
-	return "{h:016x}"
-end 'formatRegistryHash'
 
 // =============================================================================
 // Loading the generated registry
@@ -229,7 +205,7 @@ function loadRegistry(repoRoot FilePath) returns LoadedRegistry throws RegistryE
 	let stamped = try doc.getString(doc.root, key: "sourceHash") otherwise 'noHash'
 		throw RegistryError.interchangeMalformed
 	end 'noHash'
-	if not stamped.equals(formatRegistryHash(registryHash(authoredBytes))) 'stale'
+	if not stamped.equals("{registryHash(authoredBytes):016x}") 'stale'
 		throw RegistryError.interchangeStale
 	end 'stale'
 

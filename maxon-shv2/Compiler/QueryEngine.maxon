@@ -21,7 +21,7 @@
 // if it changed a DECLARATION; see `parseMemoKey`). A new or changed file is
 // upserted with its fresh hash — no shared revision counter is touched.
 export function fileChanged(project Project, path FilePath, content String)
-	let hash = contentHash(content)
+	let hash = mixBytes(Hasher.empty(), bytes: content.toByteArray())
 	if let existing = try project.db.sourceFiles.get(path) 'exists'
 		if existing.contentHash == hash 'unchanged'
 			return
@@ -158,11 +158,11 @@ end 'fileChanged'
 // and gets its own for the one it did. A path key would have missed on all of them, and a path key
 // that normalized would have had to decide what "the same file" means.
 //
-// ⚠ **IT EXTENDS THE TRUST ALREADY PLACED IN `ContentHash` FROM ONE FILE TO ALL OF THEM.** Every
+// ⚠ **IT EXTENDS THE TRUST ALREADY PLACED IN THE CONTENT HASH FROM ONE FILE TO ALL OF THEM.** Every
 // per-file memo in `QueryDatabase` already treats a 64-bit FNV-1a match as "these are the same
 // bytes" — but under a PATH key, so a collision had to be between two versions of one file. Here it
 // would be between any two admitted files. The admission list is `stdlib/`'s fifty-odd files (see
-// `ContentHashSet`), which bounds the exposure to a set that is small, fixed and not chosen by user
+// `HashDigestSet`), which bounds the exposure to a set that is small, fixed and not chosen by user
 // input.
 //
 // ⚠⚠ **IT IS SOUND ONLY WHILE COMPILES IN A PROCESS ARE STRICTLY SERIAL** — one of the four
@@ -198,14 +198,14 @@ end 'markSharedTokenSource'
 // five doors below cannot come to disagree about what "not held" is — and so an absent entry has one
 // meaning everywhere: nothing in this process has lexed these bytes, whether because no compile has
 // reached them yet, because no compile ADMITTED them, or because the one that did failed to lex.
-function heldMemoFor(contentHash ContentHash) returns SharedFileMemo throws SharedMemoMiss
+function heldMemoFor(contentHash HashDigest) returns SharedFileMemo throws SharedMemoMiss
 	return try sharedFileMemos.get(contentHash) otherwise throw SharedMemoMiss.notHeld
 end 'heldMemoFor'
 
 // The store's view for these bytes AND this target — `heldMemoFor` composed with `viewOf`, once,
 // because all three doors below want exactly that pair and a composition spelled three times is
 // three places for the two halves to come apart.
-function heldViewFor(contentHash ContentHash, targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
+function heldViewFor(contentHash HashDigest, targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
 	return try (try heldMemoFor(contentHash)).viewOf(targetKey)
 end 'heldViewFor'
 
@@ -216,7 +216,7 @@ end 'heldViewFor'
 // decides what is worth KEEPING, and a file whose bytes are already held is worth reading whoever
 // asks. A user fragment byte-identical to an admitted file gets the same tokens because it has the
 // same bytes, which is the only claim this store ever makes.
-export function sharedTokensOf(project Project, contentHash ContentHash) returns TokenArray throws SharedMemoMiss
+export function sharedTokensOf(project Project, contentHash HashDigest) returns TokenArray throws SharedMemoMiss
 	let memo = try heldMemoFor(contentHash)
 	project.db.sharedTokenHits = project.db.sharedTokenHits + 1
 	return memo.tokens
@@ -232,7 +232,7 @@ end 'sharedTokensOf'
 // being told no — so an entry already in the store returns through the hit path and never reaches
 // here. A defensive `already held?` test would be code no input can run, which is the shape this
 // project refuses; if a second publisher is ever added, it is THIS paragraph that stops holding.
-export function shareTokens(project Project, contentHash ContentHash, tokens TokenArray)
+export function shareTokens(project Project, contentHash HashDigest, tokens TokenArray)
 	if not project.db.shareableTokenHashes.contains(contentHash) 'notAdmitted'
 		return
 	end 'notAdmitted'
@@ -241,7 +241,7 @@ export function shareTokens(project Project, contentHash ContentHash, tokens Tok
 end 'shareTokens'
 
 // The `#if`-resolved stream for these bytes AND this target, if this process has one.
-export function sharedActiveTokensOf(project Project, contentHash ContentHash, targetKey TargetKey) returns TokenArray throws SharedMemoMiss
+export function sharedActiveTokensOf(project Project, contentHash HashDigest, targetKey TargetKey) returns TokenArray throws SharedMemoMiss
 	let view = try heldViewFor(contentHash, targetKey: targetKey)
 	project.db.sharedActiveTokenHits = project.db.sharedActiveTokenHits + 1
 	return view.activeTokens
@@ -255,7 +255,7 @@ end 'sharedActiveTokensOf'
 // diagnostic is already on THAT compile's `project.diagnostics` and that build is already failing.
 // A later compile of a program that merely shares the bytes has neither, so serving it the empty
 // stream would be a file silently compiling as though it were blank.
-export function shareActiveTokens(contentHash ContentHash, targetKey TargetKey, activeTokens TokenArray)
+export function shareActiveTokens(contentHash HashDigest, targetKey TargetKey, activeTokens TokenArray)
 	// No entry means the bytes were never admitted — see `shareTokens`, which owns that decision. A
 	// view is only ever ADDED here, never replaced: `queryActiveTokens` reaches this line only after
 	// `sharedActiveTokensOf` answered no for this target.
@@ -267,7 +267,7 @@ end 'shareActiveTokens'
 // of doors rather than a field the two above fill, because it is derived on FIRST DEMAND: only the
 // declaration sweep asks for it, and a compile that never reaches the sweep must not pay a token
 // walk for it.
-export function sharedProducerMaskOf(project Project, contentHash ContentHash, targetKey TargetKey) returns ProducerMask throws SharedMemoMiss
+export function sharedProducerMaskOf(project Project, contentHash HashDigest, targetKey TargetKey) returns ProducerMask throws SharedMemoMiss
 	let view = try heldViewFor(contentHash, targetKey: targetKey)
 	if not view.producerMaskComputed 'notYetDerived'
 		throw SharedMemoMiss.notHeld
@@ -277,7 +277,7 @@ export function sharedProducerMaskOf(project Project, contentHash ContentHash, t
 	return view.producerMask
 end 'sharedProducerMaskOf'
 
-export function shareProducerMask(contentHash ContentHash, targetKey TargetKey, mask ProducerMask)
+export function shareProducerMask(contentHash HashDigest, targetKey TargetKey, mask ProducerMask)
 	// Two ways there is nothing to write to, and both are ordinary: the bytes were never admitted (no
 	// entry — see `shareTokens`), or this target has no view because the file's `#if` filter FAILED and
 	// a failure is deliberately not published (see `shareActiveTokens`). The sweep still walks the empty
@@ -322,16 +322,16 @@ end 'sourceEntryOf'
 // wrong — a wrong answer served out of a cache, visible only on an incremental rebuild.
 //
 // The two halves are mixed rather than compared separately so validity stays what it has always
-// been: ONE stamped hash, ONE equality test (see this file's header). The `mix` is FNV's own
-// step, so the composite is as collision-resistant as either half.
-// The third half's two values. Arbitrary DISTINCT constants rather than 0 and 1 because `mix` is FNV's
-// own step and feeding it 0 is feeding it nothing: two files whose other halves differ by exactly one
+// been: ONE stamped hash, ONE equality test (see this file's header). `Hasher.combined` is FNV's
+// own step, so the composite is as collision-resistant as either half.
+// The third half's two values. Arbitrary DISTINCT constants rather than 0 and 1 because
+// `Hasher.combined` is FNV's own step and feeding it 0 is feeding it nothing: two files whose other halves differ by exactly one
 // would then collide across the split.
-let BodiesBuiltKeySalt = 0x9E3779B97F4A7C15 as ContentHash
-let BodiesSkippedKeySalt = 0xC2B2AE3D27D4EB4F as ContentHash
+let BodiesBuiltKeySalt = 0x9E3779B97F4A7C15 as HashDigest
+let BodiesSkippedKeySalt = 0xC2B2AE3D27D4EB4F as HashDigest
 
-function parseMemoKey(contentHash ContentHash, signatureHash ContentHash, buildsBodies bool) returns ContentHash
-	return mix(mix(contentHash, value: signatureHash), value: BodiesBuiltKeySalt if buildsBodies else BodiesSkippedKeySalt)
+function parseMemoKey(contentHash HashDigest, signatureHash HashDigest, buildsBodies bool) returns HashDigest
+	return Hasher.combined(Hasher.combined(contentHash, value: signatureHash), value: BodiesBuiltKeySalt if buildsBodies else BodiesSkippedKeySalt)
 end 'parseMemoKey'
 
 // The key a parse memo for `path` must carry to be valid right now. `signatureHash` is
@@ -342,7 +342,7 @@ end 'parseMemoKey'
 // `queryParseOps` computes it ONCE and uses that one value to both validate its memo and stamp the
 // new one, for `sourceEntryOf`'s reason: the two must be the same key, and each computation of it is
 // another `FilePath` map probe.
-export function currentParseMemoKey(project Project, path FilePath, signatureHash ContentHash, buildsBodies bool) returns ContentHash throws CompileError
+export function currentParseMemoKey(project Project, path FilePath, signatureHash HashDigest, buildsBodies bool) returns HashDigest throws CompileError
 	return parseMemoKey((try sourceEntryOf(project, path: path)).contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies)
 end 'currentParseMemoKey'
 
@@ -359,15 +359,15 @@ end 'currentParseMemoKey'
 //
 // The memo has exactly one invalidator — `fileChanged` — because the hash is a fold over exactly the
 // entries `fileChanged` writes. Nothing else can move it, so nothing else may clear the flag.
-export function compositeSourceHash(project Project) returns ContentHash
+export function compositeSourceHash(project Project) returns HashDigest
 	if project.db.compositeHashValid 'memoized'
 		return project.db.compositeHash
 	end 'memoized'
 
-	var h = fnvOffsetBasis()
+	var h = Hasher.empty()
 	for path in project.db.sourcePaths 'each'
 		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
-		h = mix(h, value: entry.contentHash)
+		h = Hasher.combined(h, value: entry.contentHash)
 	end 'each'
 
 	project.db.compositeHash = h

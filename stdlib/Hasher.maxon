@@ -1,0 +1,72 @@
+/// Incremental FNV-1a 64-bit hashing: create, combine each part, finalize. Not cryptographic.
+/// @category Core
+
+/// The result of a hash fold. `HashValue` is the 32-bit surface `Hashable` answers on; a digest
+/// that keys a content-addressed cache or has to round-trip through a generated file needs the
+/// full 64 bits, and the wrapping multiply below would trip a 32-bit range check on its first step.
+public typealias HashDigest = int(0 to u64.max)
+
+let Fnv1aPrime = 1099511628211 as HashDigest
+
+// The FNV-1a 64-bit offset basis, 0xCBF29CE484222325, reconstructed from its 32-bit halves
+// because the whole literal is outside Maxon's signed integer-literal range.
+let Fnv1aBasisHigh = 3421674724 as HashDigest
+let Fnv1aBasisLow = 2216829733 as HashDigest
+
+/// A running FNV-1a 64-bit fold.
+///
+/// Two faces over one fold. `create`/`combine`/`finalize` is for a caller that can hold a hasher;
+/// the static `empty`/`combined` pair is for one that cannot, because a mutable hasher has no
+/// expression position and a fold threaded through a `match` arm or a nested call needs one.
+///
+/// ⚠ NOTHING HERE TAGS A LENGTH, because FNV-1a does not: the fold is over a flat byte
+/// sequence. A caller hashing a SEQUENCE of parts must combine each part's length itself, or
+/// "ab" then "c" and "a" then "bc" reach the same digest — they fold the same bytes in the
+/// same order.
+public type Hasher
+	var state as HashDigest
+
+	/// The state of a fold with nothing in it: the FNV-1a offset basis.
+	public static function empty() returns HashDigest
+		return (Fnv1aBasisHigh shl 32) or Fnv1aBasisLow
+	end 'empty'
+
+	/// One FNV step. The multiply WRAPS — that is the algorithm, not an overflow.
+	public static function combined(state HashDigest, value HashDigest) returns HashDigest
+		return (state xor value) * Fnv1aPrime
+	end 'combined'
+
+	public static function combined(state HashDigest, bytes ByteArray) returns HashDigest
+		var folded = state
+		for b in bytes 'each'
+			folded = Self.combined(folded, value: b)
+		end 'each'
+
+		return folded
+	end 'combined'
+
+	/// Start a fold at the FNV-1a offset basis.
+	public static function create() returns Self
+		return Self{state: Self.empty()}
+	end 'create'
+
+	/// Re-enter the fold at a state `finalize` returned, for a caller that carried the value across
+	/// a boundary and has several parts left to combine.
+	public static function resume(state HashDigest) returns Self
+		return Self{state: state}
+	end 'resume'
+
+	public function combine(value HashDigest)
+		state = Self.combined(state, value: value)
+	end 'combine'
+
+	public function combine(bytes ByteArray)
+		state = Self.combined(state, bytes: bytes)
+	end 'combine'
+
+	/// The RAW running state, never an avalanched digest: `resume(finalize())` must reconstruct
+	/// the fold exactly, and a caller threading the value through its own structures relies on it.
+	public function finalize() returns HashDigest
+		return state
+	end 'finalize'
+end 'Hasher'

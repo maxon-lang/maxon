@@ -1,74 +1,20 @@
-// ContentHash — a deterministic 64-bit FNV-1a hash of source content.
+// The one place the shv2 query spine's hashing carries policy; the fold itself is `stdlib/Hasher`.
 //
-// This is the KEY the shv2 query spine memoizes on (PLAN.md §78): every
-// per-file query (queryTokens, queryParseOps) is keyed on the content hash of
-// its input, and the whole-program queryAllModule is keyed on a composite hash
-// folded over every file's content hash in source-path order. Content-hash
-// keying is **parallel-safe** — unlike v1's shared, monotonically-incrementing
-// `currentRevision` counter, a content hash is computed independently per file
-// with no shared mutable state, so per-file parse tasks never contend on a
-// global counter. Two builds of byte-identical input therefore produce
-// byte-identical cache keys, which is exactly the warm-rebuild byte-identity
-// property the M2 gate will assert.
+// Every per-file query (queryTokens, queryParseOps) is keyed on the content hash of its input, and
+// the whole-program queryAllModule is keyed on a composite hash folded over every file's content
+// hash in source-path order. Content-hash keying is **parallel-safe**: a hash is computed
+// independently per file with no shared mutable state, so per-file parse tasks never contend on a
+// global counter, and two builds of byte-identical input produce byte-identical cache keys.
+
+// Fold a byte sequence into a running hash, tagged with its length.
 //
-// The algorithm is the standard 64-bit FNV-1a (the same constants v1 uses in
-// IrFunctionContentHash.maxon), computed over the raw source bytes with a
-// trailing length tag so that "ab" + "c" hashes differently from "a" + "bc".
-// The arithmetic runs in the unsigned 64-bit `ContentHash` domain and relies on
-// wraparound multiply — the defining property of FNV.
-
-// 64-bit unsigned hash value. Wide range: a hash is intentionally unbounded.
-export typealias ContentHash = int(0 to u64.max)
-
-// FNV-1a 64-bit prime.
-let fnvPrime = 1099511628211 as ContentHash
-
-// FNV-1a 64-bit offset basis (0xCBF29CE484222325 = 14695981039346656037).
-// That constant is outside Maxon's signed integer-literal range, so it is
-// reconstructed from its high/low 32-bit halves at runtime — the same trick v1
-// uses. Kept as a function so the reconstruction lives in exactly one place.
+// The tag is the policy: FNV-1a folds a flat byte sequence, so without a length "ab" then "c" and
+// "a" then "bc" reach one digest — and the signature index folds a name, then a return type, then
+// the next name. It lives here rather than in stdlib because anything that must interoperate with
+// another FNV-1a implementation needs the bare fold.
 //
-// The HIGH half read 3422053188 until 2026-07-14, which is 0xCBF86344, not
-// 0xCBF29CE4 — so this function returned 0xCBF8634484222325 and the hash was not
-// FNV-1a at all, merely a deterministic hash whose comment named a different one.
-// It went unnoticed because nothing outside this file ever had to AGREE with the
-// value: a content-addressed cache key only has to be stable, and a wrong basis is
-// perfectly stable. It was caught the moment a second implementation (the MCP's
-// registry-staleness check, in C#) had to produce the same number and could not.
-// A constant only one party computes is a constant nobody checks.
-export function fnvOffsetBasis() returns ContentHash
-	let high = 3421674724 as ContentHash
-	let low = 2216829733 as ContentHash
-	return (high shl 32) or low
-end 'fnvOffsetBasis'
-
-// Mix one 64-bit value into the running hash (FNV-1a: xor then wrapping
-// multiply). Shared by both the byte loop below and the composite whole-program
-// fold in queryAllModule, so the FNV step lives in one place.
-export function mix(state ContentHash, value ContentHash) returns ContentHash
-	var s = state xor value
-	s = s * fnvPrime
-	return s as ContentHash
-end 'mix'
-
-// Fold a byte sequence into a running hash, with a trailing LENGTH TAG so that
-// "ab" + "c" hashes differently from "a" + "bc" — which matters the moment a hash
-// covers a SEQUENCE of values rather than one blob (the signature index folds a
-// function name, then its return type, then the next function's name).
-//
-// Takes a `ByteArray`, so a caller that already holds one — every interned name is
-// a zero-copy slice of the source — hashes it without building a String.
-export function mixBytes(state ContentHash, bytes ByteArray) returns ContentHash
-	var h = state
-	let n = bytes.count()
-	for i in 0 upto n 'each'
-		let b = try bytes.get(i) otherwise panic("mixBytes: bytes.get OOB at {i} (count={n})")
-		h = mix(h, value: b as ContentHash)
-	end 'each'
-	return mix(h, value: n)
+// Takes a `ByteArray`, so a caller that already holds one — every interned name is a zero-copy
+// slice of the source — hashes it without building a String.
+export function mixBytes(state HashDigest, bytes ByteArray) returns HashDigest
+	return Hasher.combined(Hasher.combined(state, bytes: bytes), value: bytes.count())
 end 'mixBytes'
-
-// FNV-1a hash of a string's UTF-8 bytes. This is the per-file source-content key.
-export function contentHash(s String) returns ContentHash
-	return mixBytes(fnvOffsetBasis(), bytes: s.toByteArray())
-end 'contentHash'
