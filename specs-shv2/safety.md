@@ -562,17 +562,18 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-function remainder(n Integer, d NegativeOne) returns Integer
-	return n mod d
+function remainder(d NegativeOne) returns Integer
+	return (dividend mod d) as Integer
 end 'remainder'
 
 function main() returns ExitCode
-	let n = ident(i64.min)
+	dividend = ident(i64.min)
 	let d = ident(-1)
-	let r = remainder(n, d: d)
+	let r = remainder(d as NegativeOne)
 	print("r={r}\n")
 	return 0
 end 'main'
+var dividend = 0
 ```
 ```stdout
 r=0
@@ -682,8 +683,8 @@ being negative: `-13 mod -5` is `-3`, the remainder taking the DIVIDEND's sign.
 ```maxon
 typealias BelowMinusOne = int(i64.min to -2)
 
-function remainder(n Integer, d BelowMinusOne) returns Integer
-	return n mod d
+function remainder(n BelowMinusOne, d BelowMinusOne) returns Integer
+	return (n mod d) as Integer
 end 'remainder'
 
 function main() returns ExitCode
@@ -761,14 +762,15 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-function divide(n Integer, d NonZero) returns Integer
-	return n / d
+function divide(n NonZero, d NonZero) returns Integer
+	return (n / d) as Integer
 end 'divide'
 
 function main() returns ExitCode
-	let z = ident(0)
-	return divide(10, d: z)
+	z = ident(0)
+	return divide(10, d: z) as ExitCode
 end 'main'
+var z = 0
 ```
 ```exitcode
 1
@@ -805,14 +807,15 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-function remainder(n Integer, d BelowMinusOne) returns Integer
-	return n mod d
+function remainder(n BelowMinusOne, d BelowMinusOne) returns Integer
+	return (n mod d) as Integer
 end 'remainder'
 
 function main() returns ExitCode
-	let bad = ident(-1)
-	return remainder(i64.min, d: bad)
+	bad = ident(-1)
+	return remainder(i64.min, d: bad) as ExitCode
 end 'main'
+var bad = 0
 ```
 ```exitcode
 1
@@ -1016,16 +1019,17 @@ end 'ident'
 // The divisor's range excludes 0, so this is the unguarded `idiv` again — the `DivisionByZero` a
 // possibly-zero divisor would have raised is about the DIVISOR, and says nothing about a quotient
 // that does not fit. `i64.min / -1` is `i64.max + 1`, so `idiv` raises `#DE` with a divisor of -1.
-function divide(n Integer, d NegativeOne) returns Integer
-	return n / d
+function divide(d NegativeOne) returns Integer
+	return (dividend / d) as Integer
 end 'divide'
 
 function main() returns ExitCode
-	let n = ident(i64.min)
+	dividend = ident(i64.min)
 	// Opaque, so the divide cannot be strength-reduced to a negation — which would not trap.
 	let d = ident(-1)
-	return divide(n, d: d)
+	return divide(d as NegativeOne) as ExitCode
 end 'main'
+var dividend = 0
 ```
 ```exitcode
 1

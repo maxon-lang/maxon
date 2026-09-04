@@ -141,7 +141,7 @@ let WasmDataBaseOffset = 1024 as Wasm32Index
 // image (`base + size`); the page size is a power of two, so rounding up is a shift, not a divide
 // (a divide would desugar to a throwing checked-division call — see the throwing-division rung).
 let WasmPageSizeLog2 = 16
-let WasmPageSizeMask = 0xFFFF as ByteCount
+let WasmPageSizeMask = 0xFFFF as BytePos
 
 // `memory.grow` returns the previous page count, or this sentinel — -1 as an i32, which
 // `emitOsAllocPages` sign-extends to -1 in i64 — on OOM. The allocator lowering tests for it and
@@ -163,8 +163,8 @@ let WasmSingleThreadToken = 1 as ParsedInt
 // dataSize`, rounded up to whole 64 KiB pages. `base` is a positive constant, so the count is
 // always at least one — the WASI `run` skeleton requires a memory export whether or not the
 // program has any global.
-function wasmMemoryMinPages(base Wasm32Index, dataSize ByteCount) returns Wasm32Index
-	let endByte = base + dataSize
+function wasmMemoryMinPages(base Wasm32Index, dataSize BytePos) returns Wasm32Index
+	let endByte = (base as BytePos) + dataSize
 	return ((endByte + WasmPageSizeMask) shr WasmPageSizeLog2) as Wasm32Index
 end 'wasmMemoryMinPages'
 
@@ -210,7 +210,7 @@ let WasiGetStderrDebugName = b"get_stderr"
 // after the `.data` image, rounded up to 8 so every 8-byte record field lands naturally
 // aligned. The base is otherwise free — nothing else in this slice touches linear memory
 // above the `.data` image.
-let WasmRdataAlignment = 8 as ByteCount
+let WasmRdataAlignment = 8 as BytePos
 
 // ==========================================================================
 // Seam 2 — the whole-module entry (the ONLY external symbol)
@@ -366,15 +366,15 @@ function bakeFuncTableIndexRelocs(rdataImage ByteArray, globalData GlobalDataTab
 		let funcIdx = try wasmFuncIdxOf(funcNames, callee: reloc.funcName) otherwise panic("bakeFuncTableIndexRelocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references function '{String.from(reloc.funcName)}', which is in no wasm function index — it was never installed (a DCE-root gap where the slot's owner was built), so it has no table slot to name")
 		// The slot's ADDRESS comes from the shared `rdataFuncSlotOffset` the x64 baker uses, because only the
 		// VALUE below is target-specific — see that function.
-		patchQword(rdataImage, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: funcIdx)
+		patchQword(rdataImage, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: funcIdx as MachineWord)
 	end 'each'
 end 'bakeFuncTableIndexRelocs'
 
 // The `.rdata` base: the first 8-aligned linear-memory address at or after the end of the
 // `.data` image. `WasmDataBaseOffset` is itself 8-aligned, so a program with no top-level `var`
 // puts `.rdata` at `WasmDataBaseOffset`.
-function wasmRdataBase(dataBase Wasm32Index, dataSize ByteCount) returns Wasm32Index
-	return alignUp(dataBase + dataSize, alignment: WasmRdataAlignment) as Wasm32Index
+function wasmRdataBase(dataBase Wasm32Index, dataSize BytePos) returns Wasm32Index
+	return alignUp((dataBase as BytePos) + dataSize, alignment: WasmRdataAlignment) as Wasm32Index
 end 'wasmRdataBase'
 
 // ⭐⭐ **`mrt_panic` ON WASM — THE THIRD IMPLEMENTATION OF ONE CONTRACT, AND THE ONLY ONE THAT PRINTS
@@ -1105,7 +1105,7 @@ end 'getValtype'
 // backing geometrically, so recording defs in id order is amortized-linear.
 function setValtype(valtypes WasmValTypeArray, v ValueId, vt WasmValType)
 	if v >= valtypes.count() 'extend'
-		valtypes.growFilled(v + 1, value: WasmValType.i64)
+		valtypes.growFilled(((v + 1) as ElementIndex), value: WasmValType.i64)
 	end 'extend'
 
 	try valtypes.set(v, value: vt) otherwise panic("setValtype: v{v} OOB after growFilled — a grow that just ensured the slot cannot leave it missing")
@@ -1467,7 +1467,7 @@ type WasmFuncEmitter
 		let valueLocalCount = self.valtypes.count()
 
 		for i in self.func.paramCount upto valueLocalCount 'valueLocals'
-			self.localTypes.push(getValtype(self.valtypes, v: i))
+			self.localTypes.push(getValtype(self.valtypes, v: i as ValueId))
 		end 'valueLocals'
 
 		if not self.useDispatcher 'noDispatcher'
@@ -2077,7 +2077,7 @@ type WasmFuncEmitter
 		// operand type ride the integer ALU.
 		requireIntegerOperand(operandType, what: "binOpImm")
 		self.pushOperandAt(lhs, targetVt: wasmMachineValTypeOf(operandType))
-		self.body.i64Const(imm)
+		self.body.i64Const(imm as ParsedInt)
 		self.emitBinOpcode(opcode)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOpImm'
@@ -2285,7 +2285,7 @@ type WasmFuncEmitter
 	function emitCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType)
 		requireIntegerOperand(operandType, what: "cmpImm")
 		self.pushOperandAt(lhs, targetVt: wasmMachineValTypeOf(operandType))
-		self.body.i64Const(imm)
+		self.body.i64Const(imm as ParsedInt)
 		self.emitCmpPred(pred, isUnsigned: stdTypeIsUnsigned(operandType))
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmpImm'
@@ -2377,7 +2377,7 @@ type WasmFuncEmitter
 	// A parameter already occupies its own local (id == index in the scalar ABI), so the copy is
 	// emitted only for the general case where the two differ.
 	function emitParam(resultId ValueId, index ParamCount)
-		if resultId != index 'needsCopy'
+		if resultId != valueIdAtParamPosition(index) 'needsCopy'
 			self.body.localGet(index as Wasm32Index)
 			self.body.localSet(resultId as Wasm32Index)
 		end 'needsCopy'
@@ -2443,7 +2443,7 @@ type WasmFuncEmitter
 	// address consumed in place — which is why it is i64 here, not the i32 those two produce.
 	function emitFuncAddr(resultId ValueId, funcName ByteArray)
 		let funcIdx = try wasmFuncIdxOf(self.funcNames, callee: funcName) otherwise panic("emitFuncAddr: no wasm function index for function value '{String.from(funcName)}'")
-		self.body.i64Const(funcIdx)
+		self.body.i64Const(funcIdx as ParsedInt)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitFuncAddr'
 
@@ -2926,12 +2926,12 @@ type WasmFuncEmitter
 	// The `i64.ge_u span` bounds guard `br_if`ing an out-of-range index to the default landing (depth 0). An
 	// i32 subject (never produced for a switch today — every biased index is i64) needs no i64 guard: its own
 	// value IS the index, so the `br_table`'s exact i32 bounds check suffices, and this emits nothing.
-	function emitSwitchBoundsGuard(subjectId ValueId, span ElementCount)
+	function emitSwitchBoundsGuard(subjectId ValueId, span ElementIndex)
 		if getValtype(self.valtypes, v: subjectId) != WasmValType.i64 'notI64'
 			return
 		end 'notI64'
 		self.body.localGet(subjectId as Wasm32Index)
-		self.body.i64Const(span)
+		self.body.i64Const(span as ParsedInt)
 		self.body.i64GeU()
 		self.body.brIf(0 as Wasm32Index)
 	end 'emitSwitchBoundsGuard'
@@ -2969,17 +2969,17 @@ type WasmFuncEmitter
 		end 'range'
 
 		var depthByOffset = Wasm32IndexArray.create()
-		depthByOffset.growFilled((maxTarget - minTarget + 1) as ElementCount, value: 0 as Wasm32Index)
-		var j = 0 as ElementCount
+		depthByOffset.growFilled((maxTarget - minTarget + 1) as ElementIndex, value: 0 as Wasm32Index)
+		var j = 0 as ElementIndex
 		for target in distinct 'depths'
-			try depthByOffset.set((target - minTarget) as ElementCount, value: (m - j) as Wasm32Index) otherwise panic("slotLandingDepths: depth set OOB at block {target}")
+			try depthByOffset.set((target - minTarget) as ElementIndex, value: (m - j) as Wasm32Index) otherwise panic("slotLandingDepths: depth set OOB at block {target}")
 			j = j + 1
 		end 'depths'
 
 		for target in caseTargets 'eachSlot'
 			var depth = 0 as Wasm32Index
 			if target >= minTarget and target <= maxTarget 'inRange'
-				depth = try depthByOffset.get((target - minTarget) as ElementCount) otherwise panic("slotLandingDepths: depth get OOB at block {target}")
+				depth = try depthByOffset.get((target - minTarget) as ElementIndex) otherwise panic("slotLandingDepths: depth get OOB at block {target}")
 			end 'inRange'
 			out.push(depth)
 		end 'eachSlot'
@@ -3064,7 +3064,7 @@ type WasmFuncEmitter
 			if leaf < dsts.count() 'foundLeaf'
 				let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB at leaf {leaf}")
 				let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB at leaf {leaf}")
-				self.emitLocalCopy(d as Wasm32Index, srcLocal: s, fromVt: getValtype(self.valtypes, v: s), toVt: getValtype(self.valtypes, v: d))
+				self.emitLocalCopy(d as Wasm32Index, srcLocal: s as Wasm32Index, fromVt: getValtype(self.valtypes, v: s), toVt: getValtype(self.valtypes, v: d))
 				removeMoveAt(dsts, srcs: srcs, idx: leaf)
 			end 'foundLeaf' else 'cycle'
 				let a = try dsts.get(0) otherwise panic("sequenceParallelCopy: dsts.get(0) OOB")
@@ -3077,7 +3077,7 @@ type WasmFuncEmitter
 				// valtypes can differ (see emitLocalCopy), so a width-mixing swap round-trips through the
 				// scratch (typed as a's width) with the same coercions a sequential assignment pair would.
 				self.emitLocalCopy(scratch, srcLocal: a as Wasm32Index, fromVt: aVt, toVt: aVt)
-				self.emitLocalCopy(a as Wasm32Index, srcLocal: b, fromVt: bVt, toVt: aVt)
+				self.emitLocalCopy(a as Wasm32Index, srcLocal: b as Wasm32Index, fromVt: bVt, toVt: aVt)
 				self.emitLocalCopy(b as Wasm32Index, srcLocal: scratch, fromVt: aVt, toVt: bVt)
 				removeMoveAt(dsts, srcs: srcs, idx: 0)
 				rewriteSourcesThroughSwap(srcs, a: a, b: b)
@@ -3275,8 +3275,8 @@ function removeSatisfiedMoves(dsts ValueIdArray, srcs ValueIdArray)
 end 'removeSatisfiedMoves'
 
 function removeMoveAt(dsts ValueIdArray, srcs ValueIdArray, idx ValueId)
-	_ = try dsts.remove(idx) otherwise panic("removeMoveAt: dsts.remove OOB at {idx}")
-	_ = try srcs.remove(idx) otherwise panic("removeMoveAt: srcs.remove OOB at {idx}")
+	_ = try dsts.remove(idx as ElementIndex) otherwise panic("removeMoveAt: dsts.remove OOB at {idx}")
+	_ = try srcs.remove(idx as ElementIndex) otherwise panic("removeMoveAt: srcs.remove OOB at {idx}")
 end 'removeMoveAt'
 
 // After exchanging locals a and b, a pending move reading a now finds its value in b and

@@ -74,7 +74,7 @@ export type StdTypeInfo
 	// other fact here does: a size table beside the enum is a second declaration of the
 	// enum, free to omit a case the day one is appended. Here a new case cannot be added
 	// without stating its size.
-	export let storageBytes as ByteCount
+	export let storageBytes as BytePos
 end 'StdTypeInfo'
 
 // --- StdType: ABI/width-level type classification ---
@@ -209,16 +209,8 @@ export function stdTypeOfAbiClass(isFloat bool) returns StdType
 	return StdType.f64 if isFloat else StdType.i64
 end 'stdTypeOfAbiClass'
 
-// ⭐ **THE SHAPE A PER-ARGUMENT ABI MASK IS** — one bit per argument, low `argCount` bits meaningful,
-// stored in a full machine word, ceiling `MaxAbiArgs`. It exists so that `argMaskBit`'s signature can name
-// the SHAPE rather than the one mask that wears it: `ArgFloatMask` below says WHICH FACT its bits carry, and
-// a reader that takes "an ABI mask" should say that. (It had a sibling, `ArgNarrowMask`; WASM3 deleted it —
-// see `stdTypeOfAbiClass`.) The two are spelled over the same range rather than derived from one another
-// because a typealias of a typealias is not a type this language admits (E2003) — so what makes them one
-// shape is this paragraph and the identical bound, and a change to the bound belongs to both at once.
-typealias ArgAbiMask = int(0 to u64.max)
-
-// A per-ARGUMENT float bitmask carried by the three indirect-call ops (`callIndirect`, `witnessCall`,
+// A per-ARGUMENT float bitmask — one bit per argument, low `argCount` bits meaningful, stored in a full
+// machine word, ceiling `MaxAbiArgs` — carried by the three indirect-call ops (`callIndirect`, `witnessCall`,
 // `witnessTryCall`) — bit k set iff argument k is a float (an f64,
 // which a backend routes to a float argument register / declares as an f64 wasm valtype rather than a GPR
 // i64). Only the low arg-count bits are meaningful; the storage is a full machine word. A SCALAR, so the op
@@ -228,10 +220,8 @@ typealias ArgAbiMask = int(0 to u64.max)
 // types into one (`floatParamMaskOf`); a caller looks the callee's up by name (`calleeArgFloatMask`) or
 // reads an indirect call's off the op. Both then hand it to the SAME placement rule
 // (`abiFileSlotIndex`/`abiArgIsOnStack`/`abiStackSlotsBefore`, StdLoweringShared), which is what makes
-// "where does argument k go?" one answer rather than two that could disagree. It used to have a
-// Targets-tier twin, `ParamFloatMask`, spelling the identical bitmask for the callee side; the twin is
-// gone. The tier boundary it was protecting is one-way and already permits this direction — a Targets-tier
-// lowering may name a Std typealias, and every one of them now does.
+// "where does argument k go?" one answer rather than two that could disagree. A Targets-tier lowering
+// names this Std typealias directly: the tier boundary is one-way and permits that direction.
 export typealias ArgFloatMask = int(0 to u64.max)
 
 // ⛔ **THE STATED CEILING ON A SIGNATURE'S ARGUMENTS — and it is THIS MASK'S OWN WIDTH.** `1 shl k` must
@@ -247,15 +237,14 @@ export typealias ArgFloatMask = int(0 to u64.max)
 // the diagnostic says.
 export let MaxAbiArgs = 64 as ParamCount
 
-// Bit k of a per-argument ABI mask — the one door the four backends read an indirect call's per-argument
-// register file (`ArgFloatMask`) through. It takes the SHAPE (`ArgAbiMask`) rather than the one mask that
-// wears it, so a second per-argument fact can be added without a second bit test being written.
-export function argMaskBit(mask ArgAbiMask, argIndex ParamCount) returns bool
+// Bit k of the per-argument float mask — the one door the four backends read an indirect call's
+// per-argument register file through.
+export function argMaskBit(mask ArgFloatMask, argIndex ParamCount) returns bool
 	return ((mask shr argIndex) and 1) != 0
 end 'argMaskBit'
 
 // How many bytes a value of `t` occupies in memory — see `StdTypeInfo.storageBytes`.
-export function stdTypeStorageBytes(t StdType) returns ByteCount
+export function stdTypeStorageBytes(t StdType) returns BytePos
 	return t.rawValue.storageBytes
 end 'stdTypeStorageBytes'
 
@@ -3100,7 +3089,8 @@ module type StdLoadOperands
 			panic("StdLoadOperands.coverage: this record does not describe a load — ask `isLoad` first")
 		end 'notALoad'
 
-		return self.offset + stdTypeStorageBytes(self.valueType)
+		let endByte = self.offset + (stdTypeStorageBytes(self.valueType) as ByteOffset)
+		return endByte as LoadCoverage
 	end 'coverage'
 
 	function recordNotALoad()
@@ -3217,10 +3207,10 @@ export type StdValueUseSet
 		// it is given — Θ(values²) of allocator traffic for a column that ends up Θ(values) long. Measured,
 		// on the first cut of this very type: +4 GB at scale rung 5, with the byte curve at exponent 2.0.
 		// `growFilled` grows the capacity geometrically and clears what the growth added.
-		self.member.growFilled(valueId + 1, value: false)
+		self.member.growFilled(((valueId + 1) as ElementIndex), value: false)
 
 		if self.tracksRepeats and self.contains(valueId) 'secondReader'
-			self.repeated.growFilled(valueId + 1, value: false)
+			self.repeated.growFilled(((valueId + 1) as ElementIndex), value: false)
 			try self.repeated.set(valueId, value: true) otherwise panic("StdValueUseSet.insert: repeated.set OOB at {valueId}")
 		end 'secondReader'
 

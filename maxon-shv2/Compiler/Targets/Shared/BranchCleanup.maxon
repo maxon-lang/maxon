@@ -96,7 +96,8 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 	// Classified in ONE pass over the blocks, so the chain walk below dereferences no block at all.
 	var forwards = BoolArray.create()
 	forwards.resize(blockCount)
-	var forwardTargetOf = zeroColumn(blockCount)
+	var forwardTargetOf = CfgIndexArray.create()
+	forwardTargetOf.resize(blockCount)
 
 	// ⭐ LOCAL 0 — THE ENTRY — IS NEVER FORWARDED THROUGH, whatever its ops. It is the block the frame
 	// pass puts the prologue in, so a predecessor re-pointed PAST it would enter the function without a
@@ -114,7 +115,8 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 
 	// `blockCount` is one past every valid local, so it can never collide with a real answer.
 	let unresolved = blockCount
-	var resolved = filledColumn(blockCount, value: unresolved)
+	var resolved = CfgIndexArray.create()
+	resolved.refill(blockCount as ElementIndex, value: unresolved)
 	var onPath = BoolArray.create()
 	onPath.resize(blockCount)
 	var path = CfgIndexArray.create()
@@ -207,7 +209,7 @@ function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved Cf
 
 	for local in 0 upto topo.numBlocks 'eachPred'
 		for k in 0 upto topo.succ.degree(local) 'eachSucc'
-			let succ = topo.succ.neighbour(local, k: k)
+			let succ = topo.succ.neighbour(local, k: k) as CfgIndex
 			let alreadyListed = try seen.get(succ) otherwise panic("threadResolvedEdges: seen.get OOB at {succ}")
 			if alreadyListed 'duplicateEdge'
 				continue
@@ -263,8 +265,8 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 		let u = try stack.pop() otherwise panic("dropUnreachableBlocks: stack.pop on non-empty failed")
 
 		// The edges as they stand AFTER the threading above: every branch target goes through `resolved`.
-		for k in 0 upto topo.succ.degree(u) 'eachSucc'
-			markReachable(reachable, stack: stack, local: try resolved.get(topo.succ.neighbour(u, k: k)) otherwise panic("dropUnreachableBlocks: resolved.get OOB"))
+		for k in 0 upto topo.succ.degree(u as CsrIndex) 'eachSucc'
+			markReachable(reachable, stack: stack, local: try resolved.get(topo.succ.neighbour(u as CsrIndex, k: k)) otherwise panic("dropUnreachableBlocks: resolved.get OOB"))
 		end 'eachSucc'
 
 		if (not blockAt(module, topo: topo, local: u).hasTerminatorOp()) and u + 1 < topo.numBlocks 'fallsThroughPhysically'

@@ -556,7 +556,7 @@ end 'narrow'
 
 function main() returns ExitCode
 	var mine = b"\x41"
-	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
+	return anyByte(narrow(try mine.get(0) otherwise 0) as Byte) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -586,7 +586,7 @@ end 'narrow'
 
 function main() returns ExitCode
 	var mine = b"\xdf"
-	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
+	return anyByte(narrow(try mine.get(0) otherwise 0) as Byte) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -878,7 +878,7 @@ typealias Bytes = Array with Byte
 function main() returns ExitCode
 	var mine = Bytes.create()
 	mine.push(65)
-	return takesWide(mine)
+	return takesWide(mine as Bytes)
 end 'main'
 ```
 ```maxoncstderr
@@ -1000,7 +1000,7 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	var a = b"hi"
 	let n = try a.get(0) otherwise 0
-	return (n - widen(56)) as ExitCode
+	return (n - (widen(56) as Byte)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1410,7 +1410,7 @@ position — turning a program that answers correctly today into a compile error
 
 ⚠⚠ **THE SUBJECT OF ALL OF THIS IS NOW `Character.bytes()` AND NOT A `String`'s BYTES, AND THAT MOVE IS
 W49 WAVE 6 RETIRING THE THREE `String` VIEWS ONTO `stdlib/String.maxon`.** Every case below used to write
-`"ß".toByteArray()`; that call is now `stdlib/String.maxon:156`, which answers with the CORPUS's own
+`"ß".toByteArray()`; that call is now `stdlib/String.maxon:154`, which answers with the CORPUS's own
 `ByteArray` over the corpus's canonical `Byte = int(0 to u8.max)` — a type fixed by the module that
 declares it, not by the file that reads it. So a narrow or wide `Byte` in the READING file no longer
 reaches a `String`'s bytes at all, and the rule has nothing to gate there.
@@ -1460,7 +1460,7 @@ error E3117: <fragment>:11:17: 'bytes' stores RAW bytes into an element declared
 ⚠ **THIS CASE WAS `the-bytes-spelling-is-refused-identically` AND PINNED E3117 ON `"ß".bytes()` UNTIL W49
 WAVE 6, ON THE GROUND THAT `bytes` AND `toByteArray` REACHED ONE EMITTER "precisely so the two spellings
 cannot come to disagree about what a byte view IS". The RENAME is the point rather than tidying:**
-They no longer do, and they no longer are one thing: `stdlib/String.maxon:156` copies into a `ByteArray`
+They no longer do, and they no longer are one thing: `stdlib/String.maxon:154` copies into a `ByteArray`
 and `:499` hands back a LAZY `ByteView` holding the String, which is the distinction the reference always
 drew and shv2 could not. So the refusal moved a whole stage earlier and the two halves now differ in
 exactly the way that is worth reading — the message names which one you wrote.
@@ -1502,7 +1502,7 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	return takes("abc".toByteArray())
+	return takes("abc".toByteArray() as Bytes)
 end 'main'
 ```
 ```exitcode
@@ -1611,18 +1611,16 @@ a range wider than a byte is not by itself a reason to refuse a raw write, which
 had to be pulled back from — survives unchanged here: `int(0 to u16.max)` is wider than a byte and admits
 every value of the two-byte slot it was given.
 
-⚠ **THE RETURN NEEDS NEITHER A MASK NOR A CAST — BUT THE REASON IS NOW THE PLATFORM'S, AND AN EARLIER
-DRAFT OF THIS PARAGRAPH STATED ONE PLATFORM'S REASON AS THE TYPE'S.** It read *"`ExitCode` now carries
-`int(0 to u32.max)`, so `int(0 to u16.max)` fits it outright"* — true on Windows and **inverted
-everywhere else** since BATCH27, where `ExitCode` is `int(0 to 255)` and `int(0 to u16.max)` does not
-fit it at all. The two lanes reach "no cast" by different routes, and the case behaves identically on
-both:
+⚠ **THE RETURN NEEDS NO MASK, AND ITS `as ExitCode` GUARDS ON SOME PLATFORMS AND NOT OTHERS.** The cast
+is owed on every target — a `Byte` is not an `ExitCode` (`nominal-typealias.md`) — and what it emits is
+the platform's, because `ExitCode`'s range is the compile target's:
 
-- on **x64-windows**, `rangeCoversRange` proves the containment, so the return is elided and writing
-  `as ExitCode` here would be E3010 — an unneeded cast, exactly like the five X6 removed from this file;
-- on **Linux, macOS and WASI**, nothing is proved and the return carries the ordinary runtime guard
-  (`range-check-panic.md`). `223` is inside `int(0 to 255)`, so it passes — a guard is not a refusal, and
-  the assertion below is the same **223** on every target.
+- on **x64-windows**, `ExitCode` is `int(0 to u32.max)` and `rangeCoversRange` proves the containment, so
+  the cast emits nothing;
+- on **Linux, macOS and WASI**, `ExitCode` is `int(0 to 255)`, `int(0 to u16.max)` does not fit it,
+  and the cast carries the ordinary runtime guard (`range-check-panic.md`). `223` is inside
+  `int(0 to 255)`, so it passes — a guard is not a refusal, and the assertion below is the same **223**
+  on every target.
 
 The `and u8.max` this case carried for one draft is dead for a second, arithmetic reason —
 `push(0)` then `setByte(0, …)` leaves the HIGH byte zero, so there is nothing above `u8.max` to mask off.
@@ -1820,7 +1818,7 @@ function main() returns ExitCode
 	b.push(65)
 	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
-	cwd.append(b)
+	cwd.append(b as __ManagedMemory)
 	return 0 if cwd.length() == before + 1 else 2
 end 'main'
 ```
@@ -1843,7 +1841,7 @@ function main() returns ExitCode
 	b.push(65)
 	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
-	cwd.append(b)
+	cwd.append(b as __ManagedMemory)
 	return 0 if cwd.length() == before + 1 else 2
 end 'main'
 ```

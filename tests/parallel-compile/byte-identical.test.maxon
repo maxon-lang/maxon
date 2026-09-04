@@ -13,11 +13,11 @@ test 'the executable is byte-identical at one processor and at the default'
 	let noArguments = StringArray.create()
 
 	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true)
-	let pinnedExit = pinnedRun.exitCode()
+	let pinnedExit = pinnedRun.exitCode() as AssertedInt
 	try Expect.equal(pinnedExit, expected: 0, message: "the pool program did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
 
 	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false)
-	let defaultExit = defaultRun.exitCode()
+	let defaultExit = defaultRun.exitCode() as AssertedInt
 	try Expect.equal(defaultExit, expected: 0, message: "the pool program did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
 
 	let pinnedExecutable = builtExecutable(staged, label: "single-processor")

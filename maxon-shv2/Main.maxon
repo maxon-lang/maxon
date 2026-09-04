@@ -1584,12 +1584,12 @@ module type MaxonArgs
 				// `--bail=nonsense` asks a question this command cannot answer, and answering a different
 				// one instead is the failure a caller can neither see nor recover from.
 				match parsePositiveFlagValue(try CommandLine.optionValue(arg) otherwise "") 'bailArg'
-					valid(failures) then parsed.bail = BailPolicy.after(failures)
+					valid(failures) then parsed.bail = BailPolicy.after(failures as ReportedTestCount)
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'bailArg'
 			end 'bailCountFlag' else if arg.startsWith(TestTimeoutFlagPrefix) 'timeoutFlag'
 				match parsePositiveFlagValue(try CommandLine.optionValue(arg) otherwise "") 'timeoutArg'
-					valid(ms) then parsed.testTimeoutMs = ms
+					valid(ms) then parsed.testTimeoutMs = ms as DurationMs
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'timeoutArg'
 			end 'timeoutFlag' else if arg.startsWith(TestColorFlagPrefix) 'colorFlag'

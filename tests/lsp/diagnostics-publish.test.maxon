@@ -25,13 +25,13 @@ test 'opening a document with a compile error publishes it with its code, severi
 
 	try Expect.equal(reported.code, expected: BareIntErrorCode, message: "the CODE is the field a Maxon author acts on — `E3005` is greppable against `docs/error-codes.txt`, where the sentence alone is not.")
 
-	try Expect.equal(reported.severity, expected: PublishedErrorSeverity, message: "every diagnostic this compiler produces fails the build, so every published one is an Error.")
+	try Expect.equal(reported.severity as AssertedInt, expected: PublishedErrorSeverity as AssertedInt, message: "every diagnostic this compiler produces fails the build, so every published one is an Error.")
 
 	try Expect.equal(reported.source, expected: MaxonDiagnosticSource, message: "an editor showing several servers groups its list by `source`.")
 
 	try Expect.contains(reported.message, needle: "bare 'int'", message: "the published sentence is the compiler's own, not a summary written for the editor.")
 
-	try Expect.equal(reported.range.startLine, expected: 0, message: "the compiler anchors this on its line 1, and LSP counts lines from 0.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: 0, message: "the compiler anchors this on its line 1, and LSP counts lines from 0.")
 end 'opening a document with a compile error publishes it with its code, severity and source'
 
 test 'a document that compiles publishes an empty array rather than nothing'
@@ -60,7 +60,7 @@ test 'a request answered behind a publish gets its own reply, and the publish su
 end 'a request answered behind a publish gets its own reply, and the publish survives'
 
 function expectAnsweredBehindPublish(symbolCount SymbolTally, publishes PublishedDiagnosticsArray) throws TestFailure
-	try Expect.equal(symbolCount, expected: 1, message: "the request must be answered with its OWN reply — this document declares one top-level block. A client that mistook the notification queued in front of it for the answer would report something else entirely.")
+	try Expect.equal(symbolCount as AssertedInt, expected: 1, message: "the request must be answered with its OWN reply — this document declares one top-level block. A client that mistook the notification queued in front of it for the answer would report something else entirely.")
 
 	try Expect.equal(publishes.count(), expected: 1, message: "and the notification skipped on the way to that reply is still readable afterwards, rather than discarded.")
 end 'expectAnsweredBehindPublish'

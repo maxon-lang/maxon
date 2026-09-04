@@ -42,7 +42,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let seed = (try int.fromString(try args.get(1) otherwise "0") otherwise 0) as Integer
 
 	// 4 working values that live across the body — opaque w.r.t. the
 	// constant folder thanks to the runtime seed. The body below uses
@@ -122,7 +122,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let seed = (try int.fromString(try args.get(1) otherwise "0") otherwise 0) as Integer
 
 	// Two values defined via opaque calls so the constant folder cannot
 	// see through them. Each combines with a small set of distinct masks
@@ -192,7 +192,7 @@ end 'add2'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let seed = (try int.fromString(try args.get(1) otherwise "0") otherwise 0) as Integer
 
 	// 6 working values live across the loop body. Each `ident`-produced
 	// value is opaque to the constant folder, so all 6 land in the live
@@ -270,7 +270,7 @@ end 'combine'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let seed = (try int.fromString(try args.get(1) otherwise "0") otherwise 0) as Integer
 
 	// 6 cold values defined early via opaque calls — the constant folder
 	// cannot see through `opaque` so each lives as a real working scalar.
@@ -386,7 +386,7 @@ end 'kernel'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let seed = (try int.fromString(try args.get(1) otherwise "0") otherwise 0) as Integer
 	let result = kernel(seed)
 	// Mask to 0..127 so the value fits both POSIX (0..255) and wasi
 	// (0..125 strict) exit-code ranges. The test gates on the
@@ -454,7 +454,7 @@ end 'combine6'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let seed = (try int.fromString(try args.get(1) otherwise "0") otherwise 0) as Integer
 
 	// Six values live across the helper call. Each comes from an opaque
 	// helper so the constant folder cannot fold them out. They are all

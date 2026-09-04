@@ -80,6 +80,8 @@ public sealed class TypeGraphCopier {
     };
     foreach (var (name, ranged) in st.InnerRangedAliases)
       copy.InnerRangedAliases[name] = ranged;
+    foreach (var (name, ranged) in st.ExtensionRangedAliases)
+      copy.ExtensionRangedAliases[name] = ranged;
     Remember(st, copy);
 
     foreach (var field in copy.Fields)

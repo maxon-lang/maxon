@@ -235,12 +235,12 @@ program faults — which is once either way, because the first one ends it. The 
 arithmetic, and the committed fragment showing TWO `idivReg` is the record of the exclusion.
 ```maxon
 typealias Word = int(i64.min to i64.max)
-// A divisor whose type EXCLUDES ZERO, so the divisions do not throw and the case can be about CSE
-// rather than about `try`. The op is still `StdOp.div`/`StdOp.mod` and still `isPure: false`.
+// The divisor's type excludes zero, but a NEGATIVE dividend needs a signed division, which is spelled only
+// through a `Word` divisor the compiler must treat as possibly zero — hence the `try`. The op is still impure.
 typealias NonZeroWord = int(1 to i64.max)
 
 function halves(a Word, b NonZeroWord) returns Word
-	return (a / b) + (a / b) + (a mod b) + (a mod b)
+	return (try (a / (b as Word)) otherwise panic("b is never zero")) + (try (a / (b as Word)) otherwise panic("b is never zero")) + (try (a mod (b as Word)) otherwise panic("b is never zero")) + (try (a mod (b as Word)) otherwise panic("b is never zero"))
 end 'halves'
 
 function main() returns ExitCode

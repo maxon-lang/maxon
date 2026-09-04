@@ -835,7 +835,7 @@ function main() returns ExitCode
     end 'work'
     otherwise (e) 'h'
         match e 'k'
-            ErrA.bad(code, msg) then sum = code + msg
+            ErrA.bad(code, msg) then sum = code + (msg as Score)
             ErrB.splat then sum = 99
         end 'k'
     end 'h'

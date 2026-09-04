@@ -170,7 +170,7 @@ module function allocateOnAWorkerPool(module TargetModule, target Target, projec
 	// is a service that never ends and an exit that never comes.
 	workers.clear()
 
-	if refused < funcCount 'aFunctionDidNotFitTheMachine'
+	if refused < funcCount as FuncIndex 'aFunctionDidNotFitTheMachine'
 		var refusedFunc = try module.functions.get(refused) otherwise panic("allocateOnAWorkerPool: functions.get OOB at the refused index {refused}")
 		try refuseForRegisterPressure(project, module: module, func: refusedFunc, funcIndex: refused, pool: pool, callerSaved: callerSaved, file: file, valueClass: classColumnFor(valueClasses, module: module, funcIndex: refused), opFacts: opFacts)
 	end 'aFunctionDidNotFitTheMachine'
@@ -202,7 +202,7 @@ function drainThePool(module TargetModule, valueClasses ValueClassColumns, worke
 	let order = functionsLongestFirst(module, funcCount: funcCount)
 	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
-	var refused = module.funcCount()
+	var refused = module.funcCount() as FuncIndex
 
 	var replies = RegAllocReplyArray.create()
 	var replyJob = FuncIndexArray.create()
@@ -211,8 +211,8 @@ function drainThePool(module TargetModule, valueClasses ValueClassColumns, worke
 
 	let pipeline = workerCount * JobsInFlightPerWorker
 	let inFlight = pipeline if pipeline < funcCount else funcCount
-	while dispatched < inFlight 'fillThePipeline'
-		let workerSlot = dispatched - (dispatched / workerCount) * workerCount
+	while dispatched < inFlight as PoolSlot 'fillThePipeline'
+		let workerSlot = try (dispatched mod (workerCount as PoolSlot)) otherwise panic("drainThePool: a pool of no workers never reaches the dispatch loop")
 		let job = try order.get(dispatched) otherwise panic("drainThePool: the dispatch order holds {order.count()} job(s) and slot {dispatched} is past the end")
 		dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: workerSlot, funcIndex: job, replies: replies, replyJob: replyJob, replyWorker: replyWorker)
 		dispatched = dispatched + 1
@@ -240,9 +240,9 @@ function drainThePool(module TargetModule, valueClasses ValueClassColumns, worke
 			end 'why'
 		end 'notAllocated'
 
-		if dispatched < funcCount 'handTheFreedWorkerTheNextJob'
+		if dispatched < funcCount as PoolSlot 'handTheFreedWorkerTheNextJob'
 			let job = try order.get(dispatched) otherwise panic("drainThePool: the dispatch order holds {order.count()} job(s) and slot {dispatched} is past the end")
-			dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: freedWorker, funcIndex: job, replies: replies, replyJob: replyJob, replyWorker: replyWorker)
+			dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: freedWorker as PoolSlot, funcIndex: job, replies: replies, replyJob: replyJob, replyWorker: replyWorker)
 			dispatched = dispatched + 1
 		end 'handTheFreedWorkerTheNextJob'
 	end 'serveWhoeverFinishedFirst'
@@ -283,16 +283,17 @@ end 'dispatchOneJob'
 // Read back DESCENDING, which is what makes it longest-first.
 function functionsLongestFirst(module TargetModule, funcCount PoolSize) returns FuncIndexArray
 	var keys = FunctionOpTallyArray.create()
+	let keyStride = funcCount as FunctionOpTally
 	for funcIndex in 0 upto funcCount 'eachFunc'
 		let func = try module.functions.get(funcIndex) otherwise panic("functionsLongestFirst: functions.get OOB at {funcIndex}")
-		keys.push(liveOpTallyOf(module, func: func) * funcCount + funcIndex)
+		keys.push(liveOpTallyOf(module, func: func) * keyStride + funcIndex)
 	end 'eachFunc'
 	keys.sort()
 
 	var order = FuncIndexArray.create()
 	for k in 0 upto keys.count() 'largestFirst'
 		let key = try keys.get(keys.count() - 1 - k) otherwise panic("functionsLongestFirst: keys.get OOB walking back from {keys.count()}")
-		order.push(key - (key / funcCount) * funcCount)
+		order.push((try (key mod keyStride) otherwise panic("functionsLongestFirst: a pool of no functions never reaches the ordering")) as FuncIndex)
 	end 'largestFirst'
 
 	return order

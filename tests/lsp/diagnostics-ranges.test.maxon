@@ -26,13 +26,13 @@ let BareIntLine = 2 as LspCoordinate
 test 'a published range is zero-based and spans the offending token'
 	let reported = try onlyPublishedDiagnostic(brokenDocument(), what: "opening a document whose error is on line 3")
 
-	try Expect.equal(reported.range.startLine, expected: BareIntLine, message: "the compiler anchors this on its line 3 and LSP counts from 0, so the published line is 2. A server publishing 3 is off by one on EVERY diagnostic — it does not crash, it underlines the line below.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: BareIntLine as AssertedInt, message: "the compiler anchors this on its line 3 and LSP counts from 0, so the published line is 2. A server publishing 3 is off by one on EVERY diagnostic — it does not crash, it underlines the line below.")
 
-	try Expect.equal(reported.range.startCharacter, expected: BareIntStartCharacter, message: "column 25 (1-based) is character 24 (0-based) — the first byte of `int`.")
+	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: BareIntStartCharacter as AssertedInt, message: "column 25 (1-based) is character 24 (0-based) — the first byte of `int`.")
 
-	try Expect.equal(reported.range.endLine, expected: BareIntLine, message: "the token does not span lines, so the range ends on the line it began on.")
+	try Expect.equal(reported.range.endLine as AssertedInt, expected: BareIntLine as AssertedInt, message: "the token does not span lines, so the range ends on the line it began on.")
 
-	try Expect.equal(reported.range.endCharacter, expected: BareIntEndCharacter, message: "the range covers the whole TOKEN. A range one character wide would underline `i` alone, which is all a server holding only the anchor could paint.")
+	try Expect.equal(reported.range.endCharacter as AssertedInt, expected: BareIntEndCharacter as AssertedInt, message: "the range covers the whole TOKEN. A range one character wide would underline `i` alone, which is all a server holding only the anchor could paint.")
 end 'a published range is zero-based and spans the offending token'
 
 // ⭐⭐ **THE REVERSE CONVERSION, AND THE ONLY DIRECTION IN WHICH COUNTING CODEPOINTS IS VISIBLE.** A
@@ -50,9 +50,9 @@ test 'a published range counts a supplementary character as TWO code units'
 
 	try Expect.equal(reported.code, expected: UndeclaredNameCode, message: "the fixture's only error is the undefined name, and the range assertions below are about WHERE that name is.")
 
-	try Expect.equal(reported.range.startLine, expected: MarkedUseLine, message: "the undefined name is on line 8 of the fixture.")
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: MarkedUseLine as AssertedInt, message: "the undefined name is on line 8 of the fixture.")
 
-	try Expect.equal(reported.range.startCharacter, expected: NameAfterTwoUnits, message: "the emoji is FOUR bytes, ONE codepoint and TWO code units, so `nowhere` opens at character 34. A server counting BYTES publishes 36 and underlines nothing; one counting CODEPOINTS publishes 33 and underlines from one character early — and 33 is the answer that every 2- and 3-byte fixture in this suite also accepts.")
+	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: NameAfterTwoUnits as AssertedInt, message: "the emoji is FOUR bytes, ONE codepoint and TWO code units, so `nowhere` opens at character 34. A server counting BYTES publishes 36 and underlines nothing; one counting CODEPOINTS publishes 33 and underlines from one character early — and 33 is the answer that every 2- and 3-byte fixture in this suite also accepts.")
 
-	try Expect.equal(reported.range.endCharacter, expected: UndeclaredNameEnd, message: "`nowhere` is seven characters, so the range ends at 41. An end measured in the wrong unit is a squiggle that stops in the wrong place even when it starts in the right one.")
+	try Expect.equal(reported.range.endCharacter as AssertedInt, expected: UndeclaredNameEnd as AssertedInt, message: "`nowhere` is seven characters, so the range ends at 41. An end measured in the wrong unit is a squiggle that stops in the wrong place even when it starts in the right one.")
 end 'a published range counts a supplementary character as TWO code units'

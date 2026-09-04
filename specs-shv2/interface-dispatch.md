@@ -530,7 +530,7 @@ type Direct implements Runner
 end 'Direct'
 
 function viaWitness(r Runner, s Small) returns Integer
-	return r.run(s)
+	return r.run(s as Integer)
 end 'viaWitness'
 
 function main() returns ExitCode
@@ -1670,7 +1670,7 @@ type Marker implements Tagged
 	let n as Integer
 
 	function tag() returns Integer
-		return n + self.s.byteLength()
+		return n + (self.s.byteLength() as Integer)
 	end 'tag'
 
 	static function create(n Integer) returns Self
@@ -2093,7 +2093,7 @@ type Runner implements Exiter
 	let base as Integer
 
 	function take(c ExitCode) returns Integer
-		return base + c
+		return base + (c as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -2130,7 +2130,7 @@ type Runner implements Exiter
 	let base as Integer
 
 	function take(c ExitCode) returns Integer
-		return base + c
+		return base + (c as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -2185,7 +2185,7 @@ type Runner implements Exiter
 		if c < 5 'small'
 			throw TakeError.tooSmall
 		end 'small'
-		return base + c
+		return base + (c as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -2965,7 +2965,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:36:20: argument type mismatch for 'i': expected 'IntPool.Idx', got 'int'
+error E3005: <fragment>:36:20: argument type mismatch for 'i': expected 'IntPool.Idx', got 'Integer'
 ```
 
 <!-- test: dispatch-arg-per-instance-alias-agrees -->

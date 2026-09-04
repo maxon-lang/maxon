@@ -18,13 +18,12 @@
 // the right side to charge: a Character holds one grapheme and is rarely iterated byte-wise, while
 // String iteration is everywhere and is exactly what SSO exists to make free.
 
-// ByteCount, BytePos exported by stdlib/String.maxon.
+// BytePos is exported by stdlib/String.maxon.
 // Both are counts over ONE string's bytes: a codepoint spends 1-4 UTF-8 bytes, and the codepoints
 // needing two UTF-16 units are exactly the ones spending four. So neither count can exceed the byte
-// count, which is bounded by the string's `__ManagedMemory` length — a signed machine word.
+// length, which is bounded by the string's `__ManagedMemory` length — a signed machine word.
 typealias CodepointCount = int(0 to i64.max)
 typealias Utf16UnitCount = int(0 to i64.max)
-typealias Utf8ByteWidth = int(1 to 4)
 typealias Byte = int(0 to u8.max)
 
 // ============================================
@@ -43,7 +42,7 @@ public type ByteView implements Iterable with (Byte, ByteIterator)
 	end 'createIterator'
 
 	/// Number of bytes
-	public function count() returns ByteCount
+	public function count() returns BytePos
 		return s.byteLength()
 	end 'count'
 end 'ByteView'
@@ -112,7 +111,7 @@ public type CodepointIterator implements Iterator with Codepoint
 	var s as String
 	var pos as BytePos
 	var cp as Codepoint
-	var cpByteLen as Utf8ByteWidth
+	var cpByteLen as ByteWidth
 
 	public static function create(s String) returns Self throws IterationError
 		if s.byteLength() == 0 'empty'
@@ -128,7 +127,7 @@ public type CodepointIterator implements Iterator with Codepoint
 	end 'current'
 
 	public function advance() throws IterationError
-		let nextPos = pos + cpByteLen
+		let nextPos = pos + (cpByteLen as BytePos)
 		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
@@ -181,7 +180,7 @@ public type UTF16Iterator implements Iterator with CodeUnit16
 	var s as String
 	var bytePos as BytePos
 	var cp as Codepoint
-	var cpByteLen as Utf8ByteWidth
+	var cpByteLen as ByteWidth
 	var onTrailSurrogate as bool
 
 	public static function create(s String) returns Self throws IterationError
@@ -208,7 +207,7 @@ public type UTF16Iterator implements Iterator with CodeUnit16
 			onTrailSurrogate = true
 			return
 		end 'emitTrail'
-		let nextPos = bytePos + cpByteLen
+		let nextPos = bytePos + (cpByteLen as BytePos)
 		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'

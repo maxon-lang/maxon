@@ -96,7 +96,7 @@ export let StringSingleByteGraphemesOffset = ManagedRecordBytes as ByteOffset
 // OUTRIGHT UNTIL W157**, when the two records were the same six slots disagreeing about what `@40` held;
 // the alias is now an ADDITION, and that difference is the rung. It is still DERIVED rather than written
 // `56`, for the same reason: the number is "a buffer record, plus a flag".
-let StringFieldBytes = 8 as ByteCount
+let StringFieldBytes = 8 as BytePos
 
 export let StringRecordBytes = ManagedRecordBytes + StringFieldBytes
 
@@ -605,10 +605,10 @@ end 'stringBlobBytes'
 // ⚠ **NOT `export`ED SINCE W49 WAVE 9** — the same orphan sweep. `registerStringRecord` is its one caller
 // and the door every other file comes through; an `export` here advertised a second way to assemble the
 // record that would skip the blob registration the offset seed depends on.
-function buildStringRecordBytes(blobOffset ByteOffset, byteLength ByteCount, singleByteGraphemes bool) returns ByteArray
+function buildStringRecordBytes(blobOffset ByteOffset, byteLength BytePos, singleByteGraphemes bool) returns ByteArray
 	var record = ByteArray.create()
 	appendRecordField(record, expectedOffset: StringBufferOffset, value: blobOffset as ParsedInt)
-	appendRecordField(record, expectedOffset: StringLengthOffset, value: byteLength)
+	appendRecordField(record, expectedOffset: StringLengthOffset, value: byteLength as ParsedInt)
 	appendRecordField(record, expectedOffset: StringCapacityOffset, value: ImmortalRecordCapacity)
 	appendRecordField(record, expectedOffset: StringElementSizeOffset, value: ByteStringElementSize)
 	appendRecordField(record, expectedOffset: StringParentPtrOffset, value: NoOwedAllocation)
@@ -643,7 +643,7 @@ end 'registerStringBlob'
 
 // Register a literal's record, seeded with its blob's offset (see `buildStringRecordBytes` for why the
 // offset, not 0). `blobLabel` must already be registered — its offset is read back here.
-function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength ByteCount, singleByteGraphemes bool) returns String
+function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength BytePos, singleByteGraphemes bool) returns String
 	let blobOffset = globalData.rdataOffsetOf(blobLabel)
 	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes), kind: RdataPayloadKind.stringRecord)
 end 'registerStringRecord'

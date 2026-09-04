@@ -588,7 +588,7 @@ type RangeCheckEmitter
 	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt` hands back
 	// the head it was given, which is how that says so without a flag.
 	function emitParamGuard(site RangeCheckParamSite, alias RangedTypeAlias, entryId BlockId, filePath FilePath)
-		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount)
+		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount as BlockOpPos)
 		let headId = guardSite.block.id
 		self.requireGuardHeadHoldsOnlyParams(guardSite)
 		// ⭐ **THE ID SPACE BEFORE AND AFTER IS WHAT ENUMERATES THE CASCADE'S OWN BLOCKS.** Everything
@@ -1012,7 +1012,7 @@ type RangeCheckEmitter
 				continue
 			end 'notInThisFunction'
 
-			var chainEnd = self.module.getBlock(tailRef - 1)
+			var chainEnd = self.module.getBlock(((tailRef - 1) as BlockRef))
 			if chainEnd.id == blockId 'neverSplit'
 				continue
 			end 'neverSplit'
@@ -1279,9 +1279,9 @@ type RangeCheckEmitter
 
 		self.guardChainTail = buildBlockIdIndex(self.module, func: self.func)
 		self.guardChainBase = BlockOpPosArray.create()
-		self.guardChainBase.growFilled(self.func.nextBlockId, value: 0)
+		self.guardChainBase.growFilled(self.func.nextBlockId as ElementIndex, value: 0)
 		self.guardChainSource = PreSplitOpsByBlock.create()
-		self.guardChainSource.growFilled(self.func.nextBlockId, value: OpIndexArray.create())
+		self.guardChainSource.growFilled(self.func.nextBlockId as ElementIndex, value: OpIndexArray.create())
 	end 'ensureChainIndex'
 
 	// ---- the panic message ----
@@ -1429,7 +1429,7 @@ export function splitBlockInPlace(module StdModule, func IrFunction, head IrBloc
 		let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlockInPlace: opRefs.get OOB at {i}")
 		tailOps.push(opIdx)
 	end 'moveTail'
-	headBlock.opRefs.truncate(position)
+	headBlock.opRefs.truncate(position as ElementIndex)
 
 	var ok = splitBlockExit(module, func: func, head: headBlock, label: label)
 	ok.opRefs = tailOps
@@ -1465,7 +1465,7 @@ end 'splitBlockExit'
 // spends it to decide a `return` is already behind one — and an elision that computed the id differently
 // from the guard it claims to stand behind would elide against a guard that is not there.
 function rangedParamValue(site RangeCheckParamSite) returns ValueId
-	return site.index
+	return valueIdAtParamPosition(site.index)
 end 'rangedParamValue'
 
 // The i64 the sign check compares against: a value `< 0` (signed) has bit 63 set, which for the

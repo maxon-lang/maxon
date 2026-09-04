@@ -268,7 +268,7 @@ error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-triv
 <!-- test: a-set-fed-from-another-container-is-not-a-conflict -->
 ### The over-rejection guard: a write of ONE storage fed from ANOTHER
 The borrow is of `other`, the write is of `managed`, and E3070's subject is the storage — so there
-is nothing to conflict with. This is the shape `stdlib/Array.maxon:283`'s `appendMemory` is, and
+is nothing to conflict with. This is the shape `stdlib/Array.maxon:282`'s `appendMemory` is, and
 the rule must not reach it.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
@@ -409,7 +409,7 @@ alpha value long enough for a heap record beta value long enough for a heap reco
 ### … and so is appending an element the container already holds
 `push` adds a slot and destroys nothing, and the element it is handed has its reference taken
 before the call — so the borrow is dead at the write and the array simply gains a second
-reference to what it already owned. `stdlib/Array.maxon:284`'s `appendMemory` is this write.
+reference to what it already owned. `stdlib/Array.maxon:283`'s `appendMemory` is this write.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	typealias ElementMemory = __ManagedMemory with Element

@@ -416,7 +416,7 @@ function main() returns ExitCode
 	let c2 = subpWait(h2)
 	print("{c2}")
 	subpRelease(h2)
-	return (n2 * 10 + rn) as ExitCode
+	return ((n2 as Integer) * 10 + rn) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

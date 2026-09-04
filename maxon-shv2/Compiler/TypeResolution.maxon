@@ -29,20 +29,20 @@
 //      It resolves to `MaxonType.exitCode`, a width-free tag whose unsigned-32-bit
 //      width is assigned at the Maxon→Std boundary (see `maxonTypeToStdType`).
 //   2. The project's DECLARED STRUCT registry — every `type Point` the parser declared. It
-//      resolves to `MaxonType.structRef(id)`, KEEPING the name id, which is the opposite of
-//      what an alias does and is the whole distinction between the two: an alias creates no
-//      nominal identity, and a `type` is nothing BUT one. `Point` and `Rect` are different
-//      types however identical their fields, and the id is what says so.
+//      resolves to `MaxonType.structRef(id)`, KEEPING the name id, so the identity survives
+//      resolution rather than having to be recovered from a column. `Point` and `Rect` are
+//      different types however identical their fields, and the id is what says so.
 //   3. The project's DECLARED ENUM/UNION registry — every `enum`/`union` the parser declared. It
 //      resolves to `MaxonType.integer` (an enum value is its i64 tag), DROPPING the id like an
 //      alias does: nothing downstream needs to know a value was a `Color`, because only `match`
 //      inspects an enum and it reads the enum by name from the signature index at parse time.
 //   4. The project's RANGED TYPEALIAS registry — every `typealias Score = int(0 to 100)`
-//      the parser declared. An alias resolves to its UNDERLYING primitive and nothing
-//      more: two aliases over the same range are the same type, because an alias
-//      creates no nominal distinction. The range itself is not consulted here — a
-//      narrowing conversion into a ranged alias is checked at run time, which is a
-//      later milestone.
+//      the parser declared. An alias resolves to its UNDERLYING primitive: resolution
+//      erases the NAME and the RANGE alike, because neither survives into a machine type.
+//      Both are still facts about the program — the name is the TYPE (`Age` never reaches
+//      a `Year` slot without an `as`) and the range is what a narrowing conversion is
+//      guarded against — and both are read BEFORE this pass, off the value columns and the
+//      pre-erasure signature columns.
 //
 // A named type in none of the four is a USER error (a typo, or a type this slice does not
 // have), not a compiler-invariant violation, and it is E3011. WHERE it is anchored is the
@@ -323,7 +323,7 @@ export function functionAliasTypeParamToken(declared MaxonType) returns TypePara
 		return NoTypeParamId
 	end 'notAnOpaqueParameter'
 
-	return typeNameIdOf(declared)
+	return typeParamIdOf(declared)
 end 'functionAliasTypeParamToken'
 
 // ⭐ **THE `GenericInstanceId` ONE SLOT OF A FUNCTION ALIAS'S SIGNATURE STORES — `functionAliasTypeParamToken`'s
@@ -338,7 +338,7 @@ export function functionAliasInstanceId(declared MaxonType) returns GenericInsta
 		return NoGenericInstance
 	end 'notAnInstantiation'
 
-	return typeNameIdOf(declared)
+	return genericInstanceIdOf(declared)
 end 'functionAliasInstanceId'
 
 // `denotedNamedType`'s "this name is in none of the sources" answer. Payload-free — the caller
@@ -472,7 +472,7 @@ end 'reportDeferredNameDiagnostics'
 // cloning and lower-casing both sides on Windows. Every path here came out of `project.db.sourcePaths`,
 // so two references to one file are literally the same string — the identical assumption
 // `RangedAliasRegistry.multiplyDeclared` keys and probes on.
-function declarationAlreadyReported(project Project, entry DeferredNameDiagnostic, upTo ElementCount) returns bool
+function declarationAlreadyReported(project Project, entry DeferredNameDiagnostic, upTo ElementIndex) returns bool
 	for i in 0 upto upTo 'each'
 		let reported = try project.diagnostics.get(i) otherwise panic("declarationAlreadyReported: i < upTo <= diagnostics.count() but get({i}) failed")
 		if reported.line == entry.line and reported.filePath.toString().equals(entry.filePath.toString()) 'sameDeclaration'
@@ -566,14 +566,14 @@ end 'functionTypeRegistryOf'
 // for `fn(Real) returns Real` — the very silent wrong answer this exists to close. Nor is it the NOMINAL
 // display comparison `checkValueMergeSignatures` makes; see FunctionShape for why a door and a merge ask
 // different questions and get different rules.
-export function functionShapesAgree(registry FunctionTypeRegistry, declared FunctionShape, got FunctionShape) returns bool
-	return shapesAgreeUnder(registry, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs)
+export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape) returns bool
+	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs)
 end 'functionShapesAgree'
 
 // The rule proper, carrying the pairs of function-type names already under comparison further down the
 // same descent (see `FunctionTypePair`). Split from the entry point above only so the cycle guard is one
 // argument the three call sites never have to know about.
-function shapesAgreeUnder(registry FunctionTypeRegistry, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray) returns bool
+function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray) returns bool
 	if declared.paramTypes.count() != got.paramTypes.count() 'arity'
 		return false
 	end 'arity'
@@ -581,7 +581,7 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, declared FunctionShape,
 	for i in 0 upto declared.paramTypes.count() 'eachParam'
 		let declaredParam = try declared.paramTypes.get(i) otherwise panic("shapesAgreeUnder: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
 		let gotParam = try got.paramTypes.get(i) otherwise panic("shapesAgreeUnder: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
-		if not resolvedTypesMatch(registry, declared: declaredParam, got: gotParam, pending: pending) 'paramMismatch'
+		if not resolvedTypesMatch(registry, signatures: signatures, declared: declaredParam, got: gotParam, pending: pending) 'paramMismatch'
 			return false
 		end 'paramMismatch'
 		// ⭐⭐ **AND THE PRE-ERASURE IDENTITY, WHICH `resolvedTypesMatch` STRUCTURALLY CANNOT ASK.** `resolveType`
@@ -600,18 +600,18 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, declared FunctionShape,
 		// for the tag rule to say. At most one of the two halves is informative about a position, so asking both
 		// IS "identity where there is one, representation where there is not".
 		//
-		// ⚠ **EXACT NAME EQUALITY, THE EMPTY-AGAINST-NON-EMPTY CASE INCLUDED** — `function(Integer)` reaching a
-		// `function(Color)` place is a real disagreement rather than a missing fact: the callee would read an
-		// ordinal as a number, or a number as an ordinal. The same exactness `Parser.namedAggregatesConflict`
-		// applies one tier down, where an aggregate is never a subtype of another.
-		if not shapeParamIdentity(declared, index: i).equals(shapeParamIdentity(got, index: i)) 'paramIdentityMismatch'
+		// ⚠ **THE EMPTY-AGAINST-NON-EMPTY CASE IS A DISAGREEMENT WHEREVER THE NAME IS AN AGGREGATE'S** —
+		// `function(Integer)` reaching a `function(Color)` place would have the callee read an ordinal as a
+		// number, or a number as an ordinal. `identitiesConflict` is the same rule every coercion site asks,
+		// so a ranged alias — a scalar wearing a name — decays here exactly as it does there.
+		if signatures.identitiesConflict(shapeParamIdentity(declared, index: i), got: shapeParamIdentity(got, index: i)) 'paramIdentityMismatch'
 			return false
 		end 'paramIdentityMismatch'
 	end 'eachParam'
 
 	// The RETURN slot asks both halves too, and for the same measurement — a shape carries ONE return identity
 	// rather than a per-position array, because a function type returns exactly one thing.
-	return returnSlotsMatch(registry, declared: declared.returnType, got: got.returnType, pending: pending) and declared.returnAggregateName.equals(got.returnAggregateName)
+	return returnSlotsMatch(registry, signatures: signatures, declared: declared.returnType, got: got.returnType, pending: pending) and not signatures.identitiesConflict(declared.returnAggregateName, got: got.returnAggregateName)
 end 'shapesAgreeUnder'
 
 // ⭐ **RENDER A RESOLVED SHAPE THE WAY IT WAS WRITTEN — the diagnostic twin of `functionShapesAgree`, and it
@@ -628,12 +628,12 @@ end 'shapesAgreeUnder'
 export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	var unerasedParams = MaxonTypeArray.create()
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
-		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i), typeNames: typeNames))
+		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i), typeNames: typeNames, signatures: signatures))
 	end 'eachParam'
 
 	let unerasedReturn = match shape.returnType 'r'
 		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames))
+		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames, signatures: signatures))
 	end 'r'
 	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, typeNames: typeNames, signatures: signatures)
 end 'formatFunctionShapeDisplay'
@@ -645,8 +645,11 @@ end 'formatFunctionShapeDisplay'
 // TYPE name, and this shape's own parameter reached `resolveNamedType` through that very name in
 // `project.typeNames`. A miss therefore means a column was filled from an interner this renderer was not
 // given, which is a compiler bug and never a program's.
-function unerasedType(t MaxonType, identity ByteArray, typeNames TypeNameInterner) returns MaxonType
-	if identity.isEmpty() 'survivedResolution'
+// A shape caption spells a slot by its CLASS WORD — `fn(int) returns int` — so a ranged alias's identity
+// (`Integer`) is not un-erased here: only a declared aggregate's is, because `int` would be a wrong
+// caption for a `Color` and the identity is the only thing that still says so.
+function unerasedType(t MaxonType, identity ByteArray, typeNames TypeNameInterner, signatures ProgramSignatures) returns MaxonType
+	if identity.isEmpty() or signatures.isRangedAliasIdentity(identity) 'survivedResolution'
 		return t
 	end 'survivedResolution'
 
@@ -667,10 +670,10 @@ let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create()
 // Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
 // meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
 // a function that writes none reads whatever was there.
-function returnSlotsMatch(registry FunctionTypeRegistry, declared MaxonReturnType, got MaxonReturnType, pending FunctionTypePairArray) returns bool
+function returnSlotsMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonReturnType, got MaxonReturnType, pending FunctionTypePairArray) returns bool
 	match declared 'declaredSlot'
 		void then return isVoidReturnType(got)
-		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(registry, declared: declaredValue, got: returnedValueType(got), pending: pending)
+		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(registry, signatures: signatures, declared: declaredValue, got: returnedValueType(got), pending: pending)
 	end 'declaredSlot'
 end 'returnSlotsMatch'
 
@@ -699,7 +702,7 @@ end 'returnedValueType'
 // Which tags carry an identity is stated as an exhaustive match rather than a list of "interesting" ones,
 // so a tag added to `ValueTypeTag` cannot default into "compare the tag only" and silently let two distinct
 // types agree.
-function resolvedTypesMatch(registry FunctionTypeRegistry, declared MaxonType, got MaxonType, pending FunctionTypePairArray) returns bool
+function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonType, got MaxonType, pending FunctionTypePairArray) returns bool
 	let declaredTag = maxonTypeTag(declared)
 	if declaredTag != maxonTypeTag(got) 'differentTag'
 		return false
@@ -713,7 +716,7 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, declared MaxonType, g
 	// nested types genuinely differ, `runner`'s own body calls `f` through `InnerB`'s signature while the
 	// caller supplied an `InnerA`, and the wrong answer lands one level in where nothing else looks.
 	if declaredTag == ValueTypeTag.function 'nestedFunctionType'
-		return nestedFunctionTypesAgree(registry, declaredId: typeNameIdOf(declared), gotId: typeNameIdOf(got), pending: pending)
+		return nestedFunctionTypesAgree(registry, signatures: signatures, declaredId: typeNameIdOf(declared), gotId: typeNameIdOf(got), pending: pending)
 	end 'nestedFunctionType'
 
 	let identifiedByName = match declaredTag 'k'
@@ -757,7 +760,7 @@ end 'resolvedTypesMatch'
 // every ordinary program: a nested function parameter almost always spells the same alias on both sides, and
 // that case allocates nothing and touches no registry. It is also what makes the cycle guard cheap — a
 // SELF-referential alias meets itself here and never descends at all.
-function nestedFunctionTypesAgree(registry FunctionTypeRegistry, declaredId TypeNameId, gotId TypeNameId, pending FunctionTypePairArray) returns bool
+function nestedFunctionTypesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declaredId TypeNameId, gotId TypeNameId, pending FunctionTypePairArray) returns bool
 	if declaredId == gotId 'sameFunctionType'
 		return true
 	end 'sameFunctionType'
@@ -768,7 +771,14 @@ function nestedFunctionTypesAgree(registry FunctionTypeRegistry, declaredId Type
 		return true
 	end 'cycle'
 
-	return shapesAgreeUnder(registry, declared: requireFunctionShapeOf(registry, name: declaredName, side: "nested declared"), got: requireFunctionShapeOf(registry, name: gotName, side: "nested arriving"), pending: pendingWithPair(pending, declaredName: declaredName, gotName: gotName))
+	// ⭐⭐ **A NESTED POSITION IS NOMINAL: `function(f Handler)` is not `function(f Callback)`.** A function
+	// typealias names its own type, so once the two shapes agree the BRANDS still have to, and a nested
+	// position is where the descent would otherwise erase the name it was written under.
+	if signatures.functionBrandsConflict(declaredName, gotName: gotName) 'twoBrandsOfOneShape'
+		return false
+	end 'twoBrandsOfOneShape'
+
+	return shapesAgreeUnder(registry, signatures: signatures, declared: requireFunctionShapeOf(registry, name: declaredName, side: "nested declared"), got: requireFunctionShapeOf(registry, name: gotName, side: "nested arriving"), pending: pendingWithPair(pending, declaredName: declaredName, gotName: gotName))
 end 'nestedFunctionTypesAgree'
 
 // ⭐ **THE NAME BEHIND A `function`-TAGGED TYPE'S ID — the ONE reader.** Every consumer of a function type
@@ -1001,12 +1011,12 @@ end 'resolveType'
 // now reported.
 //
 // ⚠ **THE RANGED CARVE-OUT IS INHERITED UNCHANGED, AND IT IS SOUND FOR THESE TWO FOR A DIFFERENT REASON.**
-// A `typealias CharSet = int(0 to 5)` mints no nominal identity, and it cannot contest the seed either,
-// because a RANGED alias and a GENERIC-INSTANCE alias live in different registries and are reached by
-// different syntax: `CharSet from ['x']` asks `genericAliases`, a ranged reference asks the alias
-// registry. MEASURED: both readings coexist and each answers for its own syntax (a `CharSet from ['x']`
-// still builds the member set, `true`, exit 0). So the erasure argument above is replaced here by a
-// disjointness one, and the answer is the same — legal.
+// A `typealias CharSet = int(0 to 5)` carries a nominal identity of its own, and it still cannot contest
+// the seed, because a RANGED alias and a GENERIC-INSTANCE alias live in different registries and are
+// reached by different syntax: `CharSet from ['x']` asks `genericAliases`, a ranged reference asks the
+// alias registry. MEASURED: both readings coexist and each answers for its own syntax (a
+// `CharSet from ['x']` still builds the member set, `true`, exit 0). So the argument here is a
+// DISJOINTNESS one rather than the erasure one above, and the answer is the same — legal.
 // ⭐ **`Codepoint` JOINS THE LIST AT P1.8 SLICE E, AND IT JOINS FOR `HashValue`'S EXACT REASON.** It is the
 // second name `isSynthesizedIntAliasName` erases to `integer` without a registry entry, so
 // `denotedNamedType`'s synthesized-alias arm answers for it BEFORE `containsStruct` is consulted — which is
@@ -1203,9 +1213,9 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	end 'isSynthesizedIntAlias'
 
 	// ⭐ A DECLARED `type` KEEPS ITS NAME ID, and that one line is the difference between the two
-	// registries this function consults. An alias RESOLVES AWAY — `Score` becomes `int`, and
-	// nothing downstream can tell it was ever written — because an alias creates no nominal
-	// distinction. A struct is nothing but a nominal distinction: `p.x` needs to know WHICH type
+	// registries this function consults. An alias RESOLVES AWAY — `Score` becomes `int`, and nothing
+	// DOWNSTREAM OF THIS PASS can tell it was ever written; its identity is spent before resolution, at
+	// the coercion doors. A struct's is needed after: `p.x` needs to know WHICH type
 	// `p` is to find `x`'s slot (`Parser.emitFieldLoad` reads the id back out and asks
 	// `structOf`), and two structs with identical fields are still two types. So the id survives,
 	// carried by `structRef`.
@@ -1274,7 +1284,8 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 
 	// A PLAIN ranged alias ("Score") — checked FIRST after the aggregates, and BEFORE the qualified-alias
 	// path below, so the common case never pays the qualified split. A plain alias resolves to its underlying
-	// primitive: two aliases over the same range are the same type, an alias creates no nominal distinction.
+	// primitive: the NAME and the RANGE are both erased here, and both were already spent — the name at the
+	// coercion doors, the range at the guards `InsertRangeChecks` plans.
 	//
 	// ⚠ Bare-name (`underlyingInAnyFile`), and that is exactly right HERE rather than a gap: this arm
 	// wants only `underlying`, and it DROPS the range — which is the erasure the whole type system

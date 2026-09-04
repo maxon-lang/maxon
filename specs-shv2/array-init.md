@@ -9,7 +9,7 @@ category: memory-safety
 
 ## Documentation
 
-`stdlib/Array.maxon:113-115` declares the static every `Array` has:
+`stdlib/Array.maxon:112-115` declares the static every `Array` has:
 
 ```
 export static function init(managed ElementMemory) returns Self

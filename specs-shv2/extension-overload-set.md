@@ -143,7 +143,7 @@ end 'Tagged'
 
 function main() returns ExitCode
 	let f = Five.make()
-	return f.pick(2) + f.pick(true)
+	return (f.pick(2) as Count) + f.pick(true)
 end 'main'
 ```
 ```exitcode
@@ -183,7 +183,7 @@ end 'Box'
 
 function main() returns ExitCode
 	let b = Box.of(10)
-	return b.widen(4) + b.widen(true)
+	return (b.widen(4) as Amount) + b.widen(true)
 end 'main'
 ```
 ```exitcode
@@ -236,13 +236,13 @@ end 'Weight'
 
 export extension Counted
 	export function score(x Weight) returns Amount
-		return base() * x.w
+		return (base() as Amount) * x.w
 	end 'score'
 end 'Counted'
 
 function main() returns ExitCode
 	let u = Unit.make()
-	return u.score(4) + u.score(true) + u.score(Weight.of(7))
+	return (u.score(4) as Amount) + (u.score(true) as Amount) + u.score(Weight.of(7))
 end 'main'
 ```
 ```exitcode

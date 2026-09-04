@@ -31,17 +31,11 @@
 // look faintly linear, and it is measured rather than assumed.
 
 // A count of heap allocations. A cumulative counter read out of the running process's own
-// allocator (see `__Builtins.mm*`), so it is monotonic and cannot go negative — as is the
-// volume of heap bytes beside it, which is `stdlib/String.maxon`'s `ByteCount`. A count of
-// bytes is one fact, so it has one declaration; this file used to carry a second identical
-// one, and `Targets/Shared/BinaryHelpers.maxon` a third.
+// allocator (see `__Builtins.mm*`), so it is monotonic and cannot go negative.
 //
-// ⚠ ITS BOUND MUST TRACK `ByteCount`'s, AND THE SELF-COMPILE IS WHAT SAYS SO. A ranged alias
-// mints no nominal identity, so `AllocCountArray` and `ByteCountArray` are THE SAME TYPE exactly
-// while these two ranges agree — and `rungCounts` serves allocations, bytes and CPU through one
-// of them. Narrowing one and not the other split the two array types apart, and
-// `ScaleHistory.memoryRowFrom` stopped compiling with `expected Array with
-// int(0 to 9223372036854775807), got AllocCountArray`.
+// ITS BOUND IS ITS OWN. `AllocCountArray` and `ByteCountArray` are two instances because their
+// element aliases are two names, whatever their ranges say, so neither bound constrains the other
+// and a reader crossing between them writes the conversion.
 //
 // Both stay FULL-RANGE UNSIGNED, deliberately. A cumulative counter read out of the allocator is
 // unsigned by nature and NOTHING HOSTILE ARRIVES AT IT: every value is minted by the runtime's own
@@ -52,13 +46,12 @@
 // user program can write and `-1`'s bit pattern is a valid `u64`.
 export typealias AllocCount = int(0 to u64.max)
 
-// The volume of heap bytes, beside the allocation count and minted the same way. This file used to
-// spell it with `stdlib/String.maxon`'s `ByteCount` on a "a count of bytes is one fact, so it has one
-// declaration" argument. ⚠ THAT MERGED TWO FACTS WITH OPPOSITE THREAT MODELS. A String's byte count
-// is a PUBLIC API DOOR — `reserve(-1)` and `byteAt(-1)` are things a user program can write, so that
-// one is narrowed to `i64.max` and refuses them. This one is a cumulative counter no caller can reach.
-// Sharing a declaration forced one bound on both, and the self-compile is where it surfaced.
-typealias HeapByteCount = int(0 to u64.max)
+// The volume of heap bytes, beside the allocation count and minted the same way. ⚠ IT IS NOT
+// `stdlib/String.maxon`'s `BytePos`, because the two have OPPOSITE THREAT MODELS: a string's byte
+// position is a PUBLIC API DOOR — `reserve(-1)` and `byteAt(-1)` are things a user program can write,
+// so that one is narrowed to `i64.max` and refuses them — while this is a cumulative counter no
+// caller can reach. One declaration cannot carry both bounds.
+export typealias HeapByteCount = int(0 to u64.max)
 
 export typealias AllocCountArray = Array with AllocCount
 export typealias ByteCountArray = Array with HeapByteCount
@@ -113,9 +106,9 @@ export type PhaseDelta
 	export let cpuTicks as CpuTicks
 	export let allocs as AllocCount
 	export let frees as AllocCount
-	export let bytes as ByteCount
+	export let bytes as HeapByteCount
 
-	export static function create(nanos DurationNanos, cpuTicks CpuTicks, allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseDelta
+	export static function create(nanos DurationNanos, cpuTicks CpuTicks, allocs AllocCount, frees AllocCount, bytes HeapByteCount) returns PhaseDelta
 		return Self{nanos: nanos, cpuTicks: cpuTicks, allocs: allocs, frees: frees, bytes: bytes}
 	end 'create'
 
@@ -161,14 +154,14 @@ end 'CounterSource'
 
 // An open bracket: the counters as they stood when the phase began, and WHICH counters they were.
 export type PhaseProbe
-	export let nanos as DurationNanos
+	export let nanos as InstantNanos
 	export let cpuTicks as CpuTicks
 	// Cumulative allocations and cumulative FREES at the instant the phase opened. The process-wide source
 	// keeps no free counter — it keeps a LIVE one — so its cumulative frees are read as `total - live`,
 	// which is exact at every instant by definition. See `freesSoFar`.
 	export let allocTotal as AllocCount
 	export let freeTotal as AllocCount
-	export let bytes as ByteCount
+	export let bytes as HeapByteCount
 	export let source as CounterSource
 
 	// Open a bracket, and open the matching TRACE SPAN.
@@ -294,7 +287,7 @@ function freesSoFar(source CounterSource) returns AllocCount
 	end 'which'
 end 'freesSoFar'
 
-function bytesSoFar(source CounterSource) returns ByteCount
+function bytesSoFar(source CounterSource) returns HeapByteCount
 	return match source 'which'
 		processWide gives processWideBytes()
 		callingThread gives callingThreadBytes()
@@ -309,8 +302,8 @@ function processWideLive() returns AllocCount
 	return __Builtins.mmAllocLive() + __Builtins.mmRawAllocLive()
 end 'processWideLive'
 
-function processWideBytes() returns ByteCount
-	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as ByteCount
+function processWideBytes() returns HeapByteCount
+	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as HeapByteCount
 end 'processWideBytes'
 
 // ⛔⛔ **THE PER-THREAD COLUMNS ARE shv2's OWN SURFACE, AND THE THREE FUNCTIONS BELOW ARE CONDITIONALLY
@@ -331,8 +324,8 @@ function callingThreadFrees() returns AllocCount
 	return __Builtins.threadFreeTotal() as AllocCount
 end 'callingThreadFrees'
 
-function callingThreadBytes() returns ByteCount
-	return __Builtins.threadAllocBytes() as ByteCount
+function callingThreadBytes() returns HeapByteCount
+	return __Builtins.threadAllocBytes() as HeapByteCount
 end 'callingThreadBytes'
 
 #else
@@ -345,7 +338,7 @@ function callingThreadFrees() returns AllocCount
 	return processWideAllocs() - processWideLive()
 end 'callingThreadFrees'
 
-function callingThreadBytes() returns ByteCount
+function callingThreadBytes() returns HeapByteCount
 	return processWideBytes()
 end 'callingThreadBytes'
 

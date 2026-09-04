@@ -1637,7 +1637,7 @@ it is not: those five take an INDEX or a CAPACITY the source wrote and must refu
 serve, while `append` is handed another record and asks the growth policy for whatever capacity that implies.
 Both references agree — the bootstrap registers it as the only `__ManagedMemory` mutator with no `throwsType`
 (`maxon-sharp/Compiler/2-Parser.cs:1670`) and v1's `__managed_mem_append` says *"Non-throwing"* in its header
-and swallows the grow's error (`stdlib/Internals.maxon:3743-3766`) — and `stdlib/String.maxon:432` declares a
+and swallows the grow's error (`stdlib/Internals.maxon:3743-3766`) — and `stdlib/String.maxon:430` declares a
 NON-throwing `append` whose whole body is a bare `managed.append(other.managed)`, which is unwritable under
 any other answer.
 
@@ -1773,7 +1773,7 @@ error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — 
 <!-- test: error.buffer-has-no-appendMemory -->
 
 ⭐⭐ **`count`'s ARGUMENT, ONE MEMBER OVER — AND THE DIRECTION THAT NEEDED ITS OWN CASE.** `appendMemory` is
-declared on `Array` (`stdlib/Array.maxon:272`) and NOWHERE else: not in the corpus, not in v1's
+declared on `Array` (`stdlib/Array.maxon:271`) and NOWHERE else: not in the corpus, not in v1's
 `__ManagedMemory` member table (`LowerMaxonToStd.maxon:1618-1660`), not in the bootstrap's
 (`2-Parser.cs:1470-1512`), and no corpus caller writes `mm.appendMemory(…)`. The envelope collapse makes the
 two surfaces ONE record and the `Array` spelling therefore folds onto the buffer's `append` EMISSION — which
@@ -2198,7 +2198,7 @@ it.
 
 ⭐⭐ **THE PROBE MOVED FROM `create` TO AN UNKNOWN MEMBER WHEN `stdlib/Array.maxon` WAS LISTED, AND THE
 ASSERTION DID NOT.** `create` used to reach this roster because nothing else claimed it; the corpus declares
-`export static function create() returns Self` (`stdlib/Array.maxon:125`), so `memberBelongsToTheCorpus` now
+`export static function create() returns Self` (`stdlib/Array.maxon:124`), so `memberBelongsToTheCorpus` now
 answers first and the name never reaches `requireSurfaceMember` at all. What this case exists to pin — that
 the sentence is JOINED from the roster constants, names `managed`, and omits `create` — is unchanged and is
 still read straight off the message below. An unknown member is in fact the BETTER vehicle for it: `create`
@@ -3772,7 +3772,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let h = Holder.create("hello".toByteArray())
+	let h = Holder.create("hello".toByteArray() as ByteBuffer)
 	return (h.buf.length() + h.size()) as ExitCode
 end 'main'
 ```
@@ -3922,7 +3922,7 @@ function size(h Held) returns Int
 end 'size'
 
 function main() returns ExitCode
-	let h = Held.mem("hello".toByteArray())
+	let h = Held.mem("hello".toByteArray() as ByteBuffer)
 	return size(h) as ExitCode
 end 'main'
 ```
@@ -3992,8 +3992,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let h = Holder.create("hello".toByteArray())
-	return (h.buf.length() + seed("hi".toByteArray())) as ExitCode
+	let h = Holder.create("hello".toByteArray() as ByteBuffer)
+	return (h.buf.length() + seed("hi".toByteArray() as ByteBuffer)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4018,8 +4018,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let h = Holder.create("hello".toByteArray())
-	return (h.buf.length() + seed("hi".toByteArray())) as ExitCode
+	let h = Holder.create("hello".toByteArray() as ByteBuffer)
+	return (h.buf.length() + seed("hi".toByteArray() as ByteBuffer)) as ExitCode
 end 'main'
 
 // --- file: alias.maxon
@@ -4083,7 +4083,7 @@ end 'arrayWidth'
 function main() returns ExitCode
 	var xs = B.create()
 	xs.push(7 as Int2)
-	return (bufferWidth("hello".toByteArray()) + arrayWidth(xs)) as ExitCode
+	return ((bufferWidth("hello".toByteArray()) as Int2) + arrayWidth(xs)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4114,7 +4114,7 @@ type Holder
 end 'Holder'
 
 export function seed() returns Int
-	let h = Holder.create("hello".toByteArray())
+	let h = Holder.create("hello".toByteArray() as B)
 	return h.buf.length()
 end 'seed'
 
@@ -4127,7 +4127,7 @@ type Bag
 	export var items as B
 
 	export static function create(items Nums) returns Self
-		return Self{items: items}
+		return Self{items: items as B}
 	end 'create'
 end 'Bag'
 
@@ -4449,7 +4449,7 @@ half nothing owns. A zero-copy view is exactly the receiver whose next byte belo
 program reaching this door through `arr.managed` takes the copy path on ordinary input: measured on the
 program below, **exit 101** — the leak gate — where the `.length()` control on the same slice exits 0.
 
-⇒ The member stays on the buffer roster, because the corpus DOES call it (`stdlib/String.maxon:195`'s
+⇒ The member stays on the buffer roster, because the corpus DOES call it (`stdlib/String.maxon:193`'s
 `cstr()`), and the visibility that declaration carries is enforced the only way shv2 can enforce it: on
 the file's physical location, exactly as the four stdlib-only `String` byte doors are
 (`Parser.requireStdlibOnlyStringMethod`). The ownership question belongs to the rung that gives `cstring`
@@ -4470,7 +4470,7 @@ error E2015: <fragment>:5:22: Unsupported: `__ManagedMemory` member 'toCString' 
 ### `makeCharFromBytes(pos, len)` is STDLIB-ONLY
 
 The same gate, and the second member behind it. Its corpus declaration is a `module function`
-(`stdlib/String.maxon:319`) whose stated contract is *"callers must guarantee `pos + len <=
+(`stdlib/String.maxon:317`) whose stated contract is *"callers must guarantee `pos + len <=
 byteLength()`"* — a PRECONDITION, so the graph it forwards to (`__char_at`, the one door a `Character` is
 born through) copies the window without checking it. The reference compiler does check, and refuses with
 `__ManagedMemory: byte index out of bounds`; shv2's `__char_at` is shared with `for c in s`, whose window

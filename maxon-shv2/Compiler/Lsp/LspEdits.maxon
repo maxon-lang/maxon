@@ -79,7 +79,7 @@ end 'LspNamedPair'
 
 // ⚠ The spans of two different blocks never overlap — one is a name, the other is inside a label's
 // quotes — so the first hit is the only hit and there is no innermost-wins rule to get wrong.
-function namedPairAt(blocks LspDocumentBlockArray, offset LspByteOffset) returns LspNamedPair
+function namedPairAt(blocks LspDocumentBlockArray, offset ByteOffset) returns LspNamedPair
 	for block in blocks 'eachBlock'
 		if lspSpanHolds(block.nameSpan, offset: offset) or lspSpanHolds(block.endNameSpan, offset: offset) 'onThisName'
 			return LspNamedPair.found(block)
@@ -178,7 +178,7 @@ end 'UnusedLocalName'
 
 typealias UnusedLocalNameArray = Array with UnusedLocalName
 
-function unusedLocalNamesIn(tokens TokenArray, blocks LspDocumentBlockArray, selectionStart LspByteOffset, selectionEnd LspByteOffset) returns UnusedLocalNameArray
+function unusedLocalNamesIn(tokens TokenArray, blocks LspDocumentBlockArray, selectionStart ByteOffset, selectionEnd ByteOffset) returns UnusedLocalNameArray
 	var found = UnusedLocalNameArray.create()
 
 	for binding in localBindingsIn(tokens, blocks: blocks) 'eachBinding'
@@ -202,10 +202,10 @@ end 'unusedLocalNamesIn'
 // One `let`/`var` binding written inside a block, named by its NAME token.
 type LocalBinding
 	export let tokenIndex as TokenIndex
-	export let startByte as LspByteOffset
-	export let endByte as LspByteOffset
+	export let startByte as ByteOffset
+	export let endByte as ByteOffset
 
-	export static function create(tokenIndex TokenIndex, startByte LspByteOffset, endByte LspByteOffset) returns LocalBinding
+	export static function create(tokenIndex TokenIndex, startByte ByteOffset, endByte ByteOffset) returns LocalBinding
 		return Self{tokenIndex: tokenIndex, startByte: startByte, endByte: endByte}
 	end 'create'
 end 'LocalBinding'

@@ -357,7 +357,7 @@ public enum ErrorCode {
   /// </summary>
   SemanticUnsafeCast = 3009,
   /// <summary>
-  /// A cast is redundant: the destination type already admits every value the source type can hold.
+  /// A cast names the value's own typealias, so it converts nothing.
   /// </summary>
   SemanticUnneededCast = 3010,
   /// <summary>

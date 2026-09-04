@@ -51,19 +51,19 @@ end 'imageReadU64'
 //
 // Written here rather than three times because it is the same arithmetic in all three formats, and a
 // guard that differs between them is a guard one of them does not have.
-export function imageRangeFits(image ByteArray, start ByteOffset, count ByteCount) returns bool
+export function imageRangeFits(image ByteArray, start ByteOffset, count BytePos) returns bool
 	if count > image.count() 'longerThanWholeFile'
 		return false
 	end 'longerThanWholeFile'
 
-	return start <= image.count() - count
+	return (start as BytePos) <= image.count() - count
 end 'imageRangeFits'
 
 // `count` bytes of `image` starting at `start`. PANICS on an out-of-range read rather than
 // truncating: every caller checks `imageRangeFits` against the file's real length first and reports a
 // `truncated` error naming the image, so reaching here with a bad range means that check was
 // skipped — a bug in the reader, not a malformed input.
-export function imageSlice(image ByteArray, start ByteOffset, count ByteCount) returns ByteArray
+export function imageSlice(image ByteArray, start ByteOffset, count BytePos) returns ByteArray
 	var out = ByteArray.create()
 	for i in 0 upto count 'each'
 		out.push(try image.get(start + i) otherwise panic("imageSlice: get OOB at {start + i} — the caller is required to have checked imageRangeFits(start, count) first"))
@@ -81,7 +81,7 @@ end 'imageSlice'
 // Running off the end of the image yields the EMPTY name rather than the partial one read so far:
 // a name that does not fit in the file is not a name, and every caller is comparing against a
 // known section name, so "" simply never matches and the walk moves on.
-export function imageNameAt(image ByteArray, at ByteOffset, maxBytes ByteCount) returns String
+export function imageNameAt(image ByteArray, at ByteOffset, maxBytes BytePos) returns String
 	var name = ByteArray.create()
 	for i in 0 upto maxBytes 'each'
 		let b = try image.get(at + i) otherwise return ""

@@ -1,0 +1,19 @@
+// Test: error.from-refuses-a-user-ranged-byte-alias
+typealias Octet = int(0 to u8.max)
+typealias OctetArray = Array with Octet
+
+function main() returns ExitCode
+	var a = OctetArray.create()
+	a.push(72)
+	a.push(105)
+	let x = try a.get(0) otherwise 0
+	let y = try a.get(1) otherwise 0
+	let pushed = String.from(a)
+	let literal = String.from([x, y])
+	print("pushed={pushed} literal={literal} len={pushed.byteLength()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:11:22: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'
+error E3005: <fragment>:12:23: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'

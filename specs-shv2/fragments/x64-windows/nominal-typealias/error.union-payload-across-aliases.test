@@ -1,0 +1,20 @@
+// Test: error.union-payload-across-aliases
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+
+union Slot
+	held(v Wide)
+	empty
+end 'Slot'
+
+function main() returns ExitCode
+	let n = 5 as Narrow
+	let s = Slot.held(n)
+	match s 'go'
+		held(v) then return v as ExitCode
+		empty then return 1
+	end 'go'
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:12:21: type mismatch: 'expected Wide, got Narrow'

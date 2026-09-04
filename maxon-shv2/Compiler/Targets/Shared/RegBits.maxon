@@ -21,7 +21,7 @@ export typealias BitWordArray = Array with MachineWord
 // addresses the 64-bit word holding it, and from the BYTE counts the object writers deal in: they
 // are all non-negative integers, and naming them alike is how a bit index ends up passed where a
 // word offset belongs.
-typealias BitIndex = int(0 to u64.max)
+export typealias BitIndex = int(0 to u64.max)
 
 // The index of one 64-bit WORD inside a `BitWordArray` — a row's BASE, or a word within a row.
 export typealias BitWordIndex = int(0 to u64.max)
@@ -54,12 +54,12 @@ let PopcountByteSelect = 0xFF
 // Words needed to hold `bitCount` bits (ceil-divide, min 1 so an empty row still
 // occupies a word and row arithmetic never touches a zero-width slice).
 export function bitsetWordsFor(bitCount BitIndex) returns BitWordCount
-	let words = (bitCount + BitsPerWord - 1) shr BitWordShift
+	let words = ((bitCount + BitsPerWord - 1) shr BitWordShift) as BitWordCount
 	return words if words > 0 else 1
 end 'bitsetWordsFor'
 
 function wordIndexOf(base BitWordIndex, bit BitIndex) returns BitWordIndex
-	return base + (bit shr BitWordShift)
+	return base + ((bit shr BitWordShift) as BitWordIndex)
 end 'wordIndexOf'
 
 function bitOf(bit BitIndex) returns MachineWord
@@ -114,7 +114,7 @@ function appendSetBitsOfWord(word MachineWord, bitBase BitIndex, out ValueIdArra
 		// Isolate the lowest set bit, emit its index, then clear it (Kernighan): the loop body
 		// runs once per LIVE value, never once per value id.
 		let lowest = remaining and -remaining
-		out.push(bitBase + trailingZeroCount(lowest))
+		out.push(bitBase + (trailingZeroCount(lowest) as BitIndex))
 		remaining = remaining and (remaining - 1)
 	end 'eachSetBit'
 end 'appendSetBitsOfWord'
@@ -466,7 +466,7 @@ end 'regMaskOf'
 
 // Number of registers in `mask`.
 export function regMaskPopcount(mask RegMask) returns RegCount
-	return popcountWord(mask)
+	return popcountWord(mask as MachineWord) as RegCount
 end 'regMaskPopcount'
 
 // The LOWEST register number (0..31) whose bit is CLEAR in `blocked`, or

@@ -1020,16 +1020,16 @@ function main() returns ExitCode
 	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
 	// answer needs all 64.
 	let narrow = -8 as I32
-	if narrow shl 29 != shlBy(-8, d: 29) 'signedFoldVsEmitted'
+	if (narrow shl 29) as Num != shlBy(-8, d: 29) 'signedFoldVsEmitted'
 		return 1
 	end 'signedFoldVsEmitted'
-	if narrow shl 29 != -4294967296 'signedValue'
+	if (narrow shl 29) as Num != -4294967296 'signedValue'
 		return 2
 	end 'signedValue'
 
 	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
 	// `shr 33` would have quietly become `shr 1`.
-	if narrow shr 33 != shrBy(-8, d: 33) 'signedCountFoldVsEmitted'
+	if (narrow shr 33) as Num != shrBy(-8, d: 33) 'signedCountFoldVsEmitted'
 		return 3
 	end 'signedCountFoldVsEmitted'
 	if narrow shr 33 != -1 'signedCountValue'
@@ -1038,10 +1038,10 @@ function main() returns ExitCode
 
 	// NARROW UNSIGNED. Zero-filling, and still 64 bits wide.
 	let wide = 4294967295 as U32
-	if wide shl 33 != shlBy(4294967295, d: 33) 'unsignedFoldVsEmitted'
+	if (wide shl 33) as Num != shlBy(4294967295, d: 33) 'unsignedFoldVsEmitted'
 		return 5
 	end 'unsignedFoldVsEmitted'
-	if wide shr 4 != shrBy(4294967295, d: 4) 'unsignedShrFoldVsEmitted'
+	if (wide shr 4) as Num != shrBy(4294967295, d: 4) 'unsignedShrFoldVsEmitted'
 		return 6
 	end 'unsignedShrFoldVsEmitted'
 	if wide shr 4 != 268435455 'unsignedShrValue'
@@ -1051,7 +1051,7 @@ function main() returns ExitCode
 	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
 	// agree with it rather than merely with each other.
 	let plain = -8 as Num
-	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
+	if plain shl 29 != (narrow shl 29) as Num 'rangedAgreesWithPlain'
 		return 8
 	end 'rangedAgreesWithPlain'
 
@@ -1121,7 +1121,7 @@ typealias Num = int(i64.min to i64.max)
 
 function sourceKeepsItsOwnType(p Num) returns Num
 	let w = p as Wide
-	return (w shr 60) - (p shr 60)
+	return ((w shr 60) as Num) - (p shr 60)
 end 'sourceKeepsItsOwnType'
 
 function castToSigned(v Wide) returns Num
@@ -1630,7 +1630,7 @@ while holding **100**. One rule covers both: the edge proves, or the claim is wi
 
 Masked, `1 shl 100` would be `1 shl 36` = **68719476736**. It is 0 here, on both compilers.
 ```maxon
-typealias Num = int(i64.min to i64.max)
+var wide = 90
 typealias Bits = int(0 to 63)
 
 union Missing implements Error
@@ -1648,7 +1648,6 @@ end 'firstBit'
 function main() returns ExitCode
 	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
 	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
-	var wide = 90 as Num
 	wide = wide + 10
 
 	let n = try firstBit(false) otherwise wide

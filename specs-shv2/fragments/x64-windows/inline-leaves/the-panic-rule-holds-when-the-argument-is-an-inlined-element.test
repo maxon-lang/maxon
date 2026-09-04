@@ -1,15 +1,12 @@
 // Test: the-panic-rule-holds-when-the-argument-is-an-inlined-element
-typealias Integer = int(i64.min to i64.max)
 typealias Percent = int(0 to 100)
-typealias IntArray = Array with Integer
 
 function clampPct(x Percent) returns Percent
 	return x
 end 'clampPct'
 
 function main() returns ExitCode
-	var a = IntArray.create()
-	a.push(101)
+	let a = [101]
 	var last = 0
 	for v in a 'each'
 		last = clampPct(v)
@@ -37,7 +34,7 @@ func @clampPct {
     x64.cmpRegImm32 rcx, 100
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:6: Range check failed: value outside typealias 'Percent'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:4: Range check failed: value outside typealias 'Percent'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -58,13 +55,18 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 101
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
   forhdr:
@@ -97,7 +99,7 @@ func @main {
     x64.cmpRegReg r12, rax
     x64.jcc lessEqual, __rc_ok#5
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

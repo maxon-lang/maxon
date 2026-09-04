@@ -799,7 +799,7 @@ let Arm64AddShiftedMulMin = 3 as Imm32
 // caller-owned record for that type's own measured reason, since this is asked at every constant
 // multiply the backend lowers.
 export function arm64MulImmForm(imm Imm32, scale MemoryIndexScaleMatch) returns Arm64MulImmForm
-	if log2OfPowerOfTwo(imm) != NotAPowerOfTwo 'shiftLeft'
+	if log2OfPowerOfTwo(imm as ParsedInt) != NotAPowerOfTwo 'shiftLeft'
 		return Arm64MulImmForm.shiftLeft
 	end 'shiftLeft'
 
@@ -816,7 +816,7 @@ end 'arm64MulImmForm'
 // multiplier, asked again where the operand is needed rather than carried on a record the other two
 // arms have no use for. The panic is the caller's obligation, not a reachable diagnostic.
 export function arm64MulImmShiftCount(imm Imm32) returns ShiftCount
-	let shift = log2OfPowerOfTwo(imm)
+	let shift = log2OfPowerOfTwo(imm as ParsedInt)
 	if shift == NotAPowerOfTwo 'notAShift'
 		panic("arm64MulImmShiftCount: {imm} is not a power of two — ask `arm64MulImmForm` first, and read this only for its `shiftLeft` answer")
 	end 'notAShift'
@@ -963,11 +963,12 @@ end 'arm64EmitCmpImm'
 
 // A signed `Imm32` as its 64-bit two's-complement pattern — the value `movz`/`movk` must materialise
 // so a negative compare/immediate operand reads with its sign extended.
-function imm32ToWord(imm Imm32) returns MachineWord
+export function imm32ToWord(imm Imm32) returns MachineWord
 	if imm >= 0 'nonNeg'
 		return imm as MachineWord
 	end 'nonNeg'
-	return u64.max - (-imm) + 1
+	let magnitude = (-imm) as MachineWord
+	return u64.max - magnitude + 1
 end 'imm32ToWord'
 
 // CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond) — one register set from the flags.
@@ -1046,7 +1047,7 @@ end 'arm64EmitVectorEor'
 // prologue pass's callee-save slots and the hand-assembled runtime chunks' locals
 // (`Arm64PanicRuntime.slotOffset`) — all three address the same frame the same way.
 export function arm64SlotDisplacement(slot SpillSlot) returns MachineWord
-	return Arm64FrameRecordBytes + slot * SpillSlotBytes
+	return Arm64FrameRecordBytes + (slot as MachineWord) * SpillSlotBytes
 end 'arm64SlotDisplacement'
 
 // Access a frame slot at `[x29 + byteOffset]`. Below 256 bytes an unscaled STUR/LDUR encodes the
@@ -1063,7 +1064,7 @@ end 'arm64SlotDisplacement'
 function arm64EmitFrameSlot(code ByteArray, rt MachineWord, byteOffset MachineWord, unscaledOp MachineWord, scaledOp MachineWord)
 	if byteOffset < Arm64UnscaledSpillThreshold 'unscaled'
 		arm64EmitUnscaledMem(code, opcode: unscaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset as Imm32)
-	end 'unscaled' else if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'scaled'
+	end 'unscaled' else if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes) 'scaled'
 		arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset, scale: SpillSlotBytes)
 	end 'scaled' else 'wide'
 		arm64EmitWideFrameSlot(code, rt: rt, byteOffset: byteOffset, scaledOp: scaledOp)
@@ -1122,7 +1123,7 @@ end 'arm64EmitWideFrameSlot'
 // re-narrowed and handed to another `Imm32` parameter — IS `specs/ranged-typealias.md`'s case, and it
 // fails. What is measurable is which divisors license the narrowing, and that answer names this
 // signature: a literal, a module-level `let` and a local `let` all fold to a range fitting `i32` and take
-// the 32-bit `idiv`, while a `NonZeroWord` divisor — `int(1 to u64.max)`, which has no signed reading to
+// the 32-bit `idiv`, while a `MachineWord` divisor — `int(0 to u64.max)`, which has no signed reading to
 // union with `Imm32` — keeps the divide at 64 bits. So the parameter below would not trip it today; the
 // failing draft must have divided by one of this file's folded scale constants.
 //
@@ -1131,8 +1132,8 @@ end 'arm64EmitWideFrameSlot'
 // home of the magnitude rule — and it folds the sign through `modulus`, the number this field genuinely
 // wraps at. `imm32ToWord((byteOffset / scale) as Imm32) and (modulus - 1)` is correct too, but only while
 // every modulus is a power of two, and nothing here says that.
-function arm64SignedMemField(byteOffset Imm32, scale NonZeroWord, modulus MachineWord) returns MachineWord
-	let units = arm64AddSubImmMagnitude(byteOffset) / scale
+function arm64SignedMemField(byteOffset Imm32, scale MachineWord, modulus MachineWord) returns MachineWord
+	let units = try (arm64AddSubImmMagnitude(byteOffset) / scale) otherwise panic("arm64SignedMemField: scale was 0 — an access width is 1, 2, 4 or 8")
 	if byteOffset < 0 'negative'
 		return modulus - units
 	end 'negative'
@@ -1150,7 +1151,7 @@ let Arm64PairImm7Modulus = 128
 // worth the check there, and the byte-fill ladder because the scaled form has NO SIGN and the ladder's tail
 // stores are anchored BACKWARD off the region's end. The offset counts BYTES, so its scale is 1.
 function arm64EmitUnscaledMem(code ByteArray, opcode MachineWord, rt MachineWord, baseReg MachineWord, byteOffset Imm32)
-	let field = arm64SignedMemField(byteOffset, scale: Arm64ByteAccessScale as NonZeroWord, modulus: Arm64UnscaledImm9Modulus)
+	let field = arm64SignedMemField(byteOffset, scale: Arm64ByteAccessScale, modulus: Arm64UnscaledImm9Modulus)
 	emitArm64Insn(code, insn: opcode or ((field and Arm64UnscaledImm9Mask) shl Arm64UnscaledImm9Shift) or (baseReg shl Arm64RnShift) or rt)
 end 'arm64EmitUnscaledMem'
 
@@ -1158,7 +1159,7 @@ end 'arm64EmitUnscaledMem'
 // what `Arm64PairScaleBytes` divides out, and it is signed — the property that lets the fill ladder anchor a
 // pair store backward off the region's end, and the reason this is not folded into the scaled builder above.
 function arm64EmitPairOffset(code ByteArray, opcode MachineWord, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, byteOffset Imm32)
-	let field = arm64SignedMemField(byteOffset, scale: Arm64PairScaleBytes as NonZeroWord, modulus: Arm64PairImm7Modulus)
+	let field = arm64SignedMemField(byteOffset, scale: Arm64PairScaleBytes, modulus: Arm64PairImm7Modulus)
 	emitArm64Insn(code, insn: opcode or ((field and Arm64PairImm7Mask) shl Arm64PairImm7Shift) or (rt2 shl Arm64Rt2Shift) or (baseReg shl Arm64RnShift) or rt1)
 end 'arm64EmitPairOffset'
 
@@ -1177,8 +1178,9 @@ end 'arm64EmitScaledMem'
 // out at both doors instead, the predicate could come to admit exactly what the encoder then panics on,
 // which is the defect A5e exists to have removed rather than relocated. It is the pairing
 // `arm64MagnitudeFitsOneImm12` gives the compare immediate one screen up.
-function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale NonZeroWord) returns bool
-	return byteOffset mod scale == 0 and byteOffset / scale <= Arm64LoadStoreImm12Mask
+function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale MachineWord) returns bool
+	let units = try (byteOffset / scale) otherwise panic("arm64ByteOffsetFitsScaledImm12: scale was 0 — an access width is 1, 2, 4 or 8")
+	return units * scale == byteOffset and units <= Arm64LoadStoreImm12Mask
 end 'arm64ByteOffsetFitsScaledImm12'
 
 // The 4 KiB-aligned part of a frame displacement past the scaled field: the base an `add`'s SHIFTED
@@ -1212,13 +1214,12 @@ end 'arm64WideFrameScratchBase'
 // every 8-byte multiple divides 8, while a byte access has scale 1 and divides everything. It is the
 // assertion that stays true only while that holds.
 function arm64ScaledImm12(byteOffset MachineWord, scale MachineWord) returns MachineWord
-	// `scale` is a load/store access width (1/2/4/8), always non-zero; cast so the divide and
-	// remainder are provably safe (integer `/`/`mod` throw for a possibly-zero divisor).
-	let s = scale as NonZeroWord
-	if not arm64ByteOffsetFitsScaledImm12(byteOffset, scale: s) 'noScaledForm'
+	if not arm64ByteOffsetFitsScaledImm12(byteOffset, scale: scale) 'noScaledForm'
 		panic("arm64 emitter: load/store byte offset {byteOffset} has no {scale}-scaled imm12 form — it is either not {scale}-aligned or its scaled count exceeds the 12-bit unsigned field — and the ISEL must have folded it into a scratch base (StdToArm64Conversion.addressFor)")
 	end 'noScaledForm'
-	return byteOffset / s
+	// `scale` is a load/store access width (1/2/4/8), never zero; `otherwise panic` is the project's form
+	// for a `try` that must not fail.
+	return try (byteOffset / scale) otherwise panic("arm64ScaledImm12: scale was 0 — an access width is 1, 2, 4 or 8")
 end 'arm64ScaledImm12'
 
 // Whether a `[base + disp]` data access at this width has a DIRECT scaled form — the offset is
@@ -1240,7 +1241,7 @@ export function arm64DispHasScaledForm(disp Imm32, width X64AccessWidth) returns
 		return false
 	end 'negative'
 
-	return arm64ByteOffsetFitsScaledImm12(disp as MachineWord, scale: accessWidthBytes(width) as NonZeroWord)
+	return arm64ByteOffsetFitsScaledImm12(disp as MachineWord, scale: accessWidthBytes(width) as MachineWord)
 end 'arm64DispHasScaledForm'
 
 // A `[base + disp]` load at the op's width (the data-section access forms). A `word64` load moves
@@ -1254,7 +1255,7 @@ end 'arm64DispHasScaledForm'
 function arm64EmitDataLoad(code ByteArray, dest TargetVReg, base MachineWord, disp Imm32, width X64AccessWidth)
 	let byteOffset = arm64NonNegDisp(disp)
 	match width 'w'
-		byte then arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width))
+		byte then arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
 		word64 then arm64EmitWord64Load(code, dest: dest, base: base, byteOffset: byteOffset)
 	end 'w'
 end 'arm64EmitDataLoad'
@@ -1262,7 +1263,7 @@ end 'arm64EmitDataLoad'
 function arm64EmitDataStore(code ByteArray, base MachineWord, disp Imm32, src TargetVReg, width X64AccessWidth)
 	let byteOffset = arm64NonNegDisp(disp)
 	match width 'w'
-		byte then arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width))
+		byte then arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: accessWidthBytes(width) as MachineWord)
 		word64 then arm64EmitWord64Store(code, base: base, byteOffset: byteOffset, src: src)
 	end 'w'
 end 'arm64EmitDataStore'
@@ -1325,7 +1326,7 @@ end 'arm64EmitRegOffsetMem'
 // hold, and the access then reads an ordinary `arm64AddLsl` result. Masking either condition away
 // would encode the WRONG ADDRESS with nothing anywhere to notice.
 function arm64IndexedScaleBit(scale MemoryIndexScale, width X64AccessWidth, disp Imm32) returns MachineWord
-	if memoryIndexScaleFactor(scale) != accessWidthBytes(width) 'noSuchShift'
+	if not memoryIndexScaleIsAccessWidth(scale, width: width) 'noSuchShift'
 		panic("arm64 emitter: an indexed access at scale {memoryIndexScaleFactor(scale)} and width {width.name} has no register-offset form — the `S` bit selects a shift of 0 or exactly log2(the access size), and the ISEL must have declined the memory fold (StdLoweringShared.indexedFormCarries)")
 	end 'noSuchShift'
 	if disp != 0 'noDisplacementField'
@@ -1440,8 +1441,8 @@ function arm64PatchBranch26(code ByteArray, codeOffset CodeOffset, targetOffset 
 		panic("arm64PatchBranch26: branch displacement out of ±128 MiB (codeOffset={codeOffset}, target={targetOffset}) — relocation overflow")
 	end 'overflow'
 	let relInsns = arm64RelInstructions(rel)
-	let orig = try readDword(code, offset: codeOffset) otherwise panic("arm64PatchBranch26: codeOffset {codeOffset} past end of code (count={code.count()})")
-	patchDword(code, offset: codeOffset, value: (orig and (not Arm64Imm26Mask)) or (relInsns and Arm64Imm26Mask))
+	let orig = try readDword(code, offset: codeOffset as ByteOffset) otherwise panic("arm64PatchBranch26: codeOffset {codeOffset} past end of code (count={code.count()})")
+	patchDword(code, offset: codeOffset as ByteOffset, value: (orig and (not Arm64Imm26Mask)) or (relInsns and Arm64Imm26Mask))
 end 'arm64PatchBranch26'
 
 // Patch a 19-bit branch (`b.cond`/`cbz`/`cbnz`) imm19 field at bit 5, preserving bits [31:24] (the
@@ -1452,8 +1453,8 @@ function arm64PatchBranch19(code ByteArray, codeOffset CodeOffset, targetOffset 
 		panic("arm64PatchBranch19: conditional-branch displacement out of ±1 MiB (codeOffset={codeOffset}, target={targetOffset}) — relocation overflow")
 	end 'overflow'
 	let relInsns = arm64RelInstructions(rel)
-	let orig = try readDword(code, offset: codeOffset) otherwise panic("arm64PatchBranch19: codeOffset {codeOffset} past end of code (count={code.count()})")
-	patchDword(code, offset: codeOffset, value: (orig and 0xFF00001F) or ((relInsns and Arm64Imm19Mask) shl Arm64Imm19Shift))
+	let orig = try readDword(code, offset: codeOffset as ByteOffset) otherwise panic("arm64PatchBranch19: codeOffset {codeOffset} past end of code (count={code.count()})")
+	patchDword(code, offset: codeOffset as ByteOffset, value: (orig and 0xFF00001F) or ((relInsns and Arm64Imm19Mask) shl Arm64Imm19Shift))
 end 'arm64PatchBranch19'
 
 // The signed byte displacement `target − instr`, wrapped into u64 two's-complement.
@@ -1461,7 +1462,8 @@ function arm64RelBytes(targetOffset CodeOffset, codeOffset CodeOffset) returns M
 	if targetOffset >= codeOffset 'forward'
 		return targetOffset - codeOffset
 	end 'forward'
-	return u64.max - (codeOffset - targetOffset) + 1
+	let back = (codeOffset - targetOffset) as MachineWord
+	return u64.max - back + 1
 end 'arm64RelBytes'
 
 // A byte displacement as a count of instructions (÷4), sign-preserving on the two's-complement value.
@@ -1629,7 +1631,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// `ADD Xd, Xn, Xm, LSL #amount` — the shifted-register form of the `add` one band up, and the same
 		// three-register emitter: the shift amount is a FIELD of the opcode word (bits 15-10), not a fourth
 		// operand, so nothing about the register encoding changes.
-		arm64AddLsl(dest, base, index, scale) then emitArm64Rrr(code, opcode: Arm64OpAdd or (memoryIndexScaleShift(scale) shl Arm64ShiftedRegAmountShift), rd: arm64GprField(dest), rn: arm64GprField(base), rm: arm64GprField(index))
+		arm64AddLsl(dest, base, index, scale) then emitArm64Rrr(code, opcode: ((Arm64OpAdd or (memoryIndexScaleShift(scale) shl Arm64ShiftedRegAmountShift)) as MachineWord), rd: arm64GprField(dest), rn: arm64GprField(base), rm: arm64GprField(index))
 		// EC18 — x64's one-operand `imul`, wired to the RAX/RDX pair. arm64's high multiply is
 		// `arm64Smulh`, an op of its own, so `StdToArm64Conversion` never mints this one.
 		imulHighReg then panic("emitArm64TargetOp: an x64 one-operand `imul` reached the arm64 encoder — arm64 spells the high half of a signed product as `arm64Smulh`, a three-address form with no fixed-register pair")
@@ -2184,7 +2186,7 @@ export function arm64EmitPrologue(code ByteArray, frameSize StackSize, recordOff
 		arm64EmitAddFpFromSp(code, offset: recordOffset)
 	end 'compact' else 'explicitAlloc'
 		arm64EmitStackAlloc(code, amount: frameSize)
-		arm64EmitFrameRecordPair(code, opcode: Arm64OpStpOffX, offset: recordOffset)
+		arm64EmitFrameRecordPair(code, opcode: Arm64OpStpOffX, offset: recordOffset as MachineWord)
 		arm64EmitAddFpFromSp(code, offset: recordOffset)
 	end 'explicitAlloc'
 end 'arm64EmitPrologue'
@@ -2198,7 +2200,7 @@ export function arm64EmitEpilogue(code ByteArray, frameSize StackSize, recordOff
 	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
 		arm64EmitLdpPostIndex(code, frameSize: frameSize)
 	end 'compact' else 'explicitFree'
-		arm64EmitFrameRecordPair(code, opcode: Arm64OpLdpOffX, offset: recordOffset)
+		arm64EmitFrameRecordPair(code, opcode: Arm64OpLdpOffX, offset: recordOffset as MachineWord)
 		arm64EmitStackFree(code, amount: frameSize)
 	end 'explicitFree'
 end 'arm64EmitEpilogue'
@@ -2227,11 +2229,11 @@ end 'arm64EmitEpilogue'
 // a door that opens second.
 function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg TargetVReg)
 	let byteOffset = slot * SpillSlotBytes
-	if not arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'unencodable'
+	if not arm64ByteOffsetFitsScaledImm12(byteOffset as MachineWord, scale: SpillSlotBytes) 'unencodable'
 		panic("arm64EmitStoreOutgoingArg: outgoing argument slot {slot} sits at byte {byteOffset} of this frame's argument region, past the {Arm64LoadStoreImm12Mask} 8-byte units the scaled STR field reaches — the region can hold at most {arm64OutgoingArgRegionBytes()} bytes while `MaxAbiArgs` caps a signature. Reaching THIS door before `arm64EmitFrameRecordPair`'s 504-byte STP/LDP imm7, which binds the same region 65x sooner from the prologue, means the frame record no longer rides that field — so read `arm64OutgoingArgRegionBytes`'s header for which ceiling moved, and expect the answer to be `arm64EmitWideFrameSlot`'s x17 fold rewritten against SP")
 	end 'unencodable'
 
-	arm64EmitWord64Store(code, base: Arm64SpBaseField, byteOffset: byteOffset, src: srcReg)
+	arm64EmitWord64Store(code, base: Arm64SpBaseField, byteOffset: byteOffset as MachineWord, src: srcReg)
 end 'arm64EmitStoreOutgoingArg'
 
 // STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
@@ -2243,7 +2245,7 @@ end 'arm64EmitStpPreIndex'
 // LDP x29, x30, [sp], #frameSize (post-indexed).
 function arm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
 	let imm7 = (frameSize / 8) and Arm64PairImm7Mask
-	emitArm64Insn(code, insn: Arm64OpLdpPostX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
+	emitArm64Insn(code, insn: ((Arm64OpLdpPostX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp) as MachineWord))
 end 'arm64EmitLdpPostIndex'
 
 // STP/LDP x29, x30, [sp, #offset] (plain signed offset) — the large-frame record store/reload.
@@ -2281,19 +2283,19 @@ function arm64EmitAddFpFromSp(code ByteArray, offset StackSize)
 		panic("arm64EmitAddFpFromSp: frame-record offset {offset} exceeds the 12-bit ADD immediate — the outgoing stack-argument region has outgrown what `add x29, sp, #imm` can reach, and a masked immediate would silently point the frame pointer inside that region")
 	end 'unencodable'
 
-	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64Fp, rn: Arm64SpBaseField, imm12: offset, shiftHi: false)
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64Fp, rn: Arm64SpBaseField, imm12: offset as MachineWord, shiftHi: false)
 end 'arm64EmitAddFpFromSp'
 
 // SUB sp, sp, #amount — reserve a large frame, splitting across the imm12 limit (a frame past 4 KiB
 // needs the hi/lo pair; the pre-index STP could not encode it at all). SP cannot be a shifted-register
 // operand, so the ADD/SUB-immediate `sh` split is the only scratch-free form.
 export function arm64EmitStackAlloc(code ByteArray, amount StackSize)
-	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount as MachineWord)
 end 'arm64EmitStackAlloc'
 
 // ADD sp, sp, #amount — free the frame (mirror of `arm64EmitStackAlloc`).
 export function arm64EmitStackFree(code ByteArray, amount StackSize)
-	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount as MachineWord)
 end 'arm64EmitStackFree'
 
 // ==========================================================================
@@ -2514,7 +2516,7 @@ end 'concatArm64FunctionChunks'
 // rdata, the `.data` pair against the data section. A kind the arm64 encoder never files panics
 // rather than defaulting to either section (they answer different small integers — a wrong-section
 // resolve, not a near miss).
-function arm64SectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns CodeOffset
+function arm64SectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns ByteOffset
 	return match reloc.kind 'kind'
 		arm64Adrp gives globalData.rdataOffsetOf(reloc.rdataLabel)
 		arm64PageOff gives globalData.rdataOffsetOf(reloc.rdataLabel)
@@ -2544,21 +2546,21 @@ end 'arm64SectionOffsetOfReloc'
 // per format — a second copy is exactly how two writers drift on which kinds they honour.
 export function patchArm64SectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textVmAddr MachineWord, rdataVmAddr MachineWord, dataVmAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
-		let instrVa = textVmAddr + reloc.codeOffset
+		let instrVa = textVmAddr + (reloc.codeOffset as MachineWord)
 		match reloc.kind 'kind'
 			ripRelDisp32 then panic("patchArm64SectionRelocations: x64 RIP-relative relocation in an arm64 image — target/emitter mismatch")
 			symdataRipRelDisp32 then panic("patchArm64SectionRelocations: x64 symdata relocation in an arm64 image — target/emitter mismatch")
 			dataSectionRipRelDisp32 then panic("patchArm64SectionRelocations: x64 data-section relocation in an arm64 image — target/emitter mismatch")
 			covdataRipRelDisp32 then panic("patchArm64SectionRelocations: x64 covdata relocation in an arm64 image — target/emitter mismatch")
-			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + reloc.rdataOffset)
-			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + reloc.rdataOffset)
+			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + (reloc.rdataOffset as MachineWord))
+			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + (reloc.rdataOffset as MachineWord))
 			symdataArm64Adr then panic("patchArm64SectionRelocations: the symdata section is empty at this milestone — a symdataArm64Adr relocation has no section to reach; it arrives at the reflection milestone")
-			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataVmAddr + reloc.rdataOffset)
+			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataVmAddr + (reloc.rdataOffset as MachineWord))
 			covdataArm64Adr then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
-			arm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + reloc.rdataOffset)
-			arm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: rdataVmAddr + reloc.rdataOffset)
-			dataSectionArm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataVmAddr + reloc.rdataOffset)
-			dataSectionArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: dataVmAddr + reloc.rdataOffset)
+			arm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + (reloc.rdataOffset as MachineWord))
+			arm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: rdataVmAddr + (reloc.rdataOffset as MachineWord))
+			dataSectionArm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataVmAddr + (reloc.rdataOffset as MachineWord))
+			dataSectionArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: dataVmAddr + (reloc.rdataOffset as MachineWord))
 			covdataArm64Adrp then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
 			covdataArm64PageOff then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
 		end 'kind'
@@ -2586,8 +2588,8 @@ end 'patchArm64AdrpPair'
 // unlike a data pointer.
 export function patchArm64FuncAdrpRelocs(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, textVmAddr MachineWord)
 	for reloc in funcAdrpRelocs 'patch'
-		let instrVa = textVmAddr + reloc.codeOffset
-		let targetVa = textVmAddr + reloc.textOffset
+		let instrVa = textVmAddr + (reloc.codeOffset as MachineWord)
+		let targetVa = textVmAddr + (reloc.textOffset as MachineWord)
 		patchArm64AdrpPair(code, adrpOffset: reloc.codeOffset, instrVa: instrVa, targetVa: targetVa)
 	end 'patch'
 end 'patchArm64FuncAdrpRelocs'

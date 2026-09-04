@@ -122,7 +122,7 @@ function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) retur
 
 		var symbol = LspJsonObject.create(doc)
 		symbol.put(SymbolNameKey, value: JsonNode.stringNode(String.from(block.name)))
-		symbol.put(LspKindKey, value: JsonNode.numberNode(kind))
+		symbol.put(LspKindKey, value: JsonNode.numberNode(kind as JsonFloat))
 		symbol.putNode(LspRangeKey, value: blockRangeNode(doc, source: source, index: index, block: block))
 		symbol.putNode(SelectionRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: block.nameSpan))
 		symbols.push(symbol.finish())
@@ -160,8 +160,8 @@ function foldingRangeAnswer(blocks LspDocumentBlockArray) returns LspAnswer
 		end 'nothingToCollapse'
 
 		var range = LspJsonObject.create(doc)
-		range.put(FoldStartLineKey, value: JsonNode.numberNode(block.startLine))
-		range.put(FoldEndLineKey, value: JsonNode.numberNode(block.endLine))
+		range.put(FoldStartLineKey, value: JsonNode.numberNode(block.startLine as JsonFloat))
+		range.put(FoldEndLineKey, value: JsonNode.numberNode(block.endLine as JsonFloat))
 		ranges.push(range.finish())
 	end 'eachBlock'
 
@@ -420,7 +420,7 @@ end 'lspBlockHoldsLine'
 
 /// Does the cursor sit on this span? A cursor one past the last byte is still on it — an editor puts the
 /// caret at the end of a name the author has just finished typing.
-module function lspSpanHolds(span LspSpan, offset LspByteOffset) returns bool
+module function lspSpanHolds(span LspSpan, offset ByteOffset) returns bool
 	return offset >= span.startByte and offset <= span.endByte
 end 'lspSpanHolds'
 

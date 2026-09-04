@@ -252,6 +252,63 @@ end 'main'
 40
 ```
 
+<!-- test: first-class-function.bind-to-a-second-name -->
+⚠ **THE `print` BETWEEN THE BINDINGS IS LOAD-BEARING.** A same-block read of a function binding reuses
+the SSA value and emits NO op, so a rule that recovers the signature from the LAST OP emitted answers
+about whichever statement happens to precede the read. `let g = f` sitting right after `f`'s own
+binding hides that — the previous op is then `f`'s assignment, which names a function. With a
+statement in between, the last op is the `print` call and the only honest source left is the binding
+itself. Both spellings are held here so neither can pass on the other's evidence.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let bump = 5
+	let f = function(x Integer) gives x * bump
+	let g = f
+	print("bound\n")
+	let h = g
+	return h(8)
+end 'main'
+```
+```stdout
+bound
+```
+```exitcode
+40
+```
+
+<!-- test: first-class-function.reassign-from-a-second-name -->
+The assignment door asks the same question as the binding door and gets the same answer: a named
+function value carries its signature on its binding, wherever the read sits.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function triple(x Integer) returns Integer
+	return x * 3
+end 'triple'
+
+function main() returns ExitCode
+	var f = double
+	let h = triple
+	print("go\n")
+	f = h
+	return f(10)
+end 'main'
+```
+```stdout
+go
+```
+```exitcode
+30
+```
+
 <!-- test: first-class-function.closure-as-argument -->
 ```maxon
 

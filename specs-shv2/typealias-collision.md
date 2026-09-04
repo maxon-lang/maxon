@@ -64,7 +64,7 @@ export typealias Score = int(0 to 80)
 function main() returns ExitCode
 	let a = 50 as api.Score
 	let b = 60 as legacy.Score
-	return a + b
+	return (a + (b as api.Score)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -85,7 +85,7 @@ export typealias Score = int(0 to 100)
 function main() returns ExitCode
 	let a = 10 as lib.fmt.Score
 	let b = 65 as legacy.Score
-	return a + b
+	return ((a as legacy.Score) + b) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -117,8 +117,8 @@ resolves to the project definition without E3063 — a project export shadows a
 stdlib export of the same name rather than colliding with it. Stdlib aliases are
 seeded as a lower-precedence library layer, so they never participate in
 cross-file ambiguity. Regression guard for self-hosting: the compiler's own
-source re-exports `StringArray`, `FilePathArray`, and `ByteCount`, all of which
-the stdlib also exports.
+source re-exports `StringArray` and `FilePathArray`, both of which the stdlib
+also exports.
 ```maxon
 export typealias StringArray = Array with String
 
@@ -286,7 +286,7 @@ end 'seven'
 
 function main() returns ExitCode
 	let a = 35 as api.Score
-	return a + run(seven)
+	return (a as ExitCode) + run(seven)
 end 'main'
 ```
 ```exitcode

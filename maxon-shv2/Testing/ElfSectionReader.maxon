@@ -113,24 +113,24 @@ export function readElfSectionData(path FilePath, sectionName String) returns By
 	// `.shstrtab`'s own header is found by INDEX (`e_shstrndx`), not by name — its name lives inside
 	// the table it is, so any name-first walk would have to read it to find it.
 	let shstrtabHeader = sectionHeaderTable + imageReadU16(image, at: EhdrShstrndxOffset) * sectionHeaderSize
-	let nameTableBase = imageReadU64(image, at: shstrtabHeader + ShdrFileOffsetOffset)
+	let nameTableBase = imageReadU64(image, at: ((shstrtabHeader + ShdrFileOffsetOffset) as ByteOffset))
 
 	for i in 0 upto sectionCount 'eachSection'
 		let header = sectionHeaderTable + i * sectionHeaderSize
 		// A string-table entry is bounded only by the image, so the image's length is its bound;
 		// the walk stops at the NUL or at end-of-file, whichever comes first.
-		let name = imageNameAt(image, at: nameTableBase + imageReadU32(image, at: header + ShdrNameOffset), maxBytes: image.count())
+		let name = imageNameAt(image, at: ((nameTableBase + imageReadU32(image, at: ((header + ShdrNameOffset) as ByteOffset))) as ByteOffset), maxBytes: image.count())
 		if name != sectionName 'notThisSection'
 			continue
 		end 'notThisSection'
 
-		let size = imageReadU64(image, at: header + ShdrSizeOffset)
-		let fileOffset = imageReadU64(image, at: header + ShdrFileOffsetOffset)
-		if not imageRangeFits(image, start: fileOffset, count: size) 'runsPastEof'
+		let size = imageReadU64(image, at: ((header + ShdrSizeOffset) as ByteOffset))
+		let fileOffset = imageReadU64(image, at: ((header + ShdrFileOffsetOffset) as ByteOffset))
+		if not imageRangeFits(image, start: fileOffset as ByteOffset, count: size as BytePos) 'runsPastEof'
 			throw ElfReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'
 
-		return imageSlice(image, start: fileOffset, count: size)
+		return imageSlice(image, start: fileOffset as ByteOffset, count: size as BytePos)
 	end 'eachSection'
 
 	throw ElfReadError.sectionMissing(path, sectionName: sectionName)

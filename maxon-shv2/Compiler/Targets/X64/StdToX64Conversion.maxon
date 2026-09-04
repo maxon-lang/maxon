@@ -193,7 +193,7 @@ let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HA
 // ⭐ The Win64 half of `StdLoweringShared.posixStreamFd` — which of the two selectors above a stream asks
 // `GetStdHandle` for. Exhaustive over `OsOutputStream` for that door's reason: a third stream must fail to
 // compile here rather than silently pick one.
-function win64StdHandleSelector(stream OsOutputStream) returns ParsedInt
+function win64StdHandleSelector(stream OsOutputStream) returns MachineWord
 	return match stream 's'
 		standardOutput gives StdOutputHandle
 		standardError gives StdErrorHandle
@@ -468,7 +468,7 @@ end 'win64OutgoingArgBytes'
 // on the stack", which is the one number the reservation and the per-argument displacements both derive
 // from.
 function callOutgoingArgBytes(argFloatMask ArgFloatMask, argCount ParamCount) returns StackSize
-	return win64OutgoingArgBytes(abiStackSlotsBefore(argFloatMask, index: argCount, capacity: x64RegisterArgCapacity()))
+	return win64OutgoingArgBytes(abiStackSlotsBefore(argFloatMask, index: argCount, capacity: x64RegisterArgCapacity()) as MachineWord)
 end 'callOutgoingArgBytes'
 
 // How many arguments of ONE file this ABI passes in registers — the capacity the shared placement rule
@@ -1369,7 +1369,7 @@ type StdToX64Lowering
 			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			return
 		end 'float'
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(TargetVReg.virtual(resultId), value: value))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(TargetVReg.virtual(resultId), value: value as MachineWord))
 	end 'lowerConst'
 
 	// Materialize a FLOAT constant: register its IEEE bits as a `.rdata` island and load them with
@@ -1921,7 +1921,7 @@ type StdToX64Lowering
 		let capacity = x64RegisterArgCapacity()
 		if abiArgIsOnStack(paramFloatMask, index: index, capacity: capacity) 'stackParam'
 			let stackSlot = abiStackSlotsBefore(paramFloatMask, index: index, capacity: capacity)
-			self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: x64PhysReg(X64Register.rbp), disp: win64IncomingArgDisp(stackSlot), width: X64AccessWidth.word64))
+			self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: x64PhysReg(X64Register.rbp), disp: win64IncomingArgDisp(stackSlot as MachineWord), width: X64AccessWidth.word64))
 			return
 		end 'stackParam'
 
@@ -2071,7 +2071,7 @@ type StdToX64Lowering
 				continue
 			end 'inRegister'
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
-			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity)), src: TargetVReg.virtual(argId), width: X64AccessWidth.word64))
+			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity) as MachineWord), src: TargetVReg.virtual(argId), width: X64AccessWidth.word64))
 		end 'eachStackArg'
 
 		for k in 0 upto args.count() 'eachRegisterArg'

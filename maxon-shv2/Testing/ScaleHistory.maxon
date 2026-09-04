@@ -532,13 +532,13 @@ function memoryRowFrom(allocCells StringArray, bytesTable LogTable, cpuTable Log
 	try assertSameRun(byteCells, date: date, mintedAt: mintedAt, note: note, marker: bytesTable.marker, source: source)
 	try assertSameRun(cpuCells, date: date, mintedAt: mintedAt, note: note, marker: cpuTable.marker, source: source)
 
-	let allocs = try rungCounts(allocCells, source: source)
-	let bytes = try rungCounts(byteCells, source: source)
+	let allocs = allocColumnOf(try rungCells(allocCells, source: source))
+	let bytes = byteColumnOf(try rungCells(byteCells, source: source))
 
 	// The CPU row's counts are PARSED and then only counted. That is the check: the row this run's write
 	// will land beneath is numeric and the same width as the other two, which is the whole of what the
 	// writer assumes about it.
-	let cpu = try rungCounts(cpuCells, source: source)
+	let cpu = try rungCells(cpuCells, source: source)
 	if allocs.count() != bytes.count() or allocs.count() != cpu.count() 'differentLadders'
 		throw ScaleError.reason("the last rows of the three tables have {allocs.count()}, {bytes.count()} and {cpu.count()} rung(s) — they measure one ladder, so one of them has been hand-edited")
 	end 'differentLadders'
@@ -589,7 +589,7 @@ function recordCellDifference(differing StringArray, heading String, logged Stri
 	end 'agrees'
 
 	let at = firstDivergenceAt(logged, other: other)
-	differing.push("`{heading}` differs — the allocations row's is {groupDigits(logged.count())} character(s), this one's is {groupDigits(other.count())}, and they part at character {groupDigits(at)}:\n      allocations: {divergenceExcerpt(logged, at: at)}\n      this table:  {divergenceExcerpt(other, at: at)}")
+	differing.push("`{heading}` differs — the allocations row's is {groupDigits(logged.count() as Delta)} character(s), this one's is {groupDigits(other.count() as Delta)}, and they part at character {groupDigits(at as Delta)}:\n      allocations: {divergenceExcerpt(logged, at: at)}\n      this table:  {divergenceExcerpt(other, at: at)}")
 end 'recordCellDifference'
 
 // The differing cells, one indented paragraph each, with THE TRUNCATION RULE STATED WHERE ITS OUTPUT IS.
@@ -609,7 +609,7 @@ let DifferingCellIndent = "\n    "
 //
 // CHARACTERS, NOT BYTES. The notes carry `⭐` and `⚠`, and an excerpt cut at a byte offset would slice a
 // codepoint in half and print a replacement character where the difference is.
-function firstDivergenceAt(logged String, other String) returns GraphemeCount
+function firstDivergenceAt(logged String, other String) returns GraphemeIndex
 	var shortest = logged.count()
 	if other.count() < shortest 'otherIsShorter'
 		shortest = other.count()
@@ -617,7 +617,7 @@ function firstDivergenceAt(logged String, other String) returns GraphemeCount
 
 	var loggedIndex = logged.startIndex()
 	var otherIndex = other.startIndex()
-	var at = 0 as GraphemeCount
+	var at = 0 as GraphemeIndex
 	while at < shortest 'walk'
 		if not logged.charAt(loggedIndex).equals(other.charAt(otherIndex)) 'diverged'
 			return at
@@ -633,7 +633,7 @@ end 'firstDivergenceAt'
 
 // A bounded window of `value` around `at` — the ONE place the truncation rule is implemented, and the
 // rule `cellDifferenceReport` states.
-function divergenceExcerpt(value String, at GraphemeCount) returns String
+function divergenceExcerpt(value String, at GraphemeIndex) returns String
 	let length = value.count()
 	if length <= ExcerptWindowChars 'fitsWhole'
 		return value
@@ -641,7 +641,7 @@ function divergenceExcerpt(value String, at GraphemeCount) returns String
 
 	// Centred on the divergence, then slid back inside the cell: a window hanging off either end would
 	// spend its width on nothing, exactly where the interesting text is.
-	var start = 0 as GraphemeCount
+	var start = 0 as GraphemeIndex
 	if at > ExcerptContextChars 'roomBefore'
 		start = at - ExcerptContextChars
 	end 'roomBefore'
@@ -657,7 +657,7 @@ end 'divergenceExcerpt'
 
 // How much of a differing cell the message shows. The window is CENTRED on the divergence, so it is
 // twice the context — one fact, not two that could disagree — and forty either side is a terminal line.
-let ExcerptContextChars = 40 as GraphemeCount
+let ExcerptContextChars = 40 as GraphemeIndex
 let ExcerptWindowChars = ExcerptContextChars * 2
 
 // What stands in for the text an excerpt cut. `omissionMark` is what puts it in: empty text for "nothing
@@ -676,9 +676,9 @@ end 'omissionMark'
 // The `StringIndex` at character offset `at`. A `StringIndex` carries a BYTE position beside its
 // character one, so it cannot be built from an offset — it is walked to. Linear, on a path that runs
 // only when a message is being written about a broken document.
-function indexAt(value String, at GraphemeCount) returns StringIndex
+function indexAt(value String, at GraphemeIndex) returns StringIndex
 	var index = value.startIndex()
-	var walked = 0 as GraphemeCount
+	var walked = 0 as GraphemeIndex
 	while walked < at 'walk'
 		index = try value.indexAfter(index) otherwise panic("indexAt: walked {walked} of {at} characters into a {value.count()}-character cell and indexAfter failed")
 		walked = walked + 1
@@ -690,13 +690,33 @@ end 'indexAt'
 // The rung columns of a memory row. `AllocCountArray` for both tables: an allocation count and a
 // byte volume are the same unsigned counter, and a second array type differing only in its name
 // would buy nothing but a cast at every use.
-function rungCounts(cells StringArray, source String) returns AllocCountArray throws ScaleError
-	var counts = AllocCountArray.create()
+typealias ParsedCountArray = Array with ParsedCount
+
+function rungCells(cells StringArray, source String) returns ParsedCountArray throws ScaleError
+	var counts = ParsedCountArray.create()
 	for i in LeadingColumns upto cells.count() 'eachRung'
 		counts.push(try parseGroupedCount(try cellAt(cells, index: i, source: source), source: source, column: i))
 	end 'eachRung'
 	return counts
-end 'rungCounts'
+end 'rungCells'
+
+// A parsed row as the column its table holds. Two builders because the two columns are two
+// instances and a function cannot be generic over which.
+function allocColumnOf(cells ParsedCountArray) returns AllocCountArray
+	var column = AllocCountArray.create()
+	for cell in cells 'eachRung'
+		column.push(cell as AllocCount)
+	end 'eachRung'
+	return column
+end 'allocColumnOf'
+
+function byteColumnOf(cells ParsedCountArray) returns ByteCountArray
+	var column = ByteCountArray.create()
+	for cell in cells 'eachRung'
+		column.push(cell as HeapByteCount)
+	end 'eachRung'
+	return column
+end 'byteColumnOf'
 
 // One cell of an already-parsed row, as a THROW rather than a panic: every caller is reading a file a
 // human may have edited, so a cell that is not there is bad input, not a bug in this file.
@@ -778,7 +798,7 @@ function memoryDiffers(results RungResultArray, loggedAllocs AllocCountArray, lo
 		end 'allocsMoved'
 
 		let logged = try loggedBytes.get(i) otherwise panic("memoryDiffers: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
-		if bytesMoved(result.total.bytes, logged: logged, bytes: bytes) 'bytesMoved'
+		if bytesMoved(result.total.bytes as BytePos, logged: logged as BytePos, bytes: bytes) 'bytesMoved'
 			return true
 		end 'bytesMoved'
 	end 'eachRung'
@@ -786,7 +806,7 @@ function memoryDiffers(results RungResultArray, loggedAllocs AllocCountArray, lo
 	return false
 end 'memoryDiffers'
 
-function bytesMoved(current ByteCount, logged ByteCount, bytes ByteDelta) returns bool
+function bytesMoved(current BytePos, logged BytePos, bytes ByteDelta) returns bool
 	return match bytes 'b'
 		withheld gives false
 		comparable gives current != logged
@@ -955,7 +975,7 @@ export function groupDigits(value Delta) returns String
 	end 'negative'
 
 	let digits = "{value}"
-	let count = digits.count()
+	let count = digits.count() as GroupIndex
 
 	var grouped = StringBuilder.create()
 	var index = 0 as GroupIndex
@@ -985,7 +1005,7 @@ end 'groupDigits'
 // Sydney is worse than one stamped in a timezone everyone can agree on.
 function todayUtc() returns String
 	let days = WallClock.nowUnixSeconds() / SecondsPerDay
-	let civil = civilFromDays(days)
+	let civil = civilFromDays(days as DayCount)
 	return "{civil.year}-{padTwo(civil.month)}-{padTwo(civil.day)}"
 end 'todayUtc'
 
@@ -1031,7 +1051,7 @@ function civilFromDays(days DayCount) returns CivilDate
 		calendarYear = year + 1
 	end 'januaryOrFebruary'
 
-	return CivilDate.create(calendarYear as CivilPart, month: month, day: day)
+	return CivilDate.create(calendarYear as CivilPart, month: month as CivilPart, day: day as CivilPart)
 end 'civilFromDays'
 
 function padTwo(value CivilPart) returns String

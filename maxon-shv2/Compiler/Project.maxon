@@ -300,7 +300,7 @@ end 'qualifiedCandidateName'
 // the build — so the `toByteArray()` per comparison is paid only by a program that is about to be
 // rejected, and never by one that compiles.
 export function insertCandidateName(candidates StringArray, candidate String)
-	var at = 0 as ElementCount
+	var at = 0 as ElementIndex
 	while at < candidates.count() and stringBytesPrecede(try candidates.get(at) otherwise panic("insertCandidateName: get OOB at {at} inside its own count()"), later: candidate) 'findPosition'
 		at = at + 1
 	end 'findPosition'
@@ -323,7 +323,7 @@ end 'insertCandidateName'
 export function stringBytesPrecede(earlier String, later String) returns bool
 	let a = earlier.toByteArray()
 	let b = later.toByteArray()
-	var i = 0 as ElementCount
+	var i = 0 as ElementIndex
 	while i < a.count() and i < b.count() 'compareByte'
 		let left = try a.get(i) otherwise panic("stringBytesPrecede: get OOB at {i} inside its own count()")
 		let right = try b.get(i) otherwise panic("stringBytesPrecede: get OOB at {i} inside its own count()")
@@ -666,6 +666,9 @@ export type VarInfo
 	// ⚠ A PARAMETER that is by-reference is cell-resident too, and its cell is the CALLER's — `boundValue` is
 	// the incoming parameter value itself. That is the one cell this frame does not own and must not drop.
 	export var isCellBinding as bool
+	// The brand this binding was DECLARED under — its initial value's brand for a local, the spelled
+	// parameter type's for a parameter — which every rebind is checked against and every merge phi wears.
+	export var brandId as TypeNameId
 
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
@@ -682,8 +685,8 @@ export type VarInfo
 	// `mutabilityExercised` take no parameter at all: they are per-path STATE the parser writes as it goes,
 	// and every binding starts with them clear. A constructor argument for one of them would be a way to
 	// start a binding already moved-from, which nothing means.
-	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding}
+	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, brandId TypeNameId = UnnamedTypeId) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, brandId: brandId}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
@@ -736,8 +739,8 @@ export type VarInfo
 	// value `boundValue`. No stack slot is materialized (SSA substitution needs
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
-	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue)
+	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId, brandId TypeNameId = UnnamedTypeId) returns VarInfo
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, brandId: brandId)
 	end 'createValueBinding'
 
 	// The value binding a PARAMETER gets — `createValueBinding` plus the one bit that distinguishes it
@@ -749,8 +752,8 @@ export type VarInfo
 	// here: `bindParameters`'s tripwire panics on the flag it actually passes, and a constructor that
 	// re-read the constant would take that flag out of the caller's hands — exactly the defeat that
 	// tripwire's comment warns about.
-	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isParameter: true)
+	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId, brandId TypeNameId) returns VarInfo
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isParameter: true, brandId: brandId)
 	end 'createParameterBinding'
 
 	// The value binding a CELL-RESIDENT name gets (PBR-2) — see `isCellBinding` for what a cell is and which
@@ -768,8 +771,8 @@ export type VarInfo
 	// its rebind is permitted by the cell rank in `requireMutableBinding`, not by this flag. `isParameter`
 	// rides for the same reason it does on `createParameterBinding`: it answers "may the container this name
 	// denotes be written?", which a by-reference parameter still needs.
-	export static function createCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool) returns VarInfo
-		return Self.make(name, varType: varType, mutable: mutable, boundValue: cell, isParameter: isParameter, isCellBinding: true)
+	export static function createCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool, brandId TypeNameId = UnnamedTypeId) returns VarInfo
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: cell, isParameter: isParameter, isCellBinding: true, brandId: brandId)
 	end 'createCellBinding'
 
 	// ⭐ **IS THIS BINDING A LIVE NAME OF `value`?** — the predicate every symbol-table scan over "who else
@@ -1009,12 +1012,13 @@ export typealias UnusedBindingCandidateArray = Array with UnusedBindingCandidate
 // position. A DECLARATION, not an op: it contributes a registry entry, and
 // TypeResolution collapses every `MaxonType.named(Score)` to the primitive below.
 //
-// TWO ALIASES OVER THE SAME RANGE ARE THE SAME TYPE — an alias creates no nominal
-// distinction, so resolution needs only `underlying`. The BOUNDS are carried anyway
-// because they ARE the alias's definition: they are what a narrowing conversion is
-// checked against (the runtime range check — a later milestone), and a registry that
-// forgot them would force that milestone to re-parse the declaration. This milestone
-// emits no range check, so nothing reads them yet.
+// TWO ALIASES OVER THE SAME RANGE ARE TWO TYPES — the NAME is the type, so an `Age`
+// never reaches a `Year` slot unless the author writes `as`. Resolution still erases
+// the name to `underlying`; the identity survives in the value column and in the
+// pre-erasure signature columns (`ProgramSignatures.rangedAliasIdentityOf` is the one
+// door that spells it). The BOUNDS are a separate fact and are carried because they
+// ARE the alias's definition: they are what a narrowing conversion is checked against,
+// and a name is never a proof that a value lies inside them.
 //
 // `low`/`high` are INCLUSIVE and stored as the raw 64-bit pattern `ParsedInt` holds:
 // `upto` (an exclusive upper bound) is normalized to `high - 1` at parse time so the
@@ -1165,7 +1169,7 @@ end 'AliasRecordOutcome'
 // two-file alias N times (N = 100…800, one worktree, path length held constant): the composite-key
 // form cost **24 allocations and 2,224 bytes per use**, linear in uses and invisible to
 // `scale-test`, whose generated corpus gives every alias a unique name so no name is ever contested.
-// `stdlib/` is not so kind — SEVEN files declare `Byte`, three declare `ByteCount` — so the cost
+// `stdlib/` is not so kind — SEVEN files declare `Byte`, four declare `BytePos` — so the cost
 // arrives in full the day ALL of `stdlib/` loads. A two-level map answers the same question with
 // no key to build: the probe that decides a name is contested IS the probe that holds the answer.
 //
@@ -1201,7 +1205,7 @@ end 'AliasRecordOutcome'
 //
 // ⭐ Their visibility is `global`, and that is what `cast-to-stdlib-internal-typealias` needs: a
 // stdlib-internal alias is nameable from any file "regardless of its source-level visibility modifier"
-// (the spec), and `ElementCount` is declared without `export` in `stdlib/Array.maxon`. Stating it as a
+// (the spec), and `ElementIndex` is declared without `export` in `stdlib/Array.maxon`. Stating it as a
 // TIER rather than as an exception is what keeps `visibleFrom` free of a special case.
 
 // `stdlib/Character.maxon`'s `export typealias Codepoint = int(0 to 1114111)`, transcribed — the highest
@@ -1210,38 +1214,33 @@ let CodepointAliasLow = 0 as ParsedInt
 let CodepointAliasHigh = 1114111 as ParsedInt
 let CodepointAliasDeclPath = "stdlib/Character.maxon"
 
-// `stdlib/Array.maxon:11`'s `typealias ElementCount = int(0 to u64.max)`, transcribed — the count and
-// index domain of the public collection API, which user code has to be able to name in an `as` cast.
-// The upper bound is the full unsigned span, which rides as the wrapped -1 exactly as a parsed
-// `u64.max` bound does (`RangedTypeAlias`).
-let ElementCountAliasLow = 0 as ParsedInt
-let ElementCountAliasHigh = U64MaxBound
-let ElementCountAliasName = b"ElementCount"
-let ElementCountAliasDeclPath = "stdlib/Array.maxon"
+// `stdlib/Array.maxon`'s `ElementIndex` — the index and count domain of the public collection API,
+// which user code has to be able to name in an `as` cast. The upper bound is the full unsigned span,
+// which rides as the wrapped -1 exactly as a parsed `u64.max` bound does (`RangedTypeAlias`); a
+// reader that can see the declaring module resolves to its own narrower bound instead.
+let ElementIndexAliasLow = 0 as ParsedInt
+let ElementIndexAliasHigh = U64MaxBound
+let ElementIndexAliasName = b"ElementIndex"
+let ElementIndexAliasDeclPath = "stdlib/Array.maxon"
 
-// ⭐ **`stdlib/String.maxon:12-13`'s `export typealias GraphemeCount = int(0 to u64.max)` and
-// `export typealias BytePos = int(0 to u64.max)`, transcribed (BATCH2 slice 6).** They arrive by exactly the
+// ⭐ **`stdlib/String.maxon`'s `BytePos` and `GraphemeIndex`.** They arrive by exactly the
 // route `Codepoint` did and for the identical reason: they are declared in a module shv2 can never LOAD,
 // because it also declares `type String` and `String` is a name this compiler owns. So the aliases exist in
 // the LANGUAGE and in no registry a reader can probe — and `stdlib/helpers/string/{utf8,hash,grapheme}.maxon`
-// spell every byte position and every cluster count with them, which without this is `E3011 Unknown type
+// spell every byte position and every cluster index with them, which without this is `E3011 Unknown type
 // 'BytePos'` twenty-two times over.
 //
-// ⚠ They share ONE range because the corpus gives them one — a byte position and a cluster count both span
-// the full unsigned domain there — so the bounds are a single pair of constants rather than two identical
-// pairs free to drift apart. It rides as the wrapped -1 exactly as `ElementCount`'s does.
-//
-// ⚠ `ByteCount`, the third alias those files' header comments name, is deliberately NOT seeded: it is
-// mentioned in a COMMENT in each of them and spelled in no signature (checked at the source). Vocabulary
-// does not ship ahead of its consumer, and the day one arrives it is one line here.
+// ⚠ They share ONE range because they name one domain — a grapheme index is a position into the same
+// bytes — so the bounds are a single pair of constants rather than two identical pairs free to drift
+// apart. It rides as the wrapped -1 exactly as `ElementIndex`'s does.
 let StringPositionAliasLow = 0 as ParsedInt
 let StringPositionAliasHigh = U64MaxBound
 let BytePosAliasName = b"BytePos"
-let GraphemeCountAliasName = b"GraphemeCount"
+let GraphemeIndexAliasName = b"GraphemeIndex"
 let StringPositionAliasDeclPath = "stdlib/String.maxon"
 
 // ⭐⭐ **THE DECLARING FILES OF THE ALIASES THE COMPILER SUPPLIES ON THE STDLIB'S BEHALF — the files the
-// SWEEP NEVER VISITS (N1c).** `RangedAliasRegistry.create` seeds `Codepoint` and `ElementCount` as
+// SWEEP NEVER VISITS (N1c).** `RangedAliasRegistry.create` seeds `Codepoint` and `ElementIndex` as
 // declarations of two real `stdlib/` modules, but it SUPPLIES them rather than parsing them, so
 // `Queries.foldOneFileInto` never stamps their module directory and every index keyed on a declaring path
 // has a hole exactly where a seed is.
@@ -1257,7 +1256,7 @@ let StringPositionAliasDeclPath = "stdlib/String.maxon"
 export function seededStdlibAliasDeclFiles() returns FilePathArray
 	var files = FilePathArray.create()
 	files.push(seedDeclFile(CodepointAliasDeclPath))
-	files.push(seedDeclFile(ElementCountAliasDeclPath))
+	files.push(seedDeclFile(ElementIndexAliasDeclPath))
 	// ONE entry for the two `stdlib/String.maxon` seeds — this list is of FILES, and both come from that one
 	// file. Pushing the same path twice would stamp the same module directory twice.
 	files.push(seedDeclFile(StringPositionAliasDeclPath))
@@ -1498,10 +1497,6 @@ export function nameableFromAnywhere(visibility Visibility) returns bool
 	return visibility == Visibility.global
 end 'nameableFromAnywhere'
 
-// The prefix Maxon reserves for compiler-minted names, as R-1 reads it — see `identifiableRangeName` for
-// why this tier has its own copy rather than sharing the parser's or the signature index's.
-let ReservedElementNamePrefix = b"__"
-
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
 	// whole-program behaviour, which is what makes the bare probe safe to keep.
@@ -1592,9 +1587,9 @@ export type RangedAliasRegistry
 		requireExitCodeRangeFitsItsWidth(exitCodeHigh)
 		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests, exitCodeHigh: exitCodeHigh}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
-		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
+		_ = registry.record(builtinStdlibAlias(ElementIndexAliasName, low: ElementIndexAliasLow, high: ElementIndexAliasHigh, declPathText: ElementIndexAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(BytePosAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
-		_ = registry.record(builtinStdlibAlias(GraphemeCountAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
+		_ = registry.record(builtinStdlibAlias(GraphemeIndexAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
 		return registry
 	end 'create'
 
@@ -1746,7 +1741,7 @@ export type RangedAliasRegistry
 	//   • **A contest ENTIRELY INSIDE `stdlib/` is untouched — the fix is a no-op there.**
 	//     `Parser.typeAliasVisibility` gives EVERY alias in a stdlib source file `Visibility.global`,
 	//     `export`ed or not, so every candidate is nameable and `nameable`'s last-wins winner IS
-	//     `byName`'s. The `Byte`/`ByteCount`/`Utf16UnitCount` contests this file cites elsewhere are all
+	//     `byName`'s. The `Byte`/`BytePos`/`Utf16UnitCount` contests this file cites elsewhere are all
 	//     of that shape. The case actually repaired is stdlib-vs-user-PRIVATE.
 	//   • **A user `export`ed alias still displaces the stdlib seed, exactly as before.** `record`'s
 	//     `nameable` is last-wins too, so `export typealias Codepoint = int(0 to 100)` in a user file
@@ -1863,6 +1858,29 @@ export type RangedAliasRegistry
 		return names
 	end 'declaredNames'
 
+	// ⭐⭐ **DOES *ANY* DECLARATION — OR THE BUILTIN — MAKE `name` A RANGED TYPEALIAS?** The
+	// allocation-free existence probe the nominal identity door rests on: a `typealias` names its own
+	// type, so the identity is the name, and what has to be settled is only whether the name denotes a
+	// ranged alias at all.
+	//
+	// ⚠ **IT MUST NOT BOX.** `aggregateNameOf` asks it at every coercion site in the program, and
+	// `lookup`'s `DeclaredAlias` is a heap union — one allocation per ask would land on `phase:parse`.
+	// Two map/table probes and no allocation whatever.
+	export function declaresAlias(name ByteArray) returns bool
+		return self.byName.contains(name) or builtinTypeNameTag(name) == ValueTypeTag.exitCode
+	end 'declaresAlias'
+
+	// ⭐ **THE IDENTITY OF A NAME TWO KINDS HOLD.** A `type Foo` and a `typealias Foo` in two files are two
+	// types, so the alias half cannot answer to the bare name the nominal half already answers to; it takes
+	// the reader's own claimant's range-qualified spelling, which `sourceSpelledAliasName` un-mints for
+	// display exactly as a contested element's does. Paid only by a cross-kind contested name.
+	export function crossKindIdentityOf(name ByteArray, readerFilePath FilePath) returns ByteArray
+		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
+			undeclared then return EmptySourceText
+			declared(alias) then return rangeQualifiedAliasName(name, low: alias.low, high: alias.high)
+		end 'resolved'
+	end 'crossKindIdentityOf'
+
 	// ⭐ **THE DECLARATION `byName` HOLDS — no scoping, and NO BUILTIN FALLBACK.** It is deliberately not
 	// `lookup`, whose job is to answer what a READER means and which therefore synthesizes the builtin
 	// `ExitCode` alias for a name no file declares. A contest is a question about DECLARATIONS, so a
@@ -1911,34 +1929,8 @@ export type RangedAliasRegistry
 		return any.underlying
 	end 'underlyingInAnyFile'
 
-	// ⭐⭐ **THE RANGE ITSELF, AS A NAME — the one BOUNDS question a file-less reader may ask, and the door
-	// R-1 resolves a generic instance's element identity through.**
-	//
-	// `underlyingInAnyFile` directly above refuses to hand out bounds at all, and its reason is exact: *a
-	// reader with no file reading A file's bounds is reading a STRANGER's bounds.* **That reason reaches only
-	// a CONTESTED name** — one whose declarations disagree about the range — **and this door refuses exactly
-	// those**, so every name it answers for is a name every file in the program reads identically. There is no
-	// stranger left to be wrong about.
-	//
-	// ⚠ **A NAME DECLARED TWICE OVER THE SAME RANGE IS NOT CONTESTED AND IS ANSWERED HERE.** That is the
-	// distinction `settleRangeContests` draws (`holdsRange` compares BOUNDS, not declarations), and it is the
-	// one this door needs: two declarations that agree are not two readings.
-	//
-	// ⚠⚠ **IT MAY NOT BE ASKED BEFORE `settleRangeContests` HAS RUN.** `rangeContested` is EMPTY until then,
-	// so every name would look uncontested and this would hand out a stranger's bounds after all — silently,
-	// and to every reader at once. Its caller gates on `ProgramSignatures.allFilesFolded`; see the ⚠⚠ note on
-	// `canonicalTypeArgName`'s `named` arm for the 34 red cases the ungated version measured.
-	export function uncontestedRangeName(name ByteArray) returns ByteArray throws MapError
-		if self.rangeContested.contains(name) 'itsDeclarationsDisagreeAboutTheRange'
-			throw MapError.keyNotFound
-		end 'itsDeclarationsDisagreeAboutTheRange'
-
-		let any = try self.byName.get(name)
-		return rangeCanonicalTypeName(any.underlying, low: any.low, high: any.high)
-	end 'uncontestedRangeName'
-
-	// `uncontestedRangeName`'s DISPLAY twin -- `int(0 to 255)` rather than the key spelling. Same contested
-	// refusal for the same reason: a name whose declarations disagree has no one range to be shown as.
+	// The range as SOURCE spells it -- `int(0 to 255)`. A name whose declarations disagree about the range has
+	// no one range to be shown as, so a contested name is refused.
 	export function uncontestedRangeSourceSpelling(name ByteArray) returns ByteArray throws MapError
 		if self.rangeContested.contains(name) 'itsDeclarationsDisagreeAboutTheRange'
 			throw MapError.keyNotFound
@@ -1947,75 +1939,6 @@ export type RangedAliasRegistry
 		let any = try self.byName.get(name)
 		return rangeSourceSpelling(any.underlying, low: any.low, high: any.high)
 	end 'uncontestedRangeSourceSpelling'
-
-	// ⭐⭐ **EVERY RANGED ALIAS THAT SHARES ITS RANGE WITH ANOTHER, PAIRED WITH THAT RANGE'S NAME (R-1).** The
-	// substitution `GenericInstanceRegistry.instanceKey` applies, in the one form the registry can consume
-	// without knowing what an alias is.
-	//
-	// ⚠ **A NAME WHOSE RANGE NO OTHER NAME SHARES IS ABSENT, AND THAT IS WHAT KEEPS THE COMMON PROGRAM FREE.**
-	// Substituting it would be a no-op — it would map the only spelling of a type to a second spelling of the
-	// same type — while making `rangeIdentity` non-empty, which is the flag every `instanceKey` tests. A
-	// program declaring no two aliases over one range gets an EMPTY map here and pays a `count()` per argument
-	// and nothing else.
-	//
-	// ⚠ **CONTESTED NAMES ARE SKIPPED, BY `uncontestedRangeName`'s REFUSAL AND NOT BY A SECOND TEST HERE.** A
-	// name whose declarations disagree about the range has no single range to be identified by; N2 has already
-	// split its instances per reading file, and that split is what must survive.
-	export function rangeIdentityPairs() returns RangeIdentityNameMap
-		// The range name is minted ONCE PER ALIAS and carried, not re-derived: it is the only allocation in this
-		// walk, and deriving it again in the second pass doubled the cost of the whole R-1 step for nothing.
-		var byAlias = RangeIdentityNameMap.create()
-		var claimants = RangeClaimantCountMap.create()
-		for (name, _) in self.byName 'eachRangedAlias'
-			if let rangeName = try self.identifiableRangeName(name) 'itsRangeIdentifiesIt'
-				byAlias.upsert(name, value: rangeName)
-				let seen = try claimants.get(rangeName) otherwise 0
-				claimants.upsert(rangeName, value: seen + 1)
-			end 'itsRangeIdentifiesIt'
-		end 'eachRangedAlias'
-
-		// A name whose range NO other name claims is dropped: substituting it would map the only spelling of a
-		// type to a second spelling of the same type, while making `rangeIdentity` non-empty — and that map's
-		// emptiness is the flag every `instanceKey` tests.
-		var pairs = RangeIdentityNameMap.create()
-		for (name, rangeName) in byAlias 'eachIdentifiableAlias'
-			let claimed = try claimants.get(rangeName) otherwise 0
-			if claimed > 1 'someOtherAliasDenotesTheSameRange'
-				pairs.upsert(name, value: rangeName)
-			end 'someOtherAliasDenotesTheSameRange'
-		end 'eachIdentifiableAlias'
-
-		return pairs
-	end 'rangeIdentityPairs'
-
-	// `uncontestedRangeName` for a name R-1 is ALLOWED to identify by its range, and a refusal for one it is
-	// not. Two names are refused, for two different reasons.
-	//
-	// A RANGE-CONTESTED name is refused by `uncontestedRangeName` itself: it has no single range to be
-	// identified by, and N2 has already given its readings distinct spellings that must survive.
-	//
-	// A COMPILER-RESERVED name is refused HERE, and this is the rule rather than an exception to it.
-	// R-1 says two aliases the AUTHOR wrote over one range are two spellings of one type. A `__`-prefixed
-	// element is not a spelling of anything — it is unspellable in source, and it is minted for the express
-	// purpose of being a DIFFERENT instance from the user-visible name beside it. `__ManagedByte` is the
-	// case: a compiler-synthesized byte buffer wears it so that it is not a user's `Array with Byte`, and the
-	// admission between the two is deliberately ONE-WAY through `ProgramSignatures.byteBufferBoundaryAdmits`
-	// (see `Parser.requireSameArrayInstance`). Identify them and that door has no subject left — the one-way
-	// admission becomes an identity, and a user's `Array with Byte` reaches a position nothing but the
-	// compiler is supposed to mint a value at. MEASURED with the exclusion absent: `stdlib/String.maxon:188`
-	// failed to compile and took three spec cases with it.
-	//
-	// ⚠ The reserved prefix is spelled here rather than shared with `Parser.ReservedNamePrefix` or
-	// `SignatureIndex.ReservedTypeNamePrefix`, which is that pair's own stated design — see the header on the
-	// latter: the three ask different questions (forbidding, minting, and now identifying) at different
-	// tiers, and the language rule binds them rather than a symbol.
-	function identifiableRangeName(name ByteArray) returns ByteArray throws MapError
-		if bytesStartWith(name, prefix: ReservedElementNamePrefix) 'aCompilerMintExistsToBeDistinct'
-			throw MapError.keyNotFound
-		end 'aCompilerMintExistsToBeDistinct'
-
-		return try self.uncontestedRangeName(name)
-	end 'identifiableRangeName'
 
 	// Does SOME file declare `name` as a ranged typealias — the membership half of `underlyingInAnyFile`,
 	// over the identical table, so the two cannot come to disagree about what this registry holds. It is the
@@ -3209,16 +3132,6 @@ end 'RangeCheckReturnSite'
 
 export typealias RangeCheckReturnSiteArray = Array with RangeCheckReturnSite
 
-// ⭐ Per-function map from a generic-INSTANCE value's function-local `ValueId` to the NAME of the
-// instance alias it came from (`WrapperA`) — the parse-time provenance the value's shared
-// `GenericInstanceId` cannot recover (P1.6-C). The NAME (not an interned id) so it survives merge with
-// no remap, exactly as `returnAliasName` does. SemanticCheck's per-instance argument check reads it off
-// the RECEIVER argument to re-qualify a method's inner-alias parameter (`WrapperB.setTag`'s `t Idx` ⇒
-// `WrapperB.Idx`). It rides `FunctionRangeChecks` because that is the ONE per-function side table the
-// parser fills and `mergeArtifact` copies whole (keyed by function name, id-stable) — a second such table
-// would be the same channel written twice.
-export typealias ValueInstanceAliasNameMap = Map with (ValueId, ByteArray)
-
 // ⭐⭐ **A CLOSED INTEGER INTERVAL A VALUE IS PROVEN TO LIE IN, THAT NOTHING NAMES (EC7).** The counter of a
 // `for i in a upto b` whose bounds are compile-time constants is in `[a, b-1]` throughout the loop body, and
 // no `typealias` in the program says so — the value's own type is the bare `int` the bounds were written at.
@@ -3244,7 +3157,7 @@ end 'ProvenIntRange'
 
 // ⭐ Per-function map from a value's function-local `ValueId` to the interval above. SPARSE — one entry per
 // counted-loop counter, and empty (the shared map) for every function that has none, which is most of them.
-// It rides `FunctionRangeChecks` for `ValueInstanceAliasNameMap`'s reason: that is the ONE per-function side
+// It rides `FunctionRangeChecks` because that is the ONE per-function side
 // table the parser fills and `mergeArtifact` copies whole, and ValueIds pass through `LowerMaxonToStd`
 // VERBATIM, so the Std tier reads the parser's own numbering with no remap.
 export typealias ProvenIntRangeMap = Map with (ValueId, ProvenIntRange)
@@ -3337,9 +3250,6 @@ export type FunctionRangeChecks
 	// The function's narrowed-range parameters — see `RangeCheckParamSite`. Empty (the shared array) for a
 	// function no parameter of which is a ranged alias, which is most of them.
 	export var paramSites as RangeCheckParamSiteArray
-	// P1.6-C — see `ValueInstanceAliasNameMap`. Empty for a function that constructs no generic instance,
-	// which is every function outside the generics corpus.
-	export var valueInstanceAliases as ValueInstanceAliasNameMap
 	// EC7 — see `ProvenIntRangeMap`. Empty for a function with no counted loop over constant bounds.
 	export var provenValueRanges as ProvenIntRangeMap
 
@@ -3348,7 +3258,7 @@ export type FunctionRangeChecks
 	//
 	// It rides HERE because the party that KNOWS is the parser and the party that ASKS is
 	// `InsertRangeChecks` at the Std tier, and this is the one per-function side table that already crosses
-	// that boundary (`ValueInstanceAliasNameMap`'s header states the same reason for the same channel). It
+	// that boundary (`ProvenIntRangeMap`'s header states the same reason for the same channel). It
 	// keys by `ValueId`, which survives the lowering verbatim, and it never travels between functions —
 	// each entry is stamped with the file's own parse.
 	//
@@ -3360,8 +3270,8 @@ export type FunctionRangeChecks
 	// Empty (the parser's shared read-only anchor) for every function that writes no negative literal.
 	export var writtenNegativeLiterals as ValueMarkSet
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, valueInstanceAliases ValueInstanceAliasNameMap, provenValueRanges ProvenIntRangeMap, writtenNegativeLiterals ValueMarkSet) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, valueInstanceAliases: valueInstanceAliases, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeMap, writtenNegativeLiterals ValueMarkSet) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals}
 	end 'create'
 end 'FunctionRangeChecks'
 
@@ -3846,11 +3756,11 @@ export typealias FieldDefaultArray = Array with FieldDefault
 // witness SLOT, which is the `(parameter, interface)` pair, and one slot holds one table however the
 // associated positions are written.
 export type WhereConstraint
-	export let typeParamIndex as FieldIndex
+	export let typeParamIndex as TypeParamPosition
 	export let interfaceName as ByteArray
 	export let associatedBindings as ByteArrayArray
 
-	export static function create(typeParamIndex FieldIndex, interfaceName ByteArray, associatedBindings ByteArrayArray = sharedEmptyDeclaredConformances) returns WhereConstraint
+	export static function create(typeParamIndex TypeParamPosition, interfaceName ByteArray, associatedBindings ByteArrayArray = sharedEmptyDeclaredConformances) returns WhereConstraint
 		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName, associatedBindings: associatedBindings}
 	end 'create'
 end 'WhereConstraint'
@@ -3921,7 +3831,7 @@ end 'conditionalExtensionWithheldMessage'
 
 export function renderWhereConstraints(constraints WhereConstraintArray, paramNames ByteArrayArray) returns String
 	var text = "where "
-	var previousParam = 0 as FieldIndex
+	var previousParam = 0 as TypeParamPosition
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("renderWhereConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 		if i == 0 or constraint.typeParamIndex != previousParam 'newParam'
@@ -3993,6 +3903,11 @@ export type StructLayout
 	// it: this column is written by the declaration SWEEP, which runs before any generic alias is interned
 	// and so cannot be asked whether `BufArray` holds buffers.
 	export var fieldDeclaredSurfaces as DeclaredSurfaceArray
+	// The bare name each field's type was WRITTEN as (`export var xs as Xs` gives `Xs`), or empty. A field
+	// declared through a generic-instance alias brands what it holds and what is read out of it; the reader
+	// (`Parser.declaredBrand`) decides whether the spelling is such an alias, because this column is written
+	// by the declaration sweep, before the alias registry can say.
+	export var fieldDeclaredBrands as ByteArrayArray
 	// ⭐ **THE DERIVED SLOT GEOMETRY — the PREFIX SUM over `fieldSlotCount` (P1.7a-existentials slice 2), and
 	// the box size that same sum ends at.** Two DERIVED columns, read by `offsetOfField`/`sizeBytes` in O(1).
 	//
@@ -4105,7 +4020,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: ByteArrayArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -4202,13 +4117,14 @@ export type StructLayout
 
 	// Append one declared field. THE one writer of the columns — every column, one push, so they
 	// cannot drift.
-	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, tier Visibility, defaultValue FieldDefault, declaredSurface DeclaredSurface)
+	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, tier Visibility, defaultValue FieldDefault, declaredSurface DeclaredSurface, declaredBrand ByteArray)
 		self.fieldNames.push(fieldName)
 		self.fieldTypes.push(declaredType)
 		self.fieldMutable.push(mutable)
 		self.fieldVisibility.push(tier)
 		self.fieldDefaults.push(defaultValue)
 		self.fieldDeclaredSurfaces.push(declaredSurface)
+		self.fieldDeclaredBrands.push(declaredBrand)
 		// The prefix sum extends by one term: this field starts where the running total stands, and the total
 		// advances by this field's own slot count. Same push, so the derived columns cannot fall out of the
 		// lockstep the header above rests on.
@@ -4422,6 +4338,10 @@ export type StructLayout
 		return try self.fieldDeclaredSurfaces.get(index) otherwise panic("StructLayout.fieldDeclaredSurface: fieldDeclaredSurfaces.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
 	end 'fieldDeclaredSurface'
 
+	export function fieldDeclaredBrand(index FieldIndex) returns ByteArray
+		return try self.fieldDeclaredBrands.get(index) otherwise panic("StructLayout.fieldDeclaredBrand: fieldDeclaredBrands.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldDeclaredBrand'
+
 	export function fieldCount() returns FieldIndex
 		return self.fieldNames.count()
 	end 'fieldCount'
@@ -4492,6 +4412,8 @@ export typealias StructLayoutMap = Map with (ByteArray, StructLayout)
 export type PayloadField
 	export let name as ByteArray
 	export let declaredType as MaxonType
+	// The bare name the payload's type was written as — `StructLayout.fieldDeclaredBrands`' twin.
+	export let declaredBrand as ByteArray
 
 	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF THIS PAYLOAD (BATCH22)** — `StructLayout`'s
 	// `fieldDeclaredSurfaces` column, at the FIFTH declared position. A payload is spelled by the very type
@@ -4501,8 +4423,8 @@ export type PayloadField
 	// `ProgramSignatures.payloadSurfaceOf`, which ORs in the element bit the sweep could not answer.
 	export let declaredSurface as DeclaredSurface
 
-	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface) returns PayloadField
-		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface}
+	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray) returns PayloadField
+		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand}
 	end 'create'
 end 'PayloadField'
 
@@ -5584,13 +5506,13 @@ export type EnumLayout
 	// of the widest case. THE one place the box size is computed, so the allocation and the stores
 	// that fill it cannot come to disagree about how big it is.
 	export function boxSizeBytes() returns ByteOffset
-		return UnionTagBytes + self.maxPayloadArity() * FieldSlotBytes
+		return UnionTagBytes + (self.maxPayloadArity() as ByteOffset) * FieldSlotBytes
 	end 'boxSizeBytes'
 
 	// The byte offset of payload slot `slot` from the box pointer `__mm_alloc` returns — past the
 	// tag word. The enum twin of `StructLayout.offsetOfField`.
 	export function payloadSlotOffset(slot CaseIndex) returns ByteOffset
-		return UnionTagBytes + slot * FieldSlotBytes
+		return UnionTagBytes + (slot as ByteOffset) * FieldSlotBytes
 	end 'payloadSlotOffset'
 
 	export function caseCount() returns CaseIndex
@@ -5895,7 +5817,7 @@ end 'builtinEnumLookupErrorEnum'
 // error enum does — which is what a program printing `"{e}"` on one gets from the oracle.
 function addBuiltinEnumCase(layout EnumLayout, caseName ByteArray)
 	let tag = layout.caseCount()
-	layout.addCase(caseName, tag: tag, rawValue: "{tag}", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+	layout.addCase(caseName, tag: tag as ParsedInt, rawValue: "{tag}", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 end 'addBuiltinEnumCase'
 
 // ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, FIVE FAMILIES (7b, +A1, +A1s).**

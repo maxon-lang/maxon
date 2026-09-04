@@ -316,16 +316,23 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: third-file-runtime-guard-uses-the-nameable-declaration -->
 The same collision through the door that emits CODE rather than a diagnostic: `big` is opaque, so
-`widen`'s narrowed parameter is enforced by its ENTRY GUARD (A1f), and that guard reads its bounds
-through the very lookup this rule fixes. Against the bare door it was built from `main.maxon`'s
-`int(0 to 100)` and the program died `Range check failed: value outside typealias 'Codepoint'` on a
-value the alias `lib.maxon` can name admits. A false panic is the runtime form of the false rejection
-above, and it is the form the stdlib actually met.
+`widen`'s parameter is enforced by its ENTRY GUARD (A1f), and that guard reads its bounds through the
+very lookup this rule fixes. Read from `main.maxon`'s `int(0 to 100)` instead, the program would die
+`Range check failed: value outside typealias 'Codepoint'` on a value the alias `lib.maxon` can name
+admits. A false panic is the runtime form of the false rejection above, and it is the form the stdlib
+actually met. `main.maxon` cannot spell the wide alias at all — its own `Codepoint` is the narrow one —
+so the conversion is `lib.maxon`'s, where the name means the exported declaration.
 ```maxon
 // --- file: alias.maxon
 export typealias Codepoint = int(0 to 1114111)
 
 // --- file: lib.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function lift(n Integer) returns Codepoint
+	return n as Codepoint
+end 'lift'
+
 export function widen(c Codepoint) returns Codepoint
 	return c
 end 'widen'
@@ -344,7 +351,7 @@ end 'narrow'
 
 function main() returns ExitCode
 	let big = opaque(70000)
-	return ((widen(big) / 1000) - narrow(28)) as ExitCode
+	return (((widen(lift(big)) / 1000) as Integer) - narrow(28)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -399,11 +406,11 @@ through a door that never asked `lookup` which reader it meant: a user program's
 (int(0 to 3))"*. `RangeCheckSite.aliasFilePath` carries the declaration now.
 
 ⚠ **THE STDLIB-INTERNAL HALF CANNOT BE WRITTEN AS A PROGRAM, so it is recorded here instead.**
-`ElementIndex` and `ElementCount` are declared in BOTH `stdlib/Array.maxon` and `stdlib/Vector.maxon`,
+`ElementIndex` is declared in BOTH `stdlib/Array.maxon` and `stdlib/Vector.maxon`,
 and no source file can change either — the only probe is a sabotage of the library. Sabotage-verified
 both ways: narrowing **`stdlib/Vector.maxon`**'s `ElementIndex` to `int(0 to 5)` refused an **`Array`**
 index of 9, and narrowing **`stdlib/Array.maxon`**'s own had **no effect at all**. Both directions
-reverse with the fix. Nothing was visibly wrong before it only because all four declarations carry the
+reverse with the fix. Nothing was visibly wrong before it only because both declarations carry the
 same `int(0 to i64.max)`.
 
 <!-- test: a-contested-element-index-does-not-govern-the-array-door -->
@@ -458,15 +465,13 @@ function main() returns ExitCode
 	var a = IntArray.create()
 	a.resize(20)
 	try a.set(9, value: 42) otherwise ignore
-	// ⚠ NOT `return mine as ExitCode`: that spelling raises E3010 (`unneeded cast`) first and masks
-	// the diagnostic this case is about.
 	let mine = 9 as ElementIndex
 	print("{mine}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:15: Value 9 is outside the range of 'ElementIndex' (int(0 to 3))
+error E3005: <fragment>:10:15: Value 9 is outside the range of 'ElementIndex' (int(0 to 3))
 ```
 
 
@@ -499,7 +504,7 @@ typealias Slots = Array with Low
 function main() returns ExitCode
 	var w = Slots.create()
 	w.push(40)
-	return (fromHigh() / 100) + (try w.get(0) otherwise 0)
+	return (((fromHigh() / 100) as Low) + (try w.get(0) otherwise 0)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -566,7 +571,7 @@ type Words
 	end 'create'
 end 'Words'
 
-export function wordCount() returns ElementCount
+export function wordCount() returns ElementIndex
 	let w = Words.create()
 	return w.items.count()
 end 'wordCount'
@@ -587,7 +592,7 @@ end 'Nums'
 
 function main() returns ExitCode
 	let n = Nums.create()
-	return (try n.items.get(0) otherwise 0) + wordCount()
+	return ((try n.items.get(0) otherwise 0) + (wordCount() as Num)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -661,7 +666,7 @@ function main() returns ExitCode
 	row.push(40)
 	g.push(row)
 	let back = try g.get(0) otherwise Slots.create()
-	return (fromHigh() / 100) + (try back.get(0) otherwise 0)
+	return (((fromHigh() / 100) as Low) + (try back.get(0) otherwise 0)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1014,7 +1019,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:30:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
-note: stdlib/Array.maxon:165:32: raised inside the library, on behalf of the construct above
+note: stdlib/Array.maxon:164:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- test: contested-generic-alias-argument-that-owns-heap-is-not-co-owned-trivial -->
@@ -1184,8 +1189,9 @@ end 'useB'
 
 typealias Integer = int(i64.min to i64.max)
 // --- file: cmain.maxon
+typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
-	return (useA() + useB()) as ExitCode
+	return ((useA() as Integer) + useB()) as ExitCode
 end 'main'
 ```
 ```exitcode

@@ -599,7 +599,7 @@ error E3120: <fragment>:24:6: 'WeirdBag' binds 'Bag's associated type 'Iter' to 
 ```
 
 <!-- test: held.the-element-is-the-enclosing-types-own-parameter -->
-⭐⭐ **THE PROGRAM `stdlib/Array.maxon:133` STANDS AT, AND THE ONE `Array.from` IS.** A generic type walking a
+⭐⭐ **THE PROGRAM `stdlib/Array.maxon:132` STANDS AT, AND THE ONE `Array.from` IS.** A generic type walking a
 value held at a parameterized interface over its OWN parameter — `Bag with (Element, Cursor with Element)`
 inside `type Collector uses Element` — and storing each element into its `Array with Element`.
 

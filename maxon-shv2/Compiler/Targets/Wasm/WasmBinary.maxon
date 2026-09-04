@@ -472,7 +472,7 @@ export type WasmBody
 	// tier carries; i64Const takes the full ParsedInt a `const` op holds (i64.min..i64.max).
 	export function i32Const(v Imm32)
 		self.buf.push(opI32Const)
-		writeSleb128(self.buf, value: v)
+		writeSleb128(self.buf, value: v as ParsedInt)
 	end 'i32Const'
 
 	export function i64Const(v ParsedInt)
@@ -1353,7 +1353,7 @@ export type WasmModuleBuilder
 		writeUleb128(contents, value: segmentCount as Wasm32Index)
 		for segment in self.dataSegments 'each'
 			contents.push(wasmDataSegmentActiveMem0)
-			writeI32ConstOffsetExpr(contents, offset: segment.base)
+			writeI32ConstOffsetExpr(contents, offset: segment.base as ParsedInt)
 			writeUleb128(contents, value: segment.bytes.count() as Wasm32Index)
 			contents.append(segment.bytes)
 		end 'each'

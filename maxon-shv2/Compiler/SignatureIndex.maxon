@@ -845,7 +845,7 @@ export union TopLevelConstant
 	//
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
 	// and fails to compile until it has been visited and decided.
-	containerValue(giid GenericInstanceId, elements ConstArrayElementArray)
+	containerValue(giid GenericInstanceId, brand ByteArray, elements ConstArrayElementArray)
 	// ⭐ **IT EVALUATED TO A USER STATIC FACTORY CALL — `var db = Database.create(…)`** (spec-port
 	// `map-struct-bytearray`). Its own arm because it is the one outcome whose value the compiler does not
 	// KNOW: the other stored arms carry a record's contents, this one carries the CALL TREE that produces
@@ -1843,7 +1843,7 @@ export union ConstFoldedValue
 	// INFERRED from its first element's kind (`constArrayValueType`), where this one is the giid the alias
 	// resolved to. That difference is exactly why the `from` form exists at all: a bare `['a', 'e']` is an
 	// array of characters, and only the alias can say the container is a `Set` over them.
-	containerCreate(giid GenericInstanceId, elements ConstArrayElementArray)
+	containerCreate(giid GenericInstanceId, brand ByteArray, elements ConstArrayElementArray)
 	// ⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE — `MaxonType.unresolved`, `Boxed.plain`.** Its own arm because
 	// its value is none of the three above: not a number, not a literal's bytes, not a list — a BOX, whose
 	// entire content is a tag word beside some zeroed slots. Nothing about it is folded in the sense the other
@@ -2031,7 +2031,8 @@ end 'TopLevelConstantLookup'
 // the two sites that WRITE (`Parser.parseTopLevelAssignment`, and the synthetic receiver binding a method
 // call is dispatched on), off this bit; without it an array `let` would silently accept both.
 export union TopLevelGlobalLookup
-	found(label ByteArray, valueType MaxonType, mutable bool)
+	// `brand` is the generic-instance alias the initializer spelled (`Xs.create()`), or empty.
+	found(label ByteArray, valueType MaxonType, brand ByteArray, mutable bool)
 	notFound
 end 'TopLevelGlobalLookup'
 
@@ -3044,14 +3045,14 @@ end 'maxonTypeName'
 // the identical defect `maxonTypeName`'s own ⚠ paragraph records having been fixed once for a nested
 // `function` type, one tag over.
 //
-// ⚠ **THE SITE-FREE `instanceDisplayName`, NEVER `instanceDisplayNameIn`, AND THE STRING'S SECOND JOB IS
-// WHY.** `formatFnTypeDisplay`'s output is a COMPARISON KEY as well as a caption (see there), so it must be
-// a pure function of the type: a reader-scoped spelling would let one function type render two ways in two
-// files and make a merge disagree about a type it agrees about. The site-free door is exactly that pure
-// function of the gid — and it is still the author's `typealias`, which is what a caption owes.
+// ⚠ **`instanceDisplayName`, NEVER A VALUE'S BRAND, AND THE STRING'S SECOND JOB IS WHY.**
+// `formatFnTypeDisplay`'s output is a COMPARISON KEY as well as a caption (see there), so it must be a pure
+// function of the type: a brand-scoped spelling would let one function type render two ways at two sites
+// and make a merge disagree about a type it agrees about. The site-free door is exactly that pure function
+// of the gid — and it is still the author's `typealias`, which is what a caption owes.
 function fnTypeSlotName(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	if maxonTypeTag(t) == ValueTypeTag.genericInstance 'anInstantiationOfAGenericBase'
-		return String.from(signatures.instanceDisplayName(typeNameIdOf(t)))
+		return String.from(signatures.instanceDisplayName(genericInstanceIdOf(t)))
 	end 'anInstantiationOfAGenericBase'
 
 	return maxonTypeName(t, typeNames: typeNames)
@@ -4442,7 +4443,7 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 	// trivial `__mm_decref` — resolved inside `signatures` over its own registry/interner (a gid is not an
 	// interner id), exactly as a struct/union field name is resolved through `managedNameDropCallee`.
 	if tag == ValueTypeTag.genericInstance 'instance'
-		return signatures.genericInstanceBoxDropCallee(typeNameIdOf(fieldType))
+		return signatures.genericInstanceBoxDropCallee(genericInstanceIdOf(fieldType))
 	end 'instance'
 	// ⛔ **AN EXISTENTIAL FIELD HAS NO STATIC DROP CALLEE, AND THAT IS THE WHOLE POINT OF IT**
 	// (P1.7a-existentials slice 2). Its conformer — and so its destructor — is a run-time fact read out of the
@@ -4750,7 +4751,7 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
 		return ManagedCascadeStrategy.direct(byteRecordCascadeCallee(action))
 	end 'byteRecord'
 	if tag == ValueTypeTag.genericInstance 'instance'
-		return instanceCascadeStrategy(signatures, id: typeNameIdOf(fieldType), asElement: asElement, action: action)
+		return instanceCascadeStrategy(signatures, id: genericInstanceIdOf(fieldType), asElement: asElement, action: action)
 	end 'instance'
 	// ⛔ **AN EXISTENTIAL IS NOT DEEP-CLONEABLE, AND THE GATE AND THE STRATEGY HAVE TO SAY SO TOGETHER**
 	// (P1.7a-existentials slice 2) — this file's standing rule (see `managedNameCascadeStrategy`'s
@@ -6124,7 +6125,7 @@ end 'surfaceSubtreeSize'
 function mixSurface(state HashDigest, surface DeclaredSurface) returns HashDigest
 	var h = state
 	for node in surface 'eachNode'
-		h = Hasher.combined(h, value: node)
+		h = Hasher.combined(h, value: node as HashDigest)
 	end 'eachNode'
 	return Hasher.combined(h, value: surface.count())
 end 'mixSurface'
@@ -7112,7 +7113,7 @@ end 'isTupleTypeName'
 function tupleStructLayout(name ByteArray, elements MaxonTypeArray, declFilePath FilePath) returns StructLayout
 	var layout = StructLayout.create(name, visibility: Visibility.global, declFilePath: declFilePath)
 	for i in 0 upto elements.count() 'eachElement'
-		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
 	end 'eachElement'
 	return layout
 end 'tupleStructLayout'
@@ -7300,39 +7301,9 @@ typealias GenericAliasDeclarationGroupMap = Map with (ByteArray, GenericAliasDec
 export typealias GenericInstanceIdArray = Array with GenericInstanceId
 export typealias GenericInstancesByBaseMap = Map with (TypeNameId, GenericInstanceIdArray)
 
-// ⭐⭐ **R-1's IDENTITY SUBSTITUTION: an alias NAME id ⇒ the id of the name of its RANGE.** Empty in every
-// program until `ProgramSignatures.mergeRangeEquivalentInstances` publishes it at the end of the declaration
-// sweep, and read only by `GenericInstanceRegistry.instanceKey`. See `rangeCanonicalTypeName`.
-export typealias RangeIdentityMap = Map with (TypeNameId, TypeNameId)
-
 // A function key ⇒ the bare NAME its `returns` clause wrote, for the clauses that wrote one. It is what a
 // CALL RESULT is stamped from; see `FuncReturnTypeEntry.returnAliasName`.
 export typealias FuncReturnAliasNameMap = Map with (ByteArray, ByteArray)
-
-// The instances more than one alias NAME claims, after R-1 merged them. Empty in a program where no two
-// ranged aliases share a range.
-export typealias GenericInstanceIdSet = Set with GenericInstanceId
-
-// For an instance R-1 merged: which alias each DECLARING FILE knows it by, keyed by that file's path text.
-// It is how a diagnostic in a file that declares one of the claimants gets THAT claimant rather than a
-// stranger's spelling of the same type. Empty unless a merge happened.
-export typealias AliasNameByFileMap = Map with (ByteArray, ByteArray)
-export typealias InstanceAliasByFileMap = Map with (GenericInstanceId, AliasNameByFileMap)
-
-// R-1's substitution as `RangedAliasRegistry` answers it — alias NAME ⇒ the name of its RANGE — before
-// `ProgramSignatures` interns both halves into ids. Two maps for one fact because the two layers key on
-// different things and neither may hold the other's interner.
-export typealias RangeIdentityNameMap = Map with (ByteArray, ByteArray)
-
-// How many ranged aliases a program declares over one range, while `rangeIdentityPairs` is deciding which
-// ranges have more than one claimant. The bound is the count of ranged typealiases in the program.
-typealias RangeClaimantCount = int(0 to u32.max)
-
-export typealias RangeClaimantCountMap = Map with (ByteArray, RangeClaimantCount)
-
-// One merged instance ⇒ the instance it merged INTO. Only `rekeyForRangeIdentity` writes it, and only for a
-// loser; a survivor is absent, which is what makes "is this id still live?" a membership test.
-export typealias MergedInstanceMap = Map with (GenericInstanceId, GenericInstanceId)
 
 // ⭐⭐ **gid ⇒ ITS COMPILED NAME, DERIVED ONCE.** A generic instance's mangling is a pure function of its
 // base name and its args, both FIXED at intern time and neither ever revised — so it is derivable once
@@ -7468,10 +7439,10 @@ typealias ClaimingFileSet = Set with String
 // it is why the claim in this header is now a derivation instead of an assumption about the input.
 function everyClaimMayCoexist(claims TypeNameClaimArray) returns bool
 	var declaringFiles = ClaimingFileSet.create()
-	var corpusNominals = 0 as ElementCount
-	var userNominals = 0 as ElementCount
-	var corpusAliases = 0 as ElementCount
-	var userAliases = 0 as ElementCount
+	var corpusNominals = 0 as ElementIndex
+	var userNominals = 0 as ElementIndex
+	var corpusAliases = 0 as ElementIndex
+	var userAliases = 0 as ElementIndex
 
 	for claim in claims 'eachClaim'
 		let declaringFile = claim.declFilePath.toString()
@@ -7742,23 +7713,8 @@ export type GenericInstanceRegistry
 	// `kindIsARefusal` for why the other two gates still do.
 	var speculative as BoolArray
 
-	// ⭐⭐ **R-1's SUBSTITUTION, AND IT IS EMPTY FOR EVERY PROGRAM UNTIL THE SWEEP ENDS.** `instanceKey` maps a
-	// `named` argument's id through this before joining it, so `Array with DenseInt` and `Array with RegCount`
-	// build ONE key once it holds `DenseInt ⇒ int$0_…` and `RegCount ⇒ int$0_…`. It is deliberately a
-	// SUBSTITUTION and not a rewrite of `argLists`: the arg lists keep the names the author WROTE, which is
-	// what `mangleGenericInstance` and every diagnostic read, so a merge changes which types are one type
-	// without changing what any of them is called.
-	var rangeIdentity as RangeIdentityMap
-	// Filled by `rekeyForRangeIdentity` alongside the rekey, for the ONE caller that must repair gids the sweep
-	// already recorded. Empty otherwise, including in every program where no two aliases share a range.
-	var mergedInto as MergedInstanceMap
-	// The other side of `mergedInto`: the instances something merged INTO. It is what tells a display name
-	// that this instance's aliases are R-1's doing, and NOT the pre-existing two-spellings-of-one-type case
-	// (`Strs` and `StringArray` over `Array with String`) that first-wins has always answered correctly.
-	var mergeSurvivors as GenericInstanceIdSet
-
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), rangeIdentity: RangeIdentityMap.create(), mergedInto: MergedInstanceMap.create(), mergeSurvivors: GenericInstanceIdSet.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create()}
 	end 'create'
 
 	// The cheap composite key that makes interning O(1): the base id, the fixed size, and each arg's
@@ -7768,136 +7724,10 @@ export type GenericInstanceRegistry
 	function instanceKey(baseId TypeNameId, args MaxonTypeArray, fixedSize FixedElementCount) returns ByteArray
 		var key = "{baseId}#{fixedSize}"
 		for arg in args 'eachArg'
-			key.append("|{maxonTypeTag(arg).rawValue}:{self.identityOfArgName(arg)}")
+			key.append("|{maxonTypeTag(arg).rawValue}:{typeNameIdOf(arg)}")
 		end 'eachArg'
 		return key.toByteArray()
 	end 'instanceKey'
-
-	// ⭐⭐ **THE ARGUMENT'S IDENTITY, WHICH IS ITS OWN NAME UNTIL R-1 SAYS OTHERWISE.** A `named` argument whose
-	// alias shares a RANGE with another alias substitutes that range's name here, so both spellings build one
-	// key and `intern` returns one instance — which is the whole of what R-1 asks for.
-	//
-	// ⚠ **THE EMPTINESS TEST IS THE POINT, NOT AN OPTIMIZATION.** `rangeIdentity` is empty for the entire
-	// declaration sweep and stays empty in any program where no two ranged aliases agree, so the common path is
-	// one `count()` and the identical key this function has always built. It matters that it is exactly
-	// identical: `intern` runs once per type reference in the program, and a map probe per ARGUMENT there is a
-	// cost every compile would pay for an answer almost every compile does not have.
-	//
-	// ⛔⛔ **IT MAY NOT BE POPULATED DURING THE SWEEP, AND THE FIRST ATTEMPT AT R-1 DID EXACTLY THAT.** Which
-	// aliases share a range is a WHOLE-PROGRAM fact, so a key built from it mid-sweep is built from a half-read
-	// answer: MEASURED, the same argument took the range key before a second declaration was folded and the
-	// spelled key after, and one `b"hi"` reached `E3006 duplicate definition of 'Array_Byte' — the generic
-	// instantiations 'Array with Byte' and 'Array with Byte' compile to that same name`. See
-	// `ProgramSignatures.mergeRangeEquivalentInstances`, which publishes this at the one moment it is a fact.
-	function identityOfArgName(arg MaxonType) returns TypeNameId
-		let nameId = typeNameIdOf(arg)
-		if self.rangeIdentity.count() == 0 'noTwoAliasesInThisProgramShareARange'
-			return nameId
-		end 'noTwoAliasesInThisProgramShareARange'
-
-		// ⭐ **A NESTED INSTANCE IS IDENTIFIED BY THE INSTANCE IT SURVIVED AS.** `Array with (Array with BytePos)`
-		// and `Array with (Array with ByteCount)` are one type only if their INNER arg resolves to one id first.
-		// `rekeyForRangeIdentity` walks ids ASCENDING and an inner instance always has the lower id — its gid must
-		// exist before an outer arg list can name it — so the inner is already settled when the outer is keyed.
-		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'nested'
-			return self.liveInstance(nameId)
-		end 'nested'
-
-		if maxonTypeTag(arg) != ValueTypeTag.named 'carriesNoAliasName'
-			return nameId
-		end 'carriesNoAliasName'
-
-		return try self.rangeIdentity.get(nameId) otherwise nameId
-	end 'identityOfArgName'
-
-	// Re-point one instance's ARGUMENT to the instance it survived as. `mangleGenericInstance` reads `argLists`,
-	// so an outer instance holding a merged inner would otherwise name a dead id in an emitted symbol.
-	export function retypeArg(id GenericInstanceId, argIndex FieldIndex, arg MaxonType)
-		var args = self.instanceArgs(id)
-		try args.set(argIndex, value: arg) otherwise panic("GenericInstanceRegistry.retypeArg: index {argIndex} out of range for instance {id}")
-		try self.argLists.set(id, value: args) otherwise panic("GenericInstanceRegistry.retypeArg: argLists desync at GenericInstanceId {id}")
-	end 'retypeArg'
-
-	// ⭐⭐ **PUBLISH R-1's SUBSTITUTION AND RE-KEY EVERY INSTANCE ALREADY INTERNED UNDER IT.**
-	//
-	// The substitution changes what `instanceKey` builds, so every key in `index` is stale the moment it is
-	// published — leave them and the next `intern` of an already-interned spelling MISSES its own row and mints
-	// a second one. The index is therefore rebuilt whole, in ASCENDING id order, and the first id to claim a key
-	// KEEPS it: the survivor of a merge is the instance the program named FIRST, which is a property of the
-	// source rather than of a walk order, and it is the one whose author-written name every later diagnostic and
-	// every emitted symbol will wear.
-	//
-	// ⚠ **`byBase` IS DELIBERATELY NOT REBUILT.** It is a superset index — "which instances share this base" —
-	// and its readers filter what they find; a merged loser left in it is an id that no live type names, which
-	// those readers already tolerate for the speculative rows beside it.
-	//
-	// Answers the losers, because gids the sweep already RECORDED cannot be rekeyed by a key rebuild and must be
-	// rewritten where they sit (`ProgramSignatures.repairMergedInstanceReferences`).
-	export function rekeyForRangeIdentity(identity RangeIdentityMap) returns MergedInstanceMap
-		self.rangeIdentity = identity
-
-		for id in 0 upto self.baseIds.count() 'eachInternedInstance'
-			let args = self.instanceArgs(id)
-			// An instance NONE of whose arguments the substitution touches builds the byte-identical key it
-			// was interned under, so its `index` entry is already right and rebuilding it would allocate a
-			// string to arrive back where it started. MEASURED on the scale ladder as a full rebuild: +7,336
-			// allocations at rung 0 rising to +35,736 at rung 5, for a program in which most instances
-			// (`Array with String`, every `Map`, every opaque `T`) hold no ranged alias at all.
-			if not self.anyArgSubstitutes(args) 'itsKeyCannotHaveMoved'
-				continue
-			end 'itsKeyCannotHaveMoved'
-
-			let key = self.instanceKey(self.instanceBaseId(id), args: args, fixedSize: self.instanceFixedSize(id))
-			if let survivor = try self.index.get(key) 'anEarlierInstanceAlreadyDenotesThisType'
-				self.mergedInto.upsert(id, value: survivor)
-				self.mergeSurvivors.insert(survivor)
-				continue
-			end 'anEarlierInstanceAlreadyDenotesThisType'
-
-			self.index.upsert(key, value: id)
-		end 'eachInternedInstance'
-
-		return self.mergedInto
-	end 'rekeyForRangeIdentity'
-
-	// Does the substitution reach any of these arguments? A pure PROBE -- it builds nothing, which is the
-	// whole reason it runs in front of `instanceKey` rather than after it.
-	//
-	// ⚠ **A SKIPPED INSTANCE CANNOT COLLIDE WITH A REKEYED ONE, and that is what makes the skip safe rather
-	// than merely cheap.** A rekeyed instance's new key names the RANGE's id in the slot where its argument's
-	// alias id stood, and no argument list anywhere holds that id -- the range's name is minted as a key and
-	// never written into `argLists` (see `rangeIdentity`). So the survivor of any merge is always among the
-	// instances this returns true for, and an untouched instance keeps an entry no rekeyed one can want.
-	function anyArgSubstitutes(args MaxonTypeArray) returns bool
-		for arg in args 'eachArg'
-			let tag = maxonTypeTag(arg)
-			if tag == ValueTypeTag.named and self.rangeIdentity.contains(typeNameIdOf(arg)) 'itsAliasIsIdentifiedByItsRange'
-				return true
-			end 'itsAliasIsIdentifiedByItsRange'
-
-			if tag == ValueTypeTag.genericInstance and self.mergedInto.contains(typeNameIdOf(arg)) 'itsNestedInstanceMerged'
-				return true
-			end 'itsNestedInstanceMerged'
-		end 'eachArg'
-
-		return false
-	end 'anyArgSubstitutes'
-
-	// The instance `id` denotes after R-1's merge — itself unless it lost one. ONE hop is exact: a survivor is
-	// by construction absent from `mergedInto`, because `rekeyForRangeIdentity` files a loser against the id
-	// that already CLAIMED the key, and a claimant never loses.
-	// Did R-1 merge another instance into this one? Only then can its aliases disagree BECAUSE of the merge.
-	export function instanceIsMergeSurvivor(id GenericInstanceId) returns bool
-		return self.mergeSurvivors.contains(id)
-	end 'instanceIsMergeSurvivor'
-
-	export function liveInstance(id GenericInstanceId) returns GenericInstanceId
-		if self.mergedInto.count() == 0 'nothingMerged'
-			return id
-		end 'nothingMerged'
-
-		return try self.mergedInto.get(id) otherwise id
-	end 'liveInstance'
 
 	// Intern `(baseId, args, fixedSize)`, returning an existing id for a structural repeat. O(1)
 	// amortized via `index`. `fixedSize` defaults to `NoFixedSize` — every base but `Vector` is unsized, so
@@ -8198,7 +8028,7 @@ export typealias GenericAliasEntryArray = Array with GenericAliasEntry
 // heap box it costs is not on any hot path.
 // How many rounds `ProgramSignatures.settleGenericAliasContest`'s fixpoint has taken. Bounded by the
 // declaration count, because a round can only deepen an argument that was still bare and an acyclic
-// declaration graph cannot nest deeper than it has declarations. Its own type rather than `ElementCount`,
+// declaration graph cannot nest deeper than it has declarations. Its own type rather than `ElementIndex`,
 // which counts ELEMENTS of something: a round is not one.
 typealias GenericAliasRoundCount = int(0 to u32.max)
 
@@ -8819,10 +8649,10 @@ typealias NameSeparatorByte = int(0 to 127)
 //
 // An INDEX loop over a byte range, not `for b in name`: this is a per-named-value-coercion hot path, and an
 // index range allocates no iterator object where the collection form might.
-function lastSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementCount
+function lastSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementIndex
 	var found = name.count()
 	for i in 0 upto name.count() 'scan'
-		if (try name.get(i) otherwise panic("lastSeparatorIndex: get OOB despite i < count()")) == separator 'here'
+		if (try name.get(i) otherwise panic("lastSeparatorIndex: get OOB despite i < count()")) == separator as Byte 'here'
 			found = i
 		end 'here'
 	end 'scan'
@@ -8833,9 +8663,9 @@ end 'lastSeparatorIndex'
 // twin, and the one `sourceSpelledAliasName` divides at (see there for why the two ends differ). Written as
 // its own scan rather than derived from the other: an early return is what makes it stop at the first hit,
 // which is the entire difference between them.
-function firstSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementCount
+function firstSeparatorIndex(name ByteArray, separator NameSeparatorByte) returns ElementIndex
 	for i in 0 upto name.count() 'scan'
-		if (try name.get(i) otherwise panic("firstSeparatorIndex: get OOB despite i < count()")) == separator 'here'
+		if (try name.get(i) otherwise panic("firstSeparatorIndex: get OOB despite i < count()")) == separator as Byte 'here'
 			return i
 		end 'here'
 	end 'scan'
@@ -8964,28 +8794,10 @@ export function rangeQualifiedAliasName(name ByteArray, low ParsedInt, high Pars
 	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{low}_{high}".toByteArray()
 end 'rangeQualifiedAliasName'
 
-// ⭐⭐ **A RANGED ALIAS'S TYPE IDENTITY IS ITS RANGE AND NOT ITS NAME (R-1, user ruling 2026-08-22).**
-// `typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to u64.max)` are two spellings of
-// ONE type, so `Array with DenseInt` and `Array with RegCount` must canonicalize to one string. **The alias's
-// own name is therefore ABSENT BY DESIGN** — it is the very thing two such declarations differ in while
-// denoting the same type, which is the whole of what R-1 says.
-//
-// ⚠ **THE UNDERLYING KEYWORD IS PART OF THE KEY, and leaving it out would be a wrong ANSWER rather than a
-// missed merge.** Bounds ride as a RAW 64-bit pattern (`RangedTypeAlias`'s header), so an `int` alias and a
-// `float` alias can hold identical bits; headless, `Array with Ratio` and `Array with Count` would be one
-// type and one of them would be read at the wrong width.
-//
-// It shares `rangeQualifiedAliasName`'s separator and therefore its unspellability in source: no program can
-// declare a type whose name collides with one of these. It is a COMPARISON name — `canonicalTypeArgName`'s
-// arm is its only caller — so nothing emitted carries it.
-export function rangeCanonicalTypeName(underlying MaxonType, low ParsedInt, high ParsedInt) returns ByteArray
-	return "{rangedAliasUnderlyingName(underlying)}{CompilerQualifiedAliasSeparator}{low}_{high}".toByteArray()
-end 'rangeCanonicalTypeName'
-
 // The same range as a reader SEES it -- `int(0 to 255)`, the syntax the source declares it in.
 //
 // ⭐⭐ **TWO SPELLINGS OF ONE RANGE, AND THE SPLIT IS THE SAME ONE `mangleGenericInstance` AND
-// `canonicalNameWithin` HAVE.** `rangeCanonicalTypeName` above is a KEY: it must be unspellable in source,
+// `canonicalNameWithin` HAVE.** `rangeQualifiedAliasName` above is a KEY: it must be unspellable in source,
 // so it wears `CompilerQualifiedAliasSeparator` and is never shown to anyone. This one is DISPLAY: it goes
 // into diagnostics, so it must read like a type and must not carry a separator no author has ever seen.
 // Neither can serve as the other, and a single spelling would have to fail at one of the two jobs.
@@ -9300,10 +9112,6 @@ export enum RecordedReturnTypeRule
 	// DECLARED the function.** See `rewrittenReturnTypeUnder`'s `contestScopedAlias` arm and the two walks
 	// that supply it a file (`recordedReturnDeclFileOf`, and an `OverloadedDecl`'s own).
 	contestScopedAlias
-	// ⭐⭐ **R-1 — a recorded `returns` clause naming a generic instance that MERGED into an earlier one.** The
-	// sweep recorded the gid it interned; `mergeRangeEquivalentInstances` then decided that gid and another
-	// denote one type, and the recorded half cannot rekey itself. See `mergedInstanceReturnOf`.
-	mergedInstance
 	// ⭐⭐ **S2j — SETTLE WHAT A RECORDED RETURN TYPE NAMING A STRUCT BOX IS SPELLED AS: the ONE repair
 	// that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
 	//
@@ -9432,10 +9240,6 @@ export type ProgramSignatures
 	// parse (which fans out per file) only ever reads it.
 	var instanceDisplayNames as InstanceDisplayNameMap
 	var funcReturnAliasNames as FuncReturnAliasNameMap
-	// Instances that MORE THAN ONE alias name claims -- empty until R-1 merges two, and the reason
-	// `instanceDisplayName` cannot always answer with an alias. See `nameInstancesFromDeclarations`.
-	var multiplyAliasedInstances as GenericInstanceIdSet
-	var instanceAliasesByFile as InstanceAliasByFileMap
 	// Which written instantiation each SUBSTITUTED instance came out of — see `SubstitutedInstanceOriginMap`.
 	var substitutedInstanceOrigins as SubstitutedInstanceOriginMap
 	// The reverse of `canonicalInstanceNames` — see `CanonicalInstanceNameIndex` for the quadratic it removes.
@@ -10409,7 +10213,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -11825,7 +11629,7 @@ export type ProgramSignatures
 	// `scopedGenericInstanceOf` is the single mint v1 has three copies of.
 	function declarationViewInstanceOf(declared MaxonType, scopeOwner ByteArray, interner TypeNameInterner, readerFilePath FilePath) returns ScopedGenericInstance
 		if maxonTypeTag(declared) == ValueTypeTag.genericInstance 'writtenOut'
-			return ScopedGenericInstance.instance(typeNameIdOf(declared))
+			return ScopedGenericInstance.instance(genericInstanceIdOf(declared))
 		end 'writtenOut'
 
 		if maxonTypeTag(declared) != ValueTypeTag.named 'spellsNoInstance'
@@ -11865,7 +11669,7 @@ export type ProgramSignatures
 			return false
 		end 'notAFormalParameter'
 
-		let owner = try self.typeParamOwnerOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.namesBufferArgOf: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
+		let owner = try self.typeParamOwnerOf(typeParamIdOf(t)) otherwise panic("ProgramSignatures.namesBufferArgOf: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
 		return owner.position == BufferSurfaceArgPosition and owner.declaringTypeName.equals(self.genericInstanceBaseName(id))
 	end 'namesBufferArgOf'
 
@@ -12112,7 +11916,7 @@ export type ProgramSignatures
 	// owner, the other leaves ownership with the constructed value.
 	function mixTypeParamFeed(state HashDigest, feed TypeParamFeed) returns HashDigest
 		return match feed 'f'
-			feeds(position, sink) gives Hasher.combined(Hasher.combined(Hasher.combined(state, value: FeedShapeFeeds), value: position), value: feedSinkShape(sink))
+			feeds(position, sink) gives Hasher.combined(Hasher.combined(Hasher.combined(state, value: FeedShapeFeeds), value: position as HashDigest), value: feedSinkShape(sink))
 			none gives Hasher.combined(state, value: FeedShapeNone)
 		end 'f'
 	end 'mixTypeParamFeed'
@@ -12626,7 +12430,7 @@ export type ProgramSignatures
 	// defaults the tolerant sweep ABANDONED (a parameter type it could not read), and it is the right one: the
 	// real parse is about to report that declaration with a position of its own.
 	export function paramDefaultsCollide(name ByteArray) returns bool
-		return self.declarationsDisagreeAbout(self.funcParamDefaults.contains(name), disagreeing: self.disagreeingParamDefaults, publishedBy: self.funcDefaultingDeclarationCounts, name: name)
+		return self.declarationsDisagreeAbout(self.funcParamDefaults.contains(name), disagreeing: self.disagreeingParamDefaults as DivergentDeclarationNameSet, publishedBy: self.funcDefaultingDeclarationCounts, name: name)
 	end 'paramDefaultsCollide'
 
 	// ⭐⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT A FACT ONLY SOME OF THEM PUBLISH? — the ONE comparison
@@ -12757,7 +12561,7 @@ export type ProgramSignatures
 	// and its tallies under the key the parser asks with, so both keys have a verdict of their own and the
 	// union collapses to the bool it always was underneath.
 	export function throwsClauseCollide(name ByteArray) returns bool
-		return self.declarationsDisagreeAbout(self.funcThrows.contains(name), disagreeing: self.disagreeingThrows, publishedBy: self.funcThrowingDeclarationCounts, name: name)
+		return self.declarationsDisagreeAbout(self.funcThrows.contains(name), disagreeing: self.disagreeingThrows as DivergentDeclarationNameSet, publishedBy: self.funcThrowingDeclarationCounts, name: name)
 	end 'throwsClauseCollide'
 
 	// Record that this declaration's body can never return — the write plus the hash, for `recordThrows`'
@@ -13077,7 +12881,7 @@ export type ProgramSignatures
 		// mixed, in list order — the witness-slot order depends on that order too.
 		for i in 0 upto layout.whereConstraintCount() 'eachConstraint'
 			let constraint = try layout.whereConstraints.get(i) otherwise panic("ProgramSignatures.recordStruct: whereConstraints.get OOB at {i}")
-			state = mixBytes(Hasher.combined(Hasher.combined(state, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex), bytes: constraint.interfaceName)
+			state = mixBytes(Hasher.combined(Hasher.combined(state, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex as HashDigest), bytes: constraint.interfaceName)
 		end 'eachConstraint'
 		// The `implements` list rides too — see `mixDeclaredConformances`. For a `type` it decides which
 		// INTERFACE EXTENSION methods the type has, so adding or removing a name here adds or removes whole
@@ -13204,7 +13008,7 @@ export type ProgramSignatures
 		// `__ManagedMemory with T` and `Array with T` fold to one `genericInstance`. A separate bit rather than
 		// a second fold, so a declaration that changes only its base's SPELLING still moves the hash.
 		let sizeBits = entry.fixedSize as HashDigest
-		var state = Hasher.combined(Hasher.combined(mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: entry.spellingBits()), value: sizeBits)
+		var state = Hasher.combined(Hasher.combined(mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: entry.spellingBits() as HashDigest), value: sizeBits)
 		for arg in args 'eachHash'
 			state = self.mixType(state, t: arg)
 		end 'eachHash'
@@ -13310,13 +13114,13 @@ export type ProgramSignatures
 		// bare tag check: a token minted by some OTHER declaration fails it rather than subscripting this
 		// interface's list at a position that happens to be in range.
 		if maxonTypeTag(arg) == ValueTypeTag.typeParameter 'maybeAnAssociatedType'
-			if let position = try typeParamPositionIn(typeNameIdOf(arg), declarationName: declaringInterfaceName, paramNames: associatedTypeNames) 'oneOfTheDeclarersOwn'
+			if let position = try typeParamPositionIn(typeParamIdOf(arg), declarationName: declaringInterfaceName, paramNames: associatedTypeNames) 'oneOfTheDeclarersOwn'
 				return self.canonicalArgNameOfSpelling(try boundSpellings.get(position) otherwise panic("substitutedArgName: boundSpellings.get OOB at {position} — it is built parallel to associatedTypeNames, which is the list that position was just read out of"), conformerName: conformerName, conformerTypeParams: conformerTypeParams)
 			end 'oneOfTheDeclarersOwn'
 		end 'maybeAnAssociatedType'
 
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'aNestedInstance'
-			return String.from(self.substitutedInstanceName(typeNameIdOf(arg), associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName))
+			return String.from(self.substitutedInstanceName(genericInstanceIdOf(arg), associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName))
 		end 'aNestedInstance'
 
 		var path = GenericInstanceIdArray.create()
@@ -13431,11 +13235,11 @@ export type ProgramSignatures
 		for field in layout.backingFieldsAt(index) 'eachField'
 			let slotted = Hasher.combined(folded, value: EnumBackingFieldSlot)
 			let labelled = mixBytes(slotted, bytes: field.name)
-			let placed = Hasher.combined(Hasher.combined(labelled, value: field.position), value: field.group)
+			let placed = Hasher.combined(Hasher.combined(labelled, value: field.position as HashDigest), value: field.group as HashDigest)
 			match field.value 'value'
 				// The literal's KIND rides beside its bits: `1` and `1.0` are different declarations that fold
 				// to the same `ParsedInt` (`floatLiteralBits(0.0)` is 0), and they type-check differently.
-				literal(bits, kind) then folded = Hasher.combined(Hasher.combined(placed, value: bits), value: enumBackingLiteralDiscriminator(kind))
+				literal(bits, kind) then folded = Hasher.combined(Hasher.combined(placed, value: bits as HashDigest), value: enumBackingLiteralDiscriminator(kind))
 				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(Hasher.combined(placed, value: EnumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
 				// The nested struct's own NAME, because it is checked against the field's declared type and a
 				// case naming a different one is a different declaration (`enumBackingNamedValueSuitsDomain`).
@@ -13983,8 +13787,8 @@ export type ProgramSignatures
 		_ = self.funcDeclarationCounts.remove(from)
 		self.moveRepeatedDeclarationCount(self.funcDefaultingDeclarationCounts, from: from, to: to)
 		self.moveRepeatedDeclarationCount(self.funcThrowingDeclarationCounts, from: from, to: to)
-		self.moveDivergentDeclarationName(self.disagreeingParamDefaults, from: from, to: to)
-		self.moveDivergentDeclarationName(self.disagreeingThrows, from: from, to: to)
+		self.moveDivergentDeclarationName(self.disagreeingParamDefaults as DivergentDeclarationNameSet, from: from, to: to)
+		self.moveDivergentDeclarationName(self.disagreeingThrows as DivergentDeclarationNameSet, from: from, to: to)
 	end 'moveDeclarationTallies'
 
 	// One tally, moved. Absent is not a failure — it is the sparse convention's "exactly one declaration"
@@ -14258,7 +14062,7 @@ export type ProgramSignatures
 	function mixAliasReturnSlot(state HashDigest, alias FunctionTypeAlias) returns HashDigest
 		let tagged = mixBytes(Hasher.combined(state, value: alias.returnTag.rawValue as HashDigest), bytes: alias.returnTypeName)
 		match aliasSlotIdentity(alias.returnTag, typeParamToken: alias.returnTypeParamToken, genericInstanceId: alias.returnGenericInstanceId, slotName: alias.returnTypeName) 'identity'
-			typeParamToken(token) then return Hasher.combined(tagged, value: token)
+			typeParamToken(token) then return Hasher.combined(tagged, value: token as HashDigest)
 			genericInstance(id) then return self.mixGenericInstance(tagged, id: id)
 			nameOnly then return tagged
 		end 'identity'
@@ -14538,7 +14342,7 @@ export type ProgramSignatures
 			scalar(folded) then return self.settleScalarValue(decl, value: folded)
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
 			arrayLiteral(elements, element) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
-			containerCreate(giid, elements) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid, elements: elements))
+			containerCreate(giid, brand, elements) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid, brand: brand, elements: elements))
 			boxedUnionCase(typeName, caseName) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.boxedUnionValue(typeName, caseName: caseName))
 		end 'kind'
 	end 'settleFoldedValue'
@@ -14807,19 +14611,19 @@ export type ProgramSignatures
 	function resolvedGlobalOf(index TopLevelDeclIndex, into TypeNameInterner) returns TopLevelGlobalLookup
 		let decl = self.declAt(index)
 		match decl.outcome 'state'
-			value(_, tag, typeName) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constantValueTypeOf(tag, typeName: typeName), mutable: decl.mutable)
+			value(_, tag, typeName) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constantValueTypeOf(tag, typeName: typeName), brand: EmptySourceText, mutable: decl.mutable)
 			failed to poisoned then return TopLevelGlobalLookup.notFound
 			// ⭐ A MANAGED `var` (P1.7 slice 2a) reads exactly as a scalar one does — the slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
 			// and a use of the literal it was initialized from are the same type by construction.
-			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath), mutable: decl.mutable)
+			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath), brand: EmptySourceText, mutable: decl.mutable)
 			// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reads as a managed `var` does — a POINTER slot holding the
 			// heap record `__module_init` built. It is the one arm `mutable` can arrive `false` from, and that
 			// bit is the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013.
-			arrayValue(elements, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element, elements: elements), mutable: decl.mutable)
+			arrayValue(elements, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element, elements: elements), brand: EmptySourceText, mutable: decl.mutable)
 			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
 			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
-			containerValue(giid, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
+			containerValue(giid, brand, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), brand: brand, mutable: decl.mutable)
 			// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE reads as a container factory does — a POINTER slot holding
 			// the box `__module_init` built — and its type needs no inference either: the initializer named the
 			// union outright. It is tagged `named(<union>)`, the tag `Parser.emitEnumBox` mints a body's box
@@ -14829,7 +14633,7 @@ export type ProgramSignatures
 			// the adoption trap the note below records, avoided at the source rather than repaired after: a
 			// `named` id minted in the INDEX's interner is meaningless in a file's parse, so nothing here has
 			// an id to hand over wrongly.
-			boxedUnionValue(typeName, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.named(into.intern(typeName)), mutable: decl.mutable)
+			boxedUnionValue(typeName, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.named(into.intern(typeName)), brand: EmptySourceText, mutable: decl.mutable)
 			// ⚠ A `CharacterSet` PRESET was a sixth arm until W129. Its ONE surviving lesson is the ADOPTION the
 			// factory arm below still performs: a `structRef` id is meaningless outside the table that minted it,
 			// and that one was minted in the INDEX's — so handing it to a file's parse unadopted panicked in
@@ -14838,7 +14642,7 @@ export type ProgramSignatures
 			// ⭐ A FACTORY-CALL GLOBAL reads the same way, at the callee's declared RETURN type — a struct
 			// reference for `Database.create(…)`, which is what makes `db.sourceFiles` an ordinary field
 			// load off an ordinary struct pointer.
-			factoryValue(_, _, returnType) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.adoptType(returnType, into: into), mutable: decl.mutable)
+			factoryValue(_, _, returnType) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.adoptType(returnType, into: into), brand: EmptySourceText, mutable: decl.mutable)
 			pending to evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
@@ -15003,7 +14807,7 @@ export type ProgramSignatures
 	function declInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		match decl.outcome 'state'
 			pending to arrayValue then return TopLevelInitializerCall.none
-			containerValue(giid, _) then return self.containerInitializerCall(giid)
+			containerValue(giid, _, _) then return self.containerInitializerCall(giid)
 			factoryValue(calls, _, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(calls))
 			// A BOXED UNION'S PAYLOAD-FREE CASE calls nothing: `__module_init` allocates the box and stores a
 			// tag it already knows, so there is no callee to root and nothing that can print, throw or mutate.
@@ -15161,7 +14965,7 @@ export type ProgramSignatures
 	function appendFoldedArgumentCallee(callees ByteArrayArray, folded ConstFoldedValue)
 		match folded 'value'
 			scalar to arrayLiteral then return
-			containerCreate(giid, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+			containerCreate(giid, _, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
 			// A BOXED UNION'S PAYLOAD-FREE CASE contributes no callee: `__module_init` allocates its box and
 			// stores a tag the fold already knew, so there is no declared body for the reachability walk to
 			// root. It answers with the range above and cannot join it, being appended past the container arm.
@@ -15903,7 +15707,7 @@ export type ProgramSignatures
 			scalar(folded) then panic("ProgramSignatures.foldedValueType: a folded scalar of tag '{typeTagName(folded.tag)}' names no record type — a scalar occupies its slot as a VALUE, and every caller splits the two before asking")
 			managed(_, kind) then return self.managedConstValueType(kind, elementFilePath: elementFilePath)
 			arrayLiteral(elements, element) then return self.constArrayValueType(element, elements: elements)
-			containerCreate(giid, _) then return MaxonType.genericInstance(giid)
+			containerCreate(giid, _, _) then return MaxonType.genericInstance(giid)
 			// A boxed union value IS its box pointer, tagged `named(<union>)` — the same tag
 			// `Parser.emitEnumBox` mints a body's box at, which is what lets `match` recognize this one through
 			// the one `enumMatchFor` door and routes its drop to `__destruct_<U>`.
@@ -15926,8 +15730,8 @@ export type ProgramSignatures
 			// The instance is read off `valueType` — which `foldedValueType` above resolved from this very
 			// element kind — rather than resolved a second time from the kind. One derivation, so the record's
 			// stamps and the slot's type cannot come from two answers to one question.
-			arrayLiteral(elements, _) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: typeNameIdOf(valueType)), valueType: valueType)
-			containerCreate(giid, elements) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: giid), valueType: valueType)
+			arrayLiteral(elements, _) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: genericInstanceIdOf(valueType)), valueType: valueType)
+			containerCreate(giid, _, elements) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: giid), valueType: valueType)
 			boxedUnionCase(typeName, caseName) then return GlobalRecordAndType.create(self.boxedUnionRecordOf(typeName, caseName: caseName), valueType: valueType)
 		end 'folded'
 	end 'globalRecordOf'
@@ -15977,7 +15781,7 @@ export type ProgramSignatures
 			pending to poisoned then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to an outcome that stores no record — every caller filters on the stored-record arms first")
 			managedValue(bytes, kind) then return ConstFoldedValue.managed(bytes, kind: kind)
 			arrayValue(elements, element) then return ConstFoldedValue.arrayLiteral(elements, element: element)
-			containerValue(giid, elements) then return ConstFoldedValue.containerCreate(giid, elements: elements)
+			containerValue(giid, brand, elements) then return ConstFoldedValue.containerCreate(giid, brand: brand, elements: elements)
 			boxedUnionValue(typeName, caseName) then return ConstFoldedValue.boxedUnionCase(typeName, caseName: caseName)
 			factoryValue then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to a factory CALL, which is not a folded value — its record is built by calling user code, not by materializing a constant")
 		end 'o'
@@ -16218,10 +16022,12 @@ export type ProgramSignatures
 			// the slot the emitted `globalAddr` names. Mixing the elements too would be SOUND and WRONG: the
 			// "sound, and useless" key that re-parses the program on every keystroke in any initializer.
 			arrayValue(elements, element) then return mixBytes(self.mixArrayElementKind(Hasher.combined(keyed, value: ConstShapeArrayValue), element: element, enumName: constArrayLiteralEnumName(elements)), bytes: decl.dataLabel)
-			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE AND ITS LABEL** — the array-literal arm's two facts,
-			// with the instance stated outright instead of inferred from an element kind. There are no
-			// elements to leave out.
-			containerValue(giid, _) then return mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
+			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE, ITS BRAND AND ITS LABEL** — the array-literal arm's
+			// facts, with the instance stated outright instead of inferred from an element kind. There are no
+			// elements to leave out. The BRAND rides beside the instance because two aliases spell one
+			// instance and `globalLookup` hands the brand back: a reader's coercion verdict moves when it
+			// changes, so a key that dropped it would serve an answer naming the wrong alias.
+			containerValue(giid, brand, _) then return mixBytes(mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: brand), bytes: decl.dataLabel)
 			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS ROOT CALLEE AND ITS LABEL, AND NOT ITS ARGUMENTS** — the
 			// array-literal arm's rule, applied to the one initializer that calls. Every reader emits
 			// `globalAddr <label>` + `loadIndirect`, byte-identical whichever arguments the call passes, so
@@ -16440,6 +16246,77 @@ export type ProgramSignatures
 		return self.typeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'aliasOf'
 
+	// ⭐⭐ **THE NOMINAL IDENTITY OF THE RANGED TYPEALIAS `name` DENOTES FOR `readerFilePath` — the whole of
+	// what makes a `typealias` a type of its own.** Every `typealias` names its own type, so the identity IS
+	// the name: `Age` and `Year` over one range are two types, and every declaration of one name is that one
+	// type (`RangedAliasRegistry.lookup` already settles which declaration a reader means, and they all
+	// answer to the same name). `EmptySourceText` where the reader means no ranged alias by it.
+	//
+	// ⚠ **THE ANSWER IS SPENT AS AN IDENTITY, NEVER AS A RANGE.** Two declarations of one name may hold two
+	// RANGES; the range is per-file and enforced where the file is known (`InsertRangeChecks`).
+	//
+	// ⚠ Kind-gated for `aliasOf`'s reason, and a name two KINDS hold takes a minted spelling so the alias
+	// half and the nominal half cannot answer to one identity.
+	export function rangedAliasIdentityOf(name ByteArray, readerFilePath FilePath) returns ByteArray
+		// Two declarations of one name over two RANGES are one type under two mints (`Byte` and `Byte$0_100`);
+		// the identity is the name they share, which `sourceSpelledAliasName` recovers from either mint.
+		let spelled = sourceSpelledAliasName(name)
+		if not self.readerMeansKind(spelled, readerFilePath: readerFilePath, kind: TypeDeclKind.rangedAlias) 'thisFileMeansAnotherDeclaration'
+			return EmptySourceText
+		end 'thisFileMeansAnotherDeclaration'
+
+		if self.crossKindContested(spelled) 'twoKindsHoldTheName'
+			return self.typeAliases.crossKindIdentityOf(spelled, readerFilePath: readerFilePath)
+		end 'twoKindsHoldTheName'
+
+		if not self.typeAliases.declaresAlias(spelled) 'noDeclarationAnswersIt'
+			return EmptySourceText
+		end 'noDeclarationAnswersIt'
+
+		return spelled
+	end 'rangedAliasIdentityOf'
+
+	// ⭐ **DOES `identity` NAME A SCALAR WEARING A NAME?** — the reader-less half of the door above, for
+	// `aggregatesConflict`, which is handed two identities and no file. A compiler-minted spelling
+	// (`Byte$0_1000`) un-mints first: the mint qualifies WHICH declaration, never WHAT KIND of thing the
+	// name denotes.
+	//
+	// ⛔ **A NAME TWO KINDS HOLD IS TWO IDENTITIES, AND ONLY THE MINTED ONE IS THE ALIAS.**
+	// `rangedAliasIdentityOf` spells a cross-kind contested alias as its mint, so the BARE name is the
+	// struct's or enum's identity — and a record must not decay: a user `type ParsedInt` beside stdlib's
+	// `typealias ParsedInt` would otherwise admit an `int` at a `Box with ParsedInt`'s `T`, to be stored in
+	// the box and freed as a struct.
+	export function isRangedAliasIdentity(identity ByteArray) returns bool
+		let spelled = sourceSpelledAliasName(identity)
+		if self.crossKindContested(spelled) 'twoKindsHoldTheName'
+			return not identity.equals(spelled)
+		end 'twoKindsHoldTheName'
+
+		return self.typeAliases.declaresAlias(spelled)
+	end 'isRangedAliasIdentity'
+
+	// ⭐⭐ **THE NOMINAL IDENTITY A `named` TYPE NAME CARRIES FOR `readerFilePath`, OR `EmptySourceText`** —
+	// the one door every extractor's `named` arm asks (`Parser.aggregateNameOf`,
+	// `SemanticCheck.aggregateNameFor`, `typeArgAggregateName`), so a signature's stored identity, a live
+	// value's and a type argument's cannot disagree about one name. `named` is overloaded: a declared
+	// struct/union/enum carries its own name, a per-instance alias (`IntWrapper.Idx`) its qualified name, a
+	// plain ranged alias the identity `rangedAliasIdentityOf` spells. A nominal declaration held only for
+	// OTHER files carries no identity in this one (`containsStructFor`'s contest guard), and a base-template
+	// inner alias (`Wrapper.Idx`) is structural.
+	export function namedIdentityOf(name ByteArray, readerFilePath FilePath) returns ByteArray
+		if self.containsStructFor(name, readerFilePath: readerFilePath) or self.containsEnumFor(name, readerFilePath: readerFilePath) 'registeredAggregate'
+			return name
+		end 'registeredAggregate'
+
+		// `containsQualifier` first: `isPerInstanceAlias` boxes a `DeclaredAlias`, and a plain name — the
+		// overwhelming case — is asked at every coercion site.
+		if containsQualifier(name) and self.isPerInstanceAlias(name, readerFilePath: readerFilePath) 'perInstanceAlias'
+			return name
+		end 'perInstanceAlias'
+
+		return self.rangedAliasIdentityOf(name, readerFilePath: readerFilePath)
+	end 'namedIdentityOf'
+
 	// ⭐⭐ **THE RANGED ALIAS `callee`'s FIRST DECLARED PARAMETER NAMES, ANSWERED FROM THIS INDEX'S OWN
 	// TABLES.** The door an ARM-SERVED member's range check asks through
 	// (`Parser.recordArmServedIndexRangeCheck`, which carries the whole argument): shv2 lowers
@@ -16456,7 +16333,7 @@ export type ProgramSignatures
 	// returned the right declaration from the day it was written and the emitted check still came out of the
 	// WRONG one, because `Parser.recordRangedTargetSite` kept only the alias's NAME and `InsertRangeChecks`
 	// re-resolved it against the CALLING file. `stdlib/Array.maxon` and `stdlib/Vector.maxon` EACH declare
-	// both `ElementIndex` and `ElementCount`, and any program may add its own, so "the same name" was never
+	// `ElementIndex`, and any program may add its own, so "the same name" was never
 	// "the same declaration" — and the wrong one won. The site carries the declaring
 	// file now — `RangeCheckSite.aliasFilePath`, which holds the measurement — and a reader arriving here
 	// should take that as the shape of the obligation: **a fact resolved against a scope must travel with
@@ -16543,7 +16420,7 @@ export type ProgramSignatures
 		end 'theReadersOwnDeclarationIsWhatItMeans'
 
 		let readerDirectory = self.moduleDirectoryOf(readerFilePath)
-		var reachable = 0 as ElementCount
+		var reachable = 0 as ElementIndex
 		var scope = EnclosingScope.none
 		for (_, alias) in contested 'countReachable'
 			if not self.candidateIsReachable(alias, readerFilePath: readerFilePath) 'hiddenOrLibrary'
@@ -16614,7 +16491,7 @@ export type ProgramSignatures
 		let claims = try self.crossKindContests.get(name) otherwise panic("ProgramSignatures.crossKindAmbiguousCandidates: '{String.from(name)}' is not cross-kind contested — the caller asks `crossKindContests.contains` first")
 		let readerDirectory = self.moduleDirectoryOf(readerFilePath)
 		let readerPath = readerFilePath.toString()
-		var reachable = 0 as ElementCount
+		var reachable = 0 as ElementIndex
 		var scope = EnclosingScope.none
 		for claim in claims 'countReachable'
 			if claim.declFilePath.toString().equals(readerPath) 'theReadersOwnDeclarationIsWhatItMeans'
@@ -17177,6 +17054,118 @@ export type ProgramSignatures
 	// aggregate check reads. Its prefix must be a generic-instance ALIAS whose base declares the inner alias
 	// named by its member. Keyed on the INSTANCE-ALIAS NAME, not the gid: `WrapperA` and `WrapperB` share one
 	// gid yet are distinct aliases, so `WrapperA.Idx ≠ WrapperB.Idx` — the whole point of the rung.
+	// ⭐⭐ **DO TWO NOMINAL IDENTITIES CONFLICT? — the NAME half of every coercion rule, and the one place the
+	// decay is written.** Two different names always conflict. One name against NONE conflicts too — an
+	// aggregate meeting a scalar is exactly the case a tag check cannot see, because `ValueTypeTag.named` is
+	// overloaded — UNLESS the named side is a SCALAR WEARING A NAME (a ranged typealias, a per-instance
+	// alias), which decays in both directions: a value with no identity of its own fits any alias slot of its
+	// structural class, and a named value fits an unnamed slot. Only two DIFFERENT names conflict.
+	//
+	// ⚠ A `String` or a boxed union reaching an alias slot answers `got.isEmpty()` too, and is refused by the
+	// TAG check every coercion site opens with rather than here, which is where it has always been refused.
+	//
+	// It is shared with `TypeResolution.shapesAgreeUnder`, whose per-position identities are built by the
+	// same extractors: a function shape's parameter and return names are the same kind of answer, so a second
+	// spelling of the rule there is exactly what would let two doors disagree about one pair of names.
+	export function identitiesConflict(expected ByteArray, got ByteArray) returns bool
+		if not namedAggregatesConflict(expected, got: got) 'theTwoIdentitiesAgree'
+			return false
+		end 'theTwoIdentitiesAgree'
+
+		if expected.isEmpty() 'aNamedScalarIntoAnUnnamedSlot'
+			return not self.aliasIdentityDecays(got)
+		end 'aNamedScalarIntoAnUnnamedSlot'
+
+		if got.isEmpty() 'anUnnamedValueIntoANamedScalarSlot'
+			return not self.aliasIdentityDecays(expected)
+		end 'anUnnamedValueIntoANamedScalarSlot'
+
+		return true
+	end 'identitiesConflict'
+
+	// ⭐ **THE GENERIC-INSTANCE ALIAS AT `position` OF INSTANCE `id`, AS THE INSTANTIATION SPELLED IT** — the
+	// brand an element read out of the instance wears, and the brand a value stored into that position must
+	// carry. Read off the RAW argument, which keeps the author's spelling (`canonicalTypeArg` is what
+	// resolves it to the instance it names); an argument spelled inline (`Array with (Array with Integer)`)
+	// or by anything but a generic alias brands nothing.
+	export function instanceArgBrand(id GenericInstanceId, position TypeParamPosition) returns ByteArray
+		let raw = self.substitutedInstanceArg(id, position: position)
+		if maxonTypeTag(raw) != ValueTypeTag.named 'spelledInlineOrByAPrimitive'
+			return EmptySourceText
+		end 'spelledInlineOrByAPrimitive'
+
+		return self.instanceBrandOfSpelling(self.nameOfId(typeNameIdOf(raw)))
+	end 'instanceArgBrand'
+
+	// The instance a requirement's rendered parameter type denotes, as the identity `canonicalInstanceName`
+	// spells: a generic alias resolves through the registry, and any other rendering is already the mint.
+	export function instanceIdentityOfSpelling(spelling ByteArray) returns ByteArray
+		let gid = try self.genericAliases.get(spelling) otherwise return spelling
+		return self.canonicalInstanceName(gid)
+	end 'instanceIdentityOfSpelling'
+
+	// ⭐ **HOW A BRAND IS QUOTED.** The author's spelling, unless that spelling is CONTESTED — two files
+	// declaring one alias name over two instances — in which case the instance's own display name carries the
+	// namespace or file that tells the two apart (`unambiguousAliasSpelling`), exactly as every other
+	// diagnostic quotes a contested alias.
+	export function brandDisplayName(brand ByteArray, gid GenericInstanceId) returns ByteArray
+		if self.contestedGenericAliases.contains(brand) 'twoFilesDeclareThisName'
+			return self.instanceDisplayName(gid)
+		end 'twoFilesDeclareThisName'
+
+		return brand
+	end 'brandDisplayName'
+
+	// The brand a spelled type argument or requirement parameter carries — the spelling itself when it is a
+	// FILE-SCOPE generic alias, nothing for an instance mint, an inner alias (qualified in this registry — see
+	// `Parser.brandOfSpelling` for why it brands nothing) or any other type.
+	// ⚠ **A CONTESTED ALIAS IS NOT BRANDED, and that is not a gap.** Two files declaring one name over two
+	// instances are split into DISTINCT gids by N2 (`fileScopedInstance`), so the gid tells them apart on its
+	// own; a brand would only add a spelling whose display is a per-file question this file-less door cannot
+	// answer (`unambiguousAliasSpelling` would path-qualify it). The instance display renders the value.
+	export function instanceBrandOfSpelling(spelling ByteArray) returns ByteArray
+		if containsQualifier(spelling) or bytesStartWith(spelling, prefix: ReservedTypeNamePrefix) or self.contestedGenericAliases.contains(spelling) 'notAPlainBrand'
+			return EmptySourceText
+		end 'notAPlainBrand'
+
+		return spelling if self.genericAliases.contains(spelling) else EmptySourceText
+	end 'instanceBrandOfSpelling'
+
+	// ⭐ **DO TWO FUNCTION-TYPE NAMES CARRY DIFFERENT BRANDS?** — the function twin of `identitiesConflict`,
+	// asked only once two SHAPES have agreed. A declared function typealias is its own type, so `Handler`
+	// never stands where a `Callback` is declared; an anonymous shape — a closure literal's inferred type, a
+	// declared function's own signature — carries no brand and fits any alias of its shape.
+	export function functionBrandsConflict(declaredName ByteArray, gotName ByteArray) returns bool
+		return not declaredName.equals(gotName) and self.functionTypeAliases.contains(declaredName) and self.functionTypeAliases.contains(gotName)
+	end 'functionBrandsConflict'
+
+	// ⭐ **IS A CONFLICT BETWEEN THESE TWO IDENTITIES ONE THAT `as` CONVERTS BY NAME ALONE?** — two scalars
+	// each wearing a name (a ranged typealias, a per-instance alias), which is the whole of what a `return`
+	// converts implicitly (`Parser.admitReturnedAggregate`). A struct, a boxed union or an instance mint
+	// wears no such name, so a conflict with either side a record answers `false` and keeps its refusal.
+	export function conflictIsBetweenNamedScalars(expected ByteArray, got ByteArray) returns bool
+		return self.aliasIdentityDecays(expected) and self.aliasIdentityDecays(got)
+	end 'conflictIsBetweenNamedScalars'
+
+	// ⭐ Is `identity` a PAYLOAD-FREE enum — one whose value is a bare i64 tag rather than a heap box? Read
+	// over `enumTypes` directly rather than through `enumOf`, which boxes a `DeclaredEnum`: this is asked at
+	// every coercion site whose two identities disagree.
+	function isPayloadFreeEnumIdentity(identity ByteArray) returns bool
+		let layout = try self.enumTypes.get(identity) otherwise return false
+		return not layout.isBoxed()
+	end 'isPayloadFreeEnumIdentity'
+
+	// ⭐⭐ **IS `identity` A SCALAR WEARING A NAME?** — a ranged typealias or a per-instance alias. Both are
+	// integers whose only nominal content is the name, so both DECAY in either direction against a value
+	// that carries no identity; the two boundary admits below are about RECORDS, which is why this question
+	// is separate from them and asked first.
+	//
+	// ⚠ **THE STRANGER'S FILE (N3)** for the per-instance half — this authority is handed two NAMES and no
+	// position, so a per-instance prefix two files declare over different bases has no reader to choose by.
+	function aliasIdentityDecays(identity ByteArray) returns bool
+		return self.isRangedAliasIdentity(identity) or self.isPerInstanceAlias(identity, readerFilePath: CompilerOwnedDeclFilePath)
+	end 'aliasIdentityDecays'
+
 	export function isPerInstanceAlias(name ByteArray, readerFilePath FilePath) returns bool
 		return match self.perInstanceAliasOf(name, readerFilePath: readerFilePath) 'p'
 			declared gives true
@@ -17222,10 +17211,10 @@ export type ProgramSignatures
 	// SemanticCheck's three (a call argument, an overload candidate's score, a generic call's type-parameter
 	// argument), so they cannot come to disagree about when a value may cross.
 	//
-	// It answers TWO questions in the order a coercion asks them, and each has its own measured wrong answer
-	// below: does a value with no nominal identity DECAY into the place (P1.6-C), and — when the two
-	// identities genuinely differ — is this the one pair of DIFFERENT names that denotes ONE record
-	// (`byteBufferBoundaryAdmits`, R4.7)?
+	// It answers THREE questions in the order a coercion asks them, and each has its own measured wrong
+	// answer below: do the two NOMINAL IDENTITIES agree, decay included (`identitiesConflict`); is the value
+	// a payload-free enum's raw tag reaching an alias slot; and — when the two identities genuinely differ —
+	// is this the one pair of DIFFERENT names that denotes ONE record (`byteBufferBoundaryAdmits`, R4.7)?
 	//
 	// ⭐ **`expected` IS THE SIDE WHOSE DECLARATION DECIDES**, which is not always a `declare`d type: the
 	// binding's declared type, the function's declared return, the parameter, the instance's type argument —
@@ -17237,26 +17226,22 @@ export type ProgramSignatures
 	// per interner, so this index cannot re-derive it — but the pair it needs is interner-independent, since
 	// a `genericInstance` carries a whole-program `GenericInstanceId` in all three.
 	//
-	// A per-instance `Idx` is a NOMINAL wrapper over a SCALAR int, so it DECAYS to plain int wherever a
-	// value with NO nominal identity of its own is expected — exactly as a per-instance argument into a
-	// plain-numeric parameter decays. `expected.isEmpty()` IS that condition: an empty aggregate name is this
-	// file's one spelling of "carries no nominal identity" (`aggregateNameOf`, `aggregateNameFor` and
-	// `typeArgAggregateName` all answer it for a scalar, a `String` and a ranged alias). There is nothing
-	// for an `Idx` to decay INTO when the target is a struct, a boxed union/enum or a generic instance, so
-	// against a NAMED target the conflict stands and `namedAggregatesConflict` reports it.
+	// ⭐⭐ **A SCALAR WEARING A NAME DECAYS IN BOTH DIRECTIONS, AND THAT IS THE WHOLE OF THE DECAY RULE.** A
+	// ranged typealias and a per-instance `Idx` are integers whose only nominal content is the name, so a
+	// value carrying NO identity fits either slot and a value carrying one fits an unnamed slot; only two
+	// DIFFERENT names conflict. `identitiesConflict` holds that rule, because a function SHAPE's per-position
+	// identities are the same kind of answer and must decay the same way.
 	//
-	// ⚠ **THE DECAY USED TO BE SPELLED "the target is not ITSELF a per-instance alias", AND THAT WAS A
-	// REACHABLE WILD FREE.** It let an `Idx` — an int — decay into every named aggregate as well as into a
-	// scalar. The safety argument written here was that "a struct value into a plain-numeric target is caught
-	// by the TAG check that runs BEFORE every one of these sites", and that premise is a SECOND fact, held at
-	// six call sites, that nothing made agree with this one. It is FALSE at the sixth:
-	// `SemanticCheck.checkTypeParameterArgsAt` compares against `substitutedInstanceArg`, which returns the
-	// type argument AS INTERNED — a struct spelled by name is a `named` LEAF, never `structRef` — so its tag
-	// check is `checkDeclaredType(named, named)`, which AGREES. `Wrapper with Integer`'s `Idx` therefore
-	// passed into a `Box with Leaf`'s `T` formal, was stored in the box's `T` field, and was freed by
-	// `__destruct_Box_Leaf` as a `Leaf`: a wild free on the integer's value (MEASURED: exit 0xC0000005).
-	// Deciding it from `expected` alone needs no premise held anywhere else.
-	export function aggregatesConflict(expected ByteArray, expectedTag ValueTypeTag, expectedNameId TypeNameId, got ByteArray, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
+	// ⚠ **THERE IS NOTHING FOR EITHER TO DECAY INTO WHEN THE OTHER SIDE IS A RECORD** — a struct, a boxed
+	// union/enum, a generic instance — so against a named AGGREGATE the conflict stands. `aliasIdentityDecays`
+	// is what separates the two groups, and deciding it from the names alone needs no premise held elsewhere.
+	//
+	// ⛔ **AN `Idx` — AN INT — MUST NOT DECAY INTO A NAMED AGGREGATE, AND THE TAG CHECK AHEAD OF THIS DOOR
+	// DOES NOT CATCH IT.** `SemanticCheck.checkTypeParameterArgsAt` compares against `substitutedInstanceArg`,
+	// which returns the type argument AS INTERNED — a struct spelled by name is a `named` LEAF, never
+	// `structRef` — so its tag check is `checkDeclaredType(named, named)`, which AGREES; only the identity
+	// rule stands between an `Idx` and a `Box with Leaf`'s `T` field, where it would be freed as a `Leaf`.
+	export function aggregatesConflict(expected ByteArray, expectedTag ValueTypeTag, expectedNameId TypeNameId, expectedBrand ByteArray, got ByteArray, gotTag ValueTypeTag, gotNameId TypeNameId, gotBrand ByteArray) returns bool
 		// `not self.isPerInstanceAlias(expected)` is not spelled: an EMPTY name can never be one
 		// (`splitQualifiedName` answers `notQualified`), and a redundant clause is a fact stated twice.
 		// ⚠ **THE STRANGER'S FILE (N3)** — this authority is asked from eight coercion sites, five of them in the
@@ -17265,13 +17250,18 @@ export type ProgramSignatures
 		// by, and `CompilerOwnedDeclFilePath` is this file's one spelling of that: resolve as a file declaring
 		// none of it would. It decides a BOOL — whether `got` carries a nominal identity that decays — and both
 		// declarations answer it alike unless their bases differ AND only one declares the member.
-		if expected.isEmpty() and not got.isEmpty() and self.isPerInstanceAlias(got, readerFilePath: CompilerOwnedDeclFilePath) 'perInstanceDecays'
-			return false
-		end 'perInstanceDecays'
-
-		if not namedAggregatesConflict(expected, got: got) 'theTwoIdentitiesAgree'
-			return false
+		if not self.identitiesConflict(expected, got: got) 'theTwoIdentitiesAgree'
+			return brandsConflict(expectedBrand, got: gotBrand)
 		end 'theTwoIdentitiesAgree'
+
+		// ⭐ **A PAYLOAD-FREE `enum`'s VALUE *IS* ITS RAW i64 TAG**, so it decays into an alias slot exactly as
+		// an unnamed integer does. ONE-WAY, and deliberately: an integer standing where an `enum` is declared
+		// would be a case index nothing produced, so a bare `Narrow` at a `Level` place stays refused — and two
+		// different enums stay refused whichever way they meet. It is a VALUE coercion rule, which is why it
+		// lives here and not in the name-only `identitiesConflict` two function-SHAPES also compare through.
+		if self.aliasIdentityDecays(expected) and self.isPayloadFreeEnumIdentity(got) 'anEnumsRawValueIntoAnAliasSlot'
+			return false
+		end 'anEnumsRawValueIntoAnAliasSlot'
 
 		// Asked only once the names have already disagreed, so every value that crosses every coercion site
 		// in a compiling program pays nothing for it. TWO boundaries answer here, and they are disjoint by
@@ -17978,7 +17968,7 @@ export type ProgramSignatures
 	// a row handed to `upsert` and kept as a local is two owners of one buffer: the very next `set` forks it,
 	// and the map keeps the row as it was. MEASURED — the holding was recorded, `associatedTypeHeldAt` found
 	// the row, and every position in it was still empty.
-	function recordAssociatedTypeHolding(interfaceName ByteArray, associatedCount ElementCount, position ElementCount, heldAt ByteArray)
+	function recordAssociatedTypeHolding(interfaceName ByteArray, associatedCount ElementIndex, position ElementIndex, heldAt ByteArray)
 		var row = self.associatedTypeHoldingRow(interfaceName, associatedCount: associatedCount)
 		if not (try row.get(position) otherwise panic("recordAssociatedTypeHolding: row.get OOB at {position} below width {row.count()} — the row is allocated at the interface's associated-type count and the caller bounds `position` by it")).isEmpty() 'alreadySettled'
 			return
@@ -17991,7 +17981,7 @@ export type ProgramSignatures
 	// This interface's row, or a fresh one at its full associated-type WIDTH — see
 	// `AssociatedTypeHoldingMap` for why the row is wide rather than dense, and `recordAssociatedTypeHolding`
 	// for why a fresh row is NOT filed here.
-	function associatedTypeHoldingRow(interfaceName ByteArray, associatedCount ElementCount) returns ByteArrayArray
+	function associatedTypeHoldingRow(interfaceName ByteArray, associatedCount ElementIndex) returns ByteArrayArray
 		if let existing = try self.associatedTypeHoldings.get(interfaceName) 'alreadyHoldsSomething'
 			return existing
 		end 'alreadyHoldsSomething'
@@ -18043,7 +18033,7 @@ export type ProgramSignatures
 	// warns about.
 	function heldArgOf(arg MaxonType) returns HeldAssociatedArg throws MapError
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'anInstanceOverSomeBase'
-			let held = typeNameIdOf(arg)
+			let held = genericInstanceIdOf(arg)
 			if maxonTypeTag(self.instanceDenotedType(held, into: self.typeNames)) != ValueTypeTag.interfaceRef 'aStructInstance'
 				throw MapError.keyNotFound
 			end 'aStructInstance'
@@ -18081,7 +18071,7 @@ export type ProgramSignatures
 	// The interface `interfaceName`'s associated type at `position` is held at; `MapError.keyNotFound` when
 	// that position is held at nothing, which is every position of every interface in a program that does not
 	// write an interface as a `with` argument.
-	export function associatedTypeHeldAt(interfaceName ByteArray, position ElementCount) returns ByteArray throws MapError
+	export function associatedTypeHeldAt(interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
 		let row = try self.associatedTypeHoldings.get(interfaceName)
 		if position >= row.count() 'pastThisInterfacesPositions'
 			throw MapError.keyNotFound
@@ -18107,7 +18097,7 @@ export type ProgramSignatures
 	// It is NOT `interfaceHoldsAnAssociatedType` with a position bolted on: that one asks whether the interface
 	// holds ANY position (the gate on the witness table's whole associated-slot block), and answering it for one
 	// position would skip every position of an interface that holds a DIFFERENT one.
-	export function associatedTypeIsHeldAt(interfaceName ByteArray, position ElementCount) returns bool
+	export function associatedTypeIsHeldAt(interfaceName ByteArray, position ElementIndex) returns bool
 		let row = try self.associatedTypeHoldings.get(interfaceName) otherwise return false
 		if position >= row.count() 'pastThisInterfacesPositions'
 			return false
@@ -18163,11 +18153,11 @@ export type ProgramSignatures
 	export function instanceArgDisplayName(gid GenericInstanceId, position TypeParamPosition) returns ByteArray
 		let arg = self.substitutedInstanceArg(gid, position: position)
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'nestedInstance'
-			return self.instanceDisplayName(typeNameIdOf(arg))
+			return self.instanceDisplayName(genericInstanceIdOf(arg))
 		end 'nestedInstance'
 
 		if maxonTypeTag(arg) == ValueTypeTag.typeParameter 'opaqueParam'
-			let owner = try self.typeParamOwnerOf(typeNameIdOf(arg)) otherwise panic("ProgramSignatures.instanceArgDisplayName: type-parameter token {typeNameIdOf(arg)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
+			let owner = try self.typeParamOwnerOf(typeParamIdOf(arg)) otherwise panic("ProgramSignatures.instanceArgDisplayName: type-parameter token {typeNameIdOf(arg)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
 			return owner.paramName
 		end 'opaqueParam'
 
@@ -18459,7 +18449,7 @@ export type ProgramSignatures
 	// with nothing tying the two; this check is what keeps that from being repeated here.
 	function managedFileLayout() returns StructLayout
 		var layout = StructLayout.createCompilerOwned(ManagedFileTypeName)
-		layout.addField(ManagedFileHandleFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		layout.addField(ManagedFileHandleFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
 
 		if layout.offsetOfField(ManagedFileHandleFieldIndex) != ManagedFileHandleOffset 'offsetDrift'
 			panic("managedFileLayout: the struct layout puts `_handle` at {layout.offsetOfField(ManagedFileHandleFieldIndex)} but the runtime reads it at {ManagedFileHandleOffset} — the front end's shape and the runtime's field access have drifted")
@@ -18498,7 +18488,7 @@ export type ProgramSignatures
 	// shape and its `__mm_alloc` from becoming a fourth combination.
 	function managedDirectoryLayout() returns StructLayout
 		var layout = StructLayout.createCompilerOwned(ManagedDirectoryTypeName)
-		layout.addField(ManagedDirectoryBlockFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		layout.addField(ManagedDirectoryBlockFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
 
 		if layout.offsetOfField(ManagedDirectoryBlockFieldIndex) != ManagedDirectoryBlockOffset 'offsetDrift'
 			panic("managedDirectoryLayout: the struct layout puts `_block` at {layout.offsetOfField(ManagedDirectoryBlockFieldIndex)} but the runtime reads it at {ManagedDirectoryBlockOffset} — the front end's shape and the runtime's field access have drifted")
@@ -18533,7 +18523,7 @@ export type ProgramSignatures
 	// drifts.
 	function managedSocketLayout() returns StructLayout
 		var layout = StructLayout.createCompilerOwned(ManagedSocketTypeName)
-		layout.addField(ManagedSocketHandleFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+		layout.addField(ManagedSocketHandleFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
 
 		if layout.offsetOfField(ManagedSocketHandleFieldIndex) != ManagedSocketHandleOffset 'offsetDrift'
 			panic("managedSocketLayout: the struct layout puts `_handle` at {layout.offsetOfField(ManagedSocketHandleFieldIndex)} but the runtime reads it at {ManagedSocketHandleOffset} — the front end's shape and the runtime's field access have drifted")
@@ -19627,7 +19617,7 @@ export type ProgramSignatures
 		for i in 0 upto paramNames.count() 'eachArg'
 			let arg = try args.get(i) otherwise panic("ProgramSignatures.instanceIsDeclarationSelf: instanceArgs.get OOB at {i} — the count was just compared")
 			let paramName = try paramNames.get(i) otherwise panic("ProgramSignatures.instanceIsDeclarationSelf: paramNames.get OOB at {i} — the count was just compared")
-			if maxonTypeTag(arg) != ValueTypeTag.typeParameter or typeNameIdOf(arg) != typeParamTokenFor(declarationName, paramName: paramName) 'notItsOwnParameter'
+			if maxonTypeTag(arg) != ValueTypeTag.typeParameter or typeNameIdOf(arg) != typeParamTokenFor(declarationName, paramName: paramName) as TypeNameId 'notItsOwnParameter'
 				return false
 			end 'notItsOwnParameter'
 		end 'eachArg'
@@ -19734,7 +19724,7 @@ export type ProgramSignatures
 	// doors — each free to drift from the others, and a site that dropped the tag half would look exactly
 	// like the six that kept it. One home, so "remembering" is not a thing a caller can fail to do.
 	export function isArrayInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isArrayInstance(nameId)
+		return tag == ValueTypeTag.genericInstance and self.isArrayInstance(nameId as GenericInstanceId)
 	end 'isArrayInstanceAt'
 
 	// The element TYPE of a ONE-ARGUMENT container instance — `Array with T` or `List with T` — its sole type
@@ -20080,7 +20070,7 @@ export type ProgramSignatures
 		end 'theParameterItself'
 
 		if tag == ValueTypeTag.genericInstance 'nestedInstance'
-			return self.instanceMentionsTypeParameter(typeNameIdOf(t))
+			return self.instanceMentionsTypeParameter(genericInstanceIdOf(t))
 		end 'nestedInstance'
 
 		return false
@@ -20107,7 +20097,7 @@ export type ProgramSignatures
 	// ⛔ **DO NOT READ THE DELETION AS PERMISSION TO NAME `isMapInstanceAt`** — this header cited it as a live
 	// callee until the W105 review struck the reference. It does not exist.
 	export function isMapShapedInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.genericInstanceBaseName(nameId).equals(MapBuiltinBaseName)
+		return tag == ValueTypeTag.genericInstance and self.genericInstanceBaseName(nameId as GenericInstanceId).equals(MapBuiltinBaseName)
 	end 'isMapShapedInstanceAt'
 
 	// The KEY type of `Map with (K, V)` — type argument 0, the one the probe hashes and compares.
@@ -20152,7 +20142,7 @@ export type ProgramSignatures
 	// can answer TRUE about an instance the caller never had. Its caller is the receiver dispatch, which
 	// holds a value's (tag, nameId) pair.
 	export function isManagedListInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isManagedListInstance(nameId)
+		return tag == ValueTypeTag.genericInstance and self.isManagedListInstance(nameId as GenericInstanceId)
 	end 'isManagedListInstanceAt'
 
 	// ⭐⭐ **`isChainInstance` STOOD HERE AND WENT WITH THE `List` SURFACE (W153).** It read
@@ -20180,7 +20170,7 @@ export type ProgramSignatures
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A NODE HANDLE?** — the receiver dispatch's door, and the (tag, id)
 	// form for `isListInstanceAt`'s reason.
 	export function isManagedListNodeInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isManagedListNodeInstance(nameId)
+		return tag == ValueTypeTag.genericInstance and self.isManagedListNodeInstance(nameId as GenericInstanceId)
 	end 'isManagedListNodeInstanceAt'
 
 	// ⭐ **THE NODE-HANDLE INSTANCE FOR A MANAGED LIST'S ELEMENT** — what an insertion's result is typed
@@ -20206,7 +20196,7 @@ export type ProgramSignatures
 	// for `isListInstanceAt`'s measured reason: a `TypeNameId` and a `GenericInstanceId` share one numeric
 	// space, so the id alone can answer TRUE about an instance the caller never had.
 	export function isManagedMemoryCursorInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isManagedMemoryCursorInstance(nameId)
+		return tag == ValueTypeTag.genericInstance and self.isManagedMemoryCursorInstance(nameId as GenericInstanceId)
 	end 'isManagedMemoryCursorInstanceAt'
 
 	// ⭐ **THE CURSOR INSTANCE FOR A BUFFER'S ELEMENT** — what `createCursor()`'s result is typed with.
@@ -20293,7 +20283,7 @@ export type ProgramSignatures
 	// caller never had. Both callers (the receiver dispatch and the `for … in` source test) hold a value's
 	// (tag, nameId) pair, which is exactly the shape that hazard bites.
 	export function isVectorInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isVectorInstance(nameId)
+		return tag == ValueTypeTag.genericInstance and self.isVectorInstance(nameId as GenericInstanceId)
 	end 'isVectorInstanceAt'
 
 	// ⭐ **HOW MANY ELEMENTS INSTANCE `id` HOLDS** — the second coordinate of a sized instance's identity, and
@@ -20319,7 +20309,7 @@ export type ProgramSignatures
 	// `GenericInstanceId` share one numeric space, so the id half alone can answer about an instance the
 	// caller never had.
 	export function valueStatesItsOwnElementCount(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.genericInstanceFixedSize(nameId) != NoFixedSize
+		return tag == ValueTypeTag.genericInstance and self.genericInstanceFixedSize(nameId as GenericInstanceId) != NoFixedSize
 	end 'valueStatesItsOwnElementCount'
 
 	// The `Vector with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`, and the one
@@ -20432,7 +20422,7 @@ export type ProgramSignatures
 			return false
 		end 'notOpaque'
 
-		return self.anyInstanceTypeArgHasKind(typeNameIdOf(element), kind: TypeArgInstantiationKind.managedElement)
+		return self.anyInstanceTypeArgHasKind(typeParamIdOf(element), kind: TypeArgInstantiationKind.managedElement)
 	end 'containerOpaqueElementCanBeManaged'
 
 	// ⭐⭐ **IS THIS COLUMN'S ELEMENT A RECORD WHOSE RELEASE IS A FACT ABOUT AN INSTANTIATION THE SHARED BODY
@@ -20469,7 +20459,7 @@ export type ProgramSignatures
 		// here travels with no reader path.
 		let tag = maxonTypeTag(columnType)
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceRestsAnUnnameableSlot(typeNameIdOf(columnType))
+			return self.instanceRestsAnUnnameableSlot(genericInstanceIdOf(columnType))
 		end 'anInstance'
 		if tag != ValueTypeTag.named 'namesNoInstance'
 			return false
@@ -20690,11 +20680,11 @@ export type ProgramSignatures
 	// concrete leaf whose drop the create site resolves for itself.
 	function slotOwnsASlotOfKind(slot MaxonType, kind TypeArgInstantiationKind, visited ClonerSet) returns bool
 		if self.slotTypeIsOpaque(slot) 'aBareParameterSlot'
-			return self.anyInstanceTypeArgHasKind(typeNameIdOf(slot), kind: kind)
+			return self.anyInstanceTypeArgHasKind(typeParamIdOf(slot), kind: kind)
 		end 'aBareParameterSlot'
 
 		if maxonTypeTag(slot) == ValueTypeTag.genericInstance and kindWalksNestedInstances(kind) 'aNestedInstance'
-			return self.instanceOwnsASlotOfKind(typeNameIdOf(slot), kind: kind, visited: visited)
+			return self.instanceOwnsASlotOfKind(genericInstanceIdOf(slot), kind: kind, visited: visited)
 		end 'aNestedInstance'
 
 		return false
@@ -20873,7 +20863,7 @@ export type ProgramSignatures
 	//
 	// The (tag, id) pair is asked through `isArrayInstanceAt`, which is where the tag half's reason lives.
 	export function isBytePackedArrayInstance(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return self.isArrayInstanceAt(tag, nameId: nameId) and self.arrayElementSize(nameId) == ByteStringElementSize
+		return self.isArrayInstanceAt(tag, nameId: nameId) and self.arrayElementSize(nameId as GenericInstanceId) == ByteStringElementSize
 	end 'isBytePackedArrayInstance'
 
 	// ⭐ **WHAT AN `Array` INSTANCE CALLS ITS ELEMENT, when the element is a `named` LEAF** — `EmptySourceText`
@@ -20892,7 +20882,7 @@ export type ProgramSignatures
 			return EmptySourceText
 		end 'notAnArrayInstance'
 
-		let element = self.containerElementType(nameId)
+		let element = self.containerElementType(nameId as GenericInstanceId)
 		if maxonTypeTag(element) != ValueTypeTag.named 'notANamedElement'
 			return EmptySourceText
 		end 'notANamedElement'
@@ -21077,13 +21067,13 @@ export type ProgramSignatures
 	// crossings, beside the two refusals that show the MEMBER surfaces staying apart.
 	function inferredIntColumnBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		if self.isArrayInstanceAt(gotTag, nameId: gotNameId) and self.isArrayInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreArrayInstances'
-			return self.columnsDenoteOneSlot(self.containerElementType(declaredNameId), gotColumn: self.containerElementType(gotNameId))
+			return self.columnsDenoteOneSlot(self.containerElementType(declaredNameId as GenericInstanceId), gotColumn: self.containerElementType(gotNameId as GenericInstanceId))
 		end 'bothAreArrayInstances'
 
 		// The SHAPE predicate, not the runtime one: this arm is about a container having two columns, which is
 		// true of the corpus `Map` exactly as it was of the synthesized one. See `isMapShapedInstanceAt`.
 		if self.isMapShapedInstanceAt(gotTag, nameId: gotNameId) and self.isMapShapedInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreMapInstances'
-			return self.columnsDenoteOneSlot(self.mapKeyType(declaredNameId), gotColumn: self.mapKeyType(gotNameId)) and self.columnsDenoteOneSlot(self.mapValueType(declaredNameId), gotColumn: self.mapValueType(gotNameId))
+			return self.columnsDenoteOneSlot(self.mapKeyType(declaredNameId as GenericInstanceId), gotColumn: self.mapKeyType(gotNameId as GenericInstanceId)) and self.columnsDenoteOneSlot(self.mapValueType(declaredNameId as GenericInstanceId), gotColumn: self.mapValueType(gotNameId as GenericInstanceId))
 		end 'bothAreMapInstances'
 
 		return false
@@ -21120,20 +21110,13 @@ export type ProgramSignatures
 	// the one a `b"…"` literal minted for itself — so what they hold is the COMPILER's to state, and a
 	// compiler-minted byte is a whole byte. Every other roster name reaching here IS declared, and its own
 	// declarations answer.
-	// IS THE DECLARED ELEMENT A BYTE ELEMENT? -- asked of its RANGE and, since R-1, deliberately not of its
-	// SPELLING.
+	// IS THE DECLARED ELEMENT A BYTE ELEMENT? -- asked of its RANGE, deliberately not of its SPELLING.
 	//
-	// It was two questions: `isByteElementName` (is it spelled `Byte` or `__ManagedByte`?) and then
-	// `holdsEveryByteInEveryFile` (does every declaration of that name hold every byte value?). The pair was
-	// sound only while an instance's recorded element name was a fact about the program. R-1 ended that: two
-	// ranged aliases over one range are ONE instance, and the surviving instance keeps whichever of the
-	// equivalent spellings the program named FIRST. MEASURED with the name test still in front: a spec
-	// declaring `typealias ByteVal = int(0 to u8.max)` merged with the stdlib's byte arrays, the survivor
-	// carried a spelling that is not `Byte`, and `stdlib/String.maxon:188` stopped compiling -- three cases.
-	//
-	// The range is the property the door actually needs, it is identical across every alias R-1 merges, and
-	// it SUBSUMES the name test rather than dropping it: the old second question answered `true` for a name
-	// that is no ranged alias at all, so only the name test was bounding the door. Asked as one question with
+	// The byte boundary is about what a slot can HOLD: a one-byte stride whose every value is a byte value.
+	// `typealias ByteVal = int(0 to u8.max)` strides and holds exactly as `Byte` does, and the synthesized
+	// buffer behind a `String` must reach either. The range answers that for every spelling at once, and it
+	// SUBSUMES a name test rather than dropping one: a name test answers `true` for a name that is no ranged
+	// alias at all, so only a range can bound the door. Asked as one question with
 	// no `otherwise true`, a non-alias element is refused where before it depended on being spelled `Byte`.
 	//
 	// The compiler's own mint is admitted by name because it IS a name and not a declaration: nothing
@@ -21213,14 +21196,14 @@ export type ProgramSignatures
 		// identical giid — and was subsumed here at the merge rather than kept beside this one, because two
 		// spellings of one rule is precisely what this rung exists to remove.
 		if self.containerElementIsManaged(receiverGiid) or self.containerElementIsOpaque(receiverGiid) 'receiverCopiesThroughItsOwnElement'
-			return argNameId == receiverGiid
+			return argNameId == receiverGiid as TypeNameId
 		end 'receiverCopiesThroughItsOwnElement'
 
-		if not self.sameTrivialArrayShape(receiverGiid, otherGiid: argNameId) 'noSharedRepresentation'
+		if not self.sameTrivialArrayShape(receiverGiid, otherGiid: argNameId as GenericInstanceId) 'noSharedRepresentation'
 			return false
 		end 'noSharedRepresentation'
 
-		return self.trivialElementAdmitsEveryValueOf(receiverGiid, sourceGiid: argNameId, readerFilePath: readerFilePath)
+		return self.trivialElementAdmitsEveryValueOf(receiverGiid, sourceGiid: argNameId as GenericInstanceId, readerFilePath: readerFilePath)
 	end 'arrayAppendArgAdmits'
 
 	// Do two array instances hold TRIVIAL elements of the same storage width — the REPRESENTATION half of
@@ -21238,6 +21221,15 @@ export type ProgramSignatures
 			return true
 		end 'oneInstanceIsOneElement'
 
+		// ⭐ **TWO ELEMENTS THE AUTHOR NAMED ARE TWO TYPES, AND THE VALUE DOMAIN IS NOT ASKED OF THEM.** `Bytes`
+		// does not append into `Smalls` however the two ranges nest: `Byte` and `Small` are two types. What
+		// the domain test still admits is a side NOBODY named — the compiler's own `int` inference behind a
+		// `[1, 2, 3]` literal, and its own byte element behind a synthesized buffer — which decays against
+		// any alias whose range holds every value the source can carry.
+		if self.elementCarriesAnAuthorsAlias(sourceGiid) and self.elementCarriesAnAuthorsAlias(destGiid) 'twoNamedElementsAreTwoTypes'
+			return false
+		end 'twoNamedElementsAreTwoTypes'
+
 		return match self.elementIntegerValueRange(destGiid, readerFilePath: readerFilePath) 'destination'
 			notIntegerValued gives false
 			inclusive(low, high) gives self.elementValuesFitWithin(sourceGiid, destLow: low, destHigh: high, readerFilePath: readerFilePath)
@@ -21247,6 +21239,11 @@ export type ProgramSignatures
 	// The SOURCE side of that comparison, split out because one `match` can read only one side and a nested
 	// pair would hide which side each arm speaks for — `requireRawByteFillFitsItsElement`'s shape, for its
 	// reason.
+	function elementCarriesAnAuthorsAlias(giid GenericInstanceId) returns bool
+		let element = self.containerElementType(giid)
+		return maxonTypeTag(element) == ValueTypeTag.named and not self.nameOfId(typeNameIdOf(element)).equals(SynthesizedByteElementName)
+	end 'elementCarriesAnAuthorsAlias'
+
 	function elementValuesFitWithin(sourceGiid GenericInstanceId, destLow ParsedInt, destHigh ParsedInt, readerFilePath FilePath) returns bool
 		return match self.elementIntegerValueRange(sourceGiid, readerFilePath: readerFilePath) 'source'
 			notIntegerValued gives false
@@ -21282,7 +21279,7 @@ export type ProgramSignatures
 		// measures every declared byte element against, because a second spelling of them here would be a
 		// second definition of what a byte is. `arrayAppendArgAdmits`'s header carries the rest of the
 		// argument, including why no nominal door belongs beside this one.
-		if self.arrayNamedElementName(ValueTypeTag.genericInstance, nameId: giid).equals(SynthesizedByteElementName) 'aCompilerMintedBufferHoldsRawBytes'
+		if self.arrayNamedElementName(ValueTypeTag.genericInstance, nameId: giid as TypeNameId).equals(SynthesizedByteElementName) 'aCompilerMintedBufferHoldsRawBytes'
 			return ElementIntegerRange.inclusive(ByteValueSetLow, high: ByteValueSetHigh)
 		end 'aCompilerMintedBufferHoldsRawBytes'
 
@@ -21339,7 +21336,7 @@ export type ProgramSignatures
 	// and it is the only thing that makes this element's slot one byte. Asking a file instead would accept a
 	// name some OTHER file declares wide, whose slot is then that file's width and not a byte.
 	function elementIsAByteNoFileDeclares(giid GenericInstanceId) returns bool
-		let name = self.arrayNamedElementName(ValueTypeTag.genericInstance, nameId: giid)
+		let name = self.arrayNamedElementName(ValueTypeTag.genericInstance, nameId: giid as TypeNameId)
 		return isByteElementName(name) and not self.typeAliases.anyFileDeclares(name)
 	end 'elementIsAByteNoFileDeclares'
 
@@ -21806,7 +21803,7 @@ export type ProgramSignatures
 		// the `Array` and asked for one `__managed_resize` on top (`ContainerSizing.fixed`). A vector's
 		// `create` is `stdlib/Vector.maxon`'s now, so it returns through the `declaredGeneric` arm above and
 		// the record it hands back is already published; only the growable record reaches here.
-		stamps.push(ContainerCreateStamp.inline(self.arrayElementSize(id)))
+		stamps.push(ContainerCreateStamp.inline(self.arrayElementSize(id) as ParsedInt))
 		stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
 		return ContainerCreateCall.create(ManagedCreateName, stamps: stamps, elementAdd: ContainerElementAdd.push(ManagedPushName))
 	end 'containerCreateCall'
@@ -21833,7 +21830,7 @@ export type ProgramSignatures
 		// add is KEYED — `(record, key, value:)` — which is a different SHAPE and not a different name, so it
 		// answers with its own arm; see `ContainerElementAdd`. The predicate is the SHAPE question, exactly as
 		// the `Set` arm's is, and for the identical reason its header gives.
-		if self.isMapShapedInstanceAt(ValueTypeTag.genericInstance, nameId: id) 'aMapLiteral'
+		if self.isMapShapedInstanceAt(ValueTypeTag.genericInstance, nameId: id as TypeNameId) 'aMapLiteral'
 			return ContainerElementAdd.upsert(qualifiedMethodName(self.genericInstanceBaseName(id), methodName: UpsertMethod))
 		end 'aMapLiteral'
 
@@ -22032,7 +22029,7 @@ export type ProgramSignatures
 	function fileScopedArg(arg MaxonType, filePath FilePath) returns MaxonType
 		let tag = maxonTypeTag(arg)
 		if tag == ValueTypeTag.genericInstance 'nested'
-			return MaxonType.genericInstance(self.fileScopedInstance(typeNameIdOf(arg), filePath: filePath))
+			return MaxonType.genericInstance(self.fileScopedInstance(genericInstanceIdOf(arg), filePath: filePath))
 		end 'nested'
 
 		if tag != ValueTypeTag.named 'carriesNoAliasName'
@@ -22097,118 +22094,6 @@ export type ProgramSignatures
 			end 'eachSweptInstance'
 		end 'eachEnvironment'
 	end 'settleRangeScopedInstances'
-
-	// R-1 (user ruling, 2026-08-22): TWO RANGED ALIASES OVER ONE RANGE ARE ONE TYPE, SO THEIR INSTANCES
-	// ARE ONE INSTANCE. `typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to u64.max)`
-	// differ only in what the author called them, and `Array with DenseInt` and `Array with RegCount` therefore
-	// name one type -- which shv2's own source needs, and which the bootstrap has always agreed with.
-	//
-	// IT CANNOT BE DONE AT INTERN TIME AND THAT WAS TRIED, MEASURED AND REVERTED FIRST. "Which aliases
-	// share a range" is a WHOLE-PROGRAM question, and interning runs DURING the sweep that answers it: the same
-	// argument took the range key before a file was folded and the spelled key after, and one `b"hi"` reached
-	// `E3006 duplicate definition of 'Array_Byte'` with the two colliding instantiations spelled identically.
-	// Ahead of that, reading an alias's bounds with no reader file broke `RangedAliasRegistry`'s own contract
-	// and collapsed a range-CONTESTED `Byte` into one instance for every reader -- 34 spec cases red. Both
-	// failures are the same one: a question about the whole program asked before the whole program was read.
-	// This runs where the answer exists.
-	//
-	// STRICTLY AFTER `settleRangeScopedInstances` AND `settleGenericAliasContest`, and the order is the same
-	// load-bearing order those two have between them. Both SPLIT instances -- per reading file, per contested
-	// alias -- and this one MERGES. Merging first would fuse instances that N2 is about to have to tell apart,
-	// and there is no way back: `rangeIdentityPairs` skips a contested name precisely because N2 has already
-	// given its readings distinct spellings, and those spellings must be in place before they can be skipped.
-	//
-	// A program where no two aliases share a range leaves after one map walk and changes nothing -- no
-	// substitution is published, so `instanceKey` keeps building the byte-identical keys it always has.
-	export function mergeRangeEquivalentInstances()
-		let pairs = self.typeAliases.rangeIdentityPairs()
-		if pairs.count() == 0 'noTwoAliasesInThisProgramShareARange'
-			return
-		end 'noTwoAliasesInThisProgramShareARange'
-
-		// The range's name is interned into THIS index's own name table like any other, and is never declared:
-		// it exists only as a key, is unspellable in source (`CompilerQualifiedAliasSeparator`), and no argument
-		// list is rewritten to hold it -- see `GenericInstanceRegistry.rangeIdentity` for why the arg lists keep
-		// the author's spelling.
-		var identity = RangeIdentityMap.create()
-		for (aliasName, rangeName) in pairs 'eachSharedAlias'
-			identity.upsert(self.typeNames.intern(aliasName), value: self.typeNames.intern(rangeName))
-		end 'eachSharedAlias'
-
-		let merged = self.genericInstances.rekeyForRangeIdentity(identity)
-		if merged.count() == 0 'theProgramNAMEDNoTwoOfThem'
-			return
-		end 'theProgramNAMEDNoTwoOfThem'
-
-		self.repairMergedInstanceReferences()
-	end 'mergeRangeEquivalentInstances'
-
-	// THE GIDS THE SWEEP ALREADY WROTE DOWN, RE-POINTED AT THE INSTANCES THEY SURVIVED AS. Rebuilding
-	// `index` fixes every FUTURE intern; it cannot reach a gid already recorded in a field type, a payload, a
-	// `returns` clause, an alias binding or another instance's argument list. Left stale, those are references
-	// to an instance no live type names -- and `mangleGenericInstance` would emit its name beside the survivor's.
-	//
-	// It walks exactly the surfaces `resolveRecordedGenericAliasTypes` walks, for the identical reason: those
-	// are the places the declaration sweep records a resolved type. The two differ only in the rule applied.
-	function repairMergedInstanceReferences()
-		self.rewriteRecordedSlotTypes(RecordedReturnTypeRule.mergedInstance)
-		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.mergedInstance)
-		self.repairMergedGenericAliases()
-		self.repairMergedInstanceArgs()
-	end 'repairMergedInstanceReferences'
-
-	// A `typealias Column = Array with DenseInt` binds a NAME to a gid, and that gid may have been the loser.
-	function repairMergedGenericAliases()
-		var names = ByteArrayArray.create()
-		var live = GenericInstanceIdArray.create()
-		for (aliasName, id) in self.genericAliases 'eachAlias'
-			let survivor = self.genericInstances.liveInstance(id)
-			if survivor == id 'itsInstanceSurvived'
-				continue
-			end 'itsInstanceSurvived'
-
-			names.push(aliasName)
-			live.push(survivor)
-		end 'eachAlias'
-
-		for i in 0 upto names.count() 'applyEach'
-			let aliasName = try names.get(i) otherwise panic("ProgramSignatures.repairMergedGenericAliases: names.get OOB at {i} below count {names.count()}")
-			let survivor = try live.get(i) otherwise panic("ProgramSignatures.repairMergedGenericAliases: live.get OOB at {i} -- the two columns are pushed together")
-			self.genericAliases.upsert(aliasName, value: survivor)
-		end 'applyEach'
-	end 'repairMergedGenericAliases'
-
-	// A nested argument (`Array with (Array with BytePos)`) holds an inner gid, and `mangleGenericInstance`
-	// reads it. The inner is settled before the outer is keyed (`identityOfArgName`'s nested arm), so this only
-	// has to write down what the key already used.
-	function repairMergedInstanceArgs()
-		for id in 0 upto self.genericInstances.count() 'eachInstance'
-			let args = self.genericInstances.instanceArgs(id)
-			for index in 0 upto args.count() 'eachArg'
-				let arg = try args.get(index) otherwise panic("ProgramSignatures.repairMergedInstanceArgs: args.get OOB at {index} for instance {id}")
-				if let live = try self.mergedInstanceType(arg) 'namesAMergedInstance'
-					self.genericInstances.retypeArg(id, argIndex: index, arg: live)
-				end 'namesAMergedInstance'
-			end 'eachArg'
-		end 'eachInstance'
-	end 'repairMergedInstanceArgs'
-
-	// The type `declared` denotes after the merge, or a refusal when it names no merged instance -- the
-	// `throws` shape every recorded-type rewrite rule in this file uses, so a rule that claims nothing costs
-	// its walk nothing.
-	function mergedInstanceType(declared MaxonType) returns MaxonType throws MapError
-		if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'namesNoInstance'
-			throw MapError.keyNotFound
-		end 'namesNoInstance'
-
-		let id = typeNameIdOf(declared)
-		let survivor = self.genericInstances.liveInstance(id)
-		if survivor == id 'itSurvivedTheMerge'
-			throw MapError.keyNotFound
-		end 'itSurvivedTheMerge'
-
-		return MaxonType.genericInstance(survivor)
-	end 'mergedInstanceType'
 
 	// ⭐⭐ **WHICH GENERIC-ALIAS NAMES DO TWO FILES DISAGREE ABOUT, AND WHAT DOES EACH FILE MEAN BY ONE? (N3)**
 	// — one pass, at the one moment every declaration is in and no file has been parsed.
@@ -22491,8 +22376,7 @@ export type ProgramSignatures
 	// EVERY DECLARED SLOT THE SWEEP RECORDED A RESOLVED TYPE INTO, REWRITTEN UNDER ONE RULE -- a struct's
 	// fields and an enum case's payloads. It is `rewriteRecordedReturnTypes`' sibling over the other half of
 	// the recorded surface, and it takes the SAME rule enum so that a repair which has to reach both halves
-	// names one rule twice rather than being written out twice. N3 (`contestScopedAlias`) and R-1
-	// (`mergedInstance`) are both such repairs, and before this pair existed the second had copied the first.
+	// names one rule twice rather than being written out twice. N3 (`contestScopedAlias`) is such a repair.
 	function rewriteRecordedSlotTypes(rule RecordedReturnTypeRule)
 		for (_, layout) in self.structTypes 'eachStruct'
 			for index in 0 upto layout.fieldCount() 'eachField'
@@ -22510,14 +22394,13 @@ export type ProgramSignatures
 		end 'eachEnum'
 	end 'rewriteRecordedSlotTypes'
 
-	// One recorded SLOT type under `rule`, or a refusal when the rule does not claim it. The two rules that
-	// reach a slot are spelled here; the two that exist only for a `returns` clause panic rather than
+	// One recorded SLOT type under `rule`, or a refusal when the rule does not claim it. The one rule that
+	// reaches a slot is spelled here; the two that exist only for a `returns` clause panic rather than
 	// returning the type unchanged, because a caller asking a return-only rule about a field has made a
 	// mistake that a silent identity would carry into the recorded layout.
 	function rewrittenSlotTypeUnder(rule RecordedReturnTypeRule, declared MaxonType, slotScopeFilePath FilePath) returns MaxonType throws MapError
 		match rule 'rule'
 			contestScopedAlias then return try self.contestScopedDeclaredType(declared, slotScopeFilePath: slotScopeFilePath)
-			mergedInstance then return try self.mergedInstanceType(declared)
 			declaredStruct then panic("ProgramSignatures.rewrittenSlotTypeUnder: `declaredStruct` is a recorded-RETURN rule and has no slot reading")
 			declaredInterface then panic("ProgramSignatures.rewrittenSlotTypeUnder: `declaredInterface` is a recorded-RETURN rule and has no slot reading")
 		end 'rule'
@@ -22639,7 +22522,6 @@ export type ProgramSignatures
 	function rewrittenReturnTypeUnder(rule RecordedReturnTypeRule, declFilePath FilePath, declared MaxonReturnType) returns MaxonType throws MapError
 		match rule 'rule'
 			contestScopedAlias then return try self.contestScopedReturnType(declared, declFilePath: declFilePath)
-			mergedInstance then return try self.mergedInstanceReturnOf(declared)
 			declaredStruct then return try self.sweptStructReturnOf(declared, declFilePath: declFilePath)
 			declaredInterface then return try self.sweptInterfaceReturnOf(declared, declFilePath: declFilePath)
 		end 'rule'
@@ -22658,13 +22540,6 @@ export type ProgramSignatures
 	// including its "absence is a throw" convention, so both read as one kind of pass. A `void` return
 	// names no type to re-tag, and a type that is already concrete is refused by the tag guard, which is
 	// what makes this idempotent.
-	function mergedInstanceReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
-		match declared 'shape'
-			void then throw MapError.keyNotFound
-			value(inner) then return try self.mergedInstanceType(inner)
-		end 'shape'
-	end 'mergedInstanceReturnOf'
-
 	function sweptStructReturnOf(declared MaxonReturnType, declFilePath FilePath) returns MaxonType throws MapError
 		match declared 'shape'
 			void then throw MapError.keyNotFound
@@ -22922,7 +22797,7 @@ export type ProgramSignatures
 		var changed = false
 		for field in payloads 'eachSlot'
 			if let resolved = try self.rewrittenSlotTypeUnder(rule, declared: field.declaredType, slotScopeFilePath: layout.declFilePath) 'theRuleClaimsIt'
-				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface))
+				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand))
 				changed = true
 			end 'theRuleClaimsIt' else 'unchanged'
 				rewritten.push(field)
@@ -23697,7 +23572,7 @@ export type ProgramSignatures
 			end 'lookup'
 		end 'namedOrStruct'
 		if tag == ValueTypeTag.genericInstance 'nested'
-			return self.genericInstanceBoxSize(typeNameIdOf(t))
+			return self.genericInstanceBoxSize(genericInstanceIdOf(t))
 		end 'nested'
 		return primitiveTypeByteSize(tag)
 	end 'typeLogicalByteSize'
@@ -23728,7 +23603,7 @@ export type ProgramSignatures
 			return String.from(self.nameOfId(typeNameIdOf(t)))
 		end 'namedOrStruct'
 		if tag == ValueTypeTag.genericInstance 'nested'
-			return String.from(self.mangleGenericInstance(typeNameIdOf(t)))
+			return String.from(self.mangleGenericInstance(genericInstanceIdOf(t)))
 		end 'nested'
 		// An OPAQUE type-parameter argument (`Array with T` inside a generic body, P1.7 slice 3b-i) — its
 		// instance `Array with <that parameter>` is interned like any other, so its structural mangling names
@@ -23748,7 +23623,7 @@ export type ProgramSignatures
 		// descriptor — it drops through `__managed_decref` and reads the enclosing instance's descriptor), and no
 		// committed fragment on any target carries such a label today.
 		if tag == ValueTypeTag.typeParameter 'opaqueParam'
-			return "T{typeNameIdOf(t):x}"
+			return "T{(typeNameIdOf(t) as ParsedInt):x}"
 		end 'opaqueParam'
 		return primitiveTypeTagName(tag)
 	end 'mangleTypeArg'
@@ -23794,7 +23669,7 @@ export type ProgramSignatures
 	export function conformerTypeArgInstance(gid GenericInstanceId, position TypeParamPosition) returns GenericInstanceId throws MapError
 		let arg = self.substitutedInstanceArg(gid, position: position)
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'anInstanceById'
-			return typeNameIdOf(arg)
+			return genericInstanceIdOf(arg)
 		end 'anInstanceById'
 
 		if not tagMayNameAggregate(maxonTypeTag(arg)) 'namesNoDeclaration'
@@ -23851,7 +23726,7 @@ export type ProgramSignatures
 			// The UNREDUCED fallback here is the mangled instance name — a name no `implements` and no
 			// intrinsic row claims — which is exactly how a non-conforming `Array with E` goes on being
 			// refused through the ordinary E3017 door. This door holds no source spelling to answer with.
-			match self.instanceConformerReduction(typeNameIdOf(t)) 'reduction'
+			match self.instanceConformerReduction(genericInstanceIdOf(t)) 'reduction'
 				arrayBuiltin then return String.from(self.arrayRecordDeclaredName())
 				declaredBase(baseName) then return String.from(baseName)
 				unreduced then return self.mangleTypeArg(t)
@@ -24255,13 +24130,10 @@ export type ProgramSignatures
 		// A `named` leaf that denotes no instance is a declared aggregate or a ranged alias: its own name,
 		// which is what `mangleTypeArg` would answer for it and is spelled here without the String round trip.
 		//
-		// ⛔⛔ **R-1 DOES NOT LIVE HERE, AND THE FIRST ATTEMPT PUT IT HERE.** Resolving a ranged alias to its
-		// RANGE in this arm gives the right identity and the wrong NAME: this string is rendered into
-		// diagnostics through `instanceDisplayName`'s fallback and through `aggregateNameOf`, and **MEASURED,
-		// four cases named `Array_int$-9223372036854775808_9223372036854775807` where the author wrote
-		// `Array_Integer`** — against this tree's standing rule that a diagnostic quotes an alias AS SOURCE
-		// SPELLS IT. The identity question is asked by `instanceIdentityKey`, which is never rendered, and the
-		// MERGE it drives leaves one instance wearing one author-written name.
+		// ⛔ **THE ALIAS'S NAME, NEVER ITS RANGE.** Two aliases over one range are two types, so the name IS
+		// the identity here — and this string is rendered into diagnostics through `instanceDisplayName`'s
+		// fallback and through `aggregateNameOf`, where this tree's standing rule is that an alias is quoted
+		// AS SOURCE SPELLS IT.
 		if maxonTypeTag(t) == ValueTypeTag.named 'namedLeaf'
 			return String.from(self.nameOfId(typeNameIdOf(t)))
 		end 'namedLeaf'
@@ -24383,43 +24255,11 @@ export type ProgramSignatures
 				continue
 			end 'aDeclarationForTheOtherRound'
 
-			// ⚠ **THROUGH `liveInstance`, BECAUSE A DECLARATION ENTRY REMEMBERS THE gid IT INTERNED AND R-1 MAY
-			// HAVE MERGED IT SINCE.** Without the hop the two declarations of one merged type land on two
-			// different ids, never collide, and the collision this walk exists to notice is invisible — the
-			// display then answers from whichever id the asker happens to hold.
-			let instance = self.genericInstances.liveInstance(self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath))
-			// Recorded BEFORE the already-named test, so the WINNER's file is in the table too — a diagnostic
-			// in the file that declared the winning alias must get that alias by the same route as everyone
-			// else, not by falling through to it.
-			if self.genericInstances.instanceIsMergeSurvivor(instance) 'R1MERGEDsomethingONTOthisTYPE'
-				self.recordInstanceAliasFile(instance, filePath: entry.filePath, aliasName: entry.aliasName)
-			end 'R1MERGEDsomethingONTOthisTYPE'
-
-			if let named = try self.instanceDisplayNames.get(instance) 'anEarlierDeclarationAlreadyNamedThisType'
-				// ⛔⛔ **R-1 MADE "THE FIRST DECLARATION WINS" A WRONG ANSWER RATHER THAN AN ARBITRARY ONE.**
-				// Before the merge, a second declaration reaching an instance already named meant two aliases
-				// for one spelling of one type, and either name was as good. Now `Array with DenseInt` and
-				// `Array with DurationNanos` ARE one instance, and whichever the program interned first would
-				// be printed at every site including the ones that wrote the other. MEASURED on shv2's own
-				// source: `cannot assign a value of type 'DurationNanosArray'` at a site whose callee declares
-				// `returns DenseColumn`, in a file that does not mention `DurationNanos` at all.
-				//
-				// ⇒ Such an instance has NO author spelling, and `instanceDisplayName` renders it by its RANGE
-				// instead of picking one. Recorded here because this is the one walk that can see the
-				// collision; the names are compared rather than counted because two DECLARATIONS of one alias
-				// name (a re-export, a per-type scope) are not two names for the type.
-				// ⚠ **ONLY WHERE R-1 MERGED, and the difference is 18 spec cases.** Two alias NAMES for one
-				// instance is not new and is usually not R-1's doing: a spec's `Strs` and the stdlib's
-				// `StringArray` have always named one `Array with String`, and first-wins has always answered
-				// those correctly — the name it picks is the type's only shape and every site recognizes it.
-				// What R-1 introduced is aliases that name one instance while denoting DIFFERENT SPELLINGS of
-				// its element, and only those have no name a reader at an arbitrary site would recognize.
-				// MEASURED marking every multiply-aliased instance: `expected 'IntArray'` became
-				// `expected 'Array with int(-9223372036854775808 to 9223372036854775807)'` across the suite.
-				if self.genericInstances.instanceIsMergeSurvivor(instance) and not named.equals(entry.aliasName) 'R1MERGEDaSECONDaliasONTOthisTYPE'
-					self.multiplyAliasedInstances.insert(instance)
-				end 'R1MERGEDaSECONDaliasONTOthisTYPE'
-
+			let instance = self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath)
+			// The FIRST declaration names the type. Two alias names for one instance are two BRANDS of it, and a
+			// branded value prints its brand (`valueBrandIds`), so this spelling is read only for a value no alias
+			// names.
+			if self.instanceDisplayNames.contains(instance) 'anEarlierDeclarationAlreadyNamedThisType'
 				continue
 			end 'anEarlierDeclarationAlreadyNamedThisType'
 
@@ -24472,46 +24312,6 @@ export type ProgramSignatures
 		return true
 	end 'contestedAliasNamespacesAreDistinct'
 
-	// ⭐ **HOW A DIAGNOSTIC SPELLS A GENERIC INSTANCE** — the author's `typealias` when the program holds one,
-	// else the canonical mint (see `InstanceDisplayNameMap` for why a miss is an answer). It is the DISPLAY
-	// sibling of `canonicalInstanceName`, never a substitute for it: nothing may COMPARE two of these, because
-	// two aliases legitimately spell one type.
-	function recordInstanceAliasFile(id GenericInstanceId, filePath FilePath, aliasName ByteArray)
-		let key = filePath.toString().toByteArray()
-		if var known = try self.instanceAliasesByFile.get(id) 'thisInstanceAlreadyHasClaimants'
-			// ⚠ **THE FIRST ALIAS THIS FILE DECLARED KEEPS THE SLOT.** A file may itself declare two aliases
-			// over one range, and then either is a spelling its own author would recognize — but only one of
-			// them is a STABLE answer. Last-writer would make the name depend on declaration order within the
-			// file, which is exactly the arbitrariness this whole door exists to remove one level up.
-			if known.contains(key) 'thisFileAlreadyDeclaredOne'
-				return
-			end 'thisFileAlreadyDeclaredOne'
-
-			known.upsert(key, value: aliasName)
-			self.instanceAliasesByFile.upsert(id, value: known)
-			return
-		end 'thisInstanceAlreadyHasClaimants'
-
-		var first = AliasNameByFileMap.create()
-		first.upsert(key, value: aliasName)
-		self.instanceAliasesByFile.upsert(id, value: first)
-	end 'recordInstanceAliasFile'
-
-	// ⭐⭐ **HOW A DIAGNOSTIC IN A PARTICULAR FILE SPELLS A TYPE R-1 MERGED — the answer `instanceDisplayName`
-	// cannot give, because it has no site and after a merge the type has no single author spelling.**
-	//
-	// A file that DECLARES one of the claimants is told that one: `WideCol` at a site in the file that wrote
-	// `typealias WideCol = Array with Wide`, however many other aliases the program has over that range.
-	// A file that declares none of them gets the RANGE, which is true of every claimant and is what the
-	// reader can actually act on — naming a stranger's alias there was the defect: shv2's own
-	// `RegisterAllocator.maxon` was told `got 'DurationNanosArray'`, a spelling from `CompileTimings.maxon`
-	// that its own file never mentions, for a value whose callee declares `returns DenseColumn`.
-	//
-	// ⚠ **DECLARING and not merely NAMEABLE.** Both claimants are usually exported and so both are spellable
-	// from anywhere; visibility therefore separates nothing. What a reader recognizes is the alias their own
-	// file wrote down, which is exactly what this asks.
-	// Did R-1 leave this instance with more than one author spelling? The question a diagnostic asks before
-	// spending anything on recovering the spelling its own SITE used.
 	// The bare name this callee's `returns` clause wrote, or EMPTY where it wrote none. The caller decides
 	// whether that name is a generic alias — this index cannot be asked during the sweep that fills it.
 	export function returnAliasNameOf(callee ByteArray) returns ByteArray
@@ -24522,32 +24322,12 @@ export type ProgramSignatures
 		return try self.funcReturnAliasNames.get(callee) otherwise EmptySourceText
 	end 'returnAliasNameOf'
 
-	export function instanceIsMultiplyAliased(id GenericInstanceId) returns bool
-		return self.multiplyAliasedInstances.contains(id)
-	end 'instanceIsMultiplyAliased'
-
-	export function instanceDisplayNameIn(id GenericInstanceId, readerFilePath FilePath) returns ByteArray
-		if not self.multiplyAliasedInstances.contains(id) 'oneAliasSpellsThisTypeForEveryone'
-			return self.instanceDisplayName(id)
-		end 'oneAliasSpellsThisTypeForEveryone'
-
-		if let claimants = try self.instanceAliasesByFile.get(id) 'itsClaimantsAreKnown'
-			if let mine = try claimants.get(readerFilePath.toString().toByteArray()) 'thisFileDeclaredOneOfThem'
-				return mine
-			end 'thisFileDeclaredOneOfThem'
-		end 'itsClaimantsAreKnown'
-
-		return self.instanceDisplayName(id)
-	end 'instanceDisplayNameIn'
-
-	// The site-free answer. A type R-1 merged has no author spelling that is true everywhere, so it renders by
-	// its RANGE rather than by whichever claimant happened to be declared first; `instanceDisplayNameIn` above
-	// is the door that can do better, and every diagnostic with a file to offer should use it.
+	// ⭐ **HOW A DIAGNOSTIC SPELLS A GENERIC INSTANCE** — the author's `typealias` when the program holds one,
+	// else the canonical mint (see `InstanceDisplayNameMap` for why a miss is an answer). It is the DISPLAY
+	// sibling of `canonicalInstanceName`, never a substitute for it: nothing may COMPARE two of these, because
+	// two aliases legitimately spell one type — and a value one of them BRANDS prints that brand instead
+	// (`Parser.valueDisplayTypeName`).
 	export function instanceDisplayName(id GenericInstanceId) returns ByteArray
-		if self.multiplyAliasedInstances.contains(id) 'moreThanOneAliasNamesThisType'
-			return self.rangeRenderedInstanceName(id)
-		end 'moreThanOneAliasNamesThisType'
-
 		return try self.instanceDisplayNames.get(id) otherwise self.unaliasedInstanceName(id)
 	end 'instanceDisplayName'
 
@@ -24568,9 +24348,7 @@ export type ProgramSignatures
 		return self.canonicalInstanceName(id)
 	end 'unaliasedInstanceName'
 
-	// An instance no single alias can be said to spell, written the way the SOURCE would write it:
-	// `Array with int(0 to 255)`. Every alias R-1 merged into this instance denotes exactly this, so the name
-	// is true at every site -- which is the property a picked alias lost.
+	// An instance no alias spells, written the way the SOURCE would write it: `Array with int(0 to 255)`.
 	//
 	// ⚠ **SOURCE SYNTAX AND NOT THE `Base_Arg` MANGLING, because this is the one instance name a reader
 	// cannot look up.** `Array_Byte` is recognizable: some file declares `Byte`. `Array_int$0_255` names
@@ -24606,7 +24384,7 @@ export type ProgramSignatures
 	function displayedTypeArgName(arg MaxonType) returns ByteArray
 		let tag = maxonTypeTag(arg)
 		if tag == ValueTypeTag.genericInstance 'nested'
-			return self.instanceDisplayName(typeNameIdOf(arg))
+			return self.instanceDisplayName(genericInstanceIdOf(arg))
 		end 'nested'
 
 		if tag == ValueTypeTag.named 'mayNameARangedAlias'
@@ -24623,11 +24401,12 @@ export type ProgramSignatures
 	// `aggregateNameOf` and SemanticCheck's `aggregateNameFor`, and it exists for the reason those two are
 	// twins rather than one function: the name is resolved against a DIFFERENT interner — an instance's
 	// argument types are interned HERE, not in the merged `project.typeNames`. The comparison RULE is still
-	// the single shared one; only the extraction is local.
+	// the single shared one, and so is the `named` arm's rule (`namedIdentityOf`); only the id-to-name step
+	// is local.
 	//
-	// `EmptySourceText` for a scalar, a `String`, a ranged alias or an opaque `typeParameter` argument: those
-	// carry no nominal identity and meet their argument by TAG (`checkDeclaredType`), so a `Box with Integer`
-	// keeps accepting a plain `int` literal.
+	// `EmptySourceText` for a scalar, a `String` or an opaque `typeParameter` argument: those carry no
+	// nominal identity and meet their argument by TAG (`checkDeclaredType`). A ranged alias carries its
+	// name, and a `Box with Integer` keeps accepting a plain `int` literal because an unnamed value decays.
 	// ⚠ **EVERY TAG STATES ITS OWN ANSWER.** This used to end in a bare `return EmptySourceText`, and that
 	// was a silent default landing on the ONE rule that reads empty as a positive claim:
 	// `namedAggregatesConflict` treats exactly-one-empty as "an aggregate meeting a SCALAR", so an
@@ -24640,7 +24419,8 @@ export type ProgramSignatures
 	// (gid, position) it was substituted once for this answer and again for the `structRef` arm, and a third
 	// time at the caller. One substitution, resolved once through `canonicalTypeArg` and read three times, is
 	// both fewer boxes and one resolution instead of two.
-	// ⚠ **AND IT ASKS ON THE CALLING FILE'S BEHALF, for `namedTypeArgIdentity`'s reason** — see there.
+	// ⚠ **AND IT ASKS ON THE CALLING FILE'S BEHALF**: a name a `type` in one file and a `typealias` in
+	// another both hold carries a nominal identity for one reader and none for the other.
 	export function typeArgAggregateName(arg MaxonType, readerFilePath FilePath) returns ByteArray
 		match maxonTypeTag(arg) 'k'
 			// No nominal identity: a scalar, a `String`, an opaque `T` and a function value all coerce by
@@ -24648,7 +24428,7 @@ export type ProgramSignatures
 			boolean then return EmptySourceText
 			integer then return EmptySourceText
 			float then return EmptySourceText
-			named then return self.namedTypeArgIdentity(arg, readerFilePath: readerFilePath)
+			named then return self.namedIdentityOf(self.nameOfId(typeNameIdOf(arg)), readerFilePath: readerFilePath)
 			exitCode then return EmptySourceText
 			unresolved then return EmptySourceText
 			void then panic("typeArgAggregateName: a type argument is `void` — a type argument is a TYPE, and the parser accepts no void one")
@@ -24660,7 +24440,7 @@ export type ProgramSignatures
 			typeParameter then return EmptySourceText
 			// CANONICAL, not `mangleTypeArg`: a nested instance's identity must match what the two
 			// value-side extractors produce for the same type, whichever way it was spelled.
-			genericInstance then return self.canonicalInstanceName(typeNameIdOf(arg))
+			genericInstance then return self.canonicalInstanceName(genericInstanceIdOf(arg))
 			// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
 			character then return EmptySourceText
 			// An interface type is refused as a generic ARGUMENT at the front end (`Parser.checkGenericArgType`
@@ -24743,7 +24523,7 @@ export type ProgramSignatures
 	// program type to be wrong about.
 	function denotedInstance(arg MaxonType) returns GenericInstanceId throws MapError
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'itIsAnInstance'
-			return typeNameIdOf(arg)
+			return genericInstanceIdOf(arg)
 		end 'itIsAnInstance'
 
 		// Only a `named` LEAF can spell an alias — a struct, a tuple and an opaque type parameter carry no
@@ -24754,31 +24534,6 @@ export type ProgramSignatures
 
 		return try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg)))
 	end 'denotedInstance'
-
-	// The identity of a `named` type argument that `canonicalTypeArg` has already resolved, so the generic
-	// alias arm is not restated here.
-	//
-	// `named` is OVERLOADED — a declared union/enum VALUE (a boxed aggregate) and a ranged numeric alias
-	// share it — so only a registered aggregate carries identity, exactly as both twins decide it.
-	// ⚠ **THE CONTEST GUARD IS `Parser.namedAggregateName`'s AND `SemanticCheck.aggregateNameFor`'s — the
-	// two doors this one is the third twin of.** `containsStruct`/`containsEnum` are bare and whole-program,
-	// so for a name a `type` in one file and a `typealias` in another may both hold this claimed a nominal
-	// identity for every reader while its twins (guarded) answered EMPTY inside the library. MEASURED:
-	// `stdlib/Builtins.maxon`'s `limbs.growFilled(n, value: 0)` over its own
-	// `typealias ParsedIntArray = Array with ParsedInt` was **E3005 `expected 'ParsedInt', got 'int'`**,
-	// because the element's identity was read as a USER program's struct and a `0` carries none.
-	function namedTypeArgIdentity(arg MaxonType, readerFilePath FilePath) returns ByteArray
-		let name = self.nameOfId(typeNameIdOf(arg))
-		if (self.containsStructInAnyFile(name) or self.containsEnumInAnyFile(name)) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'registeredAggregate'
-			return name
-		end 'registeredAggregate'
-
-		// A RANGED numeric alias (`Integer`), which is a nominal wrapper over a scalar and decays. This is
-		// the enumerated last kind a `named` can be, not a fallthrough: the three are alias / aggregate /
-		// ranged, the tag match above has already excluded everything that is not `named`, and
-		// `canonicalTypeArg` has already taken the alias.
-		return EmptySourceText
-	end 'namedTypeArgIdentity'
 
 	// ⭐ **THE FIRST GENERIC ALIAS WHOSE TYPE ARGUMENTS LEAD BACK TO IT (P1.7, E3091).** `typealias A = Box
 	// with A` and the mutual `A = Box with B` / `B = Box with A` describe INFINITE types — no finite layout,
@@ -24854,7 +24609,7 @@ export type ProgramSignatures
 			end 'eachArg'
 		end 'eachInstance'
 
-		return buildCsr(argOf, to: denotes, nodeCount: self.genericInstances.count())
+		return buildCsr(argOf, to: denotes, nodeCount: self.genericInstances.count() as CsrIndex)
 	end 'buildInstanceArgGraph'
 
 	// ⭐⭐ **THE ALIAS NAMES ON THE CYCLE DECLARATION `index` CLOSES, IN WALK ORDER — or EMPTY when the
@@ -24876,8 +24631,8 @@ export type ProgramSignatures
 	// serve none.
 	export function aliasCyclePath(index FieldIndex) returns ByteArrayArray
 		var names = ByteArrayArray.create()
-		for gid in shortestCycleThrough(self.buildInstanceArgGraph(), start: self.genericAliasDeclAt(index).internedInstance()) 'eachNodeOnTheCycle'
-			let name = self.aliasNamingInstance(gid)
+		for gid in shortestCycleThrough(self.buildInstanceArgGraph(), start: self.genericAliasDeclAt(index).internedInstance() as CsrIndex) 'eachNodeOnTheCycle'
+			let name = self.aliasNamingInstance(gid as GenericInstanceId)
 			// A NESTED instance (`Box with (Box with A)`) is interned but no `typealias` spells it, so it has
 			// no name to contribute. Skipping it is v1's rendering too (`collectGenericArgNames` collects
 			// named arguments only) — the path names the declarations the author can go and edit.
@@ -25100,7 +24855,7 @@ export type ProgramSignatures
 			panic("ProgramSignatures.opaqueTypeParamPosition: asked for the `uses`-list position of a `{typeTagName(maxonTypeTag(t))}`, which names no type parameter — every caller tests the tag first")
 		end 'notATypeParameter'
 
-		return (try self.typeParamOwnerOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.opaqueTypeParamPosition: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")).position
+		return (try self.typeParamOwnerOf(typeParamIdOf(t)) otherwise panic("ProgramSignatures.opaqueTypeParamPosition: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")).position
 	end 'opaqueTypeParamPosition'
 
 	// ⭐⭐ **THE INSTANCE VIEW OF A TYPE THE SHARED GENERIC BODY SPELLS IN ITS DECLARATION VIEW — the ONE
@@ -25145,7 +24900,7 @@ export type ProgramSignatures
 	export function substituteThroughInstance(t MaxonType, id GenericInstanceId) returns MaxonType
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.typeParameter 'opaqueFormal'
-			let owner = try self.typeParamOwnerOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.substituteThroughInstance: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
+			let owner = try self.typeParamOwnerOf(typeParamIdOf(t)) otherwise panic("ProgramSignatures.substituteThroughInstance: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
 			if not owner.declaringTypeName.equals(self.genericInstanceBaseName(id)) 'anotherDeclarationsParameter'
 				return t
 			end 'anotherDeclarationsParameter'
@@ -25157,7 +24912,7 @@ export type ProgramSignatures
 			return t
 		end 'carriesNoDeclarationView'
 
-		return self.substituteInstanceArgsThrough(typeNameIdOf(t), through: id)
+		return self.substituteInstanceArgsThrough(genericInstanceIdOf(t), through: id)
 	end 'substituteThroughInstance'
 
 	// The `genericInstance` arm of the substitution above: each argument substituted in turn, then the result
@@ -25518,7 +25273,7 @@ export type ProgramSignatures
 				return false
 			end 'stillOpaque'
 
-			if tag == ValueTypeTag.genericInstance and not self.instanceArgsAreFullyConcrete(typeNameIdOf(arg)) 'aNestedParametricInstance'
+			if tag == ValueTypeTag.genericInstance and not self.instanceArgsAreFullyConcrete(genericInstanceIdOf(arg)) 'aNestedParametricInstance'
 				return false
 			end 'aNestedParametricInstance'
 		end 'eachArg'
@@ -25571,7 +25326,7 @@ export type ProgramSignatures
 		end 'notAnInstanceField'
 
 		let gid = typeNameIdOf(declared)
-		return self.genericInstanceBaseName(gid) if self.instanceIsANestedParameterisedOne(gid) else EmptySourceText
+		return self.genericInstanceBaseName(gid as GenericInstanceId) if self.instanceIsANestedParameterisedOne(gid as GenericInstanceId) else EmptySourceText
 	end 'nestedParameterisedInstanceBaseOfFieldIn'
 
 	// ⚠ **IT ANSWERS THE ARGUMENT'S TYPE AND NOT ITS SPELLING, AND THAT IS A LOSS A CALLER MAY HAVE TO REPAIR.**
@@ -25702,7 +25457,7 @@ export type ProgramSignatures
 			return true
 		end 'byteRecord'
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.genericInstanceHasManagedField(typeNameIdOf(t))
+			return self.genericInstanceHasManagedField(genericInstanceIdOf(t))
 		end 'instance'
 		if not tagMayNameAggregate(tag) 'notNamedStruct'
 			return false
@@ -26159,7 +25914,7 @@ export type ProgramSignatures
 	export function instantiationOriginChain(id GenericInstanceId) returns GenericInstanceIdArray
 		var chain = GenericInstanceIdArray.create()
 		var current = id
-		var hops = 0 as ElementCount
+		var hops = 0 as ElementIndex
 		while hops <= self.substitutedInstanceOrigins.count() 'followTheChain'
 			chain.push(current)
 			current = try self.substitutedInstanceOrigins.get(current) otherwise return chain
@@ -26256,7 +26011,7 @@ export type ProgramSignatures
 		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'notOpaque'
 			return false
 		end 'notOpaque'
-		return self.genericTypeFieldHasManagedInstantiation(typeNameIdOf(fieldType))
+		return self.genericTypeFieldHasManagedInstantiation(typeParamIdOf(fieldType))
 	end 'isManagedOpaqueTypeParamField'
 
 	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
@@ -27340,7 +27095,7 @@ export type ProgramSignatures
 	// The declaration that minted the type-parameter token field `index` stands at. Precondition:
 	// `structFieldIsOpaque`.
 	function opaqueSlotOwnerName(structName ByteArray, index FieldIndex) returns ByteArray
-		return (try self.typeParamOwnerOf(typeNameIdOf(self.structFieldDeclaredType(structName, index: index))) otherwise panic("ProgramSignatures.opaqueSlotOwnerName: the type-parameter token of field {index} of `{String.from(structName)}` has no owner — `recordStruct` files every declared parameter as the sweep folds")).declaringTypeName
+		return (try self.typeParamOwnerOf(typeParamIdOf(self.structFieldDeclaredType(structName, index: index))) otherwise panic("ProgramSignatures.opaqueSlotOwnerName: the type-parameter token of field {index} of `{String.from(structName)}` has no owner — `recordStruct` files every declared parameter as the sweep folds")).declaringTypeName
 	end 'opaqueSlotOwnerName'
 
 	// Every remaining opaque slot of `structName` must stand at a parameter of `owner`. A record is written
@@ -27377,7 +27132,7 @@ export type ProgramSignatures
 	export function denotesArrayInstance(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.isArrayInstance(typeNameIdOf(t))
+			return self.isArrayInstance(genericInstanceIdOf(t))
 		end 'instance'
 		if tag != ValueTypeTag.named 'notNamed'
 			return false
@@ -27390,7 +27145,7 @@ export type ProgramSignatures
 	// two spellings it admits reach here.
 	export function denotedArrayInstance(t MaxonType) returns GenericInstanceId
 		if maxonTypeTag(t) == ValueTypeTag.genericInstance 'instance'
-			return typeNameIdOf(t)
+			return genericInstanceIdOf(t)
 		end 'instance'
 		return self.genericAliasInstanceInAnyFile(self.nameOfId(typeNameIdOf(t)))
 	end 'denotedArrayInstance'
@@ -27729,7 +27484,7 @@ export type ProgramSignatures
 		// be retained, may it be cloned) and `typeOwesDrop` below is the OWNERSHIP question**; a destructor
 		// stamp must ask the latter, and asking the former is the defect this note records.
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return not self.instanceIsPromiseHandle(typeNameIdOf(fieldType))
+			return not self.instanceIsPromiseHandle(genericInstanceIdOf(fieldType))
 		end 'instance'
 		// ⭐ **AN EXISTENTIAL IS MANAGED, AND IT IS THE ONE MANAGED SLOT WHOSE DESTRUCTOR IS A RUN-TIME FACT**
 		// (P1.7a-existentials slice 2). Its VALUE half is whatever the conformer's record is — a heap box for
@@ -27785,7 +27540,7 @@ export type ProgramSignatures
 	export function typeIsAGreenThreadHandle(fieldType MaxonType, from TypeNameInterner) returns bool
 		let tag = maxonTypeTag(fieldType)
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.instanceIsPromiseHandle(typeNameIdOf(fieldType))
+			return self.instanceIsPromiseHandle(genericInstanceIdOf(fieldType))
 		end 'instance'
 
 		if tag != ValueTypeTag.named 'notNamed'
@@ -28147,7 +27902,7 @@ export type ProgramSignatures
 			return true
 		end 'byteRecord'
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.instanceGraphSupportsDeepClone(typeNameIdOf(type), visited: visited)
+			return self.instanceGraphSupportsDeepClone(genericInstanceIdOf(type), visited: visited)
 		end 'instance'
 		if not tagMayNameAggregate(tag) 'notManagedRef'
 			return false
@@ -28756,9 +28511,9 @@ export type ProgramSignatures
 		var mixed = Hasher.combined(state, value: DeclShapeOpaqueParams)
 		for i in 0 upto opaqueParams.paramNames.count() 'eachSlot'
 			let paramName = try opaqueParams.paramNames.get(i) otherwise panic("mixOpaqueParams: paramNames.get OOB at {i} despite i < count")
-			mixed = Hasher.combined(mixBytes(mixed, bytes: paramName), value: opaqueParams.positionAt(i))
+			mixed = Hasher.combined(mixBytes(mixed, bytes: paramName), value: opaqueParams.positionAt(i) as HashDigest)
 		end 'eachSlot'
-		return Hasher.combined(mixed, value: opaqueParams.typeParamCount)
+		return Hasher.combined(mixed, value: opaqueParams.typeParamCount as HashDigest)
 	end 'mixOpaqueParams'
 
 	function mixReturnType(state HashDigest, returnType MaxonReturnType) returns HashDigest
@@ -28804,7 +28559,7 @@ export type ProgramSignatures
 			//
 			// ⚠ W14 therefore invalidates every warm parse memo ONCE. The query cache is in-memory only
 			// (`QueryDatabase`), so there is no on-disk artifact to migrate.
-			typeParameter(id) gives Hasher.combined(Hasher.combined(state, value: TypeShapeTypeParameter), value: id)
+			typeParameter(id) gives Hasher.combined(Hasher.combined(state, value: TypeShapeTypeParameter), value: id as HashDigest)
 			// A GENERIC INSTANCE (P1.6-A) — its own shape, then its base NAME (never its id) and each ARG's
 			// shape (recursed), so `Box with Integer` and `Box with Bool` hash apart. `mixGenericInstance`
 			// reads the `(baseId, args)` payload out of THIS index's own registry.

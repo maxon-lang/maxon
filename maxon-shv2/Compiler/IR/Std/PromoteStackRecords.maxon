@@ -189,9 +189,9 @@ type PointerScan
 
 	export static function create(valueBound ValueId) returns PointerScan
 		var escapedLocally = BoolArray.create()
-		escapedLocally.growFilled(valueBound, value: false)
+		escapedLocally.growFilled(valueBound as ElementIndex, value: false)
 		var dropSites = ValueIdArray.create()
-		dropSites.growFilled(valueBound, value: 0)
+		dropSites.growFilled(valueBound as ElementIndex, value: 0)
 		return Self{escapedLocally: escapedLocally, dropSites: dropSites, forwardedPointers: ValueIdArray.create(), forwardedCallees: FuncIndexArray.create(), forwardedPositions: ParamCountArray.create()}
 	end 'create'
 
@@ -470,7 +470,7 @@ type ConstructorScan
 	// reads the call's argument at `index`, so a `param` op whose result is some other id would silently
 	// build the record out of the wrong argument.
 	function admitParam(resultId ValueId, index ParamCount) returns bool
-		if resultId != index or index >= self.paramCount 'notTheContractsIdentity'
+		if resultId != valueIdAtParamPosition(index) or index >= self.paramCount 'notTheContractsIdentity'
 			return false
 		end 'notTheContractsIdentity'
 		self.paramOfValue.upsert(resultId, value: index)
@@ -500,7 +500,7 @@ type ConstructorScan
 
 		self.allocSize = size as ByteOffset
 		self.allocSeen = true
-		self.slotWritten.growFilled(self.allocSize / SpillSlotBytes, value: false)
+		self.slotWritten.growFilled(((self.allocSize / SpillSlotBytes) as ElementIndex), value: false)
 		return true
 	end 'admitAlloc'
 
@@ -583,14 +583,14 @@ type ParamNodeSpace
 		var next = 0 as CsrIndex
 		for funcIndex in 0 upto module.funcCount() 'eachFunc'
 			base.push(next)
-			next = next + module.getFunc(funcIndex).paramCount
+			next = next + (module.getFunc(funcIndex).paramCount as CsrIndex)
 		end 'eachFunc'
 		return Self{base: base, nodeCount: next}
 	end 'create'
 
 	export function nodeOf(funcIndex FuncIndex, param ParamCount) returns CsrIndex
 		let first = try self.base.get(funcIndex) otherwise panic("ParamNodeSpace.nodeOf: function index {funcIndex} is outside the module")
-		return first + param
+		return first + (param as CsrIndex)
 	end 'nodeOf'
 end 'ParamNodeSpace'
 
@@ -630,7 +630,7 @@ function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) retur
 	let nodes = ParamNodeSpace.create(module)
 
 	var seeds = BoolArray.create()
-	seeds.growFilled(nodes.nodeCount, value: false)
+	seeds.growFilled(nodes.nodeCount as ElementIndex, value: false)
 	// Edges point from the CALLEE's parameter to the CALLER's, so the mark propagates BACKWARD from a real
 	// escape site to every parameter that can reach one — the direction `reverseReachabilityMark` walks.
 	var edgeFrom = CsrColumn.create()
@@ -673,13 +673,13 @@ end 'seedEscapingParams'
 function collectParamForwardEdges(edgeFrom CsrColumn, edgeTo CsrColumn, nodes ParamNodeSpace, funcIndex FuncIndex, func IrFunction, scan PointerScan)
 	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
 		let pointer = try scan.forwardedPointers.get(edge) otherwise panic("collectParamForwardEdges: forwardedPointers.get OOB at {edge}")
-		if pointer >= func.paramCount 'notAParameterOfThisFunction'
+		if pointer >= valueIdAtParamPosition(func.paramCount) 'notAParameterOfThisFunction'
 			continue
 		end 'notAParameterOfThisFunction'
 		let callee = try scan.forwardedCallees.get(edge) otherwise panic("collectParamForwardEdges: forwardedCallees.get OOB at {edge}")
 		let position = try scan.forwardedPositions.get(edge) otherwise panic("collectParamForwardEdges: forwardedPositions.get OOB at {edge}")
 		edgeFrom.push(nodes.nodeOf(callee, param: position))
-		edgeTo.push(nodes.nodeOf(funcIndex, param: pointer))
+		edgeTo.push(nodes.nodeOf(funcIndex, param: paramPositionOfValueId(pointer)))
 	end 'eachForward'
 end 'collectParamForwardEdges'
 
@@ -703,7 +703,7 @@ end 'publishParamMasks'
 // `param` ops that define them.
 function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction) returns BoolArray
 	var tracked = BoolArray.create()
-	tracked.growFilled(func.paramCount, value: false)
+	tracked.growFilled(func.paramCount as ElementIndex, value: false)
 	for opIdx in liveOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("parameterValues: live op index {opIdx} not in module.ops")
 		match op 'op'
@@ -723,7 +723,7 @@ end 'parameterValues'
 // `0..paramCount-1`), and every column here is indexed by that identity. Not marking it leaves the position
 // seeded escaping, which is the safe direction.
 function markParameterValue(tracked BoolArray, resultId ValueId, index ParamCount)
-	if resultId != index or resultId >= tracked.count() 'notTheContractsIdentity'
+	if resultId != valueIdAtParamPosition(index) or resultId >= tracked.count() 'notTheContractsIdentity'
 		return
 	end 'notTheContractsIdentity'
 	try tracked.set(resultId, value: true) otherwise panic("markParameterValue: tracked.set OOB at {resultId}")
@@ -897,7 +897,7 @@ end 'promoteInFunction'
 // The tracked column for a call-site scan: every value defined by a call to a record constructor.
 function collectConstructorResults(module StdModule, liveOps OpIndexArray, valueBound ValueId, byName FunctionNameIndex, constructors RecordConstructorArray) returns BoolArray
 	var candidates = BoolArray.create()
-	candidates.growFilled(valueBound, value: false)
+	candidates.growFilled(valueBound as ElementIndex, value: false)
 	for opIdx in liveOps 'eachOp'
 		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
 			notAConstructorCall then break 'site'
@@ -989,7 +989,7 @@ end 'planPromotions'
 // Which tracked pointers were handed to a callee that RETAINS the position they filled.
 function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns BoolArray
 	var retained = BoolArray.create()
-	retained.growFilled(valueBound, value: false)
+	retained.growFilled(valueBound as ElementIndex, value: false)
 	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
 		let callee = try scan.forwardedCallees.get(edge) otherwise panic("retainedByACallee: forwardedCallees.get OOB at {edge}")
 		let position = try scan.forwardedPositions.get(edge) otherwise panic("retainedByACallee: forwardedPositions.get OOB at {edge}")
@@ -1026,8 +1026,8 @@ function assignFrameSlots(func IrFunction, plans RecordPromotionArray)
 	var reserved = 0 as StackSize
 	for planIndex in 0 upto plans.count() 'eachPlan'
 		var plan = try plans.get(planIndex) otherwise panic("assignFrameSlots: plans.get OOB at {planIndex}")
-		plan.slot = reserved / SpillSlotBytes
-		reserved = reserved + plan.sizeBytes
+		plan.slot = (reserved / SpillSlotBytes) as SpillSlot
+		reserved = reserved + (plan.sizeBytes as StackSize)
 	end 'eachPlan'
 	func.stackSize = reserved
 end 'assignFrameSlots'
@@ -1057,7 +1057,7 @@ end 'recordIsFrameLocal'
 function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, plans RecordPromotionArray)
 	// `ValueMinter.create` is seeded with the first FREE id, which for a synthesized function is its
 	// parameter count and here is the whole value space — the same meaning, a different way of knowing it.
-	var mint = ValueMinter.create(valueBound)
+	var mint = ValueMinter.create(valueBound as ParamCount)
 	// ⚠ THE PLANS ARE KEYED BY OP INDEX, not scanned per op. Walked as a list inside the rebuild, the
 	// rewrite is Θ(ops × promotions) — and a function that builds many records is exactly the one with many
 	// promotions, so the two factors grow together.
@@ -1066,7 +1066,7 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 	// "the ids a function's ops READ" (it is `collectStdOpUses`' output), and this is a different question —
 	// which records this pass is promoting. Same representation, and `valueBound` is already in hand.
 	var promoted = BoolArray.create()
-	promoted.growFilled(valueBound, value: false)
+	promoted.growFilled(valueBound as ElementIndex, value: false)
 	for planIndex in 0 upto plans.count() 'eachPlan'
 		let plan = try plans.get(planIndex) otherwise panic("applyPromotions: plans.get OOB at {planIndex}")
 		try promoted.set(plan.recordValue, value: true) otherwise panic("applyPromotions: promoted.set OOB at {plan.recordValue} — the column is sized to the function's value space")

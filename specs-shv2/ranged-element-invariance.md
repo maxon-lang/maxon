@@ -40,8 +40,10 @@ This is the same root cause as `array-clone-element-size`, where the range was t
 resolving a `Self` return and `Array.clone()` read 8 bytes at a 1-byte stride. That was fixed on the
 `Self`-returning-call path; this is the same class on the ARGUMENT-PASSING path.
 
-Ranged types are compared structurally: same base AND same bounds. Two aliases spelling the *same*
-range remain interchangeable — they carry the same invariant and the same width.
+A ranged alias is a nominal type: two aliases spelling the *same* range are two types, and a value
+of one reaches the other only through `as` (`nominal-typealias.md`). Two containers over two such
+aliases are therefore two instances as well, whatever their widths — the container half of that rule
+is `nominal-generic-alias.md`'s.
 
 ## Tests
 
@@ -89,42 +91,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/ranged-element-invariance/wide-element-rejected-where-narrow-expected.test:14:9: argument type mismatch for 'col': expected 'NarrowCol', got 'WideCol'
-```
-
-<!-- disabled-test: same-range-aliases-remain-interchangeable -->
-<!-- needs SAME-RANGE GENERIC-INSTANCE IDENTITY, which lives in `ProgramSignatures.genericInstances`:
-     instance identity is NOMINAL in shv2 — `Array with Small` and `Array with AlsoSmall` intern under
-     their element NAMES, so two aliases spelling the same range are two instances and the call is
-     rejected E3005 where the reference accepts it (measured 2026-08-04: oracle returns 42, shv2 reports
-     `expected 'SmallCol', got 'AlsoSmallCol'`). Independent of element size — the rejection fires at 8
-     bytes too. The two cases above were shelved for a different reason (the E3005 instance-name
-     RENDERING) and that reason is gone; this one is about which types are ONE type, not about how one is
-     spelled, so no display change can reach it. -->
-Two aliases spelling the SAME range are the same type — same invariant, same width — and must still be
-accepted. The fix must not over-reject.
-```maxon
-typealias Small = int(0 to 100)
-typealias SmallCol = Array with Small
-typealias AlsoSmall = int(0 to 100)
-typealias AlsoSmallCol = Array with AlsoSmall
-
-function sum(col SmallCol) returns Small
-	var total = 0
-	for v in col 'each'
-		total = total + v
-	end 'each'
-	return total
-end 'sum'
-
-function main() returns ExitCode
-	var a = AlsoSmallCol.create()
-	a.push(30)
-	a.push(12)
-	return sum(a)
-end 'main'
-```
-```exitcode
-42
 ```
 
 <!-- test: matching-ranged-element-still-works -->

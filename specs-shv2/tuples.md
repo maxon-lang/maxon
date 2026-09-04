@@ -686,7 +686,7 @@ end 'g'
 
 function main() returns ExitCode
 	let t = (10, 32)
-	return f(t) - g(t)
+	return (f(t) - (g(t) as Num)) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

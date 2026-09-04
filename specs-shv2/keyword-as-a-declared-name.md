@@ -363,7 +363,7 @@ function main() returns ExitCode
 	let n = 7
 	let msg = "hello{n}"
 	let b = StrBox.create(msg)
-	return b.value.byteLength() * 7 as ExitCode
+	return (b.value.byteLength() * 7) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -521,7 +521,7 @@ end 'from'
 
 function main() returns ExitCode
 	let s = Set from [10, 20, 30, 40, 50, 60]
-	return from(s.count())
+	return from(s.count() as Integer)
 end 'main'
 ```
 ```exitcode

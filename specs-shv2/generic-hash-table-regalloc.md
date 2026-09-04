@@ -167,7 +167,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 					end 'ns2'
 				end 'find_slot'
 
-				insertAtSlot(index, key: key, value: value, hash: hash)
+				insertAtSlot(index as Cap, key: key, value: value, hash: hash)
 			end 'occupied'
 		end 'rehash'
 	end 'grow'
@@ -240,7 +240,7 @@ type Mixer uses T where T is Hashable and Equatable
 			let h = key.hash()
 			var step = d
 			if key.equals(key) 'sameKey'
-				step = d + h
+				step = d + (h as Integer)
 			end 'sameKey'
 			a1 = a1 + step
 			a2 = a2 + step

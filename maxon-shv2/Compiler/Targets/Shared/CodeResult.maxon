@@ -95,7 +95,7 @@ end 'RdataRelocKind'
 export type RdataRelocation
 	export var codeOffset as CodeOffset
 	export var rdataLabel as String
-	export var rdataOffset as CodeOffset
+	export var rdataOffset as ByteOffset
 	export var kind as RdataRelocKind
 
 	export static function create(codeOffset CodeOffset, rdataLabel String, kind RdataRelocKind) returns RdataRelocation
@@ -153,7 +153,7 @@ export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable,
 	let funcOffsets = buildDebugSymbolIndex(debugSymbols)
 	for reloc in globalData.pendingRdataRelocs 'each'
 		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("bakeFuncAbs64Relocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — it was never installed (a DCE-root gap where the slot's owner was built), so its address cannot be resolved")
-		patchQword(rdata, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: textBaseVa + funcOffset)
+		patchQword(rdata, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: textBaseVa + (funcOffset as MachineWord))
 	end 'each'
 end 'bakeFuncAbs64Relocs'
 
@@ -197,7 +197,7 @@ export typealias Arm64FuncAdrpRelocArray = Array with Arm64FuncAdrpReloc
 // (`GlobalDataTable.registerJumpTable`), the encoders index the table with a *4 scale (`movsxd`/`ldrsw`),
 // and `patchJumpTables` writes each slot as a 4-byte little-endian i32. Widen it in one place and all three
 // move together; three literal `4`s would drift.
-export let JumpTableSlotBytes = 4 as ByteCount
+export let JumpTableSlotBytes = 4 as BytePos
 
 // ⭐ **THE BLOCK-ADDRESS RELOCATION** — the one genuinely new link-time mechanism this slice adds. A dense
 // `match` emits an `.rdata` jump table of N i32 slots, each holding `targetBlockVA − tableBaseVA` (a
@@ -279,7 +279,7 @@ end 'rebaseJumpTableReloc'
 export function patchJumpTables(rdata ByteArray, relocs JumpTableRelocArray, globalData GlobalDataTable, textAddr MachineWord, rdataAddr MachineWord)
 	for reloc in relocs 'eachTable'
 		let tableBase = globalData.rdataOffsetOf(reloc.tableLabel)
-		let tableBaseAddr = rdataAddr + tableBase
+		let tableBaseAddr = rdataAddr + (tableBase as MachineWord)
 		for (iter, targetTextOffset) in reloc.targetTextOffsets.withIterator() 'eachSlot'
 			let slotIndex = iter.index()
 			let targetAddr = textAddr + targetTextOffset
@@ -287,7 +287,7 @@ export function patchJumpTables(rdata ByteArray, relocs JumpTableRelocArray, glo
 			// The blob already holds `JumpTableSlotBytes` zero placeholder bytes here (reserved by
 			// `registerJumpTable`), so this overwrites the slot in place via the shared little-endian dword
 			// patcher rather than growing the image.
-			patchDword(rdata, offset: tableBase + slotIndex * JumpTableSlotBytes, value: entry)
+			patchDword(rdata, offset: tableBase + (slotIndex as ByteOffset) * JumpTableSlotBytes, value: entry)
 		end 'eachSlot'
 	end 'eachTable'
 end 'patchJumpTables'
@@ -297,7 +297,7 @@ end 'patchJumpTables'
 // sit in the SAME image, so the true delta fits i32 for any program the backend can produce (a `.text` far
 // larger than 2 GiB is not reachable at this rung) — but a delta that did NOT fit would silently truncate
 // to a wrong jump, so it is checked and a violation is a loud link error, not a corrupt table.
-function jumpTableEntry(targetAddr MachineWord, tableBaseAddr MachineWord, tableLabel String, slotIndex ElementCount) returns MachineWord
+function jumpTableEntry(targetAddr MachineWord, tableBaseAddr MachineWord, tableLabel String, slotIndex ElementIndex) returns MachineWord
 	let delta = (targetAddr as ParsedInt) - (tableBaseAddr as ParsedInt)
 	if delta < I32MinValue or delta > I32MaxValue 'outOfReach'
 		panic("patchJumpTables: slot {slotIndex} of '{tableLabel}' resolves to offset {delta}, outside the signed 32-bit reach of a jump-table entry — the code section has grown beyond 2 GiB from its jump tables")

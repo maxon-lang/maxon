@@ -425,7 +425,7 @@ end 'main'
 
 <!-- test: contains-both-overloads -->
 ### BOTH members of the corpus `contains` pair, from one program
-`contains` is an OVERLOAD PAIR in the corpus — `contains(needle String)` (`stdlib/String.maxon:457`) and
+`contains` is an OVERLOAD PAIR in the corpus — `contains(needle String)` (`stdlib/String.maxon:455`) and
 `contains(character Character)` (`:464`) — and until W49 wave 4 shv2 served the `String` form from a
 synthesized `__str_contains` arm, so the `Character` form did not exist here at all. Retiring the member
 hands both to `SemanticCheck.resolveOverloadedCalls`.
@@ -1056,7 +1056,7 @@ end 'main'
 was settled. It is the only retired `String` member that CONSTRUCTS a container: until W49 wave 5 the
 compiler's own arm built the result through `emitArrayCreateOp`, so shv2 — not the corpus — decided that
 array's element size and its `element_destroy@40` stamp. The corpus builds it through
-`StringArray.create()` (`stdlib/String.maxon:622-625`) instead.
+`StringArray.create()` (`stdlib/String.maxon:620-625`) instead.
 
 ⚠ **A WRONG STAMP ANNOUNCES ITSELF IN NEITHER DIRECTION**: too small and the segments leak, too eager and
 they are freed twice, and both compile clean. So the result is carried across every boundary that could
@@ -1114,7 +1114,7 @@ end 'main'
 <!-- test: a-split-result-and-an-array-literal-are-one-type -->
 ### The corpus's `StringArray` and a caller's `Array with String` are ONE instance
 The corpus declares `typealias StringArray = Array with String` INSIDE `type String`
-(`stdlib/String.maxon:622`) and this file declares its own `Array with String`. Two spellings, and the
+(`stdlib/String.maxon:620`) and this file declares its own `Array with String`. Two spellings, and the
 retirement is only sound if they are one `GenericInstanceId` — interning is keyed on `(typeNameId, args)`
 across the whole program, so they cannot be two, and this is what says so out loud: a split result is
 passed where the literal's type is declared and a literal is passed where the corpus's return type would
@@ -1129,7 +1129,7 @@ end 'takesPieces'
 function main() returns ExitCode
 	var literal = ["seed"]
 	let fromSplit = "a,b,c".split(",")
-	print("{takesPieces(fromSplit)}\n")
+	print("{takesPieces(fromSplit as Pieces)}\n")
 	print("{takesPieces(literal)}\n")
 	for p in fromSplit 'each'
 		literal.push(p.clone())

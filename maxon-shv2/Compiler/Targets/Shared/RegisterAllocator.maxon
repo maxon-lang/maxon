@@ -90,23 +90,15 @@ export type Allocation
 	var holderOfReg as ValueIdArray
 
 	export static function create(valueCount ValueId) returns Allocation
-		// The colour column is BUILT as a `RegNumColumn`, not filled as a `DenseColumn` and stored as one.
-		// ⛔⛔ **THE TWO ARE NOT THE SAME BUFFER, AND THE DIFFERENCE IS THE ELEMENT STRIDE.** `DenseInt` is
-		// `int(0 to u64.max)` and strides EIGHT bytes; `RegNum` is `int(0 to 63)` and strides ONE
-		// (`rangedAliasStorageBytes`). Storing the first where the second is declared would hand every later
-		// read a stride it was not written at — the silent wrong answer `specs-shv2/bytearray-element-size.md`
-		// measures at length (*"read back 44 from one record and 300 from the other, one static type, two
-		// behaviours, no diagnostic"*). shv2 refuses it; the bootstrap accepts it only because it does not pack
-		// narrow elements at all, so there is no reference answer to prefer here.
-		//
-		// ⚠ **AND NOTHING IS NARROWED, WHICH IS WHY NO CAST BELONGS HERE.** Every value this column is born
-		// holding is `Uncolored`, and `Uncolored` IS a `RegNum` (`RegisterFileSize as RegNum`, 63). The
-		// mismatch was never about data outgrowing a bound — it was `filledColumn` being hard-typed to one
-		// element type while this field declares another.
+		// Each column is BUILT as its own declared instance: `RegNum` strides ONE byte and `DenseInt` EIGHT
+		// (`rangedAliasStorageBytes`), so a buffer filled as one and read as the other would hand every later
+		// read a stride it was not written at.
 		var color = RegNumColumn.create()
-		color.refill(valueCount, value: Uncolored)
+		color.refill(valueCount as ElementIndex, value: Uncolored)
+		var holderOfReg = ValueIdArray.create()
+		holderOfReg.refill(RegisterFileSize, value: 0)
 
-		return Self{color: color, valueCount: valueCount, holderOfReg: filledColumn(RegisterFileSize, value: 0)}
+		return Self{color: color, valueCount: valueCount, holderOfReg: holderOfReg}
 	end 'create'
 
 	export function isColored(v ValueId) returns bool
@@ -194,9 +186,9 @@ export type ReuseCopyPlan
 	// a defence against a future reader, not a value any decision depends on today.
 	export function record(seq OpSeq, destReg RegNum, srcReg RegNum)
 		let noRegister = RegisterFileSize as RegNum
-		self.present.growFilled(seq + 1, value: false)
-		self.destRegs.growFilled(seq + 1, value: noRegister)
-		self.srcRegs.growFilled(seq + 1, value: noRegister)
+		self.present.growFilled(((seq + 1) as ElementIndex), value: false)
+		self.destRegs.growFilled(((seq + 1) as ElementIndex), value: noRegister)
+		self.srcRegs.growFilled(((seq + 1) as ElementIndex), value: noRegister)
 
 		try self.present.set(seq, value: true) otherwise panic("ReuseCopyPlan.record: present.set OOB at sequence {seq}")
 		try self.destRegs.set(seq, value: destReg) otherwise panic("ReuseCopyPlan.record: destRegs.set OOB at sequence {seq}")
@@ -1106,7 +1098,7 @@ module function foldFunctionAllocation(project Project, stats RegAllocStats, fun
 	// so the name below never exists at runtime - which is the whole reason the structured tier
 	// exists, and why it can sit on a per-function path at all.
 	let event = __DebugStream.nameId("regalloc.functionAllocated") as TraceName
-	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(facts.maxPressure), arg1: stats.valuesSplit)
+	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(facts.maxPressure) as TraceArg, arg1: stats.valuesSplit as TraceArg)
 end 'foldFunctionAllocation'
 
 // THE WHOLE PER-FUNCTION ALLOCATION, AND NOTHING THE COMPILE OWNS.
@@ -1210,12 +1202,12 @@ end 'allocateFunctionCore'
 type StuckValues
 	var values as ValueIdArray
 	var freeMasks as RegMaskColumn
-	var occupantStart as DenseColumn
-	var occupantCount as DenseColumn
+	var occupantStart as ColumnLengthColumn
+	var occupantCount as ColumnLengthColumn
 	var occupants as ValueIdArray
 
 	export static function create() returns StuckValues
-		return Self{values: ValueIdArray.create(), freeMasks: RegMaskColumn.create(), occupantStart: DenseColumn.create(), occupantCount: DenseColumn.create(), occupants: ValueIdArray.create()}
+		return Self{values: ValueIdArray.create(), freeMasks: RegMaskColumn.create(), occupantStart: ColumnLengthColumn.create(), occupantCount: ColumnLengthColumn.create(), occupants: ValueIdArray.create()}
 	end 'create'
 
 	export function clear()
@@ -1440,9 +1432,12 @@ type ColorHints
 		// `copyHint` needs no such treatment: `ValueIdArray` and `DenseColumn` are both `Array with
 		// int(0 to u64.max)`, one instance under two alias spellings.
 		var fixedHint = RegNumColumn.create()
-		fixedHint.refill(valueCount, value: NoFixedHint)
+		fixedHint.refill(valueCount as ElementIndex, value: NoFixedHint)
 
-		return Self{fixedHint: fixedHint, copyHint: filledColumn(valueCount, value: valueCount), noPartner: valueCount}
+		var copyHint = ValueIdArray.create()
+		copyHint.refill(valueCount as ElementIndex, value: valueCount)
+
+		return Self{fixedHint: fixedHint, copyHint: copyHint, noPartner: valueCount}
 	end 'create'
 
 	function setFixedIfUnset(v ValueId, regNum RegNum)
@@ -2256,8 +2251,8 @@ type BlockDeaths
 	// True iff `v` dies at op position `pos`. A linear scan of the op's dying values — at most the
 	// op's operand count, so this is O(1) in practice.
 	export function dies(pos BlockOpPos, v ValueId) returns bool
-		for k in 0 upto self.byPos.degree(pos) 'each'
-			if self.byPos.neighbour(pos, k: k) == v 'match'
+		for k in 0 upto self.byPos.degree(pos as CsrIndex) 'each'
+			if self.byPos.neighbour(pos as CsrIndex, k: k) as ValueId == v 'match'
 				return true
 			end 'match'
 		end 'each'
@@ -2268,10 +2263,10 @@ type BlockDeaths
 	// may reuse. (An uncolored dead def is handled by the caller's live-def computation, not here.)
 	export function dyingRegsAt(pos BlockOpPos, alloc Allocation) returns RegMask
 		var mask = 0 as RegMask
-		for k in 0 upto self.byPos.degree(pos) 'each'
-			let v = self.byPos.neighbour(pos, k: k)
-			if alloc.isColored(v) 'colored'
-				mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
+		for k in 0 upto self.byPos.degree(pos as CsrIndex) 'each'
+			let v = self.byPos.neighbour(pos as CsrIndex, k: k)
+			if alloc.isColored(v as ValueId) 'colored'
+				mask = regMaskAdd(mask, regNum: alloc.regNumOf(v as ValueId))
 			end 'colored'
 		end 'each'
 		return mask
@@ -2287,7 +2282,7 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 
 	liveness.liveOutInto(local, out: seedBuf)
 	for v in seedBuf 'seed'
-		bitsetAdd(seenBelow, base: 0, bit: v)
+		bitsetAdd(seenBelow, base: 0, bit: v as BitIndex)
 	end 'seed'
 	// ⚠ `liveByClass` HERE TALLIES THE ROW, AND THIS ROW IS NOT A LIVE SET. `seenBelow` means "seen
 	// below this op", and the death scan ADDS to it itself (below) for values that die — so its
@@ -2307,7 +2302,7 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	// in reverse, and a counting sort restores order in O(pairs + ops). `posOf` is the CSR KEY column
 	// (its entries are `BlockOpPos`), `valueOf` the value column.
 	var posOf = CsrColumn.create()
-	var valueOf = ValueIdArray.create()
+	var valueOf = CsrColumn.create()
 
 	for ri in 0 upto n 'eachOpRev'
 		let pos = n - 1 - ri
@@ -2318,12 +2313,12 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 		for o in buf 'markDeaths'
 			if operandIsVirtual(o) 'virt'
 				let v = operandValueId(o)
-				if not bitsetTest(seenBelow, base: 0, bit: v) 'dies'
+				if not bitsetTest(seenBelow, base: 0, bit: v as BitIndex) 'dies'
 					posOf.push(pos)
 					valueOf.push(v)
 					// Mark it seen, so the SAME value appearing twice in this op (`sub x, x`) is
 					// recorded as dying ONCE. The row's tally follows the row — see the note above.
-					bitsetAdd(seenBelow, base: 0, bit: v)
+					bitsetAdd(seenBelow, base: 0, bit: v as BitIndex)
 					stepClassLive(liveByClass, classes: liveness.valueClass, v: v, entering: true)
 				end 'dies'
 			end 'virt'
@@ -2338,10 +2333,10 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	// block's live-in set plus any of its own block-args an op re-added.
 	liveness.liveInInto(local, out: seedBuf)
 	for v in seedBuf 'clearLiveIn'
-		bitsetRemove(seenBelow, base: 0, bit: v)
+		bitsetRemove(seenBelow, base: 0, bit: v as BitIndex)
 	end 'clearLiveIn'
 	for arg in block.blockArgs 'clearPhis'
-		bitsetRemove(seenBelow, base: 0, bit: arg.valueId)
+		bitsetRemove(seenBelow, base: 0, bit: arg.valueId as BitIndex)
 	end 'clearPhis'
 
 	// The scan discovered the deaths in REVERSE op order; the counting sort in `buildCsr`

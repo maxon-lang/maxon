@@ -218,14 +218,14 @@ function hoistInFunc(module StdModule, func IrFunction, scratch LicmScratch)
 	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
 
 	for header in distinctLoopHeaders(backEdges, nodeCount: blockCount) 'eachLoop'
-		hoistFromLoop(module, func: func, tree: tree, backEdges: backEdges, header: header, scratch: scratch)
+		hoistFromLoop(module, func: func, tree: tree, backEdges: backEdges, header: header as BlockRefIndex, scratch: scratch)
 	end 'eachLoop'
 end 'hoistInFunc'
 
 // Analyse ONE natural loop and move what it admits into that loop's preheader.
 function hoistFromLoop(module StdModule, func IrFunction, tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, scratch LicmScratch)
 	scratch.beginLoop(tree.blockCount)
-	collectNaturalLoop(tree.pred, header: header, edges: backEdges, nodeCount: tree.blockCount, into: scratch.members)
+	collectNaturalLoop(tree.pred, header: header as CsrIndex, edges: backEdges, nodeCount: tree.blockCount as CsrIndex, into: scratch.members)
 
 	match soleLoopEntry(tree, members: scratch.members, header: header) 'preheader'
 		none then return
@@ -286,14 +286,14 @@ function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header Blo
 	var found = LoopPreheader.none
 	var entries = 0 as PredecessorCount
 
-	for k in 0 upto tree.pred.degree(header) 'eachPredecessor'
-		let predecessor = tree.pred.neighbour(header, k: k)
+	for k in 0 upto tree.pred.degree(header as CsrIndex) 'eachPredecessor'
+		let predecessor = tree.pred.neighbour(header as CsrIndex, k: k)
 		if members.contains(predecessor) 'aLatch'
 			continue
 		end 'aLatch'
 
 		entries = entries + 1
-		found = LoopPreheader.position(predecessor)
+		found = LoopPreheader.position(predecessor as BlockRefIndex)
 	end 'eachPredecessor'
 
 	if entries != 1 'notAUniqueEntry'
@@ -308,7 +308,7 @@ end 'soleLoopEntry'
 function soleEntryLeadsOnlyToTheHeader(tree StdDominatorTree, entry LoopPreheader, header BlockRefIndex) returns LoopPreheader
 	match entry 'candidate'
 		none then panic("soleEntryLeadsOnlyToTheHeader: asked of no candidate — the caller counted exactly one entry predecessor before calling")
-		position(preheader) then return entry if tree.succ.degree(preheader) == 1 and tree.succ.neighbour(preheader, k: 0) == header else LoopPreheader.none
+		position(preheader) then return entry if tree.succ.degree(preheader as CsrIndex) == 1 and tree.succ.neighbour(preheader as CsrIndex, k: 0) as BlockRefIndex == header else LoopPreheader.none
 	end 'candidate'
 end 'soleEntryLeadsOnlyToTheHeader'
 
@@ -330,27 +330,27 @@ end 'soleEntryLeadsOnlyToTheHeader'
 // and the required count is two higher, so the equality still selects exactly the blocks on all chains.
 function markMustExecuteBlocks(tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, scratch LicmScratch)
 	for position in scratch.members.blocks 'eachExit'
-		if not blockLeavesTheLoop(tree, position: position, members: scratch.members) 'notAnExit'
+		if not blockLeavesTheLoop(tree, position: position as BlockRefIndex, members: scratch.members) 'notAnExit'
 			continue
 		end 'notAnExit'
 
-		scratch.mustExecute.climbChainFrom(position, header: header, tree: tree)
+		scratch.mustExecute.climbChainFrom(position as BlockRefIndex, header: header, tree: tree)
 	end 'eachExit'
 
 	for k in 0 upto backEdges.count() 'eachLatch'
-		let h = try backEdges.heads.get(k) otherwise panic("markMustExecuteBlocks: heads.get OOB at {k}")
+		let h = (try backEdges.heads.get(k) otherwise panic("markMustExecuteBlocks: heads.get OOB at {k}")) as BlockRefIndex
 		if h != header 'anotherLoop'
 			continue
 		end 'anotherLoop'
 
-		scratch.mustExecute.climbChainFrom(try backEdges.tails.get(k) otherwise panic("markMustExecuteBlocks: tails.get OOB at {k}"), header: header, tree: tree)
+		scratch.mustExecute.climbChainFrom((try backEdges.tails.get(k) otherwise panic("markMustExecuteBlocks: tails.get OOB at {k}") as BlockRefIndex), header: header, tree: tree)
 	end 'eachLatch'
 end 'markMustExecuteBlocks'
 
 // Whether control can leave the loop from `position` — it has a successor outside the member set.
 function blockLeavesTheLoop(tree StdDominatorTree, position BlockRefIndex, members LoopMembership) returns bool
-	for k in 0 upto tree.succ.degree(position) 'eachSuccessor'
-		if not members.contains(tree.succ.neighbour(position, k: k)) 'anExitEdge'
+	for k in 0 upto tree.succ.degree(position as CsrIndex) 'eachSuccessor'
+		if not members.contains(tree.succ.neighbour(position as CsrIndex, k: k)) 'anExitEdge'
 			return true
 		end 'anExitEdge'
 	end 'eachSuccessor'
@@ -444,7 +444,7 @@ function scanLoopEffects(module StdModule, func IrFunction, scratch LicmScratch)
 	scratch.effects.reset()
 
 	for position in scratch.members.blocks 'eachBlock'
-		let block = blockAtPosition(module, func: func, position: position)
+		let block = blockAtPosition(module, func: func, position: position as BlockRefIndex)
 
 		for opIdx in block.opRefs 'eachOp'
 			scratch.effects.note(try module.ops.get(opIdx) otherwise panic("scanLoopEffects: op index {opIdx} from block.opRefs not in module.ops"))
@@ -471,7 +471,7 @@ end 'scanLoopEffects'
 // so there is nothing here to forget.
 function collectLoopDefs(module StdModule, func IrFunction, scratch LicmScratch)
 	for position in scratch.members.blocks 'eachBlock'
-		let block = blockAtPosition(module, func: func, position: position)
+		let block = blockAtPosition(module, func: func, position: position as BlockRefIndex)
 
 		for blockArg in block.blockArgs 'eachPhi'
 			scratch.definedInLoop.insert(blockArg.valueId)
@@ -533,14 +533,14 @@ function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorT
 	while stack.count() > 0 'preorder'
 		let position = try stack.pop() otherwise panic("analyzeLoopBlocks: stack.pop on a non-empty stack failed")
 
-		if not scratch.members.contains(position) 'notInThisLoop'
+		if not scratch.members.contains(position as CsrIndex) 'notInThisLoop'
 			continue
 		end 'notInThisLoop'
 
 		analyzeLoopBlock(module, block: blockAtPosition(module, func: func, position: position), position: position, memoryIsStable: memoryIsStable, scratch: scratch)
 
-		for k in 0 upto tree.children.degree(position) 'eachChild'
-			stack.push(tree.children.neighbour(position, k: k))
+		for k in 0 upto tree.children.degree(position as CsrIndex) 'eachChild'
+			stack.push(tree.children.neighbour(position as CsrIndex, k: k))
 		end 'eachChild'
 	end 'preorder'
 end 'analyzeLoopBlocks'
@@ -735,7 +735,7 @@ type MustExecuteCounter
 
 		self.touched.clear()
 		self.climbs = 0
-		self.onChains.growFilled(blockCount, value: 0)
+		self.onChains.growFilled(blockCount as ElementIndex, value: 0)
 	end 'reset'
 
 	// Walk one block's immediate-dominator chain up to the loop header, counting every block on it. The
@@ -821,7 +821,7 @@ type LoadWitnessTable
 		end 'anotherLoadProvesMore'
 
 		self.proven.insert(addrId)
-		self.covers.growFilled(addrId + 1, value: 0)
+		self.covers.growFilled(((addrId + 1) as ElementIndex), value: 0)
 		try self.covers.set(addrId, value: bytes) otherwise panic("LoadWitnessTable.record: covers.set OOB at {addrId}")
 	end 'record'
 
@@ -871,7 +871,7 @@ type LoopValueStamps
 	end 'beginLoop'
 
 	function insert(valueId ValueId)
-		self.stampOf.growFilled(valueId + 1, value: NoLoopStamp)
+		self.stampOf.growFilled(((valueId + 1) as ElementIndex), value: NoLoopStamp)
 		try self.stampOf.set(valueId, value: self.current) otherwise panic("LoopValueStamps.insert: stampOf.set OOB at {valueId}")
 	end 'insert'
 

@@ -390,7 +390,7 @@ end 'main'
 <!-- test: string-contains-char -->
 <!-- W49 wave 4 UNLOCKED THIS. It was disabled because `String.contains` was a SYNTHESIZED arm that served
 the `String` form only, so `text.contains('e')` was `E3005: 'contains' requires a String`. Retiring the
-member onto `stdlib/String.maxon:457,464` makes it an ordinary DECLARED overload set, which is exactly what
+member onto `stdlib/String.maxon:455,464` makes it an ordinary DECLARED overload set, which is exactly what
 `resolveOverloadedCalls` has always been able to pick from. -->
 ```maxon
 function main() returns ExitCode
@@ -592,7 +592,7 @@ end 'over'
 
 function main() returns ExitCode
 	let s = "hello"
-	return over(s.count())
+	return over(s.count() as Wide)
 end 'main'
 ```
 ```exitcode
@@ -982,7 +982,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function pad(value Integer, with String = "0") returns Integer
-	return value + with.count()
+	return value + (with.count() as Integer)
 end 'pad'
 
 function pad(value bool, with String = "---") returns Integer
@@ -1005,7 +1005,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function tag(value Integer, mark String = "a") returns Integer
-	return value + mark.count()
+	return value + (mark.count() as Integer)
 end 'tag'
 
 function tag(value String, mark String = "bb") returns Integer
@@ -1032,7 +1032,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function width(value Integer, unit String = "mm") returns Integer
-	return value + unit.count()
+	return value + (unit.count() as Integer)
 end 'width'
 
 function width(value bool, unit String = "inches") returns Integer
@@ -1611,7 +1611,7 @@ end 'want'
 function main() returns ExitCode
 	let a = try alpha.want(1) otherwise 0
 	let b = try alpha.want(false) otherwise 0
-	return (a + b + beta.want(3)) as ExitCode
+	return ((a + b) as ExitCode) + (beta.want(3) as ExitCode)
 end 'main'
 ```
 ```exitcode
@@ -1662,7 +1662,7 @@ end 'want'
 function main() returns ExitCode
 	let a = try alpha.want(1) otherwise 0
 	let b = try alpha.want(false) otherwise 0
-	return (a + b + beta.want(3)) as ExitCode
+	return ((a + b) as ExitCode) + (beta.want(3) as ExitCode)
 end 'main'
 ```
 ```maxoncstderr
@@ -1698,7 +1698,7 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return (alpha.pick(2) + alpha.pick(true) + beta.pick(3)) as ExitCode
+	return ((alpha.pick(2) + alpha.pick(true)) as ExitCode) + (beta.pick(3) as ExitCode)
 end 'main'
 ```
 ```exitcode

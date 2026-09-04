@@ -426,8 +426,8 @@ end 'rebuildUnitModule'
 
 // How many ops the unit's block BODIES hold, terminators aside. Counted rather than collected — this is
 // only ever a capacity.
-function unitBodyTally(unit RegAllocUnit) returns ElementCount
-	var tally = 0 as ElementCount
+function unitBodyTally(unit RegAllocUnit) returns ElementIndex
+	var tally = 0 as ElementIndex
 	for unitBlock in unit.blocks 'eachBlock'
 		tally = tally + unitBlock.body.count()
 	end 'eachBlock'
@@ -640,7 +640,7 @@ end 'spliceRegAllocResult'
 // append-only and earlier passes leave orphans in it, and an orphan is not this splice's to reuse.
 type OpSlotSupply
 	var recycled as OpIndexArray
-	var taken as ElementCount
+	var taken as ElementIndex
 
 	export static function create(recycled OpIndexArray) returns OpSlotSupply
 		return Self{recycled: recycled, taken: 0}
@@ -676,7 +676,7 @@ function blockRefsByIdOf(module TargetModule, func IrFunction) returns BlockRefA
 	// an id this function does not own reads as absent rather than as block 0. The id space is dense per
 	// function but not gap-free, so the holes are real.
 	var byId = BlockRefArray.create()
-	byId.refill(highestId + 1, value: module.blocks.count())
+	byId.refill(((highestId + 1) as ElementIndex), value: module.blocks.count())
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("blockRefsByIdOf: blockRef {blockRef} is not in module.blocks")
 		try byId.set(block.id, value: blockRef) otherwise panic("blockRefsByIdOf: block id {block.id} is above the {byId.count()} the id space was sized to")

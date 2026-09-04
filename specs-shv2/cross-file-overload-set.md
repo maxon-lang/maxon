@@ -330,7 +330,7 @@ public type Bag
 end 'Bag'
 
 export function pick(s String) returns Bag
-	return Bag.of(s.count() + 33, first: 44)
+	return Bag.of((s.count() as Count) + 33, first: 44)
 end 'pick'
 
 // --- file: main.maxon

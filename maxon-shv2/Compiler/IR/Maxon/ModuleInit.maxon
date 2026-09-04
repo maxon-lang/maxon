@@ -769,6 +769,7 @@ export type SynthesizedFunction
 	var block as IrBlock
 	var valueTags as ValueTypeTagArray
 	var valueNameIds as TypeNameIdArray
+	var valueBrandIds as TypeNameIdArray
 	var valueClosureEnv as ValueIdArray
 	var valueIsCapturingClosure as BoolArray
 
@@ -778,11 +779,13 @@ export type SynthesizedFunction
 	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray, needsGreenThreadStackGuard bool = false) returns SynthesizedFunction
 		var valueTags = ValueTypeTagArray.create()
 		var valueNameIds = TypeNameIdArray.create()
+		var valueBrandIds = TypeNameIdArray.create()
 		var valueClosureEnv = ValueIdArray.create()
 		var valueIsCapturingClosure = BoolArray.create()
 		for paramType in paramTypes 'eachParam'
 			valueTags.push(maxonTypeTag(paramType))
 			valueNameIds.push(typeNameIdOf(paramType))
+			valueBrandIds.push(UnnamedTypeId)
 			valueClosureEnv.push(0)
 			valueIsCapturingClosure.push(false)
 		end 'eachParam'
@@ -794,11 +797,11 @@ export type SynthesizedFunction
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. ⚠ The Maxon-tier population is
 		// `__module_init`, `__maxon_global_cleanup` and one `__lazy_init#<label>` per lazy static — the last of
 		// which is the one that carries `needsGreenThreadStackGuard`.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: needsGreenThreadStackGuard)
-		let funcIndex = module.funcCount()
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: needsGreenThreadStackGuard)
+		let funcIndex = module.funcCount() as FuncIndex
 		module.pushFunc(func)
 
-		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry"), valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
+		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry"), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
 	end 'open'
 
 	// Allocate a fresh ValueId AND record its type, in lockstep — `Parser.mintValue`'s twin over the
@@ -812,6 +815,7 @@ export type SynthesizedFunction
 		let id = self.valueTags.count()
 		self.valueTags.push(tag)
 		self.valueNameIds.push(self.projectScopedNameId(tag, nameId: nameId))
+		self.valueBrandIds.push(UnnamedTypeId)
 		self.valueClosureEnv.push(0)
 		self.valueIsCapturingClosure.push(false)
 		return id
@@ -882,7 +886,7 @@ export type SynthesizedFunction
 	export function emit(op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
 		self.module.appendOp(self.block, op: op)
-		self.recordOpTables(op, opIndex: opIndex, range: range)
+		self.recordOpTables(op, opIndex: opIndex as OpIndex, range: range)
 	end 'emit'
 
 	// ⭐ **OPEN A FRESH BLOCK AND CONTINUE EMITTING INTO IT** (spec-port `lazy-static`). Until the lazy-init
@@ -915,7 +919,7 @@ export type SynthesizedFunction
 	export function terminateBlock(target IrBlock, op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
 		self.module.setTerminator(target, op: op)
-		self.recordOpTables(op, opIndex: opIndex, range: range)
+		self.recordOpTables(op, opIndex: opIndex as OpIndex, range: range)
 	end 'terminateBlock'
 
 	// Terminate the block ops are CURRENTLY landing in. It is `terminateBlock` over `self.block` and nothing

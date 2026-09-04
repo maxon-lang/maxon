@@ -685,7 +685,7 @@ export type SplitEdits
 	function commitBlock(module TargetModule, topo FuncTopology, index UseIndex, dirty BlockSet, pressure PressureIndex, relayout PressureRelayoutScratch, opFacts OpVariantFacts, buf OperandList, blockLocal CfgIndex, from SpliceBatchIndex, to SpliceBatchIndex, withRemoval bool)
 		var block = blockAt(module, topo: topo, local: blockLocal)
 		spliceOpRefs(block, positions: self.positions, opIdxs: self.opIdxs, from: from, to: to)
-		index.addOps(to - from)
+		index.addOps(((to - from) as OpSeq))
 
 		// The POSITIONAL index takes the same ops, in the same ascending order, each at the position the
 		// backward splice above just put it at: entry `j` of this block's run was recorded at a PRE-split
@@ -717,7 +717,7 @@ export type SplitEdits
 			// Its LEAF is vacated first, while `at` still names it: freeing it afterwards would resolve the
 			// position against a block the op has already left.
 			pressure.removeOp(blockLocal, slot: pressure.slotOfPosition(blockLocal, pos: at))
-			_ = try block.opRefs.remove(at) otherwise panic("SplitEdits.commitBlock: opRefs.remove OOB at {at} of block {blockLocal}")
+			_ = try block.opRefs.remove(at as ElementIndex) otherwise panic("SplitEdits.commitBlock: opRefs.remove OOB at {at} of block {blockLocal}")
 			index.removeOp()
 		end 'dropTheDeadDef'
 
@@ -774,7 +774,7 @@ export type SplitEdits
 	// How many of the splices in `[from, to)` — ascending by position — land at or before block position
 	// `pos`, and so shift whatever sat there. Binary search: a block can take as many splices as it has
 	// ops, and a linear count per record would put back the Θ(records × splices) this batching removes.
-	function splicesAtOrBefore(pos BlockOpPos, from SpliceBatchIndex, to SpliceBatchIndex) returns SpliceBatchIndex
+	function splicesAtOrBefore(pos BlockOpPos, from SpliceBatchIndex, to SpliceBatchIndex) returns BlockOpPos
 		var lo = from
 		var hi = to
 		while lo < hi 'narrow'
@@ -840,21 +840,21 @@ type PeakTree
 	export function reset(blockCount CfgIndex)
 		self.numBlocks = blockCount
 		var base = 1 as ColumnLength
-		while base < blockCount 'toPowerOfTwo'
+		while base < blockCount as ColumnLength 'toPowerOfTwo'
 			base = base + base
 		end 'toPowerOfTwo'
 		self.leafBase = base
 
-		self.found.refill(blockCount, value: false)
-		self.pressure.refill(blockCount, value: 0)
-		self.forwardPos.refill(blockCount, value: 0)
-		self.peakSeq.refill(blockCount, value: 0)
-		self.clobberOnly.refill(blockCount, value: false)
-		self.witness.refill(blockCount, value: 0)
-		self.witnessClass.refill(blockCount, value: RegClass.gpr)
-		self.atFixedRegisterOp.refill(blockCount, value: false)
+		self.found.refill(blockCount as ElementIndex, value: false)
+		self.pressure.refill(blockCount as ElementIndex, value: 0)
+		self.forwardPos.refill(blockCount as ElementIndex, value: 0)
+		self.peakSeq.refill(blockCount as ElementIndex, value: 0)
+		self.clobberOnly.refill(blockCount as ElementIndex, value: false)
+		self.witness.refill(blockCount as ElementIndex, value: 0)
+		self.witnessClass.refill(blockCount as ElementIndex, value: RegClass.gpr)
+		self.atFixedRegisterOp.refill(blockCount as ElementIndex, value: false)
 		// Every node — including the PADDING leaves past `blockCount` — starts empty.
-		self.winner.refill(base + base, value: blockCount)
+		self.winner.refill(((base + base) as ElementIndex), value: blockCount)
 	end 'reset'
 
 	// Record one block's rank at its leaf. `build` (a whole-function seed) or `promote` (an incremental
@@ -868,7 +868,7 @@ type PeakTree
 		try self.witness.set(blockLocal, value: rank.witness) otherwise panic("PeakTree.setLeaf: witness.set OOB for block {blockLocal}")
 		try self.witnessClass.set(blockLocal, value: rank.witnessClass) otherwise panic("PeakTree.setLeaf: witnessClass.set OOB for block {blockLocal}")
 		try self.atFixedRegisterOp.set(blockLocal, value: rank.atFixedRegisterOp) otherwise panic("PeakTree.setLeaf: atFixedRegisterOp.set OOB for block {blockLocal}")
-		try self.winner.set(self.leafBase + blockLocal, value: blockLocal if rank.found else self.numBlocks) otherwise panic("PeakTree.setLeaf: winner.set OOB for block {blockLocal}")
+		try self.winner.set(self.leafBase + (blockLocal as ColumnLength), value: blockLocal if rank.found else self.numBlocks) otherwise panic("PeakTree.setLeaf: winner.set OOB for block {blockLocal}")
 	end 'setLeaf'
 
 	// Build every internal node from the leaves, in DESCENDING node order so a node's children are
@@ -882,7 +882,7 @@ type PeakTree
 	// Re-publish ONE block's leaf up to the root — O(log blocks), which is what keeps a split's cost
 	// proportional to what it dirtied.
 	export function promote(blockLocal CfgIndex)
-		var node = (self.leafBase + blockLocal) / 2
+		var node = (self.leafBase + (blockLocal as ColumnLength)) / 2
 		while node >= 1 'upToRoot'
 			self.combineAt(node)
 			if node == 1 'atRoot'
@@ -1028,7 +1028,8 @@ end 'emptyRank'
 
 // A slot in the positional pressure index — the STABLE coordinate an op keeps for as long as it is in
 // the function. Unlike a block POSITION it does not move when an op is spliced in ahead of it.
-typealias PressureSlot = int(0 to u64.max)
+export typealias PressureSlot = int(0 to u64.max)
+typealias PressureSlotColumn = Array with PressureSlot
 
 // A per-op contribution to the BACKWARD-running live population — SIGNED, because an op that defines a
 // value that outlives it LOWERS the population as the sweep steps back over it.
@@ -1055,7 +1056,7 @@ let MinRespaceStride = 2 as PressureSlot
 // lands at most `len - stride` in. That is precisely what `freeSlotAt` needs at each end of a block — a
 // free slot ahead of the first op for a position-0 splice, and the exit leaf clear of the last.
 function spreadStride(len PressureSlot, count BlockOpPos) returns PressureSlot
-	let gaps = count + 1
+	let gaps = (count + 1) as PressureSlot
 	let stride = try (len / gaps) otherwise panic("spreadStride: a run of {count} op(s) was said to have {gaps} gaps")
 	return stride
 end 'spreadStride'
@@ -1102,9 +1103,9 @@ export type PressureIndex
 	var slotCount as ColumnLength
 	// Per block: the first slot of its aligned run, the run's length, and the node that covers the run
 	// EXACTLY. All three are derived from one layout pass so no reader re-derives the arithmetic.
-	var blockFirst as DenseColumn
-	var blockLen as DenseColumn
-	var blockNode as DenseColumn
+	var blockFirst as PressureSlotColumn
+	var blockLen as PressureSlotColumn
+	var blockNode as ColumnLengthColumn
 	// LEAVES. `holdsOp` is what makes a slot a POSITION and a peak candidate; the exit leaf and every
 	// free slot carry `false`. `opAt` is meaningful only under it.
 	var holdsOp as BoolArray
@@ -1113,7 +1114,7 @@ export type PressureIndex
 	var leafTransient as PressureDeltaColumn
 	// NODES. `nodeOps` is the occupancy count the position <-> slot mapping descends on; `nodeSum` and
 	// `nodeBest` are the suffix-sum aggregate.
-	var nodeOps as DenseColumn
+	var nodeOps as BlockOpPosArray
 	var nodeSum as PressureDeltaColumn
 	var nodeBest as PressureDeltaColumn
 	// The OR of every op's clobber mask in the subtree — the second aggregate over the same slots, and
@@ -1131,10 +1132,10 @@ export type PressureIndex
 	// over it would be Theta(module ops) per function — the shape `OpVariantFacts` refuses), and a
 	// POSITION is exactly the coordinate a splice moves. So the slot is recorded where it is known for
 	// free: at the one place an op is seated. `storeFitsPool` is what reads it.
-	var defSlot as DenseColumn
+	var defSlot as PressureSlotColumn
 
 	export static function create() returns PressureIndex
-		return Self{slotCount: 1, blockFirst: DenseColumn.create(), blockLen: DenseColumn.create(), blockNode: DenseColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: DenseColumn.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: DenseColumn.create()}
+		return Self{slotCount: 1, blockFirst: PressureSlotColumn.create(), blockLen: PressureSlotColumn.create(), blockNode: ColumnLengthColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: BlockOpPosArray.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: PressureSlotColumn.create()}
 	end 'create'
 
 	// ----------------------------------------------------------------------
@@ -1151,47 +1152,47 @@ export type PressureIndex
 	// from the other — a second copy of this arithmetic would put an op at a slot the queries do not
 	// expect it at, which is a wrong peak and no crash.
 	function placeRuns(topo FuncTopology, opCounts DenseColumn)
-		self.blockFirst.refill(topo.numBlocks, value: 0)
-		self.blockLen.refill(topo.numBlocks, value: 0)
-		self.blockNode.refill(topo.numBlocks, value: 0)
+		self.blockFirst.refill(topo.numBlocks as ElementIndex, value: 0)
+		self.blockLen.refill(topo.numBlocks as ElementIndex, value: 0)
+		self.blockNode.refill(topo.numBlocks as ElementIndex, value: 0)
 
 		var next = 0 as PressureSlot
 		for b in 0 upto topo.numBlocks 'eachBlock'
 			let ops = try opCounts.get(b) otherwise panic("PressureIndex.placeRuns: opCounts.get OOB for block {b}")
-			let run = roundUpToPowerOfTwo((ops + 1) * SlotGap + 1)
+			let run = roundUpToPowerOfTwo((((ops + 1) * SlotGap + 1) as PressureSlot))
 			let first = roundUpToRunBoundary(next, runLength: run)
 			try self.blockFirst.set(b, value: first) otherwise panic("PressureIndex.placeRuns: blockFirst.set OOB for block {b}")
 			try self.blockLen.set(b, value: run) otherwise panic("PressureIndex.placeRuns: blockLen.set OOB for block {b}")
 			next = first + run
 		end 'eachBlock'
 
-		self.slotCount = roundUpToPowerOfTwo(next)
+		self.slotCount = roundUpToPowerOfTwo(next) as ColumnLength
 		for b in 0 upto topo.numBlocks 'eachNode'
 			// The node covering `[first, first + len)`: the leaves start at `slotCount`, so dividing the
 			// leaf index by the run length climbs exactly `log2(len)` levels.
 			let first = try self.blockFirst.get(b) otherwise panic("PressureIndex.placeRuns: blockFirst.get OOB for block {b}")
 			let run = try self.blockLen.get(b) otherwise panic("PressureIndex.placeRuns: blockLen.get OOB for block {b}")
 			// ⚠ The divide needs a `try` because the RANGE does not survive the column: `run` was written a
-			// line above as `roundUpToPowerOfTwo(…)`, which is 1 or more, but `blockLen` is a `DenseColumn`
-			// (`Array with DenseInt`, `int(0 to u64.max)`) and a read out of it carries the ELEMENT's range,
+			// line above as `roundUpToPowerOfTwo(…)`, which is 1 or more, but `blockLen` is a `PressureSlotColumn`
+			// (`Array with PressureSlot`, `int(0 to u64.max)`) and a read out of it carries the ELEMENT's range,
 			// not the writer's. So `divisorProof` sees a divisor that may be zero and is right to.
-			let node = try ((self.slotCount + first) / run) otherwise panic("PressureIndex.placeRuns: block {b}'s run length is a power of two and so never 0 — it was written from roundUpToPowerOfTwo one loop above")
+			let node = try (self.leafNodeOf(first) / (run as ColumnLength)) otherwise panic("PressureIndex.placeRuns: block {b}'s run length is a power of two and so never 0 — it was written from roundUpToPowerOfTwo one loop above")
 			try self.blockNode.set(b, value: node) otherwise panic("PressureIndex.placeRuns: blockNode.set OOB for block {b}")
 		end 'eachNode'
 
-		self.holdsOp.refill(self.slotCount, value: false)
-		self.opAt.refill(self.slotCount, value: 0)
-		self.leafDelta.refill(self.slotCount * RegClassCount, value: 0)
-		self.leafTransient.refill(self.slotCount * RegClassCount, value: 0)
-		self.nodeOps.refill(self.slotCount + self.slotCount, value: 0)
-		self.nodeSum.refill((self.slotCount + self.slotCount) * RegClassCount, value: 0)
-		self.nodeBest.refill((self.slotCount + self.slotCount) * RegClassCount, value: NoOpInSubtree)
-		self.nodeClobber.refill(self.slotCount + self.slotCount, value: 0)
+		self.holdsOp.refill(self.slotCount as ElementIndex, value: false)
+		self.opAt.refill(self.slotCount as ElementIndex, value: 0)
+		self.leafDelta.refill(((self.slotCount * RegClassCount) as ElementIndex), value: 0)
+		self.leafTransient.refill(((self.slotCount * RegClassCount) as ElementIndex), value: 0)
+		self.nodeOps.refill(((self.slotCount + self.slotCount) as ElementIndex), value: 0)
+		self.nodeSum.refill((((self.slotCount + self.slotCount) * RegClassCount) as ElementIndex), value: 0)
+		self.nodeBest.refill((((self.slotCount + self.slotCount) * RegClassCount) as ElementIndex), value: NoOpInSubtree)
+		self.nodeClobber.refill(((self.slotCount + self.slotCount) as ElementIndex), value: 0)
 	end 'placeRuns'
 
 	// Size the index for a function, from the IR's own op counts.
 	function layOut(module TargetModule, topo FuncTopology, opCounts DenseColumn)
-		opCounts.refill(topo.numBlocks, value: 0)
+		opCounts.refill(topo.numBlocks as ElementIndex, value: 0)
 		for b in 0 upto topo.numBlocks 'eachBlock'
 			let block = blockAt(module, topo: topo, local: b)
 			try opCounts.set(b, value: blockOpCount(block)) otherwise panic("PressureIndex.layOut: opCounts.set OOB for block {b}")
@@ -1203,8 +1204,17 @@ export type PressureIndex
 	// first op sits one gap IN, so an insertion ahead of it has somewhere to go — `freeSlotAt` treats the
 	// run's first slot as the lower bound and never seats an op there.
 	function evenSlot(blockLocal CfgIndex, pos BlockOpPos) returns PressureSlot
-		return self.firstSlotOf(blockLocal) + (pos + 1) * SlotGap
+		return self.firstSlotOf(blockLocal) + ((pos + 1) as PressureSlot) * SlotGap
 	end 'evenSlot'
+
+	// The tree node that is slot `slot`'s leaf: the leaves start at `slotCount`.
+	function leafNodeOf(slot PressureSlot) returns ColumnLength
+		return self.slotCount + (slot as ColumnLength)
+	end 'leafNodeOf'
+
+	function slotOfLeafNode(node ColumnLength) returns PressureSlot
+		return (node - self.slotCount) as PressureSlot
+	end 'slotOfLeafNode'
 
 	export function firstSlotOf(blockLocal CfgIndex) returns PressureSlot
 		return try self.blockFirst.get(blockLocal) otherwise panic("PressureIndex.firstSlotOf: block {blockLocal} out of range")
@@ -1232,7 +1242,7 @@ export type PressureIndex
 	function seatOp(slot PressureSlot, op TargetOp, opIdx OpIndex, opFacts OpVariantFacts, buf OperandList)
 		try self.holdsOp.set(slot, value: true) otherwise panic("PressureIndex.seatOp: holdsOp.set OOB at slot {slot}")
 		try self.opAt.set(slot, value: opIdx) otherwise panic("PressureIndex.seatOp: opAt.set OOB at slot {slot}")
-		try self.nodeClobber.set(self.slotCount + slot, value: opClobberMask(op, buf: buf, opFacts: opFacts)) otherwise panic("PressureIndex.seatOp: nodeClobber.set OOB at slot {slot}")
+		try self.nodeClobber.set(self.leafNodeOf(slot), value: opClobberMask(op, buf: buf, opFacts: opFacts)) otherwise panic("PressureIndex.seatOp: nodeClobber.set OOB at slot {slot}")
 		for o in buf 'eachOperand'
 			if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
 				try self.defSlot.set(operandValueId(o), value: slot) otherwise panic("PressureIndex.seatOp: value {operandValueId(o)} is defined at slot {slot} but is outside the index's value space")
@@ -1249,7 +1259,7 @@ export type PressureIndex
 	// Follow the value space the split minted ids into. The added entries are never read before an op
 	// seats them: a fresh id is DEFINED by an op the same split inserts.
 	export function growValueSpace(newValueCount ValueId)
-		self.defSlot.growFilled(newValueCount, value: 0)
+		self.defSlot.growFilled(newValueCount as ElementIndex, value: 0)
 	end 'growValueSpace'
 
 	// Does `slot` hold an op at all? The one question a caller holding a REMEMBERED slot has to ask: a
@@ -1267,19 +1277,19 @@ export type PressureIndex
 	end 'opAtSlot'
 
 	export function deltaAt(slot PressureSlot, class RegClass) returns PressureDelta
-		return try self.leafDelta.get(classRowIndex(slot, class: class)) otherwise panic("PressureIndex.deltaAt: leafDelta.get OOB at slot {slot}")
+		return try self.leafDelta.get(classRowIndex(slot as CfgIndex, class: class)) otherwise panic("PressureIndex.deltaAt: leafDelta.get OOB at slot {slot}")
 	end 'deltaAt'
 
 	export function transientAt(slot PressureSlot, class RegClass) returns PressureDelta
-		return try self.leafTransient.get(classRowIndex(slot, class: class)) otherwise panic("PressureIndex.transientAt: leafTransient.get OOB at slot {slot}")
+		return try self.leafTransient.get(classRowIndex(slot as CfgIndex, class: class)) otherwise panic("PressureIndex.transientAt: leafTransient.get OOB at slot {slot}")
 	end 'transientAt'
 
 	function setDelta(slot PressureSlot, class RegClass, value PressureDelta)
-		try self.leafDelta.set(classRowIndex(slot, class: class), value: value) otherwise panic("PressureIndex.setDelta: leafDelta.set OOB at slot {slot}")
+		try self.leafDelta.set(classRowIndex(slot as CfgIndex, class: class), value: value) otherwise panic("PressureIndex.setDelta: leafDelta.set OOB at slot {slot}")
 	end 'setDelta'
 
 	function setTransient(slot PressureSlot, class RegClass, value PressureDelta)
-		try self.leafTransient.set(classRowIndex(slot, class: class), value: value) otherwise panic("PressureIndex.setTransient: leafTransient.set OOB at slot {slot}")
+		try self.leafTransient.set(classRowIndex(slot as CfgIndex, class: class), value: value) otherwise panic("PressureIndex.setTransient: leafTransient.set OOB at slot {slot}")
 	end 'setTransient'
 
 	// Add `by` to the per-op contribution at `slot` for ONE file, and republish. THE edit the incremental
@@ -1322,7 +1332,7 @@ export type PressureIndex
 	// candidate — that covers the free slots AND the exit leaf, which carries a population but is a block
 	// BOUNDARY rather than a program point the peak-finder visits.
 	function refreshLeaf(slot PressureSlot)
-		let node = self.slotCount + slot
+		let node = self.leafNodeOf(slot)
 		let isOp = try self.holdsOp.get(slot) otherwise panic("PressureIndex.refreshLeaf: holdsOp.get OOB at slot {slot}")
 		try self.nodeOps.set(node, value: 1 if isOp else 0) otherwise panic("PressureIndex.refreshLeaf: nodeOps.set OOB at leaf {node}")
 		// The clobber leaf is NOT restated here: it is a property of the op, written once by `seatOp`, and
@@ -1330,8 +1340,8 @@ export type PressureIndex
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			let delta = self.deltaAt(slot, class: class)
-			try self.nodeSum.set(classRowIndex(node, class: class), value: delta) otherwise panic("PressureIndex.refreshLeaf: nodeSum.set OOB at leaf {node}")
-			try self.nodeBest.set(classRowIndex(node, class: class), value: (delta + self.transientAt(slot, class: class)) if isOp else NoOpInSubtree) otherwise panic("PressureIndex.refreshLeaf: nodeBest.set OOB at leaf {node}")
+			try self.nodeSum.set(classRowIndex(node as CfgIndex, class: class), value: delta) otherwise panic("PressureIndex.refreshLeaf: nodeSum.set OOB at leaf {node}")
+			try self.nodeBest.set(classRowIndex(node as CfgIndex, class: class), value: (delta + self.transientAt(slot, class: class)) if isOp else NoOpInSubtree) otherwise panic("PressureIndex.refreshLeaf: nodeBest.set OOB at leaf {node}")
 		end 'eachClass'
 	end 'refreshLeaf'
 
@@ -1349,7 +1359,7 @@ export type PressureIndex
 			let rightSum = self.sumOf(right, class: class)
 			let leftBest = self.bestOf(left, class: class)
 			let rightBest = self.bestOf(right, class: class)
-			try self.nodeSum.set(classRowIndex(node, class: class), value: leftSum + rightSum) otherwise panic("PressureIndex.combine: nodeSum.set OOB at {node}")
+			try self.nodeSum.set(classRowIndex(node as CfgIndex, class: class), value: leftSum + rightSum) otherwise panic("PressureIndex.combine: nodeSum.set OOB at {node}")
 			// ⚠ THE PARENTHESES ARE LOAD-BEARING: `a + b if c else d` binds as `a + (b if c else d)`, which
 			// on the not-taken arm adds `rightSum` to `rightBest` and inflates the whole subtree's peak by
 			// the population to its right. Measured before they were there: a block peak of 31 where the
@@ -1357,16 +1367,16 @@ export type PressureIndex
 			//
 			// The tie is `suffixBestIsInLeft`'s, which `blockPeak`'s descent asks in the same terms — see
 			// there for why the two may not be separate sentences.
-			try self.nodeBest.set(classRowIndex(node, class: class), value: (rightSum + leftBest) if suffixBestIsInLeft(leftBest, rightSum: rightSum, rightBest: rightBest) else rightBest) otherwise panic("PressureIndex.combine: nodeBest.set OOB at {node}")
+			try self.nodeBest.set(classRowIndex(node as CfgIndex, class: class), value: (rightSum + leftBest) if suffixBestIsInLeft(leftBest, rightSum: rightSum, rightBest: rightBest) else rightBest) otherwise panic("PressureIndex.combine: nodeBest.set OOB at {node}")
 		end 'eachClass'
 	end 'combine'
 
 	function sumOf(node ColumnLength, class RegClass) returns PressureDelta
-		return try self.nodeSum.get(classRowIndex(node, class: class)) otherwise panic("PressureIndex.sumOf: nodeSum.get OOB at node {node}")
+		return try self.nodeSum.get(classRowIndex(node as CfgIndex, class: class)) otherwise panic("PressureIndex.sumOf: nodeSum.get OOB at node {node}")
 	end 'sumOf'
 
 	function bestOf(node ColumnLength, class RegClass) returns PressureDelta
-		return try self.nodeBest.get(classRowIndex(node, class: class)) otherwise panic("PressureIndex.bestOf: nodeBest.get OOB at node {node}")
+		return try self.nodeBest.get(classRowIndex(node as CfgIndex, class: class)) otherwise panic("PressureIndex.bestOf: nodeBest.get OOB at node {node}")
 	end 'bestOf'
 
 	// Every leaf of `node`'s subtree and then every internal node of it, bottom-up — O(the subtree's
@@ -1385,7 +1395,7 @@ export type PressureIndex
 		// walks the levels bottom-up.
 		var width = len / 2
 		while width >= 1 'eachLevel'
-			let base = node * width
+			let base = node * (width as ColumnLength)
 			for i in 0 upto width 'eachNodeAtLevel'
 				self.combine(base + i)
 			end 'eachNodeAtLevel'
@@ -1396,7 +1406,7 @@ export type PressureIndex
 	// Re-publish ONE leaf up to its BLOCK's node — O(log slots in the block).
 	function promote(blockLocal CfgIndex, slot PressureSlot)
 		self.refreshLeaf(slot)
-		self.promoteFrom(blockLocal, node: self.slotCount + slot)
+		self.promoteFrom(blockLocal, node: self.leafNodeOf(slot))
 	end 'promote'
 
 	// Re-publish every parent of `node` up to its BLOCK's node — the parents a subtree rebuild did not
@@ -1435,7 +1445,7 @@ export type PressureIndex
 			let right = left + 1
 			node = left if suffixBestIsInLeft(self.bestOf(left, class: class), rightSum: self.sumOf(right, class: class), rightBest: self.bestOf(right, class: class)) else right
 		end 'descend'
-		return BlockPeakSlot.create(true, slot: node - self.slotCount, pressure: best)
+		return BlockPeakSlot.create(true, slot: ((node - self.slotCount) as PressureSlot), pressure: best)
 	end 'blockPeak'
 
 	// `blockPeak`'s answer, recomputed by SCANNING the block's run backward. VERIFY MODE's own oracle for
@@ -1504,8 +1514,8 @@ export type PressureIndex
 		end 'outsideTheBlock'
 
 		var mask = 0 as RegMask
-		var left = self.slotCount + lo
-		var right = self.slotCount + hi + 1
+		var left = self.leafNodeOf(lo)
+		var right = self.leafNodeOf(hi) + 1
 		while left < right 'climb'
 			if left - (left / 2) * 2 == 1 'leftEdgeIsARightChild'
 				mask = mask or (try self.nodeClobber.get(left) otherwise panic("PressureIndex.clobberOr: nodeClobber.get OOB at node {left}"))
@@ -1527,13 +1537,13 @@ export type PressureIndex
 	// `opClobberMask` from the op is what keeps "what does this op clobber" a single statement — see
 	// `opClobberMask`, whose header says why that matters.
 	export function clobberAtSlot(slot PressureSlot) returns RegMask
-		return try self.nodeClobber.get(self.slotCount + slot) otherwise panic("PressureIndex.clobberAtSlot: nodeClobber.get OOB at slot {slot}")
+		return try self.nodeClobber.get(self.leafNodeOf(slot)) otherwise panic("PressureIndex.clobberAtSlot: nodeClobber.get OOB at slot {slot}")
 	end 'clobberAtSlot'
 
 	// The sum of every leaf in `[slot, blockEnd]` — `liveBefore` at the op sitting in `slot`.
 	function suffixFrom(blockLocal CfgIndex, slot PressureSlot, class RegClass) returns PressureDelta
 		let top = self.nodeOf(blockLocal)
-		var node = self.slotCount + slot
+		var node = self.leafNodeOf(slot)
 		var total = self.sumOf(node, class: class)
 		while node > top 'climb'
 			// A LEFT child's right sibling covers slots after it and is wholly inside the suffix; a RIGHT
@@ -1550,7 +1560,7 @@ export type PressureIndex
 	// the tree's own occupancy, so the order has exactly one statement.
 	export function positionOfSlot(blockLocal CfgIndex, slot PressureSlot) returns BlockOpPos
 		let top = self.nodeOf(blockLocal)
-		var node = self.slotCount + slot
+		var node = self.leafNodeOf(slot)
 		var before = 0 as BlockOpPos
 		while node > top 'climb'
 			if node - (node / 2) * 2 == 1 'isRightChild'
@@ -1585,7 +1595,7 @@ export type PressureIndex
 				node = left + 1
 			end 'goRight'
 		end 'descend'
-		return node - self.slotCount
+		return self.slotOfLeafNode(node)
 	end 'slotOfPosition'
 
 	// ----------------------------------------------------------------------
@@ -1644,7 +1654,7 @@ export type PressureIndex
 	// one slot, `respaceRange` does it once for a whole subtree.
 	function vacateLeaf(slot PressureSlot)
 		try self.holdsOp.set(slot, value: false) otherwise panic("PressureIndex.vacateLeaf: holdsOp.set OOB at slot {slot}")
-		try self.nodeClobber.set(self.slotCount + slot, value: 0) otherwise panic("PressureIndex.vacateLeaf: nodeClobber.set OOB at slot {slot}")
+		try self.nodeClobber.set(self.leafNodeOf(slot), value: 0) otherwise panic("PressureIndex.vacateLeaf: nodeClobber.set OOB at slot {slot}")
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			self.setDelta(slot, class: class, value: 0)
@@ -1670,7 +1680,7 @@ export type PressureIndex
 	export function rebuild(module TargetModule, liveness LivenessResult, sweep PressureSweepScratch, seedBuf ValueIdArray, scratch PressureRelayoutScratch)
 		let topo = liveness.cfg.topo
 		self.layOut(module, topo: topo, opCounts: scratch.opCounts)
-		self.defSlot.refill(liveness.valueCount, value: 0)
+		self.defSlot.refill(liveness.valueCount as ElementIndex, value: 0)
 
 		var liveRow = sweep.liveRow
 		var buf = sweep.buf
@@ -1725,7 +1735,7 @@ export type PressureIndex
 			liveness.clearRowAfterSweep(b, block: block, row: liveRow, scratch: seedBuf)
 		end 'eachBlock'
 
-		self.rebuildRange(1, first: 0, len: self.slotCount)
+		self.rebuildRange(1, first: 0, len: self.slotCount as PressureSlot)
 	end 'rebuild'
 
 	// Make room for a splice at `pos` of `blockLocal`, whose gap is used up. THE ONE PLACE the gap
@@ -1751,7 +1761,7 @@ export type PressureIndex
 		let top = self.nodeOf(blockLocal)
 		// From the exhausted gap's LOWER neighbour, so every node the climb tests contains it: re-spacing a
 		// range that holds only the upper neighbour could leave the two still adjacent.
-		var node = (self.slotCount + self.spliceLowBound(blockLocal, pos: pos)) / 2
+		var node = self.leafNodeOf(self.spliceLowBound(blockLocal, pos: pos)) / 2
 		var len = 2 as PressureSlot
 		while node >= top 'climb'
 			let count = try self.nodeOps.get(node) otherwise panic("PressureIndex.makeRoom: nodeOps.get OOB at node {node}")
@@ -1759,7 +1769,7 @@ export type PressureIndex
 			if stride >= MinRespaceStride 'thisSubtreeAbsorbsIt'
 				// A node covering `len` leaves from `first` IS leaf `slotCount + first` divided by `len`, so
 				// the node index and its width state the range without a second column to keep current.
-				self.respaceRange(module, node: node, first: node * len - self.slotCount, len: len, count: count, stride: stride, blockLocal: blockLocal, opFacts: opFacts, scratch: scratch, pending: pending)
+				self.respaceRange(module, node: node, first: self.slotOfLeafNode(node * (len as ColumnLength)), len: len, count: count, stride: stride, blockLocal: blockLocal, opFacts: opFacts, scratch: scratch, pending: pending)
 				return
 			end 'thisSubtreeAbsorbsIt'
 			node = node / 2
@@ -1792,7 +1802,7 @@ export type PressureIndex
 			if not scratch.holdsOpAt(oldSlot) 'notAnOp'
 				continue
 			end 'notAnOp'
-			self.reseat(module, oldSlot: oldSlot, newSlot: first + (j + 1) * stride, opIdx: scratch.opAtSlot(oldSlot), opFacts: opFacts, scratch: scratch)
+			self.reseat(module, oldSlot: oldSlot, newSlot: first + ((j + 1) as PressureSlot) * stride, opIdx: scratch.opAtSlot(oldSlot), opFacts: opFacts, scratch: scratch)
 			j = j + 1
 		end 'eachMove'
 
@@ -1815,9 +1825,9 @@ export type PressureIndex
 	// whole-compile bytes +8.9%, all of it linear.
 	function relayout(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts, pending DenseColumn)
 		scratch.captureRuns(self.blockFirst, runLen: self.blockLen)
-		scratch.captureWindow(self.holdsOp, runOpAt: self.opAt, runDelta: self.leafDelta, runTransient: self.leafTransient, from: 0, count: self.slotCount)
+		scratch.captureWindow(self.holdsOp, runOpAt: self.opAt, runDelta: self.leafDelta, runTransient: self.leafTransient, from: 0, count: self.slotCount as PressureSlot)
 
-		scratch.opCounts.refill(topo.numBlocks, value: 0)
+		scratch.opCounts.refill(topo.numBlocks as ElementIndex, value: 0)
 		for b in 0 upto topo.numBlocks 'countEachBlock'
 			try scratch.opCounts.set(b, value: scratch.opsIn(b)) otherwise panic("PressureIndex.relayout: opCounts.set OOB for block {b}")
 		end 'countEachBlock'
@@ -1838,7 +1848,7 @@ export type PressureIndex
 		end 'eachBlock'
 
 		scratch.applyMoves(pending)
-		self.rebuildRange(1, first: 0, len: self.slotCount)
+		self.rebuildRange(1, first: 0, len: self.slotCount as PressureSlot)
 	end 'relayout'
 
 	// Move one op from `oldSlot` to `newSlot`: seat it, carry its population numbers across, and record
@@ -1878,8 +1888,8 @@ export type PressureRelayoutScratch
 	export var opCounts as DenseColumn
 	// The re-space's OWN operand list — see the note at its one use.
 	export var operands as OperandList
-	var first as DenseColumn
-	var len as DenseColumn
+	var first as PressureSlotColumn
+	var len as PressureSlotColumn
 	// The captured slots are `[windowFirst, windowFirst + holdsOp.count())` of the index, and `moved`
 	// holds, per captured slot, where the op that sat there ENDED UP. A slot holding no op maps to
 	// itself and is never read.
@@ -1891,12 +1901,12 @@ export type PressureRelayoutScratch
 	var moved as DenseColumn
 
 	export static function create() returns PressureRelayoutScratch
-		return Self{opCounts: DenseColumn.create(), operands: OperandList.create(), first: DenseColumn.create(), len: DenseColumn.create(), windowFirst: 0, holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), delta: PressureDeltaColumn.create(), transient: PressureDeltaColumn.create(), moved: DenseColumn.create()}
+		return Self{opCounts: DenseColumn.create(), operands: OperandList.create(), first: PressureSlotColumn.create(), len: PressureSlotColumn.create(), windowFirst: 0, holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), delta: PressureDeltaColumn.create(), transient: PressureDeltaColumn.create(), moved: DenseColumn.create()}
 	end 'create'
 
 	// Copy the index's per-BLOCK run layout aside — `relayout` only, which is the one thing that moves a
 	// run. `refill(0)` first, so it never reads a stale tail from a previous re-space.
-	export function captureRuns(runFirst DenseColumn, runLen DenseColumn)
+	export function captureRuns(runFirst PressureSlotColumn, runLen PressureSlotColumn)
 		self.first.refill(0, value: 0)
 		self.len.refill(0, value: 0)
 		self.first.append(runFirst)
@@ -1907,19 +1917,19 @@ export type PressureRelayoutScratch
 	// so a window smaller than the last one neither reads a stale tail nor reallocates.
 	export function captureWindow(runHoldsOp BoolArray, runOpAt OpIndexArray, runDelta PressureDeltaColumn, runTransient PressureDeltaColumn, from PressureSlot, count PressureSlot)
 		self.windowFirst = from
-		self.holdsOp.refill(count, value: false)
-		self.opAt.refill(count, value: 0)
-		self.delta.refill(count * RegClassCount, value: 0)
-		self.transient.refill(count * RegClassCount, value: 0)
-		self.moved.refill(count, value: 0)
+		self.holdsOp.refill(count as ElementIndex, value: false)
+		self.opAt.refill(count as ElementIndex, value: 0)
+		self.delta.refill(((count * RegClassCount) as ElementIndex), value: 0)
+		self.transient.refill(((count * RegClassCount) as ElementIndex), value: 0)
+		self.moved.refill(count as ElementIndex, value: 0)
 		for k in 0 upto count 'eachSlot'
 			try self.holdsOp.set(k, value: try runHoldsOp.get(from + k) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.set OOB at {k}")
 			try self.opAt.set(k, value: try runOpAt.get(from + k) otherwise panic("PressureRelayoutScratch.captureWindow: opAt.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: opAt.set OOB at {k}")
 			try self.moved.set(k, value: from + k) otherwise panic("PressureRelayoutScratch.captureWindow: moved.set OOB at {k}")
 			for classOrdinal in 0 upto RegClassCount 'eachClass'
 				let class = regClassAt(classOrdinal)
-				try self.delta.set(classRowIndex(k, class: class), value: try runDelta.get(classRowIndex(from + k, class: class)) otherwise panic("PressureRelayoutScratch.captureWindow: leafDelta.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: delta.set OOB at {k}")
-				try self.transient.set(classRowIndex(k, class: class), value: try runTransient.get(classRowIndex(from + k, class: class)) otherwise panic("PressureRelayoutScratch.captureWindow: leafTransient.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: transient.set OOB at {k}")
+				try self.delta.set(classRowIndex(k, class: class), value: try runDelta.get(classRowIndex(((from + k) as CfgIndex), class: class)) otherwise panic("PressureRelayoutScratch.captureWindow: leafDelta.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: delta.set OOB at {k}")
+				try self.transient.set(classRowIndex(k, class: class), value: try runTransient.get(classRowIndex(((from + k) as CfgIndex), class: class)) otherwise panic("PressureRelayoutScratch.captureWindow: leafTransient.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: transient.set OOB at {k}")
 			end 'eachClass'
 		end 'eachSlot'
 	end 'captureWindow'
@@ -1940,7 +1950,7 @@ export type PressureRelayoutScratch
 	export function applyMoves(pending DenseColumn)
 		let count = self.holdsOp.count()
 		for i in 0 upto pending.count() 'eachPending'
-			let slot = try pending.get(i) otherwise panic("PressureRelayoutScratch.applyMoves: pending.get OOB at {i}")
+			let slot = (try pending.get(i) otherwise panic("PressureRelayoutScratch.applyMoves: pending.get OOB at {i}")) as PressureSlot
 			if slot < self.windowFirst or slot >= self.windowFirst + count 'outsideTheWindow'
 				continue
 			end 'outsideTheWindow'
@@ -1978,11 +1988,11 @@ export type PressureRelayoutScratch
 	end 'opAtSlot'
 
 	export function deltaAt(slot PressureSlot, class RegClass) returns PressureDelta
-		return try self.delta.get(classRowIndex(self.windowIndexOf(slot), class: class)) otherwise panic("PressureRelayoutScratch.deltaAt: slot {slot} out of range")
+		return try self.delta.get(classRowIndex(self.windowIndexOf(slot) as CfgIndex, class: class)) otherwise panic("PressureRelayoutScratch.deltaAt: slot {slot} out of range")
 	end 'deltaAt'
 
 	export function transientAt(slot PressureSlot, class RegClass) returns PressureDelta
-		return try self.transient.get(classRowIndex(self.windowIndexOf(slot), class: class)) otherwise panic("PressureRelayoutScratch.transientAt: slot {slot} out of range")
+		return try self.transient.get(classRowIndex(self.windowIndexOf(slot) as CfgIndex, class: class)) otherwise panic("PressureRelayoutScratch.transientAt: slot {slot} out of range")
 	end 'transientAt'
 
 	// How many op slots block `blockLocal` held in the layout this holds — the count its new run is
@@ -2174,7 +2184,7 @@ function refreshTransientAt(module TargetModule, liveness LivenessResult, pressu
 			virtualDefs = virtualDefs + 1
 		end 'aDef'
 		if liveAfterSlot(liveness, pressure: pressure, v: operandValueId(o), blockLocal: blockLocal, slot: slot) 'liveAfterTheOp'
-			bitsetAdd(liveRow, base: 0, bit: operandValueId(o))
+			bitsetAdd(liveRow, base: 0, bit: operandValueId(o) as BitIndex)
 		end 'liveAfterTheOp'
 	end 'materializeLiveAfter'
 
@@ -2198,7 +2208,7 @@ function refreshTransientAt(module TargetModule, liveness LivenessResult, pressu
 	// entry, and a bit left standing here is a value the next block's sweep would believe live.
 	for o in buf 'clearLiveAfter'
 		if operandIsVirtual(o) 'virtual'
-			bitsetRemove(liveRow, base: 0, bit: operandValueId(o))
+			bitsetRemove(liveRow, base: 0, bit: operandValueId(o) as BitIndex)
 		end 'virtual'
 	end 'clearLiveAfter'
 end 'refreshTransientAt'
@@ -2701,9 +2711,8 @@ export type SplitDriver
 		// It is `stackSize` and not a field of its own because `stackSize` already MEANS "bytes of slot area
 		// reserved so far" (see IrFunction), and `fixFrameSize` writes the final total back through the same
 		// counter — so the promoted region is reserved, the spills are placed above it, and the frame is
-		// sized for both, from ONE number. Zero for every function the promotion pass did not touch, which is
-		// the seed this line used to hard-code.
-		return Self{cfg: cfg, liveness: liveness, scratch: SplitScratch.create(cfg.topo.numBlocks), lineage: SplitLineage.create(), paramCross: paramCross, pool: pool, file: file, nextValueId: cfg.valueCount, nextSlot: func.stackSize / SpillSlotBytes, indexBuilt: false}
+		// sized for both, from ONE number. Zero for every function the promotion pass did not touch.
+		return Self{cfg: cfg, liveness: liveness, scratch: SplitScratch.create(cfg.topo.numBlocks), lineage: SplitLineage.create(), paramCross: paramCross, pool: pool, file: file, nextValueId: cfg.valueCount, nextSlot: (func.stackSize / SpillSlotBytes) as SpillSlot, indexBuilt: false}
 	end 'create'
 
 	// Build the incremental machinery — the positional pressure index and the per-block peak tournament
@@ -3181,7 +3190,7 @@ export type SplitDriver
 	// saved — SILENT STACK CORRUPTION, not a failure. (v1 avoids it by accumulating in `insertSpillCode`
 	// and computing the frame in a pass that runs after register allocation has fully finished.)
 	export function fixFrameSize(func IrFunction)
-		func.stackSize = self.nextSlot * SpillSlotBytes
+		func.stackSize = (self.nextSlot as StackSize) * SpillSlotBytes
 	end 'fixFrameSize'
 end 'SplitDriver'
 
@@ -3202,7 +3211,7 @@ end 'SplitDriver'
 // (`valueCount` grows as fresh reload ids are minted; the bound is computed ONCE, from the initial
 // figures, because the split count is bounded by the INITIAL potential.)
 export function splitRunawayBound(liveness LivenessResult) returns EventCount
-	return liveness.useIndex.opCount * (liveness.valueCount + 1) + RegisterFileSize
+	return (liveness.useIndex.opCount as EventCount) * ((liveness.valueCount + 1) as EventCount) + RegisterFileSize
 end 'splitRunawayBound'
 
 // WHERE a colouring failed, in the coordinates a split anchor needs — plus whether an OP sits there at
@@ -3446,7 +3455,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	if VerifyIncrementalSplit 'theVerifiersOwnDerivation'
 		// The walk still writes this column on the CONFINED path, so it has to reach the ids the split
 		// just minted — even though nothing but the verifier ever reads it.
-		scratch.defLiveAfter.growFilled(cfg.valueCount, value: NoStoreAnchorPressure)
+		scratch.defLiveAfter.growFilled(cfg.valueCount as ElementIndex, value: NoStoreAnchorPressure)
 	end 'theVerifiersOwnDerivation'
 
 	// Re-derive the index facts of the values the split touched, from the dirty region alone. It must be
@@ -3793,7 +3802,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	// A value with no def point at all keeps this sentinel, so it is never mistaken for store-safe.
 	// VERIFY MODE only, like the column itself.
 	if VerifyIncrementalSplit 'theVerifiersOwnDerivation'
-		scratch.defLiveAfter.refill(liveness.valueCount, value: NoStoreAnchorPressure)
+		scratch.defLiveAfter.refill(liveness.valueCount as ElementIndex, value: NoStoreAnchorPressure)
 	end 'theVerifiersOwnDerivation'
 
 	if intoTree 'sizeTheTournament'
@@ -4456,7 +4465,7 @@ end 'recordDefLiveAfter'
 // not already pay per split anyway — `chooseVictim` walks this same row with `bitsetCollectRow`, which
 // is O(words) too.
 function zeroRow(row BitWordArray, wordsPerRow BitWordCount)
-	row.growFilled(wordsPerRow, value: 0)
+	row.growFilled(wordsPerRow as ElementIndex, value: 0)
 	for w in 0 upto wordsPerRow 'eachWord'
 		try row.set(w, value: 0) otherwise panic("zeroRow: set OOB at word {w} — the row was just grown to {wordsPerRow} words")
 	end 'eachWord'
@@ -4547,7 +4556,7 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 	var bestBracket = BeladyBest.create()
 
 	for v in candidates 'eachValue'
-		if bitsetTest(usedAtPeak, base: 0, bit: v) 'consumedHere'
+		if bitsetTest(usedAtPeak, base: 0, bit: v as BitIndex) 'consumedHere'
 			continue
 		end 'consumedHere'
 		if liveness.classOf(v) != peak.witnessClass 'otherFile'
@@ -4713,7 +4722,7 @@ function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak Pressur
 	targetOpOperands(op, buf: buf)
 	for o in buf 'eachOperand'
 		if (not operandIsDef(o)) and operandIsVirtual(o) 'use'
-			bitsetAdd(row, base: 0, bit: operandValueId(o))
+			bitsetAdd(row, base: 0, bit: operandValueId(o) as BitIndex)
 		end 'use'
 	end 'eachOperand'
 	return row
@@ -5134,7 +5143,7 @@ type ReachCache
 		self.peakBlockLocal = peakBlock
 		self.rowCount = 0
 		self.rows.clear()
-		self.rowOf.refill(self.numBlocks, value: self.numBlocks)
+		self.rowOf.refill(self.numBlocks as ElementIndex, value: self.numBlocks as ReachRow)
 	end 'retargetTo'
 
 	// Is `block` reachable from the peak's SUCCESSORS without passing through `defBlock`?
@@ -5150,12 +5159,12 @@ type ReachCache
 	// The flat index of `(row, block)` in the row-major `rows` matrix — the ONE place its layout is
 	// spelled, so the read above and the walk that fills a row cannot disagree about it.
 	function slotOf(row ReachRow, block CfgIndex) returns ReachSlot
-		return row * self.numBlocks + block
+		return (row as ReachSlot) * (self.numBlocks as ReachSlot) + (block as ReachSlot)
 	end 'slotOf'
 
 	function rowFor(topo FuncTopology, defBlock CfgIndex) returns ReachRow
 		let cached = try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
-		if cached != self.numBlocks 'hit'
+		if cached != self.numBlocks as ReachRow 'hit'
 			return cached
 		end 'hit'
 
@@ -5175,7 +5184,7 @@ type ReachCache
 		// `set`s. So on entry `existing == rowCount_old * numBlocks == row * numBlocks == base`, and
 		// `growFilled`'s fill runs over `[existing, newLength) == [base, base + numBlocks)`.
 		let base = self.slotOf(row, block: 0)
-		self.rows.growFilled(self.rowCount * self.numBlocks, value: false)
+		self.rows.growFilled(self.slotOf(self.rowCount, block: 0) as ElementIndex, value: false)
 		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base, worklist: self.worklist)
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
 		return row
@@ -5192,9 +5201,9 @@ end 'ReachCache'
 // in-edge, so a fresh one here was an O(edges) allocation per walk.
 function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ReachSlot, worklist CfgIndexArray)
 	worklist.clear()
-	let deg = topo.succ.degree(peakBlockLocal)
+	let deg = topo.succ.degree(peakBlockLocal as CsrIndex)
 	for k in 0 upto deg 'seed'
-		worklist.push(topo.succ.neighbour(peakBlockLocal, k: k))
+		worklist.push(topo.succ.neighbour(peakBlockLocal as CsrIndex, k: k))
 	end 'seed'
 
 	while worklist.count() > 0 'bfs'
@@ -5202,15 +5211,15 @@ function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex,
 		if b == defBlock 'redefined'
 			continue
 		end 'redefined'
-		let seen = try rows.get(base + b) otherwise panic("markBlocksReachableFromPeak: rows.get OOB")
+		let seen = try rows.get(base + (b as ReachSlot)) otherwise panic("markBlocksReachableFromPeak: rows.get OOB")
 		if seen 'already'
 			continue
 		end 'already'
-		try rows.set(base + b, value: true) otherwise panic("markBlocksReachableFromPeak: rows.set OOB")
+		try rows.set(base + (b as ReachSlot), value: true) otherwise panic("markBlocksReachableFromPeak: rows.set OOB")
 
-		let d = topo.succ.degree(b)
+		let d = topo.succ.degree(b as CsrIndex)
 		for k in 0 upto d 'eachSucc'
-			worklist.push(topo.succ.neighbour(b, k: k))
+			worklist.push(topo.succ.neighbour(b as CsrIndex, k: k))
 		end 'eachSucc'
 	end 'bfs'
 end 'markBlocksReachableFromPeak'
@@ -5450,7 +5459,7 @@ end 'spillOneValue'
 // `--metrics`; it was found by reading, and removing it left both of those columns unmoved.
 function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, buf OperandList, opFacts OpVariantFacts)
 	let useSites = index.useCount(valueId)
-	runStarts.refill(useSites, value: false)
+	runStarts.refill(useSites as ElementIndex, value: false)
 	if useSites == 0 'neverUsed'
 		return
 	end 'neverUsed'

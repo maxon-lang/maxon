@@ -41,7 +41,7 @@ export typealias GlobalDedupMap = Map with (ByteArray, String)
 // ⚠ **8 AND NOT 4**, though the chained-fixup stride that catches the break is 4: the slots being aligned
 // are POINTERS (a String record's `buffer@0`, a witness table's method slots, a layout descriptor's), so
 // 8 is what the loads want and 4 is merely the coarsest granularity at which the breakage becomes visible.
-let RdataPayloadAlignment = 8 as ByteCount
+let RdataPayloadAlignment = 8 as BytePos
 
 // The byte a payload is padded WITH. Named because it is read back rather than merely written: a text
 // payload's pad is indistinguishable from its NUL terminator, which is exactly what lets
@@ -475,7 +475,7 @@ export type GlobalDataTable
 	// zero bytes fixes the blob's `.rdata` offset now, so `rdataOffsetOf(label)` answers before the writer
 	// patches. The offset/name bookkeeping is the shared `appendRdataPayload`, so `rdataImage`'s drift assert
 	// covers it too.
-	export function registerJumpTable(slotCount ElementCount) returns String
+	export function registerJumpTable(slotCount ElementIndex) returns String
 		let label = "{JumpTableLabelPrefix}{self.nextStringId}"
 		self.nextStringId = self.nextStringId + 1
 		var bytes = ByteArray.create()
@@ -735,7 +735,7 @@ export type GlobalDataTable
 			var entry = try self.dataSection.get(i) otherwise panic("GlobalDataTable.layOut: dataSection.get OOB at {i} despite the upto bound")
 			entry.offset = offset
 			self.dataIndex.upsert(entry.label, value: i)
-			offset = offset + stdTypeStorageBytes(entry.valueType)
+			offset = offset + (stdTypeStorageBytes(entry.valueType) as ByteOffset)
 		end 'each'
 	end 'layOut'
 
@@ -771,7 +771,7 @@ end 'GlobalDataTable'
 // and every value it can take is a power of two — the SAME fact `GlobalDataTable.layOut` already
 // rests its zero-padding claim on, named here because `sortBySizeDescendingStable` is the code
 // that walks the size classes and would otherwise re-state the bound as a literal.
-let MaxDataSlotBytes = 8 as ByteCount
+let MaxDataSlotBytes = 8 as BytePos
 
 // `declared` ordered by storage size, LARGEST FIRST, preserving declaration order among equal
 // sizes — see `GlobalDataTable.layOut` for why both halves are load-bearing.
@@ -834,7 +834,7 @@ function rdataStoredPayload(bytes ByteArray) returns ByteArray
 
 	var padded = ByteArray.create()
 	padded.append(bytes)
-	padded.growFilled(storedCount, value: RdataPadByte)
+	padded.growFilled(storedCount as ElementIndex, value: RdataPadByte)
 	return padded
 end 'rdataStoredPayload'
 
@@ -847,7 +847,7 @@ end 'rdataStoredPayload'
 // of code that decides what those bytes are. A second renderer here would be this project's signature bug —
 // one fact written twice — with the two free to disagree about what `3.14` is.
 
-export function scalarImage(value ParsedInt, byteCount ByteCount) returns ByteArray
+export function scalarImage(value ParsedInt, byteCount BytePos) returns ByteArray
 	var bytes = ByteArray.create()
 	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)
 	return bytes

@@ -21,6 +21,9 @@ namespace MaxonSharp.Testing;
 /// `"my Integer is 5"` into `"my __b_<test>_Integer is 5"` (or worse, leaving
 /// the string content untouched while renaming the declaration, which would
 /// break interpolation lookups inside `"{Integer.max}"`).
+///
+/// A fragment that extends a type it does not declare is unbatchable for the same reason from
+/// the other side: the members it adds live in a namespace the rewriter cannot make per-test.
 /// </summary>
 public static partial class BatchRewriter {
 
@@ -90,11 +93,20 @@ public static partial class BatchRewriter {
       return new RewriteResult(null, null, false, $"renamed name '{collision}' appears inside a string literal");
     }
 
-    // Step 3: Apply the rename map across the whole source with a single
-    // alternation regex over the keys, anchored to word boundaries.
+    // Step 3: An extension of a type this test does not declare adds members to a namespace every
+    // test in the batch shares — a stdlib type, or an interface — and those members cannot be
+    // mangled without renaming every call that reaches them, which would leak the batching into
+    // the goldens. Two tests extending the same type with the same member collide at the batched
+    // compile, so such a test compiles alone.
+    foreach (Match m in ExtensionRegex().Matches(source)) {
+      var extended = m.Groups[1].Value;
+      if (!renames.ContainsKey(extended)) {
+        return new RewriteResult(null, null, false, $"extends '{extended}', a type this test does not declare — its members share one namespace across the batch");
+      }
+    }
+
     var rewritten = ApplyRenames(source, renames);
 
-    // Step 4: Add a debug header.
     var prefixed = $"// --- batched test: {testName} ---\n{rewritten}";
 
     return new RewriteResult(prefixed, value, true, "");
@@ -205,6 +217,9 @@ public static partial class BatchRewriter {
 
   [GeneratedRegex(@"^(?:export\s+)?interface\s+(\w+)", RegexOptions.Multiline | RegexOptions.Compiled)]
   private static partial Regex InterfaceRegex();
+
+  [GeneratedRegex(@"^extension\s+(\w+)", RegexOptions.Multiline | RegexOptions.Compiled)]
+  private static partial Regex ExtensionRegex();
 
   [GeneratedRegex(@"^(?:export\s+)?let\s+(\w+)\b", RegexOptions.Multiline | RegexOptions.Compiled)]
   private static partial Regex TopLevelLetRegex();

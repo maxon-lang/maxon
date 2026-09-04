@@ -365,11 +365,6 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// element, so reversing the two would make every such pair look like agreement. See
 	// `settleGenericAliasContest`, which likewise leaves an uncontested program after one walk.
 	signatures.settleGenericAliasContest()
-	// R-1 -- LAST of the whole-program instance steps, because the two above SPLIT instances and this one
-	// MERGES. Two ranged aliases over one range are one type (user ruling, 2026-08-22), so the instances over
-	// them are one instance; see `mergeRangeEquivalentInstances` for why the answer exists only here and for the
-	// two wrong answers an earlier attempt measured.
-	signatures.mergeRangeEquivalentInstances()
 	// ⭐⭐ **AND NOW THE CORPUS'S TWO FUSED WRAPPERS CAN BE CHECKED AGAINST THE RECORD SHV2 MINTS FOR THEM**
 	// — the assertion `Project.ManagedMemorySlotCount` has owed since the envelope collapse. HERE because
 	// this is the first line at which every declaration is folded AND every field's declared type has been
@@ -977,7 +972,7 @@ end 'tokenIsAMemberSpelling'
 // the grouping is a WALK and not a map: an inner loop consumes the run of sites sharing a path.
 function foldInterfaceDeclarations(project Project, signatures ProgramSignatures) throws CompileError
 	let sites = signatures.interfaceDeclSites
-	var i = 0 as ElementCount
+	var i = 0 as ElementIndex
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
@@ -1028,7 +1023,7 @@ end 'foldExtensionDeclarations'
 // weaker guarantee than the fold it precedes.
 function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, namesOnly bool) throws CompileError
 	let sites = signatures.extensionDeclSites
-	var i = 0 as ElementCount
+	var i = 0 as ElementIndex
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")).path
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
@@ -1106,7 +1101,7 @@ end 'siteFileReader'
 // above — factor the READER, not the DRIVER — is true of every walk here rather than of three of them.
 function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
 	let sites = signatures.conformanceClauseSites
-	var i = 0 as ElementCount
+	var i = 0 as ElementIndex
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")).path
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
@@ -1175,7 +1170,7 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	var selfCallees = SelfCalleesMap.create()
 	var countCallees = SelfCalleesMap.create()
 
-	var i = 0 as ElementCount
+	var i = 0 as ElementIndex
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")).path
 		// `buildsBodies: false` — this scan settles a CALLING CONVENTION and emits nothing, which is the one
@@ -1387,6 +1382,14 @@ function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 			reportUnverifiableFnMerge(project, check: check)
 			return
 		end 'otherUnverifiable'
+		// A FUNCTION TYPEALIAS IS ITS OWN TYPE, so two BRANDS of one shape do not merge. Asked ahead of the
+		// display comparison, which is a SHAPE question and calls `Handler` and `Callback` equal; the sentence
+		// names the two aliases, because the shapes it would otherwise print are identical.
+		if programSignaturesIn(project, asker: "checkOneValueMergeSignature").functionBrandsConflict(firstName, gotName: otherName) 'twoBrandsOfOneShape'
+			reportParseError(project, path: check.filePath, error: valueMergeMismatchError(check.isTernary, expectedDisplay: String.from(firstName), gotDisplay: String.from(otherName), line: check.line, column: check.column))
+			return
+		end 'twoBrandsOfOneShape'
+
 		let otherDisplay = armFnTypeDisplay(project, name: otherName)
 		if not firstDisplay.equals(otherDisplay) 'mismatch'
 			// The construct→E2028/E3005 noun is decided by the ONE shared mapping (`valueMergeMismatchError`),
@@ -2042,6 +2045,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		noWitnessRequirementOfArity(method, provider, argCount, available, line, column) then reportPositioned(project, code: ErrorCode.semanticNoWitnessRequirementForArgCount, message: "no requirement named '{method}' provided by {provider} takes {argCount} argument(s); they provide {available}", line: line, column: column, filePath: path)
 		staticRequirementNotDispatchable(requirement, receiver, line, column) then reportPositioned(project, code: ErrorCode.semanticStaticRequirementNotDispatchable, message: "'{requirement}' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of {receiver} cannot reach it. Call a `static` member on a concrete type", line: line, column: column, filePath: path)
 		operandTypeMismatch(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type (both bool or both int)", line: line, column: column, filePath: path)
+		operandAliasMismatch(op, left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type: '{left}' and '{right}' are different typealiases — cast one side with 'as'", line: line, column: column, filePath: path)
 		nonNumericOperands(left, right, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot operate on {left} and {right}", line: line, column: column, filePath: path)
 		nonNumericNegation(operand, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot negate {operand}", line: line, column: column, filePath: path)
 		// ⚠ Byte-for-byte the bootstrap's text (ShiftSemantics.NegativeCountMessage) — the specs gate

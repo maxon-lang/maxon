@@ -820,7 +820,7 @@ function main() returns ExitCode
 		list.append(k * 10)
 		k = k + 1
 	end 'build'
-	let s = walkSum(list, n: list.count())
+	let s = walkSum(list, n: list.count() as N)
 	print("sum={s}\n")
 	return 0
 end 'main'

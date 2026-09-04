@@ -128,32 +128,32 @@ end 'main'
 <!-- test: the-inlined-guard-still-panics-with-the-callees-frame -->
 <!-- targets: x64-windows, x64-linux -->
 ⭐ **THE PANIC RULE'S GATE.** `clampPct` is a pure leaf whose entry guard panics, and the argument is
-COMPUTED so the compile-time half cannot fold it. The inlined guard refuses the value, control leaves
-for the slow block, the ORIGINAL call runs, and the panic comes out of `clampPct`'s own frame — which
-is why this stderr is byte-identical to what the same program prints with the pass disabled.
+COMPUTED from a loop counter so the compile-time half cannot fold it — and carries no typealias, so it
+reaches `Percent` with no cast and the guard that refuses it is the CALLEE's own. The inlined guard
+refuses the value, control leaves for the slow block, the ORIGINAL call runs, and the panic comes out
+of `clampPct`'s own frame — which is why this stderr is byte-identical to what the same program prints
+with the pass disabled.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 typealias Percent = int(0 to 100)
 
 function clampPct(x Percent) returns Percent
 	return x
 end 'clampPct'
 
-function grow(n Integer) returns Integer
-	return n * 101
-end 'grow'
-
 function main() returns ExitCode
-	let big = grow(1)
-	return clampPct(big)
+	var last = 0
+	for i in 1 to 1 'once'
+		last = clampPct(i * 101)
+	end 'once'
+	return last as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at the-inlined-guard-still-panics-with-the-callees-frame.test:5: Range check failed: value outside typealias 'Percent'
+panic at the-inlined-guard-still-panics-with-the-callees-frame.test:4: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in clampPct
   in main
@@ -210,7 +210,7 @@ type Meter
 	end 'create'
 
 	export function record(p Percent) returns Integer
-		self.level = self.level + p
+		self.level = self.level + (p as Integer)
 		return self.level
 	end 'record'
 end 'Meter'
@@ -504,18 +504,20 @@ that pass wrote, in a block it shaped, which is the arrangement the old order co
 guard still refuses it, control still leaves for `__il_slow`, the ORIGINAL call still runs, and the
 panic still comes out of `clampPct`'s own frame.
 
+The array is a LITERAL because its element must carry no alias: a `Percent`-typed store is guarded at
+every write, so no element of an `Array with Percent` can be out of `Percent`'s range, and an element of
+any other alias cannot reach `clampPct` without a cast. A literal's element is unnamed, decays into the
+`Percent` slot with no cast, and the only guard it meets is the callee's.
+
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 typealias Percent = int(0 to 100)
-typealias IntArray = Array with Integer
 
 function clampPct(x Percent) returns Percent
 	return x
 end 'clampPct'
 
 function main() returns ExitCode
-	var a = IntArray.create()
-	a.push(101)
+	let a = [101]
 	var last = 0
 	for v in a 'each'
 		last = clampPct(v)
@@ -527,7 +529,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:6: Range check failed: value outside typealias 'Percent'
+panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:4: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in clampPct
   in main

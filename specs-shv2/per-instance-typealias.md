@@ -353,9 +353,9 @@ error E3005: specs/fragments/per-instance-typealias/error.cast-does-not-launder-
 
 ### Per-instance Idx decays to plain int on return
 
-A per-instance `Idx` is a nominal wrapper over a SCALAR int, so it DECAYS to plain int wherever a
-non-per-instance numeric is expected — a `return` included. `getTag()` returns `IW.Idx`, and returning
-it from an `ExitCode` function is accepted (no narrowing: the range fits), yielding the value.
+A per-instance `Idx` is a nominal wrapper over a SCALAR int. `getTag()` returns `IW.Idx`, and `ExitCode` is
+its own type, so returning it from an `ExitCode` function takes the one door between two names: `as`.
+The cast is guard-free — the range fits — and yields the value.
 
 <!-- test: return-decays-to-plain -->
 ```maxon

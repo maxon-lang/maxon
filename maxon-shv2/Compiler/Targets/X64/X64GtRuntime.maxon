@@ -193,7 +193,7 @@ function assertGtFrameConsistent(target Target)
 	let gprBytes = calleeSavedOrder.count() * StackWordBytes
 	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + StackWordBytes
 
-	let declared = gtInitialFrameBytes(target)
+	let declared = gtInitialFrameBytes(target) as StackSize
 	if framedBytes != declared 'drift'
 		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words ({gprBytes} bytes) + {calleeSavedXmmOrder.count()} callee-saved XMM words ({gtXmmSaveAreaBytes()} bytes) + 1 return-address word = {framedBytes} bytes, but `gtInitialFrameBytes` (the frame __gt_spawn lays for this target) is {declared} — a mismatch is a wild ret on the first switch-in")
 	end 'drift'
@@ -879,7 +879,7 @@ end 'emitGtExitSyscall'
 // than written as `0x30`, for the reason the shim's `frameSize` is derived from its two — and a FUNCTION
 // rather than a `let` because a global initializer may not call one (E2045).
 function exitSyscallSlowFrameBytes() returns StackSize
-	return alignUp(ShadowSpaceBytes + SpillSlotBytes, alignment: StackFrameAlignment)
+	return alignUpStack(ShadowSpaceBytes + SpillSlotBytes, alignment: StackFrameAlignment)
 end 'exitSyscallSlowFrameBytes'
 
 // Where in that frame the result waits — immediately above the shadow space, which is the first byte the
@@ -935,7 +935,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// error 7a's review found one function away, where `GtArgSlotBytes` and `SpillSlotBytes` were two facts
 	// sharing the number 8 — and it is the error this rung exists to remove, not to commit in reverse. Both
 	// derive from the same two constants, which is the part that has to be true.
-	let frameSize = alignUp(ShadowSpaceBytes + (stackArgWords * SpillSlotBytes), alignment: StackFrameAlignment)
+	let frameSize = alignUpStack(ShadowSpaceBytes + (stackArgWords * SpillSlotBytes), alignment: StackFrameAlignment)
 	let reserve = frameSize + ShimPushedWordBytes
 
 	var shimFixups = ChunkRel32FixupArray.create()

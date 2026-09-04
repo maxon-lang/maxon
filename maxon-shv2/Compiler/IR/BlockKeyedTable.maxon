@@ -98,8 +98,8 @@ export type BlockKeyedTable uses Value
 	// column, and `place` never reallocates. `IrFunction.nextBlockId` IS that count.
 	export static function forBlockCount(blockCount BlockId) returns Self
 		var table = Self.create()
-		table.values.reserve(blockCount)
-		table.present.growFilled(blockCount, value: false)
+		table.values.reserve(blockCount as ElementIndex)
+		table.present.growFilled(blockCount as ElementIndex, value: false)
 		return table
 	end 'forBlockCount'
 
@@ -117,7 +117,7 @@ export type BlockKeyedTable uses Value
 	// close that gap for all three users, and is a contract change rather than a comment.
 	export function place(id BlockId, value Value)
 		let needed = id + 1
-		self.present.growFilled(needed, value: false)
+		self.present.growFilled(needed as ElementIndex, value: false)
 
 		// ⭐ **`value` REACHES EXACTLY ONE STORE, AND THAT IS AN OWNERSHIP RULE RATHER THAN A TIDY-UP.** An
 		// extension fills `[count, needed)` and `id` IS `needed - 1`, so when the column grows `growFilled`
@@ -129,7 +129,7 @@ export type BlockKeyedTable uses Value
 		// ALREADY inside the column — exactly the case `growFilled` declines to write, since it no-ops when
 		// `newLength <= existing`.
 		if needed > self.values.count() 'extendsColumn'
-			self.values.growFilled(needed, value: value)
+			self.values.growFilled(needed as ElementIndex, value: value)
 		end 'extendsColumn' else 'alreadySized'
 			try self.values.set(id, value: value) otherwise panic("BlockKeyedTable.place: values.set OOB for block {id} — the column already holds at least {needed} slots")
 		end 'alreadySized'

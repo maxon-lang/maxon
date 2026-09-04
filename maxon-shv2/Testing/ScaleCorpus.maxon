@@ -555,6 +555,16 @@ function corpusDivisor() returns CorpusDivisorValue
 	return ((corpusSeedValue() and DivisorMask) + 1) as CorpusDivisorValue
 end 'corpusDivisor'
 
+// The mirror of one `/` and one `mod` group over `corpusDivisor()`, divided in the tracked value's own
+// type; the divisor is `int(1 to 8)` by construction.
+function corpusSeedQuotient() returns TrackedValue
+	return try (corpusSeedValue() / (corpusDivisor() as TrackedValue)) otherwise panic("corpusSeedQuotient: a CorpusDivisorValue of 0 past its own range")
+end 'corpusSeedQuotient'
+
+function corpusSeedRemainder() returns TrackedValue
+	return try (corpusSeedValue() mod (corpusDivisor() as TrackedValue)) otherwise panic("corpusSeedRemainder: a CorpusDivisorValue of 0 past its own range")
+end 'corpusSeedRemainder'
+
 // The declared range the masked divisor is cast into — the language's escape hatch from a checked
 // divide (`specs-shv2/division.md`'s `ranged-divisor-is-a-bare-idiv`). `1 to 8` is exactly what
 // `DivisorMask` admits, so the guard the cast records can never fire; and an upper bound of 8 rather
@@ -575,8 +585,8 @@ let ScaleDivisorAlias = "ScaleDivisor"
 // count is now stated there as the COMMAND that re-derives it: `grep -c "Range check failed"`.)
 //
 // What was absent is the OTHER door. Not one generated function DECLARED a narrowed RETURN type — the
-// aliases that reach a `return` (`ScaleXHoldValue`, `ScaleMeasure<N>`, `ScaleElement` and the rest) are
-// all `int(i64.min to i64.max)`, which `rangeIsFull` discards before a site can be recorded, and the
+// alias that reaches every other `return` is `ScaleInt`, which is `int(i64.min to i64.max)` and which
+// `rangeIsFull` discards before a site can be recorded, and the
 // per-instance `GenericInstanceElemPrefix` aliases are only ever generic TYPE ARGUMENTS, erased before
 // any door sees them. So `InsertRangeChecks.processReturnSites` — and `retBlockOf` and
 // `splitBlockInPlace` behind it — ran exactly ZERO times at every rung of a 32x ladder, which is the
@@ -856,6 +866,17 @@ typealias TrackedValueArray = Array with TrackedValue
 // must NOT. Both halves are `writeRungFile`'s, which is the single door every corpus file goes through.
 let ScaleIntAlias = "ScaleInt"
 let ScaleIntAliasDecl = "typealias ScaleInt = int(i64.min to i64.max)\n"
+
+// `(<expr> as ScaleInt)` — how a value carrying ANOTHER alias enters a driver's arithmetic. Two named
+// aliases never meet in an operator, and the corpus meets three kinds: a stdlib member's answer
+// (`BytePos`, `GraphemeIndex`, `ElementIndex`), a value the namespace and generic-instance knobs bind
+// under a narrow alias of their own, and a callee's narrowed `return`. `ScaleInt` is full-range, so the
+// cast records no guard, and its retag folds before codegen: the emitted code is what an alias-free
+// operand produces. What it costs is the front end's — one cast expression per site — which is why
+// every site writes it through this one door rather than as a second spelling.
+function asScaleInt(expr String) returns String
+	return "({expr} as {ScaleIntAlias})"
+end 'asScaleInt'
 
 // What `main` returns when every driver in the rung witnessed itself. SEVEN, the convention the hand
 // ladders already use (`tests/ladders/README.md`) — a value nothing else in the process returns, so a
@@ -1882,7 +1903,7 @@ function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize
 				break
 			end 'past'
 			drivers.push(smallFunctionName(fileIndex, slot: slot))
-			out.append(smallFunctionSource(fileIndex, slot: slot, salt: funcIndex))
+			out.append(smallFunctionSource(fileIndex, slot: slot, salt: funcIndex as KnobIndex))
 		end 'eachFunc'
 		total = total + try writeRungFile(dir, name: "b_funcs_{fileIndex}", source: out.build(), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 	end 'eachFile'
@@ -1915,7 +1936,7 @@ function smallFunctionSource(fileIndex KnobIndex, slot KnobIndex, salt KnobIndex
 	out.append("\tlet b = a + {k}\n")
 	out.append("\tlet c = b * 3\n")
 	out.append("\tif c > a and b < c 'grew'\n")
-	out.append("\t\tif c - a == {witnessExpr(2 * corpusSeedValue() + 3 * k)} 'witness'\n")
+	out.append("\t\tif c - a == {witnessExpr(2 * corpusSeedValue() + 3 * (k as TrackedValue))} 'witness'\n")
 	out.append("\t\t\treturn a\n")
 	out.append("\t\tend 'witness'\n")
 	out.append("\tend 'grew'\n")
@@ -2300,7 +2321,8 @@ function nestedLoopsSource(depth KnobSize) returns String
 	// The innermost body then adds `depth` until the limit is reached — a ceiling division, and the one
 	// place this knob's answer is stated.
 	let remaining = NestedLoopLimit - descended
-	let settled = descended + depth * ((remaining + depth - 1) / depth)
+	let step = depth as TrackedValue
+	let settled = descended + step * (try ((remaining + step - 1) / step) otherwise panic("nestedLoopsSource: a depth of 0 — the knob starts at LoopNestBase"))
 
 	out.append(closes)
 	out.append(driverWitnessTail(NestedDriver, valueExpr: "acc", expected: settled))
@@ -2458,12 +2480,12 @@ function floatOpsSource(groupCount KnobSize) returns String
 		out.append("\tf{p} = f{p} * 0.{floatGroupMultiplierDigit(i)}5\n")
 		trackedFloatSet(tracked, slot: p, value: trackedFloatAt(tracked, slot: p) * floatGroupMultiplier(i))
 		out.append("\tf{r} = f{r} / {floatGroupDivisorWhole(i)}.25\n")
-		// Bound rather than divided by in place: the non-zero range travels with the BINDING, which is
-		// the same shape `intDivideSource` emits for `ScaleDivisor` one knob over. `FloatGroupDivisor` is
-		// `float(2.25 to 5.25)`, so the divide is provably safe and takes no `try` — and this line is what
-		// found that shv2 was not reading a ranged FLOAT alias as a proof at all (see `Parser.divisorProof`).
-		let divisor = floatGroupDivisor(i)
-		trackedFloatSet(tracked, slot: r, value: trackedFloatAt(tracked, slot: r) / divisor)
+		// Bound rather than divided by in place: in the GENERATED program the non-zero range travels with
+		// the binding, the same shape `intDivideSource` emits for `ScaleDivisor` one knob over. The mirror
+		// here divides in the tracked value's own type, so it says `otherwise panic` for a divisor that is
+		// `float(2.25 to 5.25)` by construction.
+		let divisor = floatGroupDivisor(i) as TrackedFloatValue
+		trackedFloatSet(tracked, slot: r, value: try (trackedFloatAt(tracked, slot: r) / divisor) otherwise panic("floatGroupSource: a FloatGroupDivisor of 0 past its own range"))
 
 		// The compare that feeds a branch, and the float phi the continuation takes for `f{p}`.
 		out.append("\tif f{p} > f{q} 'fc{i}'\n")
@@ -2851,20 +2873,20 @@ let StringTypeSpelling = "String"
 // shape to drift, and the drift would be silent — each knob would still compile and each would be
 // measuring a slightly different declaration.
 //
-// `valueTypeName` is a NAME rather than a fixed `int` because each caller's file declares its own
-// element alias, and a ranged alias and a bare `int` do not lay out the same slot everywhere.
+// The trivial field is a `ScaleInt`: every knob reads it into a `ScaleInt` accumulator, and a per-knob
+// twin of that alias would be a second name for the same domain that no operator could meet it in.
 //
 // ⚠ THE MANAGED FIELD'S TYPE IS A PARAMETER, AND THAT IS THE WHOLE OF WHY THIS IS ONE EMITTER AND NOT
 // TWO. `String` and `__ManagedMemory` are two different managed types over ONE declaration shape; the
 // destructor cascade the shape exists to measure does not care which, and the buffer knob needs the
 // FIELD SPELLING (`Parser.markDeclaredSurface`'s struct-field carrier) rather than a new layout.
-function managedFieldTypeDecl(name String, managedFieldName String, managedTypeName String, valueTypeName String) returns String
+function managedFieldTypeDecl(name String, managedFieldName String, managedTypeName String) returns String
 	var out = StringBuilder.create()
 	out.append("\ntype {name}\n")
 	out.append("\texport var {managedFieldName} as {managedTypeName}\n")
-	out.append("\texport var value as {valueTypeName}\n")
+	out.append("\texport var value as {ScaleIntAlias}\n")
 	out.append("\n")
-	out.append("\tstatic function create({managedFieldName} {managedTypeName}, value {valueTypeName}) returns Self\n")
+	out.append("\tstatic function create({managedFieldName} {managedTypeName}, value {ScaleIntAlias}) returns Self\n")
 	out.append("\t\treturn Self\{{managedFieldName}: {managedFieldName}, value: value\}\n")
 	out.append("\tend 'create'\n")
 	out.append("end '{name}'\n")
@@ -2961,10 +2983,10 @@ function structCreateInBlock(index KnobIndex, typeName String, binding String) r
 	let rewritten = index mod 3 + 1
 	var body = StringBuilder.create()
 	body.append("\t\tvar {binding} = {typeName}.create(a, y: a + {created})\n")
-	body.append("\t\tacc = acc + {binding}.x + {binding}.y{neutralizeText(2 * corpusSeedValue() + created)}\n")
+	body.append("\t\tacc = acc + {binding}.x + {binding}.y{neutralizeText(2 * corpusSeedValue() + (created as TrackedValue))}\n")
 	body.append(accProbe("\t\t"))
 	body.append("\t\t{binding}.y = a + {rewritten}\n")
-	body.append("\t\tacc = acc + {structReaderName(typeName)}({binding}){neutralizeText(2 * corpusSeedValue() + rewritten)}\n")
+	body.append("\t\tacc = acc + {structReaderName(typeName)}({binding}){neutralizeText(2 * corpusSeedValue() + (rewritten as TrackedValue))}\n")
 	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("g{index}", body: body.build())
 end 'structCreateInBlock'
@@ -3037,31 +3059,44 @@ end 'structAllocsSource'
 
 let DivideDriver = "scaleDivide"
 
+// The bare-idiv knob's dividend: a file-private top-level `var`, initialised from a literal so it
+// carries NO alias, and assigned the seed once at the top of the driver.
+//
+// It is UNNAMED because a named dividend cannot meet a differently-aliased divisor. The divisor must
+// carry `ScaleDivisor` — its non-zero range is what makes the divide a bare `idiv` at all — and the two
+// casts that would put a `ScaleInt` dividend beside it both destroy the knob: casting the DIVISOR to
+// `ScaleInt` discards the non-zero proof (E3057, a checked divide, which is the OTHER knob's subject),
+// and casting the DIVIDEND into `ScaleDivisor` guards a value outside 1..8. A value with no alias may
+// meet either; `specs-shv2/ranged-typealias.md`'s `div-divisor-range-does-not-narrow-the-dividend` is
+// written the same way. The quotient adopts the divisor's alias and is cast back per group.
+let DivideDividendGlobal = "scaleDividend"
+
 // The `intDivide` knob: N `/` and `mod` groups over a divisor derived from the opaque seed.
 //
 // BOTH OPERATORS, because they share one `idiv` and read DIFFERENT result registers — the quotient
 // from RAX, the remainder from RDX. A corpus with only one of them measures half the lowering.
 //
-// The dividend is `acc`, which the group has just written and the next group will read, so `acc` is
-// live ACROSS an `idiv` that clobbers both RAX and RDX. That is the constraint the whole path exists
-// to satisfy, and a corpus of `20 / 4` could never provoke it — that folds before it reaches an
-// allocator at all.
+// `acc`, which the group has just written and the next group will read, is live ACROSS an `idiv` that
+// clobbers both RAX and RDX. That is the constraint the whole path exists to satisfy, and a corpus of
+// `20 / 4` could never provoke it — that folds before it reaches an allocator at all. The dividend is
+// `DivideDividendGlobal`, loaded per group; it costs one store in the driver and one load per group.
 function intDivideSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the int-divide knob — {groupCount} `/` and `mod` groups over an opaque, non-zero divisor.\n")
 	out.append("typealias {ScaleDivisorAlias} = int(1 to {DivisorMask + 1})\n")
+	out.append("var {DivideDividendGlobal} = 0\n")
 	out.append(witnessedDriverHeader(DivideDriver))
-	// The dividend is the pinned accumulator and the divisor is derived from it by a mask this line
-	// wrote, so both the quotient and the remainder are known here — and knowing them SEPARATELY is what
-	// makes this witness see the RAX/RDX split it exists for: a lowering that read the quotient out of
-	// the remainder's register moves one fold and not the other.
-	let divisor = corpusDivisor()
+	out.append("\t{DivideDividendGlobal} = a\n")
+	// The dividend is the pinned seed and the divisor is derived from it by a mask this line wrote, so
+	// both the quotient and the remainder are known here — and knowing them SEPARATELY is what makes
+	// this witness see the RAX/RDX split it exists for: a lowering that read the quotient out of the
+	// remainder's register moves one fold and not the other.
 	for i in 0 upto groupCount 'eachGroup'
 		// The CAST is what keeps this the BARE `idiv` knob after A1 — see `DivisorMask`'s second ⚠.
 		out.append("\tlet d{i} = ((a and {DivisorMask}) + 1) as {ScaleDivisorAlias}\n")
-		out.append("\tacc = acc + a / d{i}{neutralizeText(corpusSeedValue() / divisor)}\n")
+		out.append("\tacc = acc + {asScaleInt("({DivideDividendGlobal} / d{i})")}{neutralizeText(corpusSeedQuotient())}\n")
 		out.append(accProbe("\t"))
-		out.append("\tacc = acc + a mod d{i}{neutralizeText(corpusSeedValue() mod divisor)}\n")
+		out.append("\tacc = acc + {asScaleInt("({DivideDividendGlobal} mod d{i})")}{neutralizeText(corpusSeedRemainder())}\n")
 		out.append(accProbe("\t"))
 	end 'eachGroup'
 	out.append(accWitnessTail(DivideDriver))
@@ -3092,12 +3127,11 @@ function checkedDivideSource(groupCount KnobSize) returns String
 	// UNREACHABLE by construction (the mask leaves the divisor in 1..8), so a `try` that took its
 	// fallback would fold 0 where a quotient belongs and this witness would say so. That is the one thing
 	// a corpus which is compiled and never run could not check about a fallible divide.
-	let divisor = corpusDivisor()
 	for i in 0 upto groupCount 'eachGroup'
 		out.append("\tlet d{i} = (a and {DivisorMask}) + 1\n")
-		out.append("\tacc = acc + (try (a / d{i}) otherwise 0){neutralizeText(corpusSeedValue() / divisor)}\n")
+		out.append("\tacc = acc + (try (a / d{i}) otherwise 0){neutralizeText(corpusSeedQuotient())}\n")
 		out.append(accProbe("\t"))
-		out.append("\tacc = acc + (try (a mod d{i}) otherwise 0){neutralizeText(corpusSeedValue() mod divisor)}\n")
+		out.append("\tacc = acc + (try (a mod d{i}) otherwise 0){neutralizeText(corpusSeedRemainder())}\n")
 		out.append(accProbe("\t"))
 	end 'eachGroup'
 	out.append(accWitnessTail(CheckedDivideDriver))
@@ -3149,9 +3183,10 @@ function rangedReturnSource(siteCount KnobSize) returns String
 	out.append("\n")
 	// The driver returns a plain `int`, so it contributes no ranged site of its own and the knob stays
 	// exactly `siteCount` — the same reason `genretsites.sh`'s `spread` dispatcher returns the wide alias.
+	// The picker's answer arrives under the narrowed alias and is re-branded at the binding.
 	out.append(driverHeader(RangedReturnDriver))
 	out.append("\tvar wit = 0\n")
-	out.append("\tlet picked = {RangedReturnPickName}(a)\n")
+	out.append("\tlet picked = {asScaleInt("{RangedReturnPickName}(a)")}\n")
 	// WHICH site fires is the answer here, and it is known because the sites are `n == 0` … `n == N-1`
 	// against a pinned argument: site `seed` if the knob is wide enough to have one, and otherwise the
 	// literal `return 0` that closes the body. Both outcomes are real at different rungs — the knob is 8
@@ -3164,7 +3199,7 @@ end 'rangedReturnSource'
 // What `scaleRangedReturnPick` hands back for the pinned accumulator: the accumulator itself when one of
 // the `siteCount` sites matches it, and the closing literal otherwise.
 function rangedReturnPicked(siteCount KnobSize) returns TrackedValue
-	if corpusSeedValue() < siteCount 'someSiteMatches'
+	if corpusSeedValue() < siteCount as TrackedValue 'someSiteMatches'
 		return corpusSeedValue()
 	end 'someSiteMatches'
 	return 0
@@ -3193,7 +3228,6 @@ function shiftCoverageSource() returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: shift COVERAGE (fixed, not scaled) — const/dynamic counts over signed and ranged operands.\n")
 	out.append("typealias ScaleWide = int(0 to u64.max)\n")
-	out.append("typealias ScaleSigned = int(i64.min to i64.max)\n")
 	out.append("\n")
 
 	// Dynamic counts, signed operand: the guarded shl then shr.
@@ -3202,7 +3236,7 @@ function shiftCoverageSource() returns String
 	// so it computed a ROUND TRIP and any defect that moved BOTH shifts by the same amount (both counts
 	// masked to 3 bits instead of 6, say) cancelled exactly and the witness read clean. A relational
 	// assertion cannot catch a bug that moves both of its operands, which is what a single `c` made this.
-	out.append("function scaleShiftDyn(v ScaleSigned, c ScaleSigned, d ScaleSigned) returns {ScaleIntAlias}\n")
+	out.append("function scaleShiftDyn(v {ScaleIntAlias}, c {ScaleIntAlias}, d {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\tlet x = v shl c\n")
 	out.append("\treturn x shr d\n")
 	out.append("end 'scaleShiftDyn'\n")
@@ -3215,23 +3249,23 @@ function shiftCoverageSource() returns String
 	out.append("\n")
 
 	// Dynamic count, ranged operand: guarded, and the fill still decided by the operand's range.
-	out.append("function scaleShiftWideDyn(v ScaleWide, c ScaleSigned) returns {ScaleIntAlias}\n")
+	out.append("function scaleShiftWideDyn(v ScaleWide, c {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\treturn v shr c\n")
 	out.append("end 'scaleShiftWideDyn'\n")
 	out.append("\n")
 
 	// Constant count, signed operand: arithmetic (sign) fill.
-	out.append("function scaleShiftSignedConst(v ScaleSigned) returns {ScaleIntAlias}\n")
+	out.append("function scaleShiftSignedConst(v {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\treturn v shr {ShiftSignedConstantCount}\n")
 	out.append("end 'scaleShiftSignedConst'\n")
 	out.append("\n")
 
-	// The driver threads the opaque seed through every shift function. The seed `a` flows straight into
-	// every operand, signed OR ranged: shv2's argument check is CLASS-based (numeric agrees with
-	// numeric), so a plain `int` coerces into a `ScaleWide` parameter with no cast and no mask. The
-	// operand's VALUE never matters here — the shift codegen inside each callee is exercised because the
-	// parameter is opaque (shv2 has no interprocedural constant propagation), not because of what flows
-	// in. Dynamic counts are the seed masked to a small non-negative range so they stay runtime values.
+	// The driver threads the opaque seed through every shift function. The signed operands are
+	// `ScaleInt` already; the ranged operand is `hi as ScaleWide`, a cast between two full 64-bit ranges,
+	// so it records no guard and masks nothing — `hi` is NEGATIVE and a guard would fire. The operand's
+	// VALUE never matters here — the shift codegen inside each callee is exercised because the parameter
+	// is opaque (shv2 has no interprocedural constant propagation), not because of what flows in.
+	// Dynamic counts are the seed masked to a small non-negative range so they stay runtime values.
 	//
 	// ⭐ THE OPERAND'S VALUE NOW MATTERS AFTER ALL — NOT TO THE CODEGEN, BUT TO THE ANSWER. Each call is
 	// witnessed against the same shift this generator wrote, applied to the pinned seed with the same
@@ -3291,9 +3325,9 @@ function shiftCoverageSource() returns String
 	out.append("\tlet c1 = a and {ShiftCountMask}\n")
 	out.append("\tlet c2 = (a shr {ShiftSecondCountShift}) and {ShiftSecondCountMask}\n")
 
-	out.append("\tacc = acc + scaleShiftWideConst(hi){neutralizeText(logicalShr(highOperand, count: ShiftWideConstantCount))}\n")
+	out.append("\tacc = acc + scaleShiftWideConst(hi as ScaleWide){neutralizeText(logicalShr(highOperand, count: ShiftWideConstantCount))}\n")
 	out.append(accProbe("\t"))
-	out.append("\tacc = acc + scaleShiftWideDyn(hi, c: c1){neutralizeText(logicalShr(highOperand, count: firstCount))}\n")
+	out.append("\tacc = acc + scaleShiftWideDyn(hi as ScaleWide, c: c1){neutralizeText(logicalShr(highOperand, count: firstCount))}\n")
 	out.append(accProbe("\t"))
 	out.append("\tacc = acc + scaleShiftSignedConst(hi){neutralizeText(highOperand shr ShiftSignedConstantCount)}\n")
 	out.append(accProbe("\t"))
@@ -3573,20 +3607,16 @@ let StringViewOpsDriver = "scaleStringViewOps"
 let CharOpsDriver = "scaleCharOps"
 
 let ManagedStructPrefix = "ScaleNamed"
-let ManagedStructValueAlias = "ScaleNamedValue"
 let ManagedStructsDriver = "scaleManagedStructs"
 
-let ArrayElementAlias = "ScaleElement"
 let IntArrayAlias = "ScaleIntArray"
 let ArrayOpsDriver = "scaleArrayOps"
 
 let StringArrayAlias = "ScaleStringArray"
-let ManagedRowValueAlias = "ScaleRowValue"
 let ManagedRowName = "ScaleRow"
 let ManagedRowArrayAlias = "ScaleRowArray"
 let ManagedArrayOpsDriver = "scaleManagedArrayOps"
 
-let GenericElementAlias = "ScaleGenElement"
 let GenericBasePrefix = "ScaleGBase"
 let GenericBaseInstPrefix = "ScaleGBaseInst"
 let GenericBasesDriver = "scaleGenericBases"
@@ -3594,14 +3624,12 @@ let GenericBasesDriver = "scaleGenericBases"
 let GenericInstanceBaseName = "ScaleXBox"
 let GenericInstanceElemPrefix = "ScaleXElem"
 let GenericInstanceHoldPrefix = "ScaleXHold"
-let GenericInstanceHoldValueAlias = "ScaleXHoldValue"
 let GenericInstancePrefix = "ScaleXInst"
 let GenericInstancesDriver = "scaleGenericInstances"
 
 let TryCoOwnBaseName = "ScaleTcBox"
 let TryCoOwnErrorName = "ScaleTcBoom"
 let TryCoOwnHolderName = "ScaleTcHolder"
-let TryCoOwnHolderValueAlias = "ScaleTcHoldValue"
 let TryCoOwnHolderBoxAlias = "ScaleTcHolderBox"
 let TryCoOwnStringBoxAlias = "ScaleTcStringBox"
 let TryCoOwnHolderConsumerName = "scaleTcConsumeHolder"
@@ -3610,12 +3638,10 @@ let TryCoOwnDriver = "scaleTryCoOwn"
 
 let InterfacePrefix = "ScaleProto"
 let ConformerPrefix = "ScaleUnit"
-let InterfaceMeasurePrefix = "ScaleMeasure"
 let InterfaceFileDriverPrefix = "scaleIfaceFile"
 
 let DispatchInterfacePrefix = "ScaleDispProto"
 let DispatchConformerPrefix = "ScaleDisp"
-let DispatchMeasureAlias = "ScaleDispMeasure"
 let IfaceDispatchDriver = "scaleIfaceDispatch"
 
 // ⚠⚠ **`ByteAliasName` IS NOT THIS FILE'S TO CHOOSE, AND RENAMING IT BREAKS THE KNOB SILENTLY-ISH.**
@@ -3632,7 +3658,6 @@ let BufferSurfaceArrayAlias = "ScaleBufArray"
 let BufferSurfaceOfBuffersAlias = "ScaleBufOfBufs"
 let BufferSurfaceHoldName = "ScaleBufHold"
 let BufferSurfaceHoldFieldName = "buf"
-let BufferSurfaceHoldValueAlias = "ScaleBufHoldValue"
 let BufferSurfaceReadName = "scaleBufLength"
 let BufferSurfaceReturnPrefix = "scaleBufferOf"
 let BufferSurfacesDriver = "scaleBufferSurfaces"
@@ -3715,7 +3740,7 @@ function enumTypesSource(typeCount KnobSize) returns String
 			out.append("\t\t{EnumCasePrefix}{c} then acc = acc + {c + 1}\n")
 		end 'eachArm'
 		out.append("\tend 'em{t}'\n")
-		out.append("\tacc = acc{neutralizeText(enumPickerCase(t) + 1)}\n")
+		out.append("\tacc = acc{neutralizeText(((enumPickerCase(t) + 1) as TrackedValue))}\n")
 		out.append(accProbe("\t"))
 	end 'eachUse'
 	out.append(accWitnessTail(EnumTypesDriver))
@@ -3748,7 +3773,7 @@ function enumPickerThreshold(salt KnobIndex) returns KnobSize
 end 'enumPickerThreshold'
 
 function enumPickerCase(salt KnobIndex) returns KnobIndex
-	if corpusSeedValue() > enumPickerThreshold(salt) 'highArm'
+	if corpusSeedValue() > enumPickerThreshold(salt) as TrackedValue 'highArm'
 		return EnumCasesPerType - 1
 	end 'highArm'
 	return 0
@@ -3821,7 +3846,7 @@ function matchDenseStatementSite(index KnobIndex) returns String
 		out.append("\t\t{MatchDenseCasePrefix}{c} then acc = acc + {(index + c) mod 7 + 1}\n")
 	end 'eachArm'
 	out.append("\tend 'ms{index}'\n")
-	out.append("\tacc = acc{neutralizeText((index + enumPickerCase(MatchDenseSalt)) mod 7 + 1)}\n")
+	out.append("\tacc = acc{neutralizeText((((index + enumPickerCase(MatchDenseSalt)) mod 7 + 1) as TrackedValue))}\n")
 	out.append(accProbe("\t"))
 	return out.build()
 end 'matchDenseStatementSite'
@@ -3840,7 +3865,7 @@ function matchRangeExpressionSite(index KnobIndex) returns String
 	if enumPickerCase(MatchDenseSalt) == EnumCasesPerType - 1 'lastCase'
 		given = index mod 6 + 2
 	end 'lastCase'
-	return matchExpressionSite(index, pickName: MatchDensePickName, arms: arms.build(), given: given)
+	return matchExpressionSite(index, pickName: MatchDensePickName, arms: arms.build(), given: given as TrackedValue)
 end 'matchRangeExpressionSite'
 
 // SHAPE 2 — an EXPRESSION match over the SPARSE enum: four far-apart intervals, so a binary search.
@@ -3849,7 +3874,7 @@ function matchSparseExpressionSite(index KnobIndex) returns String
 	for c in 0 upto EnumCasesPerType 'eachArm'
 		arms.append("\t\t{MatchSparseCasePrefix}{c} gives {(index + c) mod 8 + 1}\n")
 	end 'eachArm'
-	return matchExpressionSite(index, pickName: MatchSparsePickName, arms: arms.build(), given: (index + enumPickerCase(MatchSparseSalt)) mod 8 + 1)
+	return matchExpressionSite(index, pickName: MatchSparsePickName, arms: arms.build(), given: (((index + enumPickerCase(MatchSparseSalt)) mod 8 + 1) as TrackedValue))
 end 'matchSparseExpressionSite'
 
 // The EXPRESSION-form wrapper both expression shapes sit inside: the opaque scrutinee, the `let … = match`
@@ -3906,7 +3931,7 @@ function stringOpsSource(groupCount KnobSize) returns String
 		body.append("\t\tvar sv{i} = \"{literal}\"\n")
 		body.append("\t\tlet st{i} = \" tail \{a\}\"\n")
 		body.append("\t\tsv{i}.append(st{i})\n")
-		body.append("\t\tacc = acc + sv{i}.byteLength() - st{i}.byteLength(){neutralizeText(literal.byteLength())}\n")
+		body.append("\t\tacc = acc + {asScaleInt("sv{i}.byteLength()")} - {asScaleInt("st{i}.byteLength()")}{neutralizeText(literal.byteLength() as TrackedValue)}\n")
 		body.append(accProbe("\t\t"))
 		body.append(falsePredicateProbe("sv{i} == \"{literal}\"", label: "se{i}"))
 		out.append(ownedSiteBlock("sg{i}", body: body.build()))
@@ -3993,7 +4018,7 @@ function stringSearchOpsSource(groupCount KnobSize) returns String
 
 	for i in 0 upto groupCount 'eachGroup'
 		let payload = searchPayloadText(i)
-		let payloadBytes = payload.byteLength()
+		let payloadBytes = payload.byteLength() as TrackedValue
 
 		var predicates = StringBuilder.create()
 		predicates.append("\t\tlet qv{i} = \"{payload}\"\n")
@@ -4015,7 +4040,7 @@ function stringSearchOpsSource(groupCount KnobSize) returns String
 		predicates.append(truePredicateProbe("qv{i}.toUpper().contains(\"{SearchUpperProbe}\")", label: "qup{i}"))
 		// ...and the conversions' LENGTHS, which the probes above cannot pin: an ASCII case map rewrites
 		// bytes in place, so a result that lost or gained one lands here and nowhere else.
-		predicates.append("\t\tacc = acc + qv{i}.toLower().byteLength() + qv{i}.toUpper().byteLength(){neutralizeText(2 * payloadBytes)}\n")
+		predicates.append("\t\tacc = acc + {asScaleInt("qv{i}.toLower().byteLength()")} + {asScaleInt("qv{i}.toUpper().byteLength()")}{neutralizeText(2 * payloadBytes)}\n")
 		predicates.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("qg{i}", body: predicates.build()))
 
@@ -4023,16 +4048,16 @@ function stringSearchOpsSource(groupCount KnobSize) returns String
 		rewrites.append("\t\tlet rv{i} = \"{payload}\"\n")
 		// The replacement is LONGER than the needle on purpose. Equal widths would witness a `replace` that
 		// found every match and one that found none identically, since both answer at the receiver's length.
-		rewrites.append("\t\tacc = acc + rv{i}.replace(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength(){neutralizeText(payloadBytes + SearchNeedleOccurrences * searchReplacementDelta())}\n")
+		rewrites.append("\t\tacc = acc + {asScaleInt("rv{i}.replace(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength()")}{neutralizeText(payloadBytes + SearchNeedleOccurrences * searchReplacementDelta())}\n")
 		rewrites.append(accProbe("\t\t"))
-		rewrites.append("\t\tacc = acc + rv{i}.replaceFirst(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength(){neutralizeText(payloadBytes + searchReplacementDelta())}\n")
+		rewrites.append("\t\tacc = acc + {asScaleInt("rv{i}.replaceFirst(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength()")}{neutralizeText(payloadBytes + searchReplacementDelta())}\n")
 		rewrites.append(accProbe("\t\t"))
 		// `split` at the same needle: N cuts make N+1 pieces, and element 0 is the head this generator
 		// wrote. The COUNT alone would be witnessed identically by a split that handed back N+1 empty
 		// strings, which is why the element's length is folded beside it — and reading a MANAGED element
 		// out of an Array owes a retain, so the read is load-bearing twice over.
 		rewrites.append("\t\tlet rp{i} = rv{i}.split(\"{SearchNeedle}\")\n")
-		rewrites.append("\t\tacc = acc + rp{i}.count() + (try rp{i}.get(0) otherwise \"\").byteLength(){neutralizeText(SearchNeedleOccurrences + 1 + searchPayloadFirstPart(i).byteLength())}\n")
+		rewrites.append("\t\tacc = acc + {asScaleInt("rp{i}.count()")} + {asScaleInt("(try rp{i}.get(0) otherwise \"\").byteLength()")}{neutralizeText(((SearchNeedleOccurrences + 1 + searchPayloadFirstPart(i).byteLength()) as TrackedValue))}\n")
 		rewrites.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("rg{i}", body: rewrites.build()))
 	end 'eachGroup'
@@ -4087,7 +4112,7 @@ function stringIndexOpsSource(groupCount KnobSize) returns String
 
 	for i in 0 upto groupCount 'eachGroup'
 		let payload = indexPayloadText(i)
-		let payloadBytes = payload.byteLength()
+		let payloadBytes = payload.byteLength() as TrackedValue
 		let firstNeedleAt = indexPayloadHead(i).byteLength()
 		let lastNeedleAt = firstNeedleAt + IndexNeedle.byteLength() + IndexMiddleText.byteLength()
 
@@ -4098,7 +4123,7 @@ function stringIndexOpsSource(groupCount KnobSize) returns String
 		ends.append("\t\tlet xv{i} = \"{payload}\"\n")
 		ends.append("\t\tlet xs{i} = xv{i}.startIndex()\n")
 		ends.append("\t\tlet xe{i} = xv{i}.endIndex()\n")
-		ends.append("\t\tacc = acc + xs{i}.charIndex() + xs{i}.bytePos() + xe{i}.charIndex() + xe{i}.bytePos(){neutralizeText(2 * payloadBytes)}\n")
+		ends.append("\t\tacc = acc + {asScaleInt("xs{i}.charIndex()")} + {asScaleInt("xs{i}.bytePos()")} + {asScaleInt("xe{i}.charIndex()")} + {asScaleInt("xe{i}.bytePos()")}{neutralizeText(2 * payloadBytes)}\n")
 		ends.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("xg{i}", body: ends.build()))
 
@@ -4109,16 +4134,16 @@ function stringIndexOpsSource(groupCount KnobSize) returns String
 		searches.append("\t\tlet yv{i} = \"{payload}\"\n")
 		searches.append("\t\tlet yf{i} = try yv{i}.findFirst(\"{IndexNeedle}\") otherwise yv{i}.endIndex()\n")
 		searches.append("\t\tlet yl{i} = try yv{i}.findLast(\"{IndexNeedle}\") otherwise yv{i}.startIndex()\n")
-		searches.append("\t\tacc = acc + yf{i}.bytePos() + yl{i}.charIndex(){neutralizeText(firstNeedleAt + lastNeedleAt)}\n")
+		searches.append("\t\tacc = acc + {asScaleInt("yf{i}.bytePos()")} + {asScaleInt("yl{i}.charIndex()")}{neutralizeText(((firstNeedleAt + lastNeedleAt) as TrackedValue))}\n")
 		searches.append(accProbe("\t\t"))
 		// The ERROR EDGE, taken at every site — see this function's header.
 		searches.append("\t\tlet ym{i} = try yv{i}.findFirst(\"{SearchAbsentNeedle}\") otherwise yv{i}.endIndex()\n")
-		searches.append("\t\tacc = acc + ym{i}.bytePos(){neutralizeText(payloadBytes)}\n")
+		searches.append("\t\tacc = acc + {asScaleInt("ym{i}.bytePos()")}{neutralizeText(payloadBytes)}\n")
 		searches.append(accProbe("\t\t"))
 		// `indexAfter` off the START, which is the one position whose answer needs no search: the payload's
 		// first cluster is one ASCII byte, so the step is exactly one in both columns.
 		searches.append("\t\tlet yn{i} = try yv{i}.indexAfter(yv{i}.startIndex()) otherwise yv{i}.endIndex()\n")
-		searches.append("\t\tacc = acc + yn{i}.charIndex() + yn{i}.bytePos() - 2\n")
+		searches.append("\t\tacc = acc + {asScaleInt("yn{i}.charIndex()")} + {asScaleInt("yn{i}.bytePos()")} - 2\n")
 		searches.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("yg{i}", body: searches.build()))
 
@@ -4128,9 +4153,9 @@ function stringIndexOpsSource(groupCount KnobSize) returns String
 		slices.append("\t\tlet zv{i} = \"{payload}\"\n")
 		slices.append("\t\tlet zs{i} = zv{i}.startIndex()\n")
 		slices.append("\t\tlet zf{i} = try zv{i}.findFirst(\"{IndexNeedle}\") otherwise zv{i}.endIndex()\n")
-		slices.append("\t\tacc = acc + zv{i}.slice(zs{i}, endIndex: zf{i}).byteLength(){neutralizeText(firstNeedleAt)}\n")
+		slices.append("\t\tacc = acc + {asScaleInt("zv{i}.slice(zs{i}, endIndex: zf{i}).byteLength()")}{neutralizeText(firstNeedleAt as TrackedValue)}\n")
 		slices.append(accProbe("\t\t"))
-		slices.append("\t\tacc = acc + zv{i}.slice(zs{i}, length: {IndexSliceClusters}).byteLength(){neutralizeText(IndexSliceClusters)}\n")
+		slices.append("\t\tacc = acc + {asScaleInt("zv{i}.slice(zs{i}, length: {IndexSliceClusters}).byteLength()")}{neutralizeText(IndexSliceClusters)}\n")
 		slices.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("zg{i}", body: slices.build()))
 	end 'eachGroup'
@@ -4210,7 +4235,7 @@ function trimWhitespacePadding() returns TrimPadding
 end 'trimWhitespacePadding'
 
 function trimDigitPadding() returns TrimPadding
-	return TrimPadding.create(TrimDigitPad, leadBytes: TrimDigitPad.byteLength(), trail: TrimDigitPad, trailBytes: TrimDigitPad.byteLength(), argument: TrimExplicitCharacterSet, tag: "u")
+	return TrimPadding.create(TrimDigitPad, leadBytes: TrimDigitPad.byteLength() as TrackedValue, trail: TrimDigitPad, trailBytes: TrimDigitPad.byteLength() as TrackedValue, argument: TrimExplicitCharacterSet, tag: "u")
 end 'trimDigitPadding'
 
 // ONE trim SITE, in ONE `ownedSiteBlock`. See `StringTrimOpsBase` for why a site gets a block to itself
@@ -4218,7 +4243,7 @@ end 'trimDigitPadding'
 function trimSiteBlock(label String, binding String, payload String, member String, padding TrimPadding, expectedBytes TrackedValue) returns String
 	var body = StringBuilder.create()
 	body.append("\t\tlet {binding} = \"{payload}\"\n")
-	body.append("\t\tacc = acc + {binding}.{member}({padding.argument}).byteLength(){neutralizeText(expectedBytes)}\n")
+	body.append("\t\tacc = acc + {asScaleInt("{binding}.{member}({padding.argument}).byteLength()")}{neutralizeText(expectedBytes)}\n")
 	body.append(accProbe("\t\t"))
 	return ownedSiteBlock(label, body: body.build())
 end 'trimSiteBlock'
@@ -4228,7 +4253,7 @@ end 'trimSiteBlock'
 // cut the wrong end lands on the other one-ended form's expectation and the two do not cancel, because
 // they are folded in separate blocks against the same pinned accumulator.
 function trimSchemeBlocks(index KnobIndex, padding TrimPadding, core String) returns String
-	let coreBytes = core.byteLength()
+	let coreBytes = core.byteLength() as TrackedValue
 	let payload = "{padding.lead}{core}{padding.trail}"
 	var out = StringBuilder.create()
 	out.append(trimSiteBlock("{padding.tag}b{index}", binding: "{padding.tag}vb{index}", payload: payload, member: TrimBothMethod, padding: padding, expectedBytes: coreBytes))
@@ -4309,7 +4334,7 @@ function stringViewOpsSource(groupCount KnobSize) returns String
 
 	for i in 0 upto groupCount 'eachGroup'
 		let payload = viewPayloadText(i)
-		let payloadBytes = payload.byteLength()
+		let payloadBytes = payload.byteLength() as TrackedValue
 		// The payload is the segment with ASCII on both sides, and every count is additive over it: an
 		// ASCII byte is one byte, one grapheme, one codepoint and one UTF-16 unit alike.
 		let asciiBytes = payloadBytes - ViewSegmentBytes
@@ -4319,15 +4344,15 @@ function stringViewOpsSource(groupCount KnobSize) returns String
 		// Each of the four is folded in its OWN line with its OWN expectation. Summing them would let two
 		// materializers answering each other's number cancel, which is precisely the confusion this
 		// payload was built to detect.
-		counts.append("\t\tacc = acc + vv{i}.count(){neutralizeText(asciiBytes + ViewSegmentGraphemes)}\n")
+		counts.append("\t\tacc = acc + {asScaleInt("vv{i}.count()")}{neutralizeText(asciiBytes + ViewSegmentGraphemes)}\n")
 		counts.append(accProbe("\t\t"))
-		counts.append("\t\tacc = acc + vv{i}.codepoints().count(){neutralizeText(asciiBytes + ViewSegmentCodepoints)}\n")
+		counts.append("\t\tacc = acc + {asScaleInt("vv{i}.codepoints().count()")}{neutralizeText(asciiBytes + ViewSegmentCodepoints)}\n")
 		counts.append(accProbe("\t\t"))
-		counts.append("\t\tacc = acc + vv{i}.utf16().count(){neutralizeText(asciiBytes + ViewSegmentUtf16Units)}\n")
+		counts.append("\t\tacc = acc + {asScaleInt("vv{i}.utf16().count()")}{neutralizeText(asciiBytes + ViewSegmentUtf16Units)}\n")
 		counts.append(accProbe("\t\t"))
 		// `bytes()` and `toByteArray()` are ONE emitter in shv2 and two members in the reference, so both
 		// spellings are written: the day they stop being one answer, the day they part is here.
-		counts.append("\t\tacc = acc + vv{i}.bytes().count() + vv{i}.toByteArray().count(){neutralizeText(2 * payloadBytes)}\n")
+		counts.append("\t\tacc = acc + {asScaleInt("vv{i}.bytes().count()")} + {asScaleInt("vv{i}.toByteArray().count()")}{neutralizeText(2 * payloadBytes)}\n")
 		counts.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("vg{i}", body: counts.build()))
 
@@ -4342,7 +4367,7 @@ function stringViewOpsSource(groupCount KnobSize) returns String
 		// would read zero.
 		leftovers.append("\t\tvar wc{i} = wv{i}.clone()\n")
 		leftovers.append("\t\twc{i}.append(\"{ViewCloneTail}\")\n")
-		leftovers.append("\t\tacc = acc + wc{i}.byteLength() - wv{i}.byteLength(){neutralizeText(ViewCloneTail.byteLength())}\n")
+		leftovers.append("\t\tacc = acc + {asScaleInt("wc{i}.byteLength()")} - {asScaleInt("wv{i}.byteLength()")}{neutralizeText(ViewCloneTail.byteLength() as TrackedValue)}\n")
 		leftovers.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("wg{i}", body: leftovers.build()))
 	end 'eachGroup'
@@ -4527,10 +4552,9 @@ end 'charOpsSource'
 function managedStructTypesSource(typeCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the managed-struct-types knob — {typeCount} types owning a String field, each built once and dropped through its cascade.\n")
-	out.append("typealias {ManagedStructValueAlias} = int(i64.min to i64.max)\n")
 
 	for t in 0 upto typeCount 'eachType'
-		out.append(managedFieldTypeDecl("{ManagedStructPrefix}{t}", managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling, valueTypeName: ManagedStructValueAlias))
+		out.append(managedFieldTypeDecl("{ManagedStructPrefix}{t}", managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling))
 	end 'eachType'
 
 	out.append("\n")
@@ -4576,8 +4600,7 @@ let ArraySliceWidth = 1
 function arrayOpsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the array-ops knob — {groupCount} trivial-element Array groups (create/reserve/push/get/count, then slice/clone/append).\n")
-	out.append("typealias {ArrayElementAlias} = int(i64.min to i64.max)\n")
-	out.append("typealias {IntArrayAlias} = Array with {ArrayElementAlias}\n")
+	out.append("typealias {IntArrayAlias} = Array with {ScaleIntAlias}\n")
 	out.append("\n")
 	out.append(witnessedDriverHeader(ArrayOpsDriver))
 
@@ -4590,7 +4613,7 @@ function arrayOpsSource(groupCount KnobSize) returns String
 		// Slot 0 holds the accumulator because the first `push` above put it there, and the count is the
 		// number of `push`es this loop wrote — so both halves of the growth path are known, and the
 		// `otherwise 0` is a fallback a correct `get` never takes.
-		grow.append("\t\tacc = acc + (try ab{i}.get(0) otherwise 0) + ab{i}.count(){neutralizeText(corpusSeedValue() + ArrayGrowPushCount)}\n")
+		grow.append("\t\tacc = acc + (try ab{i}.get(0) otherwise 0) + {asScaleInt("ab{i}.count()")}{neutralizeText(corpusSeedValue() + ArrayGrowPushCount)}\n")
 		grow.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("ag{i}", body: grow.build()))
 
@@ -4605,7 +4628,7 @@ function arrayOpsSource(groupCount KnobSize) returns String
 		// because this line asked for `[0, 1)`, and the clone-then-append is the pushed count twice. That
 		// second number is the one worth having — a `.append` that failed to detach, or detached and lost
 		// the appended half, lands here and nowhere else in the corpus.
-		share.append("\t\tacc = acc + aq{i}.count() + ak{i}.count(){neutralizeText(ArraySliceWidth + 2 * ArraySharePushCount)}\n")
+		share.append("\t\tacc = acc + {asScaleInt("aq{i}.count()")} + {asScaleInt("ak{i}.count()")}{neutralizeText(ArraySliceWidth + 2 * ArraySharePushCount)}\n")
 		share.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("as{i}", body: share.build()))
 	end 'eachGroup'
@@ -4636,9 +4659,8 @@ let ManagedRowPushCount = 1
 function managedArrayOpsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the managed-array-ops knob — {groupCount} groups over `Array with String` and `Array with <struct owning a String>`.\n")
-	out.append("typealias {ManagedRowValueAlias} = int(i64.min to i64.max)\n")
 	out.append("typealias {StringArrayAlias} = Array with String\n")
-	out.append(managedFieldTypeDecl(ManagedRowName, managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling, valueTypeName: ManagedRowValueAlias))
+	out.append(managedFieldTypeDecl(ManagedRowName, managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling))
 	out.append("\ntypealias {ManagedRowArrayAlias} = Array with {ManagedRowName}\n")
 	out.append("\n")
 	out.append(witnessedDriverHeader(ManagedArrayOpsDriver))
@@ -4653,14 +4675,14 @@ function managedArrayOpsSource(groupCount KnobSize) returns String
 		strings.append("\t\tms{i}.push(\"{element}\")\n")
 		strings.append("\t\tms{i}.push(\"managed array element \{a\}\")\n")
 		strings.append("\t\tlet mg{i} = try ms{i}.get(0) otherwise \"\"\n")
-		strings.append("\t\tacc = acc + ms{i}.count() + mg{i}.byteLength(){neutralizeText(ManagedArrayPushCount + element.byteLength())}\n")
+		strings.append("\t\tacc = acc + {asScaleInt("ms{i}.count()")} + {asScaleInt("mg{i}.byteLength()")}{neutralizeText(((ManagedArrayPushCount + element.byteLength()) as TrackedValue))}\n")
 		strings.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("mq{i}", body: strings.build()))
 
 		var rows = StringBuilder.create()
 		rows.append("\t\tvar mr{i} = {ManagedRowArrayAlias}.create()\n")
 		rows.append("\t\tmr{i}.push({ManagedRowName}.create(\"row element label number {i} for the heap\", value: a))\n")
-		rows.append("\t\tacc = acc + mr{i}.count(){neutralizeText(ManagedRowPushCount)}\n")
+		rows.append("\t\tacc = acc + {asScaleInt("mr{i}.count()")}{neutralizeText(ManagedRowPushCount)}\n")
 		rows.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("mw{i}", body: rows.build()))
 	end 'eachGroup'
@@ -4688,7 +4710,6 @@ end 'managedArrayOpsSource'
 function genericBasesSource(baseCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the generic-bases knob — {baseCount} unconstrained generic bases alternating `uses T` and `uses A, B`, each instantiated once.\n")
-	out.append("typealias {GenericElementAlias} = int(i64.min to i64.max)\n")
 
 	for t in 0 upto baseCount 'eachBase'
 		let baseName = "{GenericBasePrefix}{t}"
@@ -4696,7 +4717,7 @@ function genericBasesSource(baseCount KnobSize) returns String
 		let arity = t mod GenericBaseArityShapeCount
 		if arity == 0 'oneParam'
 			out.append(genericBoxDecl(baseName, fetch: GenericBoxFetch.none))
-			out.append("\ntypealias {instName} = {baseName} with {GenericElementAlias}\n")
+			out.append("\ntypealias {instName} = {baseName} with {ScaleIntAlias}\n")
 		end 'oneParam' else if arity == 1 'twoParam'
 			out.append("\ntype {baseName} uses A, B\n")
 			out.append("\texport var first as A\n")
@@ -4710,7 +4731,7 @@ function genericBasesSource(baseCount KnobSize) returns String
 			out.append("\t\treturn self.first\n")
 			out.append("\tend 'firstVal'\n")
 			out.append("end '{baseName}'\n")
-			out.append("\ntypealias {instName} = {baseName} with ({GenericElementAlias}, {GenericElementAlias})\n")
+			out.append("\ntypealias {instName} = {baseName} with ({ScaleIntAlias}, {ScaleIntAlias})\n")
 		end 'twoParam' else 'noArityEmitter'
 			panic("genericBasesSource: GenericBaseArityShapeCount is {GenericBaseArityShapeCount} but arity shape {arity} has no declaration branch — add one beside `uses T` and `uses A, B`, or lower the constant")
 		end 'noArityEmitter'
@@ -4766,7 +4787,6 @@ let GenericInstanceArgMask = 255
 function genericInstancesSource(instanceCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the generic-instances knob — {instanceCount} instantiations of one fixed base, each with its OWN type argument (trivial ranged int / managed holder).\n")
-	out.append("typealias {GenericInstanceHoldValueAlias} = int(i64.min to i64.max)\n")
 	out.append(genericBoxDecl(GenericInstanceBaseName, fetch: GenericBoxFetch.none))
 
 	for i in 0 upto instanceCount 'eachInstance'
@@ -4775,7 +4795,7 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 			out.append("\ntypealias {GenericInstanceElemPrefix}{i} = int(0 to {GenericInstanceElemFloor + i})\n")
 			out.append("typealias {GenericInstancePrefix}{i} = {GenericInstanceBaseName} with {GenericInstanceElemPrefix}{i}\n")
 		end 'trivialArg' else if shape == 1 'managedArg'
-			out.append(managedFieldTypeDecl("{GenericInstanceHoldPrefix}{i}", managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling, valueTypeName: GenericInstanceHoldValueAlias))
+			out.append(managedFieldTypeDecl("{GenericInstanceHoldPrefix}{i}", managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling))
 			out.append("typealias {GenericInstancePrefix}{i} = {GenericInstanceBaseName} with {GenericInstanceHoldPrefix}{i}\n")
 		end 'managedArg' else 'noArgEmitter'
 			// The CHECK between `GenericInstanceArgShapeCount` and the branches that realize it — the same
@@ -4791,13 +4811,14 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 		var body = StringBuilder.create()
 		let shape = i mod GenericInstanceArgShapeCount
 		if shape == 0 'trivialUse'
-			// Masked, not raw: the argument's alias is narrow, so an unmasked `acc` would be a value the
-			// range admits only by luck. The mask is opaque either way (the folder cannot see through
-			// `acc`), and the compiler cannot prove the bound, so the range guard is emitted regardless.
+			// Masked, then cast into the instance's OWN element alias: the mask keeps the value inside every
+			// instance's range, and the cast is how a `ScaleInt` reaches a parameter of another alias. The
+			// bound is not proven (the folder cannot see through `a`), so the cast is a real guard site.
 			// What comes back out of the box is what went in, which is the whole witness a borrowed
-			// argument can offer — and it travels through an opaque-`T` field read to get here.
-			body.append("\t\tlet xv{i} = {GenericInstancePrefix}{i}.create(a and {GenericInstanceArgMask})\n")
-			body.append("\t\tacc = acc + xv{i}.get(){neutralizeText(corpusSeedValue() and GenericInstanceArgMask)}\n")
+			// argument can offer — it travels through an opaque-`T` field read and is re-branded on the
+			// way into `acc`.
+			body.append("\t\tlet xv{i} = {GenericInstancePrefix}{i}.create((a and {GenericInstanceArgMask}) as {GenericInstanceElemPrefix}{i})\n")
+			body.append("\t\tacc = acc + {asScaleInt("xv{i}.get()")}{neutralizeText(corpusSeedValue() and GenericInstanceArgMask)}\n")
 			body.append(accProbe("\t\t"))
 		end 'trivialUse' else if shape == 1 'managedUse'
 			// The managed arm's `T` is a struct MOVED into the box, so `get()` would hand the whole value
@@ -4880,11 +4901,10 @@ end 'tryCoOwnPayloadText'
 function tryCoOwnSource(siteCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the try-co-own knob — {siteCount} `try` sites over a substituted managed `T` return, in all three forms, on both edges.\n")
-	out.append("typealias {TryCoOwnHolderValueAlias} = int(i64.min to i64.max)\n")
 	out.append("\nenum {TryCoOwnErrorName} implements Error\n")
 	out.append("\tbad\n")
 	out.append("end '{TryCoOwnErrorName}'\n")
-	out.append(managedFieldTypeDecl(TryCoOwnHolderName, managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling, valueTypeName: TryCoOwnHolderValueAlias))
+	out.append(managedFieldTypeDecl(TryCoOwnHolderName, managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling))
 	out.append(genericBoxDecl(TryCoOwnBaseName, fetch: GenericBoxFetch.throwing(TryCoOwnErrorName)))
 	out.append("\ntypealias {TryCoOwnHolderBoxAlias} = {TryCoOwnBaseName} with {TryCoOwnHolderName}\n")
 	out.append("typealias {TryCoOwnStringBoxAlias} = {TryCoOwnBaseName} with {StringTypeSpelling}\n")
@@ -4942,8 +4962,8 @@ type TryCoOwnSpelling
 	export let payloadText as String
 	export let fallbackText as String
 
-	// Appended to a binding to reach an int — `.value` for the aggregate, `.byteLength()` for a String.
-	// It is the ONE route out of a managed `T` into the accumulator.
+	// Appended to a binding to reach a `ScaleInt` — `.value` for the aggregate, `.byteLength()` re-branded
+	// for a String. It is the ONE route out of a managed `T` into the accumulator.
 	export let readText as String
 
 	// What the OK edge contributes through `readText`, and what the expression form's `otherwise`
@@ -4978,7 +4998,7 @@ end 'tryCoOwnAggregateSpelling'
 function tryCoOwnStringSpelling(index KnobIndex) returns TryCoOwnSpelling
 	let payload = tryCoOwnPayloadText(index)
 	let fallback = "fallback {index}"
-	return TryCoOwnSpelling.create(TryCoOwnStringBoxAlias, payloadText: "\"{payload}\"", fallbackText: "\"{fallback}\"", readText: ".byteLength()", okValue: payload.byteLength(), fetchFallbackValue: fallback.byteLength(), consumerName: TryCoOwnStringConsumerName, stem: "tcs")
+	return TryCoOwnSpelling.create(TryCoOwnStringBoxAlias, payloadText: "\"{payload}\"", fallbackText: "\"{fallback}\"", readText: ".byteLength() as {ScaleIntAlias}", okValue: payload.byteLength() as TrackedValue, fetchFallbackValue: fallback.byteLength() as TrackedValue, consumerName: TryCoOwnStringConsumerName, stem: "tcs")
 end 'tryCoOwnStringSpelling'
 
 // ONE SITE: the three forms, over whichever spelling and on whichever edge it was handed.
@@ -4991,13 +5011,13 @@ function tryCoOwnSite(index KnobIndex, spelling TryCoOwnSpelling, throwsHere boo
 	// THE EXPRESSION FORM, whose promotion is lifted onto `tryok`. Its `otherwise` is worth something the
 	// ok edge cannot produce, so this one fold says WHICH edge ran.
 	body.append("\t\tlet {stem}e{index} = try {stem}b{index}.fetch({live}) otherwise {spelling.fallbackText}\n")
-	body.append("\t\tacc = acc + {stem}e{index}{spelling.readText}{neutralizeText(tryCoOwnPick(throwsHere, taken: spelling.fetchFallbackValue, untaken: spelling.okValue))}\n")
+	body.append("\t\tacc = acc + ({stem}e{index}{spelling.readText}){neutralizeText(tryCoOwnPick(throwsHere, taken: spelling.fetchFallbackValue, untaken: spelling.okValue))}\n")
 	body.append(accProbe("\t\t"))
 
 	// THE CONDITION FORM, whose ok edge is the THEN block — `parseCatchingCondition`'s road to the same
 	// fork. Each arm folds its own value, for the same reason.
 	body.append("\t\tif let {stem}c{index} = try {stem}b{index}.fetch({live}) '{stem}ok{index}'\n")
-	body.append("\t\t\tacc = acc + {stem}c{index}{spelling.readText}\n")
+	body.append("\t\t\tacc = acc + ({stem}c{index}{spelling.readText})\n")
 	body.append("\t\tend '{stem}ok{index}' else ({stem}err{index}) '{stem}bad{index}'\n")
 	body.append("\t\t\tacc = acc + {TryCoOwnElseArmValue}\n")
 	body.append("\t\tend '{stem}bad{index}'\n")
@@ -5121,7 +5141,7 @@ function namespacedModuleSource(m KnobIndex) returns String
 	// The file-private alias, named BARE from the file that declares it — the one door a file-private
 	// declaration has, and the arm `pushNamespaceQualifiedAlias` mints no mirror for.
 	out.append("\tlet v = (a and {NsAliasMask}) as {privateAlias}\n")
-	out.append("\treturn {NsHiddenPrefix}{m}(a) + v\n")
+	out.append("\treturn {NsHiddenPrefix}{m}(a) + {asScaleInt("v")}\n")
 	out.append("end '{NsHelperPrefix}{m}'\n")
 	out.append("\n")
 	// FILE-PRIVATE, and it still earns a `ns{m}.nsHidden{m}` entry in the namespace-qualified function set:
@@ -5219,11 +5239,11 @@ function qualifiedReferenceGroup(m KnobIndex) returns String
 	out.append("\tlet ns{m}b = (a and {NsAliasMask}) as {innerNs}{NsQualifierSeparator}{NsDeepAliasName}\n")
 	// ONE-DOT qualified CALL — `parseQualifiedCall`'s door, which asks the namespace registry with the
 	// `Type.method` name it had already mangled.
-	out.append("\tacc = acc + {moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(a) + ns{m}a{neutralizeText(nsHelperValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
+	out.append("\tacc = acc + {moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(a) + {asScaleInt("ns{m}a")}{neutralizeText(nsHelperValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
 	out.append(accProbe("\t"))
 	// TWO-DOT qualified CALL — `parseDottedPrimary`'s own arm, the one that WALKS the token chain and
 	// ASSEMBLES the name before probing.
-	out.append("\tacc = acc + {innerNs}{NsQualifierSeparator}{NsDeepFuncPrefix}{m}(a) + ns{m}b{neutralizeText(nsDeepValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
+	out.append("\tacc = acc + {innerNs}{NsQualifierSeparator}{NsDeepFuncPrefix}{m}(a) + {asScaleInt("ns{m}b")}{neutralizeText(nsDeepValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
 	out.append(accProbe("\t"))
 	// A qualified call as a STATEMENT — the third door, and the one whose absence made a namespaced
 	// module's void function uncallable (`E2015: Unsupported: identifier statement`). The callee is the
@@ -5256,14 +5276,9 @@ function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, 
 	var total = 0 as SourceByteCount
 	for fileIndex in 0 upto fileCount 'eachFile'
 		let driverName = "{InterfaceFileDriverPrefix}{fileIndex}"
-		let measureAlias = "{InterfaceMeasurePrefix}{fileIndex}"
 
 		var out = StringBuilder.create()
 		out.append("// Generated by ScaleCorpus: the interface-types knob, file {fileIndex} — up to {InterfacesPerFile} interfaces and their conforming types.\n")
-		// The measure alias is per FILE, not shared: a typealias is a declaration like any other, and the
-		// same name declared by every one of the rung's interface files would be a redeclaration rather
-		// than a convenience.
-		out.append("typealias {measureAlias} = int(i64.min to i64.max)\n")
 
 		var body = StringBuilder.create()
 		body.append("\n")
@@ -5277,7 +5292,7 @@ function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, 
 				break
 			end 'past'
 
-			out.append(interfaceConformancePair("{InterfacePrefix}{index}", typeName: "{ConformerPrefix}{index}", measureAlias: measureAlias, salt: index))
+			out.append(interfaceConformancePair("{InterfacePrefix}{index}", typeName: "{ConformerPrefix}{index}", salt: index))
 			body.append(interfaceDispatchSite(index, typeName: "{ConformerPrefix}{index}", binding: "uv{index}", label: "ic{index}", salt: index))
 		end 'eachInterface'
 
@@ -5300,24 +5315,24 @@ end 'writeInterfaceTypes'
 //
 // ⚠ NO `where T is I` — concrete dispatch only. A constrained type parameter's method call is a witness
 // dispatch, whose table rides the x64-only `funcAbs64InRdata` relocation; see the knob section's header.
-function interfaceConformancePair(interfaceName String, typeName String, measureAlias String, salt KnobIndex) returns String
+function interfaceConformancePair(interfaceName String, typeName String, salt KnobIndex) returns String
 	var out = StringBuilder.create()
 	out.append("\ninterface {interfaceName}\n")
-	out.append("\tfunction {InterfaceProbeMethod}() returns {measureAlias}\n")
-	out.append("\tfunction {InterfaceScaleMethod}(n {measureAlias}) returns {measureAlias}\n")
+	out.append("\tfunction {InterfaceProbeMethod}() returns {ScaleIntAlias}\n")
+	out.append("\tfunction {InterfaceScaleMethod}(n {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("end '{interfaceName}'\n")
 	out.append("\ntype {typeName} implements {interfaceName}\n")
-	out.append("\tlet base as {measureAlias}\n")
+	out.append("\tlet base as {ScaleIntAlias}\n")
 	out.append("\n")
-	out.append("\tfunction {InterfaceProbeMethod}() returns {measureAlias}\n")
+	out.append("\tfunction {InterfaceProbeMethod}() returns {ScaleIntAlias}\n")
 	out.append("\t\treturn base + {salt mod 7 + 1}\n")
 	out.append("\tend '{InterfaceProbeMethod}'\n")
 	out.append("\n")
-	out.append("\tfunction {InterfaceScaleMethod}(n {measureAlias}) returns {measureAlias}\n")
+	out.append("\tfunction {InterfaceScaleMethod}(n {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\t\treturn base * 2 + n\n")
 	out.append("\tend '{InterfaceScaleMethod}'\n")
 	out.append("\n")
-	out.append("\tstatic function create(base {measureAlias}) returns Self\n")
+	out.append("\tstatic function create(base {ScaleIntAlias}) returns Self\n")
 	out.append("\t\treturn Self\{base: base\}\n")
 	out.append("\tend 'create'\n")
 	out.append("end '{typeName}'\n")
@@ -5337,8 +5352,8 @@ function interfaceDispatchSite(index KnobIndex, typeName String, binding String,
 	// `base` is the accumulator because the `create` on the line above put it there, so both method
 	// answers are known: `probe()` adds the conformer's salt to it, and `scaleBy(n)` doubles it and adds
 	// `n`. Two CONCRETE dispatches, and a call that landed on the wrong conformance moves the first.
-	let probed = corpusSeedValue() + (salt mod 7 + 1)
-	let scaled = corpusSeedValue() * 2 + scaleArgument
+	let probed = corpusSeedValue() + ((salt mod 7 + 1) as TrackedValue)
+	let scaled = corpusSeedValue() * 2 + (scaleArgument as TrackedValue)
 	var body = StringBuilder.create()
 	body.append("\t\tlet {binding} = {typeName}.create(a)\n")
 	body.append("\t\tacc = acc + {binding}.{InterfaceProbeMethod}() + {binding}.{InterfaceScaleMethod}({scaleArgument}){neutralizeText(probed + scaled)}\n")
@@ -5360,10 +5375,9 @@ end 'interfaceDispatchSite'
 function ifaceDispatchSource(siteCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the interface-dispatch knob — {siteCount} concrete dispatch sites over {IfaceDispatchTypeCount} conformances.\n")
-	out.append("typealias {DispatchMeasureAlias} = int(i64.min to i64.max)\n")
 
 	for t in 0 upto IfaceDispatchTypeCount 'eachType'
-		out.append(interfaceConformancePair("{DispatchInterfacePrefix}{t}", typeName: "{DispatchConformerPrefix}{t}", measureAlias: DispatchMeasureAlias, salt: t))
+		out.append(interfaceConformancePair("{DispatchInterfacePrefix}{t}", typeName: "{DispatchConformerPrefix}{t}", salt: t))
 	end 'eachType'
 
 	out.append("\n")
@@ -5435,7 +5449,7 @@ function bufferPendingTempBlock(index KnobIndex) returns String
 	let payload = "scale buffer payload segment {index} long enough to reach the heap"
 	var body = StringBuilder.create()
 	body.append("\t\tlet bt{index} = \"{payload}\".toByteArray().managed\n")
-	body.append("\t\tacc = acc + bt{index}.length(){neutralizeText(payload.byteLength())}\n")
+	body.append("\t\tacc = acc + bt{index}.length(){neutralizeText(payload.byteLength() as TrackedValue)}\n")
 	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("bt{index}", body: body.build())
 end 'bufferPendingTempBlock'
@@ -5486,7 +5500,7 @@ function bufferElementReadBlock(index KnobIndex) returns String
 	body.append("\t\tvar bf{index} = {BufferSurfaceOfBuffersAlias}.create()\n")
 	body.append("\t\tbf{index}.push(\"{element}\".toByteArray())\n")
 	body.append("\t\tlet bg{index} = try bf{index}.get(0) otherwise panic(\"scale corpus: index 0 of an array pushed to one line above\")\n")
-	body.append("\t\tacc = acc + bg{index}.length() + bf{index}.count(){neutralizeText(element.byteLength() + BufferElementPushCount)}\n")
+	body.append("\t\tacc = acc + bg{index}.length() + bf{index}.count(){neutralizeText(((element.byteLength() + BufferElementPushCount) as TrackedValue))}\n")
 	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("bf{index}", body: body.build())
 end 'bufferElementReadBlock'
@@ -5523,8 +5537,7 @@ function bufferSurfacesSource(groupCount KnobSize) returns String
 	out.append("typealias {ByteAliasName} = int(0 to u8.max)\n")
 	out.append("typealias {BufferSurfaceArrayAlias} = Array with {ByteAliasName}\n")
 	out.append("typealias {BufferSurfaceOfBuffersAlias} = Array with {ManagedMemoryTypeSpelling}\n")
-	out.append("typealias {BufferSurfaceHoldValueAlias} = int(i64.min to i64.max)\n")
-	out.append(managedFieldTypeDecl(BufferSurfaceHoldName, managedFieldName: BufferSurfaceHoldFieldName, managedTypeName: ManagedMemoryTypeSpelling, valueTypeName: BufferSurfaceHoldValueAlias))
+	out.append(managedFieldTypeDecl(BufferSurfaceHoldName, managedFieldName: BufferSurfaceHoldFieldName, managedTypeName: ManagedMemoryTypeSpelling))
 
 	// The PARAMETER carrier of the declared surface, and the ARGUMENT door's callee. ONE function, because a
 	// parameter's spelling is read once per DECLARATION while the axis that has to double is the CALL — which
@@ -5646,8 +5659,8 @@ export function assertCorpusCompiled(results RungResultArray) throws ScaleError
 		let below = try results.get(i - 1) otherwise panic("assertCorpusCompiled: i >= 1 but results.get({i - 1}) failed")
 		let rung = try results.get(i) otherwise panic("assertCorpusCompiled: i < count but results.get({i}) failed")
 
-		if not grewBy(rung.codeBytes, previous: below.codeBytes, minimum: MinCodeGrowthRatio) 'folded'
-			throw ScaleError.reason("rung {rung.rung} emitted {rung.codeBytes} bytes of code against rung {below.rung}'s {below.codeBytes} — a growth of {growthText(growthOf(rung.codeBytes, previous: below.codeBytes))} where the ladder DOUBLES the program and the floor is {growthText(GrowthReading.measured(MinCodeGrowthRatio))}. The corpus FOLDED AWAY rather than compiling, so every number this run produced is a number about nothing. The generated programs must be fold-resistant (see this file's header): seed every value from a loop-carried accumulator or a call result.")
+		if not grewBy(rung.codeBytes as MeasuredQuantity, previous: below.codeBytes as MeasuredQuantity, minimum: MinCodeGrowthRatio) 'folded'
+			throw ScaleError.reason("rung {rung.rung} emitted {rung.codeBytes} bytes of code against rung {below.rung}'s {below.codeBytes} — a growth of {growthText(growthOf(rung.codeBytes as MeasuredQuantity, previous: below.codeBytes as MeasuredQuantity))} where the ladder DOUBLES the program and the floor is {growthText(GrowthReading.measured(MinCodeGrowthRatio))}. The corpus FOLDED AWAY rather than compiling, so every number this run produced is a number about nothing. The generated programs must be fold-resistant (see this file's header): seed every value from a loop-carried accumulator or a call result.")
 		end 'folded'
 	end 'eachRung'
 end 'assertCorpusCompiled'
@@ -5662,7 +5675,7 @@ export function codeGrowthAt(results RungResultArray, rung LadderIndex) returns 
 
 	let below = try results.get(rung - 1) otherwise panic("codeGrowthAt: rung >= 1 but results.get({rung - 1}) failed")
 	let here = try results.get(rung) otherwise panic("codeGrowthAt: results.get({rung}) failed")
-	return growthOf(here.codeBytes, previous: below.codeBytes)
+	return growthOf(here.codeBytes as MeasuredQuantity, previous: below.codeBytes as MeasuredQuantity)
 end 'codeGrowthAt'
 
 // ===========================================================================================
@@ -5729,10 +5742,21 @@ export function printCorpusManifest()
 	print("\n")
 	print("  CONSTRUCTS GENERATED (a codegen change to one of these moves the memory numbers):\n")
 	print("    int arithmetic (+ - *), comparisons, BODY-LOCAL let / var, return\n")
-	print("    integer / and mod — the idiv path, over an OPAQUE divisor, with the dividend live across\n")
-	print("      the RAX/RDX clobber (a constant divisor folds and measures nothing). BOTH shapes, on\n")
+	print("    `as` between two aliases whose ranges both fit — a RE-BRAND, not a conversion. Every stdlib\n")
+	print("      member's answer (`BytePos`, `GraphemeIndex`, `ElementIndex`), every value a knob binds under\n")
+	print("      a narrow alias of its own, and the ranged-return knob's answer all enter `{ScaleIntAlias}`'s\n")
+	print("      arithmetic through one, because two named aliases never meet in an operator. It records\n")
+	print("      no guard and folds before codegen, so it is a cost of the FRONT END alone\n")
+	print("    integer / and mod — the idiv path, over an OPAQUE divisor, with `acc` live across the\n")
+	print("      RAX/RDX clobber (a constant divisor folds and measures nothing). BOTH shapes, on\n")
 	print("      two knobs: the divisor cast into a NON-ZERO range (the bare idiv) and the divisor left\n")
-	print("      possibly-zero (the CHECKED divide — cmp/setcc/or plus a three-block `try` fork, A1)\n")
+	print("      possibly-zero (the CHECKED divide — cmp/setcc/or plus a three-block `try` fork, A1).\n")
+	print("      The bare-idiv knob's DIVIDEND IS UNNAMED — a top-level `var` (`{DivideDividendGlobal}`),\n")
+	print("      stored once per driver and loaded once per group — BECAUSE a named dividend cannot meet\n")
+	print("      a differently-aliased divisor: casting the divisor to `{ScaleIntAlias}` discards its\n")
+	print("      non-zero proof (E3057, a checked divide), and casting the dividend into `{ScaleDivisorAlias}`\n")
+	print("      guards a value outside its range. The quotient adopts `{ScaleDivisorAlias}` and is cast\n")
+	print("      back per group\n")
 	print("    TOP-LEVEL let — the constant arena and its initializer DFS, as a 2-PARENT DAG so an\n")
 	print("      unmemoized DFS would go exponential rather than merely slow. It is FOLDED into every\n")
 	print("      use and emits almost no code: that is correct, and it is the front end being measured\n")
@@ -5756,11 +5780,17 @@ export function printCorpusManifest()
 	print("      SIGNED operand (arithmetic/sign fill) AND a ranged int(0 to u64.max) operand (zero fill)\n")
 	print("    ranged typealiases at BOTH doors that emit a RUNTIME RANGE GUARD over an OPAQUE value —\n")
 	print("      a cast or a `return` of a LITERAL is settled at compile time and emits nothing, so both\n")
-	print("      are driven from the opaque seed. `grep -c 'Range check failed' <rung binary>` is the\n")
-	print("      audit, and it reads 41 at rung 0 and 1,281 at rung 5:\n")
+	print("      are driven from the opaque seed. `grep -a -o \"typealias '[A-Za-z0-9.]*'\" <rung binary> |\n")
+	print("      sort | uniq -c` is the audit — it lists stdlib's own guard sites beside the corpus's, so\n")
+	print("      read the corpus's by name: one `{ScaleDivisorAlias}` per int-divide group, one\n")
+	print("      `{GenericInstanceElemPrefix}<i>` per trivial generic instance, `{NsPrivateAliasPrefix}<m>`,\n")
+	print("      `ns<m>.{NsSharedAliasName}` and `ns<m>.{NsInnerDirName}.{NsDeepAliasName}` per namespace module,\n")
+	print("      `{RangedReturnNarrowAlias}` per ranged-return site, and ONE `{CoverageNarrowAlias}`:\n")
 	print("        an ALIAS-NAMED `as` cast — the divisor cast into `{ScaleDivisorAlias}`, one per\n")
-	print("          int-divide group so it DOUBLES, plus ONE fixed `{CoverageNarrowAlias}` cast. This\n")
-	print("          door carries `guardSiteAt`, the guard CHAIN and `splitChainEnd`\n")
+	print("          int-divide group so it DOUBLES; the generic-instances knob's masked argument cast into\n")
+	print("          its instance's OWN element alias; the namespace knob's three per-module casts; plus ONE\n")
+	print("          fixed `{CoverageNarrowAlias}` cast. This door carries `guardSiteAt`, the guard CHAIN and\n")
+	print("          `splitChainEnd`\n")
 	print("        a narrowed `return` TYPE — its own doubling SITE count, all in ONE function and all\n")
 	print("          returning ONE parameter. This door carries `retBlockOf` and `splitBlockInPlace`,\n")
 	print("          and NOTHING generated one until A2a: every alias reaching a `return` was\n")

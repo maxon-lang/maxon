@@ -185,7 +185,7 @@ end 'base'
 
 function widen(j Integer) returns Integer
 	let r = base()
-	return r + j
+	return (r as Integer) + j
 end 'widen'
 
 function main() returns ExitCode

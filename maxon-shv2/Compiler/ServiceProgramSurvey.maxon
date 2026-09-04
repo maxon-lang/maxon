@@ -46,12 +46,12 @@ module let NoAwaitRow = u64.max as CsrIndex
 // reply simply appears in no row, and nothing has to remember not to read its fields.
 module type ServiceAwaitRoster
 	// Row ⇒ the function whose own body holds the `await`.
-	var funcIndices as CsrColumn
+	var funcIndices as FuncIndexArray
 	// Row ⇒ which service that await blocks on, and where it is written.
 	var sites as ServiceAwaitSiteArray
 
 	static function create() returns ServiceAwaitRoster
-		return Self{funcIndices: CsrColumn.create(), sites: ServiceAwaitSiteArray.create()}
+		return Self{funcIndices: FuncIndexArray.create(), sites: ServiceAwaitSiteArray.create()}
 	end 'create'
 
 	function note(funcIndex FuncIndex, site ServiceAwaitSite)
@@ -132,11 +132,11 @@ module type ServiceProgramSurvey
 	// where the function count is known (`possibleIndirectCallTargets`).
 	var addressTaken as CsrColumn
 	// E3143's roster, in two parallel columns.
-	var accessFuncs as CsrColumn
+	var accessFuncs as FuncIndexArray
 	var accessSites as ModuleVarAccessSiteArray
 
 	static function create() returns ServiceProgramSurvey
-		return Self{edges: CallGraphEdges.create(), ownerPerFunc: ByteArrayArray.create(), messageSeeds: BoolArray.create(), awaits: ServiceAwaitRoster.create(), dispatchesBlindly: BoolArray.create(), addressTaken: CsrColumn.create(), accessFuncs: CsrColumn.create(), accessSites: ModuleVarAccessSiteArray.create()}
+		return Self{edges: CallGraphEdges.create(), ownerPerFunc: ByteArrayArray.create(), messageSeeds: BoolArray.create(), awaits: ServiceAwaitRoster.create(), dispatchesBlindly: BoolArray.create(), addressTaken: CsrColumn.create(), accessFuncs: FuncIndexArray.create(), accessSites: ModuleVarAccessSiteArray.create()}
 	end 'create'
 
 	export function funcCount() returns CsrIndex

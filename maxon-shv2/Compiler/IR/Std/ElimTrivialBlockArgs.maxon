@@ -326,7 +326,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	//                      worklist asks after every fold, and the one a re-sweep answered by
 	//                      re-reading the FUNCTION.
 	//   • `parent`       — the fold chain, as a union-find column seeded with the identity.
-	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound)
+	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound as CsrIndex)
 	var triggers = FeedTriggers.create(pairs, bound: bound)
 
 	var parent = ValueIdArray.create()
@@ -416,8 +416,8 @@ end 'relayFold'
 // when one of its feeders has just folded — which is the only event that can change its answer.
 function reread(carried CarriedValues, feeders CsrGraph, parent ValueIdArray, arg ValueId, bound ValueId)
 	carried.forget(arg)
-	for k in 0 upto feeders.degree(arg) 'eachFeeder'
-		carried.note(arg, incoming: findRoot(parent, v: feeders.neighbour(arg, k: k), bound: bound))
+	for k in 0 upto feeders.degree(arg as CsrIndex) 'eachFeeder'
+		carried.note(arg, incoming: findRoot(parent, v: feeders.neighbour(arg as CsrIndex, k: k) as ValueId, bound: bound))
 	end 'eachFeeder'
 end 'reread'
 

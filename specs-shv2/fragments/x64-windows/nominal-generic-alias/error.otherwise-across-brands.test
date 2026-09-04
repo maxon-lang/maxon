@@ -1,0 +1,23 @@
+// Test: error.otherwise-across-brands
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+enum Fault implements Error
+	failed
+end 'Fault'
+
+function mayFail() returns Ys throws Fault
+	throw Fault.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var xs = Xs.create()
+	xs.push(1)
+	let ys = try mayFail() otherwise xs
+	print("{ys.count()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:17:11: type mismatch: 'otherwise type 'Xs' does not match expected type 'Ys''

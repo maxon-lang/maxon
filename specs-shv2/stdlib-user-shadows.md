@@ -293,7 +293,7 @@ end 'FilePath'
 
 function main() returns ExitCode
 	let child = Directory.currentPath().join("alpha.txt")
-	return (FilePath.make().tag + child.filename().byteLength()) as ExitCode
+	return (FilePath.make().tag + (child.filename().byteLength() as Integer)) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -322,7 +322,7 @@ end 'FilePath'
 function main() returns ExitCode
 	let mine = FilePath.make()
 	let child = Directory.currentPath().join("alpha.txt")
-	return (mine.filename() + child.filename().byteLength()) as ExitCode
+	return mine.filename() + (child.filename().byteLength() as ExitCode)
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

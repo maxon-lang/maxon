@@ -614,7 +614,7 @@ export type ValueMinter
 	var next as ValueId
 
 	export static function create(paramCount ParamCount) returns ValueMinter
-		return Self{next: paramCount}
+		return Self{next: valueIdAtParamPosition(paramCount)}
 	end 'create'
 
 	export function mint() returns ValueId
@@ -1096,7 +1096,7 @@ export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMin
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
 	for k in 0 upto text.count() 'each'
 		let ch = try text.get(k) otherwise panic("emitLiteralCString: text.get OOB at {k}")
-		let byteConst = emitConst(module, block: block, value: ch, ids: ids)
+		let byteConst = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
 		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: k as ByteOffset, valueId: byteConst, valueType: StdType.u8))
 	end 'each'
 	return buf
@@ -2782,7 +2782,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 		work.register(dictionaryDestructorSymbol(mangled), node: CascadeNode.genericInstanceDictionary(id))
 	end 'eachInstance'
 
-	work.seed(usage.neededDestructors)
+	work.seed(usage.neededDestructors as CascadeSymbolSet)
 
 	while work.hasPending() 'drain'
 		let node = work.take()
@@ -3010,7 +3010,7 @@ export function installStructDestructors(module StdModule, project Project, sign
 		return
 	end 'nothingDrops'
 
-	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed, kind: StructRuntimeEntryKind.destructor)
+	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed as ReferencedEntrySymbols, kind: StructRuntimeEntryKind.destructor)
 end 'installStructDestructors'
 
 // ⭐⭐ **THE PER-RECORD *DICTIONARY* DESTRUCTOR CASCADE (W183)** — the declared-record twin of
@@ -3031,7 +3031,7 @@ export function installStructDictionaryDestructors(module StdModule, project Pro
 		return
 	end 'nothingDrops'
 
-	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed, kind: StructRuntimeEntryKind.dictionaryDestructor)
+	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed as ReferencedEntrySymbols, kind: StructRuntimeEntryKind.dictionaryDestructor)
 end 'installStructDictionaryDestructors'
 
 // ⭐⭐ **WHICH PER-STRUCT RUNTIME ENTRY THE ONE LAYOUT WALK BELOW IS INSTALLING.** A discriminator rather than
@@ -3112,10 +3112,10 @@ end 'installStructRuntimeEntries'
 // visible.
 function installOneStructRuntimeEntry(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
 	match kind 'entry'
-		destructor then installOneStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed)
-		dictionaryDestructor then installOneStructDictionaryDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed)
-		cloner then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed, action: CascadeAction.clone)
-		soleWalk then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed, action: CascadeAction.soleWalk)
+		destructor then installOneStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed as DestructorSet)
+		dictionaryDestructor then installOneStructDictionaryDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed as DestructorSet)
+		cloner then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.clone)
+		soleWalk then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.soleWalk)
 	end 'entry'
 end 'installOneStructRuntimeEntry'
 
@@ -3641,13 +3641,10 @@ end 'noteCascadeUsage'
 // `recordCallUsage`'s, which routes a callee to its own family's set by prefix, so this selector cannot
 // become a second place a symbol is filed.
 function cascadeNeededSet(usage RuntimeUsage, action CascadeAction) returns CascadeSymbolSet
-	// An `if` rather than a `match` expression: the two fields wear DIFFERENT typealiases over the one
-	// `Set with ByteArray`, which a match expression reconciles by name and refuses.
-	if action == CascadeAction.clone 'theCloneSet'
-		return usage.neededCloners
-	end 'theCloneSet'
-
-	return usage.neededSoleWalks
+	return match action 'action'
+		clone gives usage.neededCloners as CascadeSymbolSet
+		soleWalk gives usage.neededSoleWalks as CascadeSymbolSet
+	end 'action'
 end 'cascadeNeededSet'
 
 // The symbol prefix `action`'s per-type entries wear — what tells a NESTED cascade callee apart from a leaf
@@ -3773,7 +3770,7 @@ export function installStructCascades(module StdModule, project Project, signatu
 	// no `typealias` at all. A drop and a clone that disagree about which layouts exist is the same defect
 	// twice — so the roster is `installStructRuntimeEntries`, derived once, and neither side can grow a
 	// registry the other does not see.
-	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed, kind: structEntryKindOf(action))
+	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed as ReferencedEntrySymbols, kind: structEntryKindOf(action))
 end 'installStructCascades'
 
 // Which entry of the shared struct roster `action` installs. The roster is walked once per KIND, so the two

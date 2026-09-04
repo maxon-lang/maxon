@@ -348,7 +348,7 @@ end 'mmTagIndex'
 // The tag table's FORMAT — the roster, the blob, and the one door a user name comes through.
 // ============================================================================
 
-export typealias DebugStreamNameIndexMap = Map with (String, MachineWord)
+export typealias DebugStreamNameIndexMap = Map with (String, ParsedInt)
 
 // ⭐⭐ **ONE TABLE KIND, TWO INSTANCES — `MXDS_TAGS` AND `MXDS_STRS`.** Both answer the same question for
 // the same wire width (a name ⇒ a u16 the monitor resolves back), differ only in WHICH names they hold, and
@@ -378,7 +378,7 @@ export type DebugStreamNameTable
 	export static function create(seed StringArray) returns DebugStreamNameTable
 		var byName = DebugStreamNameIndexMap.create()
 		for name in seed 'seedIndex'
-			byName.upsert(name, value: byName.count())
+			byName.upsert(name, value: byName.count() as ParsedInt)
 		end 'seedIndex'
 		return Self{names: seed, byName: byName}
 	end 'create'
@@ -386,7 +386,7 @@ export type DebugStreamNameTable
 	// The wire index for `name`, minting one on first sight.
 	export function intern(name String) returns ParsedInt
 		return try self.byName.get(name) otherwise 'fresh'
-			let minted = self.names.count()
+			let minted = self.names.count() as ParsedInt
 			self.byName.upsert(name, value: minted)
 			self.names.push(name)
 			return minted
@@ -462,12 +462,12 @@ end 'userTagIndex'
 // exactly a tag index that will not fit, so a second test beside the minter would be the same fact written
 // twice. It REFUSES rather than truncating: `writeWord` would silently keep the low two bytes, which does
 // not lose one name — it desynchronises the blob and renames every allocation after the offender.
-function appendNameBlobField(blob ByteArray, value ElementCount, what String)
+function appendNameBlobField(blob ByteArray, value ElementIndex, what String)
 	if value > DsNameBlobFieldMax 'doesNotFit'
 		panic("DebugStream name blob: {what} is {value}, which does not fit its {DsNameBlobFieldBytes}-byte field (max {DsNameBlobFieldMax})")
 	end 'doesNotFit'
 
-	writeWord(blob, value: value)
+	writeWord(blob, value: value as MachineWord)
 end 'appendNameBlobField'
 
 // ============================================================================

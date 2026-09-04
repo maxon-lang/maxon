@@ -231,11 +231,12 @@ type SlabArenaGeometry
 
 	// The derivation, written once for both lanes so a new one cannot arrive with a hand-computed bitmap.
 	static function fromChunkCount(chunkCount ArenaChunkCount, hasPageReservation bool) returns Self
-		let bitmapWords = chunkCount shr BitmapBitsPerWordShift
-		let granuleCount = chunkCount shr SlabArenaCommitGranuleChunksShift
+		let chunks = chunkCount as ParsedInt
+		let bitmapWords = chunks shr BitmapBitsPerWordShift
+		let granuleCount = chunks shr SlabArenaCommitGranuleChunksShift
 		let commitBitmapWords = (granuleCount + BitmapBitsPerWordMask) shr BitmapBitsPerWordShift
 		let commitBitmapOffset = ((ArenaBitmapOffset as ParsedInt) + bitmapWords * ArenaWordBytes) as ByteOffset
-		let bytes = chunkCount * SlabPageBytes
+		let bytes = chunks * SlabPageBytes
 		return Self{chunkCount: chunkCount, bitmapWords: bitmapWords, granuleCount: granuleCount, commitBitmapWords: commitBitmapWords, commitBitmapOffset: commitBitmapOffset, bytes: bytes, reservationBytes: bytes + arenaAlignSlackBytes(hasPageReservation), hasPageReservation: hasPageReservation}
 	end 'fromChunkCount'
 end 'SlabArenaGeometry'
@@ -568,7 +569,7 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 	// The bitmap's width is the chunk count shifted down by a word's bit count, and a LOSSY shift would leave
 	// the top chunks with no bit at all — free forever, and handed out by nobody. The scan would still work,
 	// which is what makes it worth asserting.
-	if geometry.bitmapWords * BitmapBitsPerWord != geometry.chunkCount 'bitmapShort'
+	if geometry.bitmapWords * BitmapBitsPerWord != geometry.chunkCount as ParsedInt 'bitmapShort'
 		panic("slab arena ({lane}): {geometry.bitmapWords} bitmap words describe {geometry.bitmapWords * BitmapBitsPerWord} chunks, not the arena's {geometry.chunkCount}")
 	end 'bitmapShort'
 
@@ -576,7 +577,7 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 	// reservation and the OS would refuse it, and the derived granule count would describe fewer chunks than
 	// the arena has. (That the granule is itself a whole number of chunks is asked of the granule alone, one
 	// signature up.)
-	if geometry.granuleCount * SlabArenaCommitGranuleChunks != geometry.chunkCount 'granuleOverrunsArena'
+	if geometry.granuleCount * SlabArenaCommitGranuleChunks != geometry.chunkCount as ParsedInt 'granuleOverrunsArena'
 		panic("slab arena ({lane}): {geometry.granuleCount} commit granules describe {geometry.granuleCount * SlabArenaCommitGranuleChunks} chunks, not the arena's {geometry.chunkCount}")
 	end 'granuleOverrunsArena'
 
@@ -594,8 +595,9 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 	// `slabChunkRunUnsatisfiable`, on one lane, in a build whose native twin is perfect. It subsumes the
 	// weaker "an arena has any payload chunks at all", which is why that is not asked separately.
 	let largestMapTableRun = arenaChunksFor(ArenaMapLevelEntries * ArenaWordBytes)
-	if largestMapTableRun > geometry.chunkCount - ArenaMetadataChunks 'mapTableRunUnsatisfiable'
-		panic("slab arena ({lane}): a {largestMapTableRun}-chunk reverse-map level does not fit the {geometry.chunkCount - ArenaMetadataChunks} chunks an arena has after its {ArenaMetadataChunks} metadata chunk(s), so `__slab_arena_map_ensure` would abort on the first lookup")
+	let payloadChunks = (geometry.chunkCount as ParsedInt) - ArenaMetadataChunks
+	if largestMapTableRun > payloadChunks 'mapTableRunUnsatisfiable'
+		panic("slab arena ({lane}): a {largestMapTableRun}-chunk reverse-map level does not fit the {payloadChunks} chunks an arena has after its {ArenaMetadataChunks} metadata chunk(s), so `__slab_arena_map_ensure` would abort on the first lookup")
 	end 'mapTableRunUnsatisfiable'
 
 	// The list link and the two bitmaps are the whole of the metadata chunk — the commit bitmap is last, so
@@ -699,7 +701,7 @@ end 'arenaChunksFor'
 // `checkArenaGeometryForLane`'s reason: a request too large is refused at RUN TIME with
 // `slabChunkRunUnsatisfiable`, on one lane, in a build whose native twin is perfect.
 export function slabArenaAllocatableChunks(hasPageReservation bool) returns ParsedInt
-	return SlabArenaGeometry.forReservation(hasPageReservation).chunkCount - ArenaMetadataChunks
+	return (SlabArenaGeometry.forReservation(hasPageReservation).chunkCount as ParsedInt) - ArenaMetadataChunks
 end 'slabArenaAllocatableChunks'
 
 // `__slab_assert_os_alloc(ptr) -> ptr` — surface a refused OS page call as a clean abort, and hand the
@@ -961,7 +963,7 @@ function buildSlabArenaAllocChunks(module StdModule, geometry SlabArenaGeometry)
 	let tooSmall = emitCmp(module, block: entry, a: numChunks, b: minRun, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: badRequest.id, elseBlockId: checkHigh.id))
 
-	let maxRun = emitConst(module, block: checkHigh, value: geometry.chunkCount - ArenaMetadataChunks, ids: ids)
+	let maxRun = emitConst(module, block: checkHigh, value: ((geometry.chunkCount - ArenaMetadataChunks) as ParsedInt), ids: ids)
 	let tooBig = emitCmp(module, block: checkHigh, a: numChunks, b: maxRun, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(checkHigh, op: StdOp.condBranch(tooBig, thenBlockId: badRequest.id, elseBlockId: start.id))
 
@@ -1008,7 +1010,7 @@ function buildSlabArenaAllocChunks(module StdModule, geometry SlabArenaGeometry)
 	scanHeader.blockArgs.push(IrBlockArg.create(runLen, argType: StdType.i64))
 	scanHeader.blockArgs.push(IrBlockArg.create(runStart, argType: StdType.i64))
 
-	let chunkLimit = emitConst(module, block: scanHeader, value: geometry.chunkCount, ids: ids)
+	let chunkLimit = emitConst(module, block: scanHeader, value: geometry.chunkCount as ParsedInt, ids: ids)
 	let scanned = emitCmp(module, block: scanHeader, a: chunk, b: chunkLimit, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(scanHeader, op: StdOp.condBranch(scanned, thenBlockId: nextArena.id, elseBlockId: loadWord.id))
 
@@ -1134,7 +1136,7 @@ function buildSlabArenaFreeChunks(module StdModule, geometry SlabArenaGeometry)
 	module.setTerminator(checkCount, op: StdOp.condBranch(emptyRun, thenBlockId: badRange.id, elseBlockId: checkHigh.id))
 
 	let pastRun = emitBin(module, block: checkHigh, a: chunkIndex, b: numChunks, opcode: StdBinOpcode.add, ids: ids)
-	let chunkLimit = emitConst(module, block: checkHigh, value: geometry.chunkCount, ids: ids)
+	let chunkLimit = emitConst(module, block: checkHigh, value: geometry.chunkCount as ParsedInt, ids: ids)
 	let aboveArena = emitCmp(module, block: checkHigh, a: pastRun, b: chunkLimit, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(checkHigh, op: StdOp.condBranch(aboveArena, thenBlockId: badRange.id, elseBlockId: release.id))
 

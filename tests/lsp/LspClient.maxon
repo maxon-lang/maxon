@@ -92,12 +92,15 @@ public typealias CompletionKindCode = int(i64.min to i64.max)
 public typealias SemanticTokenValue = int(i64.min to i64.max)
 public typealias DiagnosticSeverityCode = int(i64.min to i64.max)
 
+// An integer as the wire carries it, before a purpose is read into it or after one is written out.
+public typealias JsonInteger = int(i64.min to i64.max)
+
 // A spawned server's exit status.
 public typealias ProcessExitCode = int(i64.min to i64.max)
 
 // The `kind` a server may omit. LSP numbers both `SymbolKind` and `CompletionItemKind` from 1, so 0 is
 // outside either enumeration and cannot be mistaken for one of its members.
-public let UnspecifiedKind = 0 as SymbolKindCode
+public let UnspecifiedKind = 0 as JsonInteger
 
 public typealias CompletionItemArray = Array with CompletionItem
 public typealias TextEditArray = Array with TextEdit
@@ -491,7 +494,7 @@ public type LspClient
 
 		var identifier = JsonObjectBuilder.create(doc)
 		identifier.putString(UriKey, value: uri)
-		identifier.putInt(VersionKey, value: version)
+		identifier.putInt(VersionKey, value: version as JsonInteger)
 
 		var change = JsonObjectBuilder.create(doc)
 		change.putString(TextKey, value: content)
@@ -650,7 +653,7 @@ public type LspClient
 		var message = beginMessage(doc, method: MethodFormatting)
 
 		var options = JsonObjectBuilder.create(doc)
-		options.putInt(TabSizeKey, value: tabSize)
+		options.putInt(TabSizeKey, value: tabSize as JsonInteger)
 		options.putBool(InsertSpacesKey, value: insertSpaces)
 
 		var params = JsonObjectBuilder.create(doc)
@@ -667,7 +670,7 @@ public type LspClient
 		var symbols = DocumentSymbolArray.create()
 
 		for element in try optionalElements(doc, id: result) 'eachSymbol'
-			symbols.push(DocumentSymbol.create(try stringMember(doc, of: element, key: NameKey), kind: optionalKind(doc, of: element)))
+			symbols.push(DocumentSymbol.create(try stringMember(doc, of: element, key: NameKey), kind: optionalKind(doc, of: element) as SymbolKindCode))
 		end 'eachSymbol'
 
 		return DocumentSymbolsResult.of(symbols)
@@ -779,7 +782,7 @@ public type LspClient
 		let id = self.nextRequestId
 		self.nextRequestId = id + 1
 
-		message.putInt(JsonRpcIdKey, value: id)
+		message.putInt(JsonRpcIdKey, value: id as JsonInteger)
 		doc.root = message.finish()
 		try self.writeFrame(Json.stringify(doc))
 
@@ -917,9 +920,9 @@ type JsonObjectBuilder
 		self.children.push(self.doc.add(JsonNode.stringNode(value)))
 	end 'putString'
 
-	function putInt(key String, value JsonRpcErrorCode)
+	function putInt(key String, value JsonInteger)
 		self.keys.push(key)
-		self.children.push(self.doc.add(JsonNode.numberNode(value)))
+		self.children.push(self.doc.add(JsonNode.numberNode(value as JsonFloat)))
 	end 'putInt'
 
 	function putBool(key String, value bool)
@@ -958,8 +961,8 @@ end 'textDocumentIdentifier'
 
 function positionNode(doc JsonDoc, line LspCoordinate, character LspCoordinate) returns JsonNodeId
 	var position = JsonObjectBuilder.create(doc)
-	position.putInt(LineKey, value: line)
-	position.putInt(CharacterKey, value: character)
+	position.putInt(LineKey, value: line as JsonInteger)
+	position.putInt(CharacterKey, value: character as JsonInteger)
 	return position.finish()
 end 'positionNode'
 
@@ -1030,7 +1033,7 @@ end 'addressesRequest'
 function replyOf(doc JsonDoc) returns (JsonDoc, JsonNodeId) throws LspClientError
 	if hasMember(doc, of: doc.root, key: JsonRpcErrorKey) 'refused'
 		let failure = try memberNode(doc, of: doc.root, key: JsonRpcErrorKey)
-		let code = try integerMember(doc, of: failure, key: JsonRpcErrorCodeKey)
+		let code = (try integerMember(doc, of: failure, key: JsonRpcErrorCodeKey)) as JsonRpcErrorCode
 		throw LspClientError.serverRefused(code, message: try stringMember(doc, of: failure, key: JsonRpcErrorMessageKey))
 	end 'refused'
 
@@ -1084,7 +1087,7 @@ function stringMember(doc JsonDoc, of JsonNodeId, key String) returns String thr
 	end 'notAString'
 end 'stringMember'
 
-function integerMember(doc JsonDoc, of JsonNodeId, key String) returns JsonRpcErrorCode throws LspClientError
+function integerMember(doc JsonDoc, of JsonNodeId, key String) returns JsonInteger throws LspClientError
 	return try doc.getInt(of, key: key) otherwise 'notAnInteger'
 		throw LspClientError.malformedResponse("a reply's '{key}' member is missing or is not a number")
 	end 'notAnInteger'
@@ -1112,7 +1115,7 @@ end 'coordinateMember'
 
 // A `kind` a server may leave out. LSP numbers both enumerations from 1, so the absent value is outside
 // either one and cannot be read as a member of it.
-function optionalKind(doc JsonDoc, of JsonNodeId) returns SymbolKindCode
+function optionalKind(doc JsonDoc, of JsonNodeId) returns JsonInteger
 	return try doc.getInt(of, key: KindKey) otherwise UnspecifiedKind
 end 'optionalKind'
 
@@ -1170,7 +1173,7 @@ function readPublishedDiagnostics(doc JsonDoc, uri String) returns PublishedDiag
 
 	for element in try elementsOf(doc, id: try memberNode(doc, of: params, key: DiagnosticsKey)) 'eachDiagnostic'
 		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
-		let severity = try integerMember(doc, of: element, key: SeverityKey)
+		let severity = (try integerMember(doc, of: element, key: SeverityKey)) as DiagnosticSeverityCode
 		let code = try stringMember(doc, of: element, key: CodeKey)
 		let source = try stringMember(doc, of: element, key: SourceKey)
 
@@ -1252,7 +1255,7 @@ function readCompletion(doc JsonDoc, id JsonNodeId) returns CompletionResult thr
 	let listed = id if doc.get(id).kind == JsonKind.jsonArray else try memberNode(doc, of: id, key: ItemsKey)
 
 	for element in try elementsOf(doc, id: listed) 'eachItem'
-		items.push(CompletionItem.create(try stringMember(doc, of: element, key: LabelKey), kind: optionalKind(doc, of: element)))
+		items.push(CompletionItem.create(try stringMember(doc, of: element, key: LabelKey), kind: optionalKind(doc, of: element) as CompletionKindCode))
 	end 'eachItem'
 
 	return CompletionResult.of(items)

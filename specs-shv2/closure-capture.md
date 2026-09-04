@@ -603,7 +603,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Word = int(0 to u64.max)
 
 function usesClosure(bump Integer, high Word) returns Integer
-	let op = function(n Integer) gives n + bump + (high shr 62)
+	let op = function(n Integer) gives n + bump + ((high shr 62) as Integer)
 	return op(1)
 end 'usesClosure'
 

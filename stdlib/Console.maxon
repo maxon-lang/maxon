@@ -23,10 +23,10 @@ end 'NotFound'
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-// Byte counts into the buffered-pending array. The buffer is one `Array`, whose count is bounded by
-// its `__ManagedMemory` length — a signed machine word — so this matches `Array.ElementCount`
-// exactly, upper bound included.
-typealias ByteCount = int(0 to i64.max)
+// Positions and lengths in the buffered-pending array. The buffer is one `Array`, whose count is
+// bounded by its `__ManagedMemory` length — a signed machine word — so this matches
+// `Array.ElementIndex` exactly, upper bound included.
+typealias BytePos = int(0 to i64.max)
 
 // Chunk size for each underlying __Builtins.readStdin call. 4 KiB balances
 // syscall overhead against memory footprint for typical line-oriented input.
@@ -105,7 +105,7 @@ type Stdin
 
 	/// Read up to `n` bytes. Returns fewer than `n` only when EOF is reached
 	/// before the count is satisfied. Returns an empty array at EOF.
-	function readBytes(n ByteCount) returns ByteArray
+	function readBytes(n BytePos) returns ByteArray
 		while pending.count() < n and not eofSeen 'fillLoop'
 			fillOnce()
 		end 'fillLoop'
@@ -121,7 +121,7 @@ type Stdin
 	// Index of the first '\n' byte in `pending`. Throws `NotFound.notFound`
 	// when no newline is in the buffer yet — the caller decides whether to
 	// fill more or stop.
-	function findNewline() returns ByteCount throws NotFound
+	function findNewline() returns BytePos throws NotFound
 		let len = pending.count()
 		var i = 0
 		while i < len 'scan'
@@ -138,7 +138,7 @@ type Stdin
 
 	// Remove and return the first `n` bytes of `pending`. Caller must ensure
 	// `n <= pending.count()`.
-	function takePrefix(n ByteCount) returns ByteArray
+	function takePrefix(n BytePos) returns ByteArray
 		var out = ByteArray.create()
 		var i = 0
 		while i < n 'copy'
@@ -158,7 +158,7 @@ type Stdin
 	end 'discardOne'
 
 	// Shift `pending` left by `n`, discarding the first `n` bytes.
-	function shiftLeft(n ByteCount)
+	function shiftLeft(n BytePos)
 		let len = pending.count()
 		var rebuilt = ByteArray.create()
 		var i = n

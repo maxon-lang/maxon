@@ -100,10 +100,6 @@ let RuleUnit = "-"
 // one in for two digits).
 typealias Permille = int(0 to 1000)
 
-// A non-zero quantity — the divisor type for the percentage conversion below, in whichever
-// unit is being shared out (see `ShareQuantity`).
-typealias NonZeroShare = int(1 to u64.max)
-
 let PermilleScale = 1000
 let PermilleTenthsPerPercent = 10
 
@@ -593,7 +589,7 @@ function regAllocBreakdown(timings CompileTimings, total PhaseCost) returns Stri
 end 'regAllocBreakdown'
 
 function timingRow(label String, cost PhaseCost, total PhaseCost) returns String
-	return "{padRight(label, width: PhaseNameWidth)}{padLeft(millisText(cost.nanos), width: TimeWidth)}{padLeft(percentOfTotal(cost.nanos, total: total.nanos), width: PercentWidth)}{padLeft(percentOfTotal(cost.cpuTicks, total: total.cpuTicks), width: PercentWidth)}\n"
+	return "{padRight(label, width: PhaseNameWidth)}{padLeft(millisText(cost.nanos), width: TimeWidth)}{padLeft(percentOfTotal(cost.nanos as ShareQuantity, total: total.nanos as ShareQuantity), width: PercentWidth)}{padLeft(percentOfTotal(cost.cpuTicks as ShareQuantity, total: total.cpuTicks as ShareQuantity), width: PercentWidth)}\n"
 end 'timingRow'
 
 // Nanoseconds rendered as milliseconds to one decimal place, in integer math.
@@ -636,10 +632,9 @@ function percentOfTotal(value ShareQuantity, total ShareQuantity) returns String
 		panic("percentOfTotal: a phase claims {value} of a {total} compile — a phase timer overlaps another and is double-counting (see CompileTimings' header).")
 	end 'overlap'
 
-	// `total` is guarded non-zero above; cast so the divide is provably safe (integer `/` throws
-	// for a possibly-zero divisor).
-	let denom = total as NonZeroShare
-	let permille = ((value * PermilleScale) / denom) as Permille
+	// `total` is guarded non-zero above; integer `/` throws for a possibly-zero divisor, and
+	// `otherwise panic` is the project's form for a `try` that must not fail.
+	let permille = (try ((value * PermilleScale) / total) otherwise panic("percentOfTotal: total was 0 past its own guard")) as Permille
 	return "{permille / PermilleTenthsPerPercent}.{permille mod PermilleTenthsPerPercent}%"
 end 'percentOfTotal'
 
@@ -659,12 +654,12 @@ end 'padLeft'
 // The spaces a `text` cell needs to fill a `width` column — none, for a label that already overflows
 // it (see `padRight`: an overlong label widens its row rather than being truncated).
 function padCount(text String, width ColumnWidth) returns ColumnWidth
-	let len = text.byteLength()
+	let len = text.byteLength() as ColumnWidth
 	if len >= width 'overflows'
 		return 0
 	end 'overflows'
 
-	return (width - len) as ColumnWidth
+	return width - len
 end 'padCount'
 
 // `unit` repeated `count` times — the one place a run of identical characters is spelled, for both
@@ -676,7 +671,7 @@ end 'padCount'
 // every cell of every table paid it.
 function repeated(unit String, count ColumnWidth) returns String
 	var out = StringBuilder.create()
-	out.reserve(unit.byteLength() * count)
+	out.reserve(unit.byteLength() * (count as BytePos))
 
 	for _ in 0 upto count 'each'
 		out.append(unit)

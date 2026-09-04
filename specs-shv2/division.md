@@ -233,8 +233,8 @@ range is doing all the work. `100 / 7 = 14`, `100 mod 7 = 2`, `14 + 2 = 16`.
 ```maxon
 typealias NonZero = int(1 to 1000)
 
-function divide(n Integer, d NonZero) returns Integer
-	return n / d + n mod d
+function divide(n NonZero, d NonZero) returns Integer
+	return (n / d + n mod d) as Integer
 end 'divide'
 
 function main() returns ExitCode
@@ -366,8 +366,8 @@ as "the range is positive" instead of "the range excludes `-1`". The golden hold
 ```maxon
 typealias BelowMinusOne = int(i64.min to -2)
 
-function remainder(n Integer, d BelowMinusOne) returns Integer
-	return n mod d
+function remainder(n BelowMinusOne, d BelowMinusOne) returns Integer
+	return (n mod d) as Integer
 end 'remainder'
 
 function main() returns ExitCode

@@ -82,7 +82,7 @@ export typealias Score = int(0 to 10)
 function main() returns ExitCode
 	let wide = 50 as api.Score
 	let narrow = 5 as legacy.Score
-	return (wide + narrow) as ExitCode
+	return (wide + (narrow as api.Score)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -121,9 +121,7 @@ declaration rules admit and which a qualifier walk that demanded plain identifie
 unreachable.
 ```maxon
 // --- file: lib/inner/deep.maxon
-typealias Integer = int(0 to 125)
-
-export function from(v Integer) returns Integer
+export function from(v api.Score) returns api.Score
 	return v + 1
 end 'from'
 
@@ -197,7 +195,7 @@ end 'helper'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let s = 5 as lib.from.Score
-	return (lib.from.helper() + s) as ExitCode
+	return ((lib.from.helper() as lib.from.Score) + s) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -972,11 +970,11 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return (alpha.pick() * 10 + beta.pick()) as ExitCode
+	return (alpha.pick() * 10) as ExitCode + (beta.pick() as ExitCode)
 end 'main'
 ```
 ```maxoncstderr
-error E3036: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-default-is-not-inherited.test:18:35: 'beta.pick' expects 1 argument(s) but 0 were provided
+error E3036: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-default-is-not-inherited.test:18:49: 'beta.pick' expects 1 argument(s) but 0 were provided
 ```
 
 
@@ -1011,7 +1009,7 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return (pick(2) + alpha.pick(1)) as ExitCode
+	return (pick(2) as ExitCode) + (alpha.pick(1) as ExitCode)
 end 'main'
 ```
 ```maxoncstderr
@@ -1075,7 +1073,7 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return (alpha.pick() * 10 + beta.pick(3)) as ExitCode
+	return (alpha.pick() * 10) as ExitCode + (beta.pick(3) as ExitCode)
 end 'main'
 ```
 ```exitcode

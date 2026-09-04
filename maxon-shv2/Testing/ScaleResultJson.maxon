@@ -117,7 +117,7 @@ end 'writeResultJson'
 function addRepeatSampling(doc JsonDoc, keys StringArray, children JsonNodeIdArray, repeat RepeatSampling)
 	match repeat 'r'
 		unstated then return
-		stated(count) then pushJsonNumber(doc, keys: keys, children: children, key: "repeat", value: count)
+		stated(count) then pushJsonNumber(doc, keys: keys, children: children, key: "repeat", value: count as JsonFloat)
 	end 'r'
 end 'addRepeatSampling'
 
@@ -133,9 +133,9 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 		var keys = StringArray.create()
 		var children = JsonNodeIdArray.create()
 
-		pushJsonNumber(doc, keys: keys, children: children, key: "rung", value: result.rung)
-		pushJsonNumber(doc, keys: keys, children: children, key: "sourceBytes", value: result.sourceBytes)
-		pushJsonNumber(doc, keys: keys, children: children, key: "codeBytes", value: result.codeBytes)
+		pushJsonNumber(doc, keys: keys, children: children, key: "rung", value: result.rung as JsonFloat)
+		pushJsonNumber(doc, keys: keys, children: children, key: "sourceBytes", value: result.sourceBytes as JsonFloat)
+		pushJsonNumber(doc, keys: keys, children: children, key: "codeBytes", value: result.codeBytes as JsonFloat)
 		addMetricFields(doc, keys: keys, children: children, metric: result.total)
 
 		// The deltas the report prints, so a consumer never has to re-derive them from the log. ABSENT
@@ -188,14 +188,14 @@ function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray
 	end 'notLogged'
 	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
 
-	pushJsonNumber(doc, keys: keys, children: children, key: "allocsDelta", value: result.total.allocs - beforeAllocs)
+	pushJsonNumber(doc, keys: keys, children: children, key: "allocsDelta", value: ((result.total.allocs - beforeAllocs) as JsonFloat))
 
 	// OMITTED, never zero, when the logged row was minted at another path — the same rule `allocsDelta`
 	// follows one line up when a rung has no past. A consumer that finds no `bytesDelta` knows the
 	// subtraction was refused; one handed a number could not have known it was fiction.
 	match bytes 'b'
 		withheld then return
-		comparable then pushJsonNumber(doc, keys: keys, children: children, key: "bytesDelta", value: result.total.bytes - beforeBytes)
+		comparable then pushJsonNumber(doc, keys: keys, children: children, key: "bytesDelta", value: ((result.total.bytes - beforeBytes) as JsonFloat))
 	end 'b'
 end 'addLoggedDeltas'
 
@@ -215,10 +215,10 @@ end 'metricNode'
 // A consumer reading these fields in order reads them in decreasing order of how much a small
 // movement in one is worth — see the header for the band.
 function addMetricFields(doc JsonDoc, keys StringArray, children JsonNodeIdArray, metric PhaseMetric)
-	pushJsonNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs)
-	pushJsonNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees)
-	pushJsonNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes)
-	pushJsonNumber(doc, keys: keys, children: children, key: "cpuTicks", value: metric.cpuTicks)
+	pushJsonNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: "cpuTicks", value: metric.cpuTicks as JsonFloat)
 end 'addMetricFields'
 
 // ===========================================================================================

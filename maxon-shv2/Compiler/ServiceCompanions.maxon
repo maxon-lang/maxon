@@ -588,7 +588,7 @@ module function buildServiceRequestUnion(signatures ProgramSignatures, typeName 
 	// completion an author can await, and a graceful drain that could not be waited on would be a race
 	// written into the language.
 	var shutdownPayloads = PayloadFieldArray.create()
-	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface))
+	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
 	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: shutdownPayloads)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
@@ -610,11 +610,11 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	var payloads = PayloadFieldArray.create()
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
-		payloads.push(PayloadField.create(serviceParamName(decl, index: p), declaredType: signatures.declaredSlotType(declared, into: into, slotScopeFilePath: declFilePath), declaredSurface: sharedEmptyDeclaredSurface))
+		payloads.push(PayloadField.create(serviceParamName(decl, index: p), declaredType: signatures.declaredSlotType(declared, into: into, slotScopeFilePath: declFilePath), declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
 	end 'eachParam'
 
 	if serviceMessageHasAReply(signatures, key: key, decl: decl) 'awaitable'
-		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface))
+		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
 	end 'awaitable'
 
 	return payloads
@@ -759,7 +759,7 @@ end 'serviceReplyErrorLayout'
 // enum's — a literal here would be a second statement of the position and the two are free to disagree.
 function addServiceRequestCase(request EnumLayout, caseName ByteArray, payloads PayloadFieldArray)
 	let tag = request.caseCount()
-	request.addCase(caseName, tag: tag, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+	request.addCase(caseName, tag: tag as ParsedInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 end 'addServiceRequestCase'
 
 // The handle: ONE field holding the mailbox pointer. On `SignatureIndex.managedFileLayout`'s shape, and for
@@ -771,7 +771,7 @@ end 'addServiceRequestCase'
 module function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
 	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
 	var handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
-	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
+	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
 
 	// ⭐⭐ **THE AUDIT THAT KEEPS THE RUNTIME'S TWO NUMBERS HONEST.** `__mbox_handle_clone_box` allocates
 	// `ServiceHandleBoxSize` bytes and both handle entries load the mailbox from `ServiceHandleMailboxOffset`,

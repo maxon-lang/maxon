@@ -66,7 +66,7 @@ export let StderrFd = 0x2  // fd = 2 (STDERR_FILENO) — also the panic/backtrac
 // POSIX lowerings (x64-linux's raw syscall and arm64's syscall/libSystem call), so the two isels cannot come
 // to disagree about which descriptor `printError` writes to. Exhaustive over `OsOutputStream`, which is what
 // makes a third stream a compile error at every backend rather than a silent default.
-export function posixStreamFd(stream OsOutputStream) returns ParsedInt
+export function posixStreamFd(stream OsOutputStream) returns MachineWord
 	return match stream 's'
 		standardOutput gives PosixStdoutFd
 		standardError gives StderrFd
@@ -288,7 +288,7 @@ end 'returnTypeResultClass'
 // the added slots are `gpr`, the same fill the pre-size uses for ids no op names.
 function setValueClass(column ValueClassColumn, valueId ValueId, class RegClass)
 	if valueId >= column.count() 'extend'
-		column.growFilled(valueId + 1, value: RegClass.gpr)
+		column.growFilled(((valueId + 1) as ElementIndex), value: RegClass.gpr)
 	end 'extend'
 
 	try column.set(valueId, value: class) otherwise panic("setValueClass: v{valueId} outside the {column.count()}-wide class column after growFilled(v{valueId}+1) — a grow that just ensured the slot cannot leave it missing")
@@ -399,7 +399,7 @@ end 'requireRuntimeChunkCallee'
 function runtimeChunkArgFloatMask(callee ByteArray, argCount ParamCount, registerCapacity RegisterArgCapacity) returns ArgFloatMask
 	requireRuntimeChunkCallee(callee, context: "calleeArgFloatMask")
 
-	if argCount > registerCapacity 'pastRegisterFile'
+	if argCount > registerCapacity as ParamCount 'pastRegisterFile'
 		panic("calleeArgFloatMask: the hand-assembled runtime chunk '{String.from(callee)}' is called with {argCount} arguments, but this target passes only {registerCapacity} per register file — a chunk reads its arguments out of the argument registers and has no stack-argument path, so the overflow would be stored where nothing loads it")
 	end 'pastRegisterFile'
 
@@ -463,7 +463,7 @@ end 'abiFileSlotIndex'
 // its file. THE predicate — no site re-derives "past the end of the register file", so the callee's decision
 // to READ from memory and the caller's decision to WRITE to memory are the same decision.
 export function abiArgIsOnStack(mask ArgFloatMask, index ParamCount, capacity RegisterArgCapacity) returns bool
-	return abiFileSlotIndex(mask, index: index) >= capacity
+	return abiFileSlotIndex(mask, index: index) >= capacity as ParamCount
 end 'abiArgIsOnStack'
 
 // How many of the arguments BEFORE `index` travel on the stack. Two readers, one walk:
@@ -479,14 +479,15 @@ export function abiStackSlotsBefore(mask ArgFloatMask, index ParamCount, capacit
 	var fileSlots = 0 as ParamCount
 	var floatFileSlots = 0 as ParamCount
 	var stackSlots = 0 as ParamCount
+	let fileCapacity = capacity as ParamCount
 	for i in 0 upto index 'eachPreceding'
 		if argMaskBit(mask, argIndex: i) 'floatArg'
-			if floatFileSlots >= capacity 'floatOverflows'
+			if floatFileSlots >= fileCapacity 'floatOverflows'
 				stackSlots = stackSlots + 1
 			end 'floatOverflows'
 			floatFileSlots = floatFileSlots + 1
 		end 'floatArg' else 'intArg'
-			if fileSlots >= capacity 'intOverflows'
+			if fileSlots >= fileCapacity 'intOverflows'
 				stackSlots = stackSlots + 1
 			end 'intOverflows'
 			fileSlots = fileSlots + 1
@@ -501,7 +502,7 @@ end 'abiStackSlotsBefore'
 function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex FuncIndex, funcNames FunctionNameIndex) returns ValueClassColumn
 	let srcFunc = stdModule.getFunc(funcIndex)
 	var column = ValueClassColumn.create()
-	column.refill(scanFunctionValueCount(targetModule, func: srcFunc), value: RegClass.gpr)
+	column.refill(scanFunctionValueCount(targetModule, func: srcFunc) as ElementIndex, value: RegClass.gpr)
 
 	for blockRef in srcFunc.blockRefs 'eachBlock'
 		// ⚠ SKIP THE TARGET-ONLY BLOCKS. By the time this runs, `srcFunc.blockRefs` may also hold blocks
@@ -1020,7 +1021,7 @@ export type ScaledIndexFolds
 		// EC19 — recorded BEFORE the early returns below, so the column covers every arithmetic result
 		// of the function and not only the ones an addressing mode consumed.
 		if self.operands.isArithmetic() 'definesArithResult'
-			self.arithDefBlock.growFilled(self.operands.resultId + 1, value: blockRef)
+			self.arithDefBlock.growFilled(((self.operands.resultId + 1) as ElementIndex), value: blockRef)
 			try self.arithDefBlock.set(self.operands.resultId, value: blockRef) otherwise panic("ScaledIndexFolds.recordOp: arithDefBlock.set OOB at {self.operands.resultId}")
 			self.arithDefs.insert(self.operands.resultId)
 		end 'definesArithResult'
@@ -1147,10 +1148,10 @@ export type ScaledIndexFolds
 	end 'fuseAddressIntoMemoryOp'
 
 	function recordEntry(valueId ValueId, base ValueId, index ValueId, scale MemoryIndexScale, blockRef BlockRef)
-		self.baseColumn.growFilled(valueId + 1, value: 0)
-		self.indexColumn.growFilled(valueId + 1, value: 0)
-		self.scaleColumn.growFilled(valueId + 1, value: MemoryIndexScale.byOne)
-		self.defBlockColumn.growFilled(valueId + 1, value: 0)
+		self.baseColumn.growFilled(((valueId + 1) as ElementIndex), value: 0)
+		self.indexColumn.growFilled(((valueId + 1) as ElementIndex), value: 0)
+		self.scaleColumn.growFilled(((valueId + 1) as ElementIndex), value: MemoryIndexScale.byOne)
+		self.defBlockColumn.growFilled(((valueId + 1) as ElementIndex), value: 0)
 
 		try self.baseColumn.set(valueId, value: base) otherwise panic("ScaledIndexFolds.recordEntry: baseColumn.set OOB at {valueId}")
 		try self.indexColumn.set(valueId, value: index) otherwise panic("ScaledIndexFolds.recordEntry: indexColumn.set OOB at {valueId}")
@@ -1181,7 +1182,7 @@ function indexedFormCarries(memoryForm IndexedMemoryForm, scale MemoryIndexScale
 	return match memoryForm 'form'
 		none gives false
 		anyScaleAndDisplacement gives true
-		accessWidthScaleAtZeroOffset gives memoryIndexScaleFactor(scale) == accessWidthBytes(accessWidthFor(valueType)) and memoryDisplacement(offset) == 0
+		accessWidthScaleAtZeroOffset gives memoryIndexScaleIsAccessWidth(scale, width: accessWidthFor(valueType)) and memoryDisplacement(offset) == 0
 	end 'form'
 end 'indexedFormCarries'
 

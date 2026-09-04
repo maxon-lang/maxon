@@ -695,14 +695,14 @@ type RangeSiteWalk
 		checks.positionsResolved = true
 
 		self.runEnd.clear()
-		self.runEnd.growFilled(blockCount, value: 0)
+		self.runEnd.growFilled(blockCount as ElementIndex, value: 0)
 		for site in checks.sites 'countPerBlock'
 			let seen = try self.runEnd.get(site.block) otherwise panic("RangeSiteWalk.beginFunction: a site names block id {site.block}, outside the function's id space of {blockCount}")
 			try self.runEnd.set(site.block, value: seen + 1) otherwise panic("RangeSiteWalk.beginFunction: runEnd.set OOB at block {site.block}, which was just read in range")
 		end 'countPerBlock'
 
 		self.cursor.clear()
-		self.cursor.reserve(blockCount)
+		self.cursor.reserve(blockCount as ElementIndex)
 		var total = 0 as RangeSiteIndex
 		for id in 0 upto blockCount 'accumulate'
 			total = total + (try self.runEnd.get(id) otherwise panic("RangeSiteWalk.beginFunction: runEnd.get OOB at block {id} despite the upto bound"))
@@ -1200,7 +1200,7 @@ type MaxonToStdLowering
 	// Is `value` one of the CURRENT function's by-reference parameters? Parameter `i` owns ValueId `i` (the
 	// parser's dense numbering), which is what makes this two scalar reads rather than a lookup.
 	function valueIsByRefParam(value ValueId) returns bool
-		return value < self.currentParamCount and maskHasParam(self.currentByRefParams, param: value)
+		return value < valueIdAtParamPosition(self.currentParamCount) and maskHasParam(self.currentByRefParams, param: paramPositionOfValueId(value))
 	end 'valueIsByRefParam'
 
 	function lower(project Project) returns StdModule
@@ -1582,7 +1582,7 @@ type MaxonToStdLowering
 	//
 	// Only the FOUR non-zero fields are stamped: `parent@32` and `element_destroy@40` come pre-zeroed from
 	// `__mm_alloc`'s zeroing contract (the same one `__managed_create` relies on to leave them unwritten).
-	function lowerConstArrayLiteral(result ValueId, elementSize ParsedInt, elementCount ParsedInt, bytes ByteArray, dstBlock IrBlock)
+	function lowerConstArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, dstBlock IrBlock)
 		let blobLabel = registerByteArrayLiteralBlob(self.globalData, bytes: bytes)
 
 		// result = __mm_alloc(ManagedRecordBytes, 0) — the owned heap 48-byte record (MM header + refcount before it).
@@ -1613,7 +1613,7 @@ type MaxonToStdLowering
 		// element_size@24 — 1 for a `b"…"` (a byte is one byte, so `.get(i)` strides by 1), a NEGATIVE bit
 		// width for a packed literal (`.get(i)` then reads its field out of a byte it shares).
 		let elementSizeId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: elementSize, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: elementSize as ParsedInt, valueType: StdType.i64))
 		self.emitConstArrayField(result, offset: ManagedRecordElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
 	end 'lowerConstArrayLiteral'
 
@@ -1702,7 +1702,7 @@ type MaxonToStdLowering
 	// `witnessParamBase` is witness slot 0's ValueId, read by `lowerWitnessDispatch` to forward a witness.
 	function bindImplicitParams(func IrFunction)
 		self.currentWitnessCount = self.witnessParamCountForFunc(func)
-		self.witnessParamBase = func.paramCount - self.currentWitnessCount
+		self.witnessParamBase = valueIdAtParamPosition(func.paramCount - self.currentWitnessCount)
 
 		// ⭐ `[user][env][existentialWitness][layout][count][witness_0..k]` — read back from the END, so the
 		// count slot is found first and the descriptor sits one further in (W190). BOTH offsets come from
@@ -1911,9 +1911,9 @@ type MaxonToStdLowering
 			// must not be assumed — that is exactly the wrong forwarding index this rung exists to avoid.
 			// `opaqueParamDischarge` is the same answer `checkWhereConstraints` accepted the program on, so the
 			// slot placed here is the slot the check verified.
-			let typeArg = self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+			let typeArg = self.signatures.substitutedInstanceArg(gid as GenericInstanceId, position: constraint.typeParamIndex)
 			if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
-				return self.forwardOpaqueParamWitness(typeNameIdOf(typeArg), constraint: constraint, callee: callee)
+				return self.forwardOpaqueParamWitness(typeParamIdOf(typeArg), constraint: constraint, callee: callee)
 			end 'opaqueArgument'
 
 			// The CANONICAL conformer name (`Box with Integer` -> `int`, `Box with Point` -> `Point`), so the
@@ -1924,8 +1924,8 @@ type MaxonToStdLowering
 			// conformance, and where that conformance's impls carry a dictionary the table has to be keyed by the
 			// instantiation as well. `witnessTableInstanceFor` decides; a `Box with Integer` still names
 			// `__witness_int.Hashable` because `int` is no instance at all.
-			let concreteType = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
-			let argInstance = self.constraintArgumentInstance(gid, position: constraint.typeParamIndex)
+			let concreteType = self.signatures.conformerTypeArgName(gid as GenericInstanceId, position: constraint.typeParamIndex).toByteArray()
+			let argInstance = self.constraintArgumentInstance(gid as GenericInstanceId, position: constraint.typeParamIndex)
 
 			// ⭐⭐ **AND AN INSTANCE THAT IS STILL PARAMETRIC HAS NO TABLE AT ALL, SO THE CALL PASSES A ZERO AND
 			// OWES A PROOF (BATCH43)** — see `NullWitnessArgRequest` for why no `.rdata` blob can serve it and
@@ -2006,10 +2006,10 @@ type MaxonToStdLowering
 	end 'forwardOpaqueParamWitness'
 
 	function forwardCallerWitness(constraintIndex WitnessSlotIndex, callee ByteArray) returns ValueId
-		if constraintIndex >= self.currentWitnessCount 'noSuchSlot'
+		if constraintIndex as ParamCount >= self.currentWitnessCount 'noSuchSlot'
 			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' carries {self.currentWitnessCount} witness parameter(s) and was asked to forward slot {constraintIndex} to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method whose own constraint list is a PREFIX-COMPATIBLE superset of the callee's")
 		end 'noSuchSlot'
-		return (self.witnessParamBase + constraintIndex) as ValueId
+		return self.witnessParamBase + (constraintIndex as ValueId)
 	end 'forwardCallerWitness'
 
 	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName` (P1.7a slice 2a).** The
@@ -2051,8 +2051,8 @@ type MaxonToStdLowering
 		// `methodIndex` indexes; the associated block is addressed from that same count and is not part of
 		// it, so widening this word would move every reader's idea of where the methods end.
 		var blob = ByteArray.create()
-		blob.append(scalarImage(methodCount, byteCount: WitnessSlotBytes as ByteCount))
-		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)) as ElementCount, value: 0)
+		blob.append(scalarImage(methodCount, byteCount: WitnessSlotBytes as BytePos))
+		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)) as ElementIndex, value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
@@ -2235,7 +2235,7 @@ type MaxonToStdLowering
 			return WitnessTableInstance.shared
 		end 'namesNoInstance'
 
-		return WitnessTableInstance.perInstance(try self.valueNameIds.get(value) otherwise panic("witnessInstanceOfValue: generic-instance value v{value} has no recorded name-id (its GenericInstanceId) — the two type columns are minted in lockstep"))
+		return WitnessTableInstance.perInstance((try self.valueNameIds.get(value) otherwise panic("witnessInstanceOfValue: generic-instance value v{value} has no recorded name-id (its GenericInstanceId) — the two type columns are minted in lockstep")) as GenericInstanceId)
 	end 'witnessInstanceOfValue'
 
 	// ⭐ **THE TABLE REQUEST FOR ONE `where` CONSTRAINT'S SUBSTITUTED ARGUMENT** — the door
@@ -2349,7 +2349,7 @@ type MaxonToStdLowering
 	// across the op loop (see there), so the per-op ref comes back through the module each time: an indexed
 	// load for the block and one for the ref. It is a method rather than an inlined pair of `get`s so the
 	// two panics that describe the invariant are written once.
-	function maxonBlockOpRefAt(blockRef BlockRef, pos ElementCount) returns OpIndex
+	function maxonBlockOpRefAt(blockRef BlockRef, pos ElementIndex) returns OpIndex
 		let block = try self.maxonModule.blocks.get(blockRef) otherwise panic("maxonBlockOpRefAt: blockRef {blockRef} is not in maxonModule.blocks")
 		return try block.opRefs.get(pos) otherwise panic("maxonBlockOpRefAt: opRefs.get OOB at {pos} in block {blockRef}")
 	end 'maxonBlockOpRefAt'
@@ -2358,7 +2358,7 @@ type MaxonToStdLowering
 	// `WitnessAdapterRequest`). An adapter's own dictionary may request a further table, whose slots may
 	// request further adapters, so the list is drained by INDEX over a growing array rather than by `for..in`.
 	function installWitnessSlotAdapters(project Project)
-		var next = 0 as ElementCount
+		var next = 0 as ElementIndex
 		while next < self.pendingWitnessAdapters.count() 'drain'
 			// ⚠⚠ **THE REQUEST IS COPIED OUT, AND THIS IS THE ONE SITE WHERE THAT IS NOT MERELY THE BORROW
 			// RULE BEING SATISFIED — IT IS THE HAZARD THE RULE EXISTS FOR.** `synthesizeWitnessSlotAdapter`
@@ -2499,12 +2499,12 @@ type MaxonToStdLowering
 			// A per-instance table is only minted for a CONCRETE instance, and a concrete instance states its
 			// own count — `Vector with 4 Element` says 4 — so unlike the value door there is no caller slot to
 			// fall back on and a silent instance is an internal break.
-			if not self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: gid) 'statesNoCount'
+			if not self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: gid as TypeNameId) 'statesNoCount'
 				panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
 			end 'statesNoCount'
 
 			let countId = args.count()
-			self.stdModule.appendOp(entry, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid), valueType: StdType.i64))
+			self.stdModule.appendOp(entry, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid) as ParsedInt, valueType: StdType.i64))
 			args.push(countId)
 		end 'aFixedElementCount'
 
@@ -2564,7 +2564,7 @@ type MaxonToStdLowering
 		let referenced = self.loweredValueUses(impl)
 
 		for hidden in request.slotArity upto impl.paramCount 'eachHiddenParam'
-			if referenced.contains(hidden) 'theBodyReadsIt'
+			if referenced.contains(hidden as ValueId) 'theBodyReadsIt'
 				reportPositioned(project, code: ErrorCode.semanticSharedConformanceReadsDictionary, message: "'{String.from(request.implName)}' satisfies a requirement of `{String.from(request.conformerType)}` and reads the hidden dictionary parameter its generic declaration reserves (its type parameter's layout descriptor, or a `where` constraint's witness table). A conforming generic type shares ONE witness table across every instantiation, so a dispatch through that table has no instantiation to take the dictionary from — the impls it holds must be independent of the type argument", line: impl.nameLine, column: impl.nameColumn, filePath: impl.sourceFilePath)
 				return
 			end 'theBodyReadsIt'
@@ -2629,11 +2629,11 @@ type MaxonToStdLowering
 		let callee = try self.funcNames.funcNamed(request.callee) otherwise panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' is in no function of this module — `materializeWitnessArg` recorded a call the lowering had already resolved")
 		let sig = try self.funcSignatures.get(request.callee) otherwise panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' has no signature — a witness argument is appended only for a callee whose signature sized the hidden block")
 		let witnessCount = self.witnessParamCountForCallee(request.callee, sig: sig)
-		if request.constraintIndex >= witnessCount 'noSuchSlot'
+		if request.constraintIndex as ParamCount >= witnessCount 'noSuchSlot'
 			panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' carries {witnessCount} witness parameter(s) and a call passed one for constraint {request.constraintIndex} — `appendWitnessArgs` walks the very list this count is of")
 		end 'noSuchSlot'
 
-		if not self.loweredValueUses(callee).contains((callee.paramCount - witnessCount + request.constraintIndex) as ValueId) 'theCalleeNeverReadsIt'
+		if not self.loweredValueUses(callee).contains(valueIdAtParamPosition(callee.paramCount - witnessCount + (request.constraintIndex as ParamCount))) 'theCalleeNeverReadsIt'
 			return
 		end 'theCalleeNeverReadsIt'
 
@@ -2653,7 +2653,7 @@ type MaxonToStdLowering
 	// fact rather than by a second agreement. What the two ends genuinely share is the OFFSET function and its
 	// `methodCount` base, which is where a disagreement could still be written and therefore where the
 	// arithmetic lives.
-	function heldAssociatedSlotCount(interfaceName ByteArray, iface IrInterface) returns ElementCount
+	function heldAssociatedSlotCount(interfaceName ByteArray, iface IrInterface) returns ElementIndex
 		if not self.signatures.interfaceHoldsAnAssociatedType(interfaceName) 'holdsNothing'
 			return 0
 		end 'holdsNothing'
@@ -2688,7 +2688,7 @@ type MaxonToStdLowering
 	//
 	// A conformance that bound nothing at this position is E3016's to report and stamps nothing: leaving the
 	// zero-fill is right, because nothing will read a slot for a position that has no binding to widen.
-	function stampAssociatedWitnessSlots(typeName ByteArray, interfaceName ByteArray, label String, methodCount WitnessMethodIndex, associatedCount ElementCount)
+	function stampAssociatedWitnessSlots(typeName ByteArray, interfaceName ByteArray, label String, methodCount WitnessMethodIndex, associatedCount ElementIndex)
 		for position in 0 upto associatedCount 'eachAssociatedType'
 			if let held = try self.signatures.associatedTypeHeldAt(interfaceName, position: position) 'heldAtAnInterface'
 				if let binding = try conformerAssociatedBinding(self.conformances, typeName: typeName, interfaceName: interfaceName, position: position) 'thisConformerBoundIt'
@@ -2881,13 +2881,13 @@ type MaxonToStdLowering
 	// nothing — so that chain keeps both of its inert ends.
 	function emitInstanceDescriptorAddr(instanceValue ValueId, dstBlock IrBlock) returns ValueId
 		let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitInstanceDescriptorAddr: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
-		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'forwardsTheCallersOwnRun'
+		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid as GenericInstanceId) 'forwardsTheCallersOwnRun'
 			// The run's base is argument 0's own `uses`-list position; the predicate above proved the rest follow it.
-			return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.substitutedInstanceArg(gid, position: 0))), dstBlock: dstBlock)
+			return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.substitutedInstanceArg(gid as GenericInstanceId, position: 0))), dstBlock: dstBlock)
 		end 'forwardsTheCallersOwnRun'
 
 		let descId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid as GenericInstanceId).toByteArray()))
 		return descId
 	end 'emitInstanceDescriptorAddr'
 
@@ -2973,7 +2973,7 @@ type MaxonToStdLowering
 			// disagrees with this branch is either a rejected legal program or this routine's own abort.
 			if self.signatures.valueStatesItsOwnElementCount(tag, nameId: gid) 'statesItsOwnCount'
 				let countId = self.mintStdValueId()
-				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid), valueType: StdType.i64))
+				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid as GenericInstanceId) as ParsedInt, valueType: StdType.i64))
 				return countId
 			end 'statesItsOwnCount'
 		end 'anInstance'
@@ -3035,7 +3035,7 @@ type MaxonToStdLowering
 		// refusal, not a convention: delete that refusal and this becomes a wrong answer, which is why the two
 		// are named in each other's comments.
 		let soleArgLogicalSize = self.signatures.genericInstanceSoleArgLogicalSizeOrNone(gid)
-		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid), alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: soleArgLogicalSize)
+		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid) as MachineWord, alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: soleArgLogicalSize as MachineWord)
 		// ⭐ ONE BLOCK PER TYPE PARAMETER — see `layoutDescriptorBytesFor` for the wild free a single shared
 		// `destroyFunc@40` caused on a two-parameter generic. A one-parameter instance emits one block and is
 		// byte-identical to what it always emitted.
@@ -3425,7 +3425,7 @@ type MaxonToStdLowering
 		// about to occupy is read AFTER it and immediately before the append — the same discipline
 		// `Parser.emitRuntimeCallInto` states for its own op index.
 		let callArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
-		self.recordStaticElementStride(args, opIndex: self.stdModule.opCount())
+		self.recordStaticElementStride(args, opIndex: self.stdModule.opCount() as OpIndex)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: callArgs))
 	end 'appendRuntimeCall'
 
@@ -3478,7 +3478,7 @@ type MaxonToStdLowering
 			return
 		end 'notAnArrayRecord'
 
-		if self.signatures.containerElementIsOpaque(instance) 'sharedGenericBody'
+		if self.signatures.containerElementIsOpaque(instance as GenericInstanceId) 'sharedGenericBody'
 			return
 		end 'sharedGenericBody'
 
@@ -3489,7 +3489,7 @@ type MaxonToStdLowering
 			panic("recordStaticElementStride: Std op index {opIndex} already carries an element stride — the key space is meant to be one entry per appended call, so `ops.count()` and the append it names have come apart")
 		end 'keyAlreadyTaken'
 
-		self.stdOpElementStrides.upsert(opIndex, value: self.signatures.arrayElementSize(instance))
+		self.stdOpElementStrides.upsert(opIndex, value: self.signatures.arrayElementSize(instance as GenericInstanceId))
 	end 'recordStaticElementStride'
 
 	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table (P1.7b slice A) — the address of one
@@ -3587,7 +3587,7 @@ type MaxonToStdLowering
 			panic("typeParamValueBlockOffset: `{String.from(callee)}` was given a {tag.name} value — only an opaque type-parameter value is owned through the descriptor")
 		end 'notATypeParameter'
 		let token = try self.valueNameIds.get(value) otherwise panic("typeParamValueBlockOffset: typeParameter value v{value} has no name-id (its type-parameter token) — the two type columns are dense and in lockstep")
-		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token)))
+		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token as TypeParamId)))
 	end 'typeParamValueBlockOffset'
 
 	// Is this runtime call an OPAQUE-`T` container `create()` — an `__managed_create` (P1.7 slice 3b-i) or a
@@ -3606,7 +3606,7 @@ type MaxonToStdLowering
 		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
 			return false
 		end 'notInstance'
-		return self.signatures.containerElementIsOpaque(try self.valueNameIds.get(result) otherwise panic("isOpaqueContainerCreateCall: genericInstance '{String.from(callee)}' result v{result} has no name-id (its GenericInstanceId)"))
+		return self.signatures.containerElementIsOpaque((try self.valueNameIds.get(result) otherwise panic("isOpaqueContainerCreateCall: genericInstance '{String.from(callee)}' result v{result} has no name-id (its GenericInstanceId)") as GenericInstanceId))
 	end 'isOpaqueContainerCreateCall'
 
 	// Emit an opaque-`T` container create: load the element destructor from the enclosing instance's layout
@@ -3639,7 +3639,7 @@ type MaxonToStdLowering
 	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueElementCopyCallee`).
 	function opaqueContainerBlockOffset(containerInstance ValueId, callee ByteArray) returns ByteOffset
 		let gid = try self.valueNameIds.get(containerInstance) otherwise panic("opaqueContainerBlockOffset: opaque container value v{containerInstance} of '{String.from(callee)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
-		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid)))
+		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid as GenericInstanceId)))
 	end 'opaqueContainerBlockOffset'
 
 	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor
@@ -3842,7 +3842,7 @@ type MaxonToStdLowering
 	function witnessFormalType(formalName ByteArray, interfaceDeclIndex InterfaceDeclIndex, receiver ValueId) returns MaxonType
 		let dispatched = self.interfaceAtDeclIndex(interfaceDeclIndex)
 		if let position = try namePositionIn(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
-			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName, receiver: receiver)
+			return self.associatedFormalType(dispatched.name, position: position as ElementIndex, formalName: formalName, receiver: receiver)
 		end 'aConformerBindsIt'
 
 		return renderedTypeNameAbiType(formalName, signatures: self.signatures)
@@ -3868,8 +3868,8 @@ type MaxonToStdLowering
 	// `unconformed` means no type in the program conforms, so no dispatch through this requirement is
 	// reachable and the machine word constrains nothing — unchanged by the per-site rule, which narrows WHICH
 	// conformers can arrive and cannot conjure one where there are none.
-	function associatedFormalType(interfaceName ByteArray, position ElementCount, formalName ByteArray, receiver ValueId) returns MaxonType
-		if let siteBinding = try self.receiverSiteBinding(receiver, position: position, interfaceName: interfaceName) 'theReceiverClaimsIt'
+	function associatedFormalType(interfaceName ByteArray, position ElementIndex, formalName ByteArray, receiver ValueId) returns MaxonType
+		if let siteBinding = try self.receiverSiteBinding(receiver, position: position as TypeParamPosition, interfaceName: interfaceName) 'theReceiverClaimsIt'
 			return renderedTypeNameAbiType(siteBinding, signatures: self.signatures)
 		end 'theReceiverClaimsIt'
 
@@ -3893,7 +3893,7 @@ type MaxonToStdLowering
 	// arrangement one tier up: `ConformanceCheck.receiverClaimedPositions` reads the two stores in this order
 	// and for this reason, so the refusal that admits the dispatch and the ABI this emits for it cannot come to
 	// disagree about what the site fixed.
-	function receiverSiteBinding(receiver ValueId, position ElementCount, interfaceName ByteArray) returns ByteArray throws MapError
+	function receiverSiteBinding(receiver ValueId, position TypeParamPosition, interfaceName ByteArray) returns ByteArray throws MapError
 		if let instance = try self.currentExistentialInstances.get(receiver) 'declaredAtAnInstantiatedExistential'
 			if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
 				throw MapError.keyNotFound
@@ -3907,7 +3907,7 @@ type MaxonToStdLowering
 		end 'notAConstrainedParameter'
 
 		let token = try self.valueNameIds.get(receiver) otherwise throw MapError.keyNotFound
-		let bindings = constrainedParamAssociatedBindings(self.signatures, token: token, interfaceName: interfaceName)
+		let bindings = constrainedParamAssociatedBindings(self.signatures, token: token as TypeParamId, interfaceName: interfaceName)
 		if position >= bindings.count() 'theConstraintBoundNothingHere'
 			throw MapError.keyNotFound
 		end 'theConstraintBoundNothingHere'
@@ -4617,7 +4617,7 @@ type MaxonToStdLowering
 	// shifts' immediate forms, so the emitted code is two shift-immediates and no register for the count.
 	function lowerSignExtend(result ValueId, operand ValueId, slotBytes ByteOffset, dstBlock IrBlock)
 		let count = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(count, value: (MachineWordBytes - slotBytes) * BitsPerByte, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(count, value: ((MachineWordBytes - slotBytes) * BitsPerByte) as ParsedInt, valueType: StdType.i64))
 
 		let raised = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(raised, lhs: operand, rhs: count, opcode: StdBinOpcode.shl, operandType: StdType.i64))
@@ -4891,7 +4891,7 @@ type MaxonToStdLowering
 			// (`__managed_get`, `__managed_set`, `__managed_mem_set`) — the same fact about the same argument,
 			// so the two doors share the one recorder rather than each testing the argument for itself.
 			let tryCallArgs = self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)
-			self.recordStaticElementStride(args, opIndex: self.stdModule.opCount())
+			self.recordStaticElementStride(args, opIndex: self.stdModule.opCount() as OpIndex)
 			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: tryCallArgs))
 			return
 		end 'compilerOwnTryCall'

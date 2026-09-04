@@ -47,14 +47,14 @@ let OneQuery = 1 as QueryCount
 // identical (carrying the common byte count for the running total) or a rendered
 // mismatch detail (first differing offset, or a trailing length difference).
 union SectionComparison
-	identical(byteCount ByteCount)
+	identical(byteCount BytePos)
 	mismatch(detail String)
 end 'SectionComparison'
 
 // The determinism verdict over ALL sections: every section identical (with the
 // summed byte count) or the FIRST section that differed (with its detail).
 union DeterminismOutcome
-	allIdentical(totalBytes ByteCount)
+	allIdentical(totalBytes BytePos)
 	sectionDiffers(detail String)
 end 'DeterminismOutcome'
 
@@ -124,7 +124,7 @@ function verifyDeterminism(inputPath FilePath, target Target) returns bool throw
 	end 'outcome'
 end 'verifyDeterminism'
 
-function reportDeterminismPass(totalBytes ByteCount) returns bool
+function reportDeterminismPass(totalBytes BytePos) returns bool
 	print("PASS determinism: {totalBytes} bytes identical across 2 cold compiles\n")
 	return true
 end 'reportDeterminismPass'
@@ -137,7 +137,7 @@ end 'reportDeterminismFail'
 // Compare every section, summing identical bytes; stop at the FIRST section that
 // differs and report it (that is the actionable failure).
 function compareEmittedSections(sections EmittedSectionArray) returns DeterminismOutcome
-	var totalBytes = 0 as ByteCount
+	var totalBytes = 0 as BytePos
 
 	for section in sections 'each'
 		match compareSection(section.name, left: section.left, right: section.right) 'result'

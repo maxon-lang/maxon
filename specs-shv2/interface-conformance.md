@@ -291,11 +291,10 @@ end 'main'
 42
 ```
 
-<!-- test: conformance-alias-crossing -->
-An interface and a conforming impl may reach a shared type through DIFFERENT ranged typealiases. A ranged
-alias resolves to its underlying primitive (the range is dropped from the signature type, enforced by range
-checks instead), so `A` and `B` — both `int(0 to 100)` — are ONE type and the conformance is valid, not a
-spurious wrong-signature. Regression: the check compared alias NAMES, which false-rejected this valid program.
+<!-- test: error.conformance-alias-crossing -->
+A `typealias` names its own type, so a requirement spelled `A` is met only by an implementation spelling
+`A`. `B` is a different type even over the identical range, and the refusal quotes both spellings, because
+the spelling is exactly what was compared.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -321,6 +320,41 @@ end 'Widget'
 function main() returns ExitCode
 	var w = Widget.create()
 	return w.process(7)
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:11:6: Partial interface implementation: type 'Widget' has 1 method(s) with wrong signature:
+  - process(value B) returns Integer (expected process(value A) returns Integer)
+```
+
+<!-- test: conformance-alias-crossing -->
+The crossing that IS legal: the implementation declares the requirement's own alias, and a `B` value
+reaches it through the one door between two aliases, an explicit `as`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias A = int(0 to 100)
+typealias B = int(0 to 100)
+
+interface Processor
+	function process(value A) returns Integer
+end 'Processor'
+
+type Widget implements Processor
+	var v as Integer
+
+	function process(value A) returns Integer
+		return value
+	end 'process'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	var w = Widget.create()
+	let b = 7 as B
+	return w.process(b as A)
 end 'main'
 ```
 ```exitcode
@@ -1424,12 +1458,47 @@ error E3016: <fragment>:8:6: Partial interface implementation: type 'Tag' has 1 
 ```
 
 <!-- test: error.two-overloads-match-one-requirement -->
-⚠ **TWO MATCHES IS AMBIGUITY, NOT SUCCESS — and taking the first would have been the old bug wearing the
-fix's clothes.** `Code` and `Small` are two ranged aliases over one primitive, and `signatureMatches`
-compares CANONICALIZED type names (that is deliberate — see `canonicalTypeName`), so both members match
-`label(v Code)` equally. There is no fact to choose by, the witness slot admits exactly one address, and
-the call-site resolver already refuses the same pair as E3007. Before R10 the bare key hid the second
-member and this program compiled.
+⚠ **TWO MATCHES IS AMBIGUITY, NOT SUCCESS.** `signatureMatches` compares types, never parameter names, so
+two members that differ only in a parameter NAME both match `label(v Code)` equally. There is no fact to
+choose by, the witness slot admits exactly one address, and the call-site resolver refuses the same pair as
+E3007 — so the declaration is refused rather than the first member taken.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Labeled
+	function label(v Code) returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(v Code) returns Code
+		return v
+	end 'label'
+
+	export function label(w Code) returns Code
+		return w + 1
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.x
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:8:6: Partial interface implementation: type 'Tag' has 1 method(s) with wrong signature:
+  - 2 members named 'label' match: label(v Code) returns Code, label(w Code) returns Code (expected label(v Code) returns Code)
+```
+
+<!-- test: two-overloads-distinguished-by-alias-leave-one-candidate -->
+Two members distinguished only by a ranged alias are NOT a tie: `Small` is a different type from `Code`,
+so `label(v Small)` is not a candidate for `label(v Code)` and exactly one member matches. The `Code`
+member is the one dispatched, so the call answers `42`, not the `Small` member's `7`.
 ```maxon
 typealias Code = int(0 to u32.max)
 typealias Small = int(0 to 100)
@@ -1456,12 +1525,11 @@ end 'Tag'
 
 function main() returns ExitCode
 	let t = Tag.create(42)
-	return t.x
+	return t.label(t.x)
 end 'main'
 ```
-```maxoncstderr
-error E3016: <fragment>:9:6: Partial interface implementation: type 'Tag' has 1 method(s) with wrong signature:
-  - 2 members named 'label' match: label(v Code) returns Code, label(v Small) returns Code (expected label(v Code) returns Code)
+```exitcode
+42
 ```
 
 <!-- test: error.interface-declares-two-requirements-of-one-name -->

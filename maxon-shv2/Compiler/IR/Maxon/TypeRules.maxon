@@ -135,7 +135,9 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		boolean gives TypeClass.boolean
 		integer gives TypeClass.numeric
 		float gives TypeClass.numeric
-		// A `named` type is a ranged typealias, and EVERY alias shv2 can declare is NUMERIC:
+		// A `named` type is a ranged typealias, and EVERY alias shv2 can declare is NUMERIC. The CLASS is
+		// what this table answers and it is the same for every alias; which alias a value wears is a
+		// separate question, answered by name in `ProgramSignatures.aggregatesConflict`:
 		// `Parser.readTypeAliasDeclaration` accepts `int(low to high)` and `float(low to high)` — it
 		// rejects every other form with a positioned `unsupported` — and hands `RangedTypeAlias.create`
 		// a literal `MaxonType.integer` or `MaxonType.float` as the underlying type. Both are
@@ -634,6 +636,14 @@ export function namedAggregatesConflict(expected ByteArray, got ByteArray) retur
 	return not (expected.isEmpty() and got.isEmpty()) and not got.equals(expected)
 end 'namedAggregatesConflict'
 
+// ⭐ **DO TWO BRANDS OF ONE GENERIC INSTANCE CONFLICT?** A brand is the `typealias` a value was declared, built
+// or read under, compared only once the instance identities agree. An UNBRANDED side fits any brand — a
+// `[1, 2]` literal, an inline-spelled instance — so, unlike `namedAggregatesConflict`, one empty side never
+// conflicts; only two different names do.
+export function brandsConflict(expected ByteArray, got ByteArray) returns bool
+	return not expected.isEmpty() and not got.isEmpty() and not got.equals(expected)
+end 'brandsConflict'
+
 // ⭐⭐ **CAN THIS DECLARED TAG HOLD A NAMED AGGREGATE AT ALL? — the half of the rule above that its
 // callers were SKIPPING, and the reason an aggregate reached a scalar parameter in silence.**
 //
@@ -1082,6 +1092,18 @@ function wordOperator(op MaxonBinOp) returns bool
 		divUnsigned to modUnsigned gives false
 	end 'k'
 end 'wordOperator'
+
+// The two operators whose result wears NO typealias. `or` and `xor` SET bits, so `0x0F or 0xF0` lands
+// above both operands and no alias either operand carries describes the result; `and` can only clear
+// bits and hands its operands' alias down (`Parser.bitAndInheritedAlias`). A `Wide or Wide` that wore
+// `Wide` would shift and divide UNSIGNED — the runnable oracle reads the result as a bare int.
+export function setsBits(op MaxonBinOp) returns bool
+	return match op 'k'
+		add to bitAnd gives false
+		bitOr to bitXor gives true
+		shl to modUnsigned gives false
+	end 'k'
+end 'setsBits'
 
 // The two operators whose RIGHT operand is not an ordinary number but a shift DISTANCE, and so
 // the two the shift rule below governs.
@@ -2259,10 +2281,10 @@ function foldUnsignedIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) re
 	// `rhs` is guarded non-zero by the caller, so neither divide can fail; the `otherwise` arms PANIC
 	// rather than fold a wrong answer, exactly as the signed arm's do and for its stated reason.
 	if divisionReadsRemainder(op) 'remainder'
-		return FoldedInt.folded(try (dividend mod divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard"))
+		return FoldedInt.folded((try (dividend mod divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard")) as ParsedInt)
 	end 'remainder'
 
-	return FoldedInt.folded(try (dividend / divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard"))
+	return FoldedInt.folded((try (dividend / divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard")) as ParsedInt)
 end 'foldUnsignedIntDivision'
 
 // Fold `lhs <op> rhs` over two float BIT PATTERNS with the host's native f64 — the float twin of

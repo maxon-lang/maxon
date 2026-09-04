@@ -160,7 +160,6 @@ register — plus the one `lea rN, [rM + 0]` that mints the retagged value (`emi
 header says why an in-place re-tag is not an option). The six quotients still cross the call in the five
 callee-saved registers with no spill, which is the claim above and is what the golden shows.
 ```maxon
-typealias Positive = int(1 to i64.max)
 
 function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
@@ -170,15 +169,15 @@ function divsAcross(p Integer) returns Integer
 	let n1 = p + 100
 	let n2 = p + 45
 	let n3 = p + 23
-	let d1 = (p + 12) as Positive
-	let d2 = (p + 7) as Positive
-	let d3 = (p + 9) as Positive
-	let q1 = n1 / d1
-	let q2 = n1 mod d1
-	let q3 = n2 / d2
-	let q4 = n2 mod d2
-	let q5 = n3 / d3
-	let q6 = n3 mod d3
+	let d1 = p + 12
+	let d2 = p + 7
+	let d3 = p + 9
+	let q1 = try (n1 / d1) otherwise panic("d1 is never zero")
+	let q2 = try (n1 mod d1) otherwise panic("d1 is never zero")
+	let q3 = try (n2 / d2) otherwise panic("d2 is never zero")
+	let q4 = try (n2 mod d2) otherwise panic("d2 is never zero")
+	let q5 = try (n3 / d3) otherwise panic("d3 is never zero")
+	let q6 = try (n3 mod d3) otherwise panic("d3 is never zero")
 	let r = digits6(q1, p2: q2, p3: q3, p4: q4, p5: q5, p6: q6)
 	return r + q1 * 100000 + q2 * 10000 + q3 * 1000 + q4 * 100 + q5 * 10 + q6
 end 'divsAcross'
@@ -351,7 +350,6 @@ holds no register; the cast's retag mint takes one (`r15` in the golden), and th
 colors with NO spill in the loop body — which is the reduced-pool claim above, re-proven at the tighter
 bound. `i` runs 1..6, so the guard never fires.
 ```maxon
-typealias Positive = int(1 to i64.max)
 
 function press(p Integer) returns Integer
 	let k1 = p + 11
@@ -367,7 +365,7 @@ function press(p Integer) returns Integer
 	var i = 1
 	while i <= 5 'loop'
 		let t = k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9
-		sum = sum + t / (i as Positive)
+		sum = sum + (try (t / i) otherwise panic("i is never zero"))
 		i = i + 1
 	end 'loop'
 	return sum

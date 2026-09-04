@@ -97,19 +97,19 @@ typealias PosDivisor = int(2 to 1000000)
 typealias NegDivisor = int(-1000000 to -2)
 
 function refDiv(n Word, d PosDivisor) returns Word
-	return n / d
+	return try (n / (d as Word)) otherwise panic("d is never zero")
 end 'refDiv'
 
 function refMod(n Word, d PosDivisor) returns Word
-	return n mod d
+	return try (n mod (d as Word)) otherwise panic("d is never zero")
 end 'refMod'
 
 function refDivNeg(n Word, d NegDivisor) returns Word
-	return n / d
+	return try (n / (d as Word)) otherwise panic("d is never zero")
 end 'refDivNeg'
 
 function refModNeg(n Word, d NegDivisor) returns Word
-	return n mod d
+	return try (n mod (d as Word)) otherwise panic("d is never zero")
 end 'refModNeg'
 
 function edgeDividends() returns WordArray
@@ -216,17 +216,17 @@ typealias WordArray = Array with Word
 typealias PosDivisor = int(2 to 1000000)
 
 function refDiv(n Word, d PosDivisor) returns Word
-	return n / d
+	return try (n / (d as Word)) otherwise panic("d is never zero")
 end 'refDiv'
 
 function refMod(n Word, d PosDivisor) returns Word
-	return n mod d
+	return try (n mod (d as Word)) otherwise panic("d is never zero")
 end 'refMod'
 
 // The largest positive `n` with `n mod d == d - 1`. Both divisions here read a RUNTIME divisor, so
 // neither is reduced and neither can be folded — the value is the hardware's answer, not the pass's.
 function hardestDividend(d PosDivisor) returns Word
-	return i64.max - ((refMod(i64.max, d: d) + 1) mod d)
+	return i64.max - (try ((refMod(i64.max, d: d) + 1) mod (d as Word)) otherwise panic("d is never zero"))
 end 'hardestDividend'
 
 function neighbourhood(d PosDivisor) returns WordArray
@@ -350,11 +350,11 @@ typealias UnsignedArray = Array with Unsigned
 typealias UPosDivisor = int(2 to 1000000)
 
 function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
-	return n / d
+	return try (n / (d as Unsigned)) otherwise panic("d is never zero")
 end 'refUDiv'
 
 function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
-	return n mod d
+	return try (n mod (d as Unsigned)) otherwise panic("d is never zero")
 end 'refUMod'
 
 function main() returns ExitCode
@@ -404,20 +404,20 @@ typealias Unsigned = int(0 to u64.max)
 typealias UPosDivisor = int(2 to u64.max)
 
 function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
-	return n / d
+	return try (n / (d as Unsigned)) otherwise panic("d is never zero")
 end 'refUDiv'
 
 function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
-	return n mod d
+	return try (n mod (d as Unsigned)) otherwise panic("d is never zero")
 end 'refUMod'
 
 function main() returns ExitCode
 	let huge = ((9223372036854775807 as Unsigned) + (9223372036854775793 as Unsigned)) as Unsigned
 	let a = ((9223372036854775807 as Unsigned) + 1000) as Unsigned
-	if a / huge != refUDiv(a, d: huge) 'quotient'
+	if a / huge != refUDiv(a, d: huge as UPosDivisor) 'quotient'
 		return 1
 	end 'quotient'
-	if a mod huge != refUMod(a, d: huge) 'remainder'
+	if a mod huge != refUMod(a, d: huge as UPosDivisor) 'remainder'
 		return 2
 	end 'remainder'
 	if a / huge != 0 'quotientIsZero'
@@ -474,28 +474,28 @@ CONTROL. The rewrite replaces the `div` op but keeps its RESULT VALUE ID, which 
 `insertRangeChecks` had already emitted names. Give the reduced quotient back a value its ranged
 typealias excludes and that guard must still fire, at the same line and out of the same frame — a
 rewrite that minted a fresh result id instead would leave the guard reading a value nothing writes.
+The dividend is a loop counter: it carries no typealias, so the quotient reaches `Small` with no cast
+and the guard that fires is the callee's own.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 typealias Small = int(0 to 10)
 
 function narrow(x Small) returns Small
 	return x
 end 'narrow'
 
-function quotient(n Integer) returns Integer
-	return n / 3
-end 'quotient'
-
 function main() returns ExitCode
-	let big = quotient(1000)
-	return narrow(big)
+	var last = 0
+	for i in 1000 to 1000 'once'
+		last = narrow(i / 3)
+	end 'once'
+	return last as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at a-reduced-division-still-meets-its-range-check.test:5: Range check failed: value outside typealias 'Small'
+panic at a-reduced-division-still-meets-its-range-check.test:4: Range check failed: value outside typealias 'Small'
 Stack trace:
   in narrow
   in main

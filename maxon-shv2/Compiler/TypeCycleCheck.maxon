@@ -47,7 +47,7 @@ end 'TypeCycleTarget'
 
 // The node a `MaxonType` interned in `typeNames` points at. `named` and `structRef` are ONE arm because the
 // split between them is about how a value is TAGGED (a union value carries `named`, a struct `structRef`)
-// and this check asks only what the reference NAMES — the same question `namedTypeArgIdentity` answers one
+// and this check asks only what the reference NAMES — the same question `ProgramSignatures.namedIdentityOf` answers one
 // registry over.
 export function typeCycleTargetOf(t MaxonType, typeNames TypeNameInterner) returns TypeCycleTarget
 	let tag = maxonTypeTag(t)
@@ -57,7 +57,7 @@ export function typeCycleTargetOf(t MaxonType, typeNames TypeNameInterner) retur
 	end 'namesAnAggregate'
 
 	if tag == ValueTypeTag.genericInstance 'namesAContainer'
-		return TypeCycleTarget.container(typeNameIdOf(t))
+		return TypeCycleTarget.container(genericInstanceIdOf(t))
 	end 'namesAContainer'
 
 	return TypeCycleTarget.nothing
@@ -151,7 +151,7 @@ type TypeCycleGraph
 			panic("TypeCycleGraph.containerNode: generic instance {id} lies outside the {self.instanceCount} this graph was built over — the width is taken from `signatures.genericInstanceCount()` at `create`, so every instance a type reference can name is already interned when the graph is built")
 		end 'outsideTheInternedSpace'
 
-		return self.aggregateCount() + id
+		return self.aggregateCount() + (id as CsrIndex)
 	end 'containerNode'
 
 	// Record one ownership edge. `caseName` / `memberName` are EMPTY where the shape has none; the three
@@ -171,7 +171,7 @@ type TypeCycleGraph
 	// The adjacency both walks read. Built on demand rather than cached: `nodesOnACycle` asks for it once per
 	// compile, and `shortestCycleThrough` only on a program that is already being rejected.
 	function adjacency() returns CsrGraph
-		return buildCsr(self.edgeOwners, to: self.edgeHeld, nodeCount: self.aggregateCount() + self.instanceCount)
+		return buildCsr(self.edgeOwners, to: self.edgeHeld, nodeCount: self.aggregateCount() + (self.instanceCount as CsrIndex))
 	end 'adjacency'
 
 	// ⭐⭐ **THE PATH, AND IT IS ONE FORMULA FOR ALL FOUR SHAPES `/specs/ownership.md` pins.** The cycle
@@ -245,7 +245,7 @@ type TypeCycleGraph
 			return self.aggregateNameOfNode(node)
 		end 'aDeclaredAggregate'
 
-		return signatures.instanceDisplayName(node - self.aggregateCount())
+		return signatures.instanceDisplayName(((node - self.aggregateCount()) as GenericInstanceId))
 	end 'displayNameOfNode'
 
 	// The declared name of a node ALREADY KNOWN to be an aggregate — the half `blameForTypeCycles` needs,

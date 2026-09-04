@@ -177,7 +177,7 @@ typealias Millis = int(0 to u64.max)
 var order = 0
 
 function sleeper(ms Millis, tag Integer) returns Integer
-	sleep(ms)
+	sleep(ms as Milliseconds)
 	order = order * 10 + tag
 	return tag
 end 'sleeper'

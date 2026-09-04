@@ -90,8 +90,8 @@ let OperandConstraintTagFixed = 2
 // across ISAs exactly as `TargetVReg` is (see `operandPhysicalRegNum`).
 function packVRegBits(vreg TargetVReg) returns MachineWord
 	return match vreg 'v'
-		physical(reg) gives reg shl OperandVRegShift
-		virtual(id) gives OperandVRegVirtualBit or (id shl OperandVRegShift)
+		physical(reg) gives (reg as MachineWord) shl OperandVRegShift
+		virtual(id) gives OperandVRegVirtualBit or ((id as MachineWord) shl OperandVRegShift)
 	end 'v'
 end 'packVRegBits'
 
@@ -136,7 +136,7 @@ end 'pushDef'
 // `reuseIndex` (the same vreg read at `early`). Models the two-address `add`/
 // `sub`/`imul`/`neg`, whose destination is also their first source.
 function pushReuseDef(buf OperandList, vreg TargetVReg, reuseIndex OperandIndex)
-	buf.push(packOperand(vreg, kind: OperandKind.def, position: OperandPosition.late, constraintTag: OperandConstraintTagReuse, constraintArg: reuseIndex))
+	buf.push(packOperand(vreg, kind: OperandKind.def, position: OperandPosition.late, constraintTag: OperandConstraintTagReuse, constraintArg: reuseIndex as MachineWord))
 end 'pushReuseDef'
 
 // --- Accessors (read the packed bits back) ---
@@ -152,11 +152,11 @@ end 'operandIsDef'
 // input operand; the biased-coloring hints (`collectReuseHints`) read it too.
 // `targetOpOperands` SETS it via `pushReuseDef`.
 function operandConstraintTag(op Operand) returns MachineWord
-	return (op shr OperandConstraintTagShift) and OperandConstraintTagMask
+	return ((op as MachineWord) shr OperandConstraintTagShift) and OperandConstraintTagMask
 end 'operandConstraintTag'
 
 function operandConstraintArg(op Operand) returns MachineWord
-	return (op shr OperandConstraintArgShift) and OperandConstraintArgMask
+	return ((op as MachineWord) shr OperandConstraintArgShift) and OperandConstraintArgMask
 end 'operandConstraintArg'
 
 export function operandIsReuseDef(op Operand) returns bool
@@ -170,7 +170,7 @@ end 'operandIsVirtual'
 // The vreg payload: the value id for a virtual operand, the register number for a
 // physical one. Callers gate on `operandIsVirtual` first.
 export function operandPayload(op Operand) returns MachineWord
-	return op shr OperandVRegShift
+	return (op as MachineWord) shr OperandVRegShift
 end 'operandPayload'
 
 // The value id of a VIRTUAL operand (caller must have checked `operandIsVirtual`).

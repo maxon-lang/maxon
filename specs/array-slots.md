@@ -283,7 +283,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:249: Range check failed: value outside typealias 'ElementIndex'
+panic at Array.maxon:248: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in SlotArray.get
   in main

@@ -48,7 +48,7 @@ end 'utf16IsBmp'
 /// Formula: 0xD800 + ((codepoint - 0x10000) shr 10)
 public function utf16LeadSurrogate(codepoint Codepoint) returns CodeUnit16
 	let offset = codepoint - 65536  // codepoint - 0x10000
-	return 55296 + (offset shr 10)  // 0xD800 + high 10 bits
+	return (55296 + (offset shr 10)) as CodeUnit16  // 0xD800 + high 10 bits
 end 'utf16LeadSurrogate'
 
 /// Get the low (trail) surrogate for a codepoint
@@ -56,7 +56,7 @@ end 'utf16LeadSurrogate'
 /// Formula: 0xDC00 + ((codepoint - 0x10000) and 0x3FF)
 public function utf16TrailSurrogate(codepoint Codepoint) returns CodeUnit16
 	let offset = codepoint - 65536  // codepoint - 0x10000
-	return 56320 + (offset mod 1024)  // 0xDC00 + low 10 bits
+	return (56320 + (offset mod 1024)) as CodeUnit16  // 0xDC00 + low 10 bits
 end 'utf16TrailSurrogate'
 
 /// Decode a surrogate pair to a codepoint
@@ -64,7 +64,7 @@ end 'utf16TrailSurrogate'
 public function utf16DecodeSurrogates(high CodeUnit16, low CodeUnit16) returns Codepoint
 	let highOffset = high - 55296  // high - 0xD800
 	let lowOffset = low - 56320  // low - 0xDC00
-	return 65536 + (highOffset * 1024) + lowOffset  // 0x10000 + combined
+	return (65536 + (highOffset * 1024) + lowOffset) as Codepoint  // 0x10000 + combined
 end 'utf16DecodeSurrogates'
 
 /// Check if high and low form a valid surrogate pair

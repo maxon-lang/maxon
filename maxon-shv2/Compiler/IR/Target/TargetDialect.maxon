@@ -1929,13 +1929,19 @@ export function memoryIndexScaleFactor(scale MemoryIndexScale) returns MemoryInd
 	end 's'
 end 'memoryIndexScaleFactor'
 
+// Whether `scale` multiplies by exactly one element of `width` — the form an indexed access at offset 0
+// carries. Answered here because both units are this file's.
+export function memoryIndexScaleIsAccessWidth(scale MemoryIndexScale, width X64AccessWidth) returns bool
+	return memoryIndexScaleFactor(scale) == accessWidthBytes(width) as MemoryIndexScaleFactor
+end 'memoryIndexScaleIsAccessWidth'
+
 // The scale a `binOpImm(mul, index, multiplier)` denotes, or `notAScale` — the ISEL's admission test
 // and its conversion in ONE answer, so the two cannot come to disagree about which multipliers the
 // hardware carries. The case list is walked rather than re-spelled as four comparisons: the set lives
 // in the enum, and a case added there is admitted here with no edit at all.
 export function memoryIndexScaleOfFactor(multiplier Imm32, scale MemoryIndexScaleMatch) returns bool
 	for candidate in MemoryIndexScale.allCases 'eachScale'
-		if multiplier == memoryIndexScaleFactor(candidate) 'isThisOne'
+		if multiplier == memoryIndexScaleFactor(candidate) as Imm32 'isThisOne'
 			scale.value = candidate
 			return true
 		end 'isThisOne'

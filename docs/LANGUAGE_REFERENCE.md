@@ -501,7 +501,26 @@ typealias Port = int(0 to 65535)
 var p = 8080 as Port
 ```
 
-In most cases the cast is unnecessary — when a literal flows into a slot whose type is already a ranged alias (a parameter, a struct field, a function return), the literal is checked against that target type directly. Use `as` when the target type needs to be visible at the use site, or when narrowing a wider value to a smaller range.
+A literal needs no cast — when it flows into a slot whose type is already a ranged alias (a parameter, a struct field, a function return), the literal is checked against that target type directly.
+
+**Every typealias is a nominally distinct type.** Two aliases are two types even when they spell the same range, and a value of one never flows into a slot of the other — a parameter, a rebind, an `otherwise`, a `match` arm, a struct field, a union payload, a generic type argument — unless the author writes the cast. `as` is the one door between two aliases, and it works in both directions:
+
+```maxon
+typealias Age = int(0 to 150)
+typealias Year = int(0 to 3000)
+
+let a = 30 as Age
+takesYear(a)             // error: expected 'Year', got 'Age'
+takesYear(a as Year)     // the cast is the door
+```
+
+A widening cast (the source range provably fits the target's) emits no runtime check; a narrowing cast keeps one. A cast to the value's OWN alias is rejected as unneeded (E3010).
+
+A value with no alias fits any alias slot of its structural type: a literal, a counted-loop counter, a `var` initialised from a literal, the raw value of a payload-free `enum` case. A named value fits an unnamed slot. Only two DIFFERENT names conflict.
+
+The same alias name declared over the same range in two files is one type.
+
+**A `return` carries the cast.** `return x` from a function declared `returns T` is `return x as T` — the one implicit conversion in the language, and it performs exactly what the written cast would: a widening return emits no check, a narrowing return keeps its runtime check, a generic-instance or function-type alias re-brands at no cost, and `main` may return an alias-typed value without spelling `ExitCode`. Nothing else converts implicitly. Only a nominal difference converts: a different struct, a boxed union where a scalar is declared, a different generic instance, a function value of a different shape, or a lossy float where an int is declared is refused at the `return`.
 
 **Compile-time range checks:**
 
@@ -542,14 +561,21 @@ end 'half'
 
 **Arithmetic:**
 
-Ranged types support standard arithmetic. The result of arithmetic between ranged values is the underlying primitive type:
+Ranged types support standard arithmetic, and the result carries the operands' alias. Two operands of ONE alias yield that alias; an unnamed operand (a literal, a loop counter) adopts the named one; two operands of DIFFERENT aliases are a compile error, and one side must be cast. The same rule governs comparisons, `min`/`max` and unary minus. A shift adopts its LEFT operand only.
 
 ```maxon
 typealias Score = int(0 to 100)
+typealias Meters = int(0 to 1000)
 var a = 30 as Score
 var b = 12 as Score
-var sum = a + b    // result is int
+var m = 5 as Meters
+var sum = a + b          // Score
+var bumped = a + 1       // Score — the literal adopts the alias
+var bad = a + m          // error: 'Score' and 'Meters' are different typealiases
+var ok = a + (m as Score)
 ```
+
+The alias an arithmetic result carries is a name, not a proof that the value is in range: `a + b` over `Score` is `Score`-typed but may exceed 100, so every range check that applies to a computed value still applies.
 
 All arithmetic on ranged integer types uses 64-bit operations regardless of storage type.
 
@@ -585,7 +611,7 @@ The standard library exports a small set of cross-cutting aliases that don't bel
 | `HashValue` | `u32` | Hash function results |
 | `Codepoint` | `int(0 to 1114111)` | Unicode codepoints |
 
-Domain-specific quantities (counts, indices, byte offsets, math values) are declared as typealiases inside the module they belong to — for example `String` exports `ByteCount` and `GraphemeCount`, `Math` exports `Real`, and `Array` keeps `ElementCount`/`ElementIndex` private. Application code should follow the same pattern: declare a typealias that names the *purpose* (e.g. `Tally`, `BytePos`, `Coord`) rather than reaching for a generic `Count`/`Index`.
+Domain-specific quantities (counts, indices, byte offsets, math values) are declared as typealiases inside the module they belong to — for example `String` exports `BytePos` and `GraphemeIndex`, `Math` exports `Real`, and `Array` keeps `ElementIndex` private. Application code should follow the same pattern: declare a typealias that names the *purpose* (e.g. `Tally`, `BytePos`, `Coord`) rather than reaching for a generic `Count`/`Index`. Because every alias is its own type, a quantity that crosses from one module's alias into another's is cast at the crossing.
 
 **Assignment and rebinding:**
 
@@ -1078,9 +1104,13 @@ typealias Tally = int(0 to u64.max)
 typealias StringMap = Map with (String, Tally)    // OK: String implements Hashable
 ```
 
+### Generic-Instance and Function-Type Aliases Are Brands
+
+A typealias over a generic instance or a function type names a type a value may already have, under its own name — and the name is the type. `typealias Xs = Array with Integer` and `typealias Ys = Array with Integer` are one instance (one layout, one method set) under two brands: an `Xs` does not flow into a `Ys` slot at any door unless the author writes `xs as Ys`, which re-brands the value and emits no operation. A `[...]` literal carries no brand and fits either; a closure literal or a declared function carries no brand and fits any function alias of its shape. An interface requirement over `Xs` is implemented only by a method spelled over `Xs`. A cast to a DIFFERENT instance is still refused (E3131).
+
 ### Per-Instance Typealiases
 
-A ranged typealias declared inside a generic type body produces a nominally distinct type for each concrete instantiation. This prevents accidentally mixing values between different instances of the same generic type.
+A ranged typealias declared inside a generic type body produces a nominally distinct type for each concrete instantiation — the general nominal rule, applied once per instance.
 
 ```maxon
 type Pool uses T
@@ -1100,7 +1130,7 @@ typealias PoolA = Pool with NodeId
 typealias PoolB = Pool with NodeId
 ```
 
-`PoolA.Idx` and `PoolB.Idx` are distinct types — passing one where the other is expected produces a compile error. Literal integers that fit the range are still accepted. To explicitly convert between compatible per-instance aliases, use `as`:
+`PoolA.Idx` and `PoolB.Idx` are distinct types — passing one where the other is expected produces a compile error, exactly as passing an `Age` where a `Year` is expected does. Literal integers that fit the range are still accepted. To convert between per-instance aliases, use `as`:
 
 ```text
 let bIdx = aIdx as PoolB.Idx
@@ -4264,7 +4294,11 @@ Without `export`, types and enums are only usable within the file where they are
 export typealias Score = int(0 to 100)
 ```
 
-Non-exported typealiases are only visible within their file.
+Non-exported typealiases are only visible within their file. The standard library is the one
+exception, and it is a real one now that a typealias is a type rather than a spelling: every stdlib
+alias is seeded into every file, `export`ed or not, so a name like `AssertedInt` can be written
+wherever a value has to cross into a stdlib signature. Without that, a caller holding its own alias
+would have no way to name the type `Expect.equal` asks for.
 
 **Exporting top-level variables:**
 

@@ -147,7 +147,7 @@ reachable here; that fallback exists FOR this property and its header names this
 
 ⚠ **READ THE NEXT TEST WITH THIS ONE — ON ITS OWN THIS PROGRAM PROVES NOTHING, AND THAT IS
 EXACTLY HOW ITS PREDECESSOR CAME TO PASS FOR THE WRONG REASON.** The version of this case ported
-from `/specs` named `ElementCount`, which lives in `stdlib/Array.maxon` — a module the loader
+from `/specs` named `ElementIndex`, which lives in `stdlib/Array.maxon` — a module the loader
 did not then load. The name resolved to nothing, the cast evaporated, and the exit code
 came out right anyway. It was green because the lookup FAILED. (All of `stdlib/` loads now, so that
 particular lookup would succeed today; what the paragraph records is why the case was rewritten.)

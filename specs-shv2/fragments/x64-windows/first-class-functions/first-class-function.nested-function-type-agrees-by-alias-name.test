@@ -1,0 +1,91 @@
+// Test: first-class-function.nested-function-type-agrees-by-alias-name
+
+typealias Integer = int(i64.min to i64.max)
+typealias InnerA = function(x Integer) returns Integer
+typealias Outer = function(f InnerA) returns Integer
+
+function dbl(x Integer) returns Integer
+	return x * 2
+end 'dbl'
+
+function runner(f InnerA) returns Integer
+	return f(21)
+end 'runner'
+
+// The door under test is the ARGUMENT one: `runner` is an `fn(InnerA) returns Integer` arriving where an
+// `Outer` — an `fn(InnerA) returns Integer` — is declared.
+function drive(o Outer) returns Integer
+	return o(dbl)
+end 'drive'
+
+function main() returns ExitCode
+	return drive(runner) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @dbl {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @runner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 21
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @drive {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegFunc rcx, [rip + __fnref_dbl]
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_runner]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect drive
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at first-class-function.nested-function-type-agrees-by-alias-name.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

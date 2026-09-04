@@ -1,6 +1,5 @@
 // Test: error.unneeded.through-a-union-payload-binding
 typealias Count = int(0 to 255)
-typealias Small = float(0.0 to 10.0)
 
 union Tagged
 	blank
@@ -15,27 +14,27 @@ type Holder
 	end 'make'
 end 'Holder'
 
-function fromPayload(t Tagged) returns Small
+function fromPayload(t Tagged) returns Count
 	return match t 'k'
-		blank gives 0.0
-		one(n) gives n as Small
+		blank gives 0
+		one(n) gives n as Count
 	end 'k'
 end 'fromPayload'
 
 function main() returns ExitCode
 	let local = 5 as Count
-	let a = local as Small
+	let a = local as Count
 	let h = Holder.make()
-	let b = h.n as Small
+	let b = h.n as Count
 	let c = fromPayload(Tagged.one(3))
 	print("{a} {b} {c}")
 	return 0
 end 'main'
 ---
 MaxoncStderr: ```
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:21:18: unneeded cast: 'Count' already fits in 'Small'
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:27:16: unneeded cast: 'Count' already fits in 'Small'
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:29:14: unneeded cast: 'Count' already fits in 'Small'
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:20:18: unneeded cast: 'Count' already fits in 'Count'
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:26:16: unneeded cast: 'Count' already fits in 'Count'
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:28:14: unneeded cast: 'Count' already fits in 'Count'
 ```
 ---
 ---

@@ -99,8 +99,8 @@ end 'lspRangeNode'
 
 function lspPositionNode(doc JsonDoc, line LspLineNumber, character LspCharacter) returns JsonNodeId
 	var position = LspJsonObject.create(doc)
-	position.put(LspLineKey, value: JsonNode.numberNode(line))
-	position.put(LspCharacterKey, value: JsonNode.numberNode(character))
+	position.put(LspLineKey, value: JsonNode.numberNode(line as JsonFloat))
+	position.put(LspCharacterKey, value: JsonNode.numberNode(character as JsonFloat))
 	return position.finish()
 end 'lspPositionNode'
 
@@ -125,8 +125,11 @@ let JsonRpcVersion = "2.0"
 
 let JsonRpcVersionKey = "jsonrpc"
 let JsonRpcIdKey = "id"
+
 module let JsonRpcMethodKey = "method"
+
 module let JsonRpcParamsKey = "params"
+
 let JsonRpcResultKey = "result"
 let JsonRpcErrorKey = "error"
 let JsonRpcErrorCodeKey = "code"
@@ -197,7 +200,7 @@ end 'writeJsonRpcMessage'
 
 function idNodeFor(id LspRequestId) returns JsonNode
 	return match id 'idShape'
-		number(value) gives JsonNode.numberNode(value)
+		number(value) gives JsonNode.numberNode(value as JsonFloat)
 		text(value) gives JsonNode.stringNode(value)
 		// JSON-RPC addresses an error it could not attribute to a request — a body that did not parse —
 		// to a null id.

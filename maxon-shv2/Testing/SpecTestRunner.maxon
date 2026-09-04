@@ -796,7 +796,7 @@ export function runProcess(exe Executable, argv StringArray, workingDirectory Fi
 	config.standardInput = standardInput
 
 	let collected = try Subprocess.runConfiguration(config)
-	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
+	return ProcessCapture.create(collected.exitCode() as ExitCodeValue, stdout: collected.stdout, stderr: collected.stderr)
 end 'runProcess'
 
 // ============================================================================================
@@ -2410,7 +2410,7 @@ function renumberAllocIds(payload String, seen MmAllocIdMap) returns String
 			continue
 		end 'notANumber'
 
-		out = "{out}{MmTraceAllocIdMark}{denseIdFor(dense, seen: seen)}{rest}"
+		out = "{out}{MmTraceAllocIdMark}{denseIdFor(dense as MmAllocId, seen: seen)}{rest}"
 	end 'eachId'
 
 	return out
@@ -2419,7 +2419,7 @@ end 'renumberAllocIds'
 // The dense number `raw` maps to, minting the next one on first sight.
 function denseIdFor(raw MmAllocId, seen MmAllocIdMap) returns MmAllocId
 	return try seen.get(raw) otherwise 'fresh'
-		let minted = seen.count() + 1
+		let minted = (seen.count() + 1) as MmAllocId
 		seen.upsert(raw, value: minted)
 		return minted
 	end 'fresh'
@@ -2428,7 +2428,7 @@ end 'denseIdFor'
 // `parts[first..]`, rejoined with the separator they were split on. Both reductions above need it — the
 // prefix strip rejoins a payload that contained its separator, the renumber rejoins a line's tail — and a
 // second copy is how the two would come to disagree about whether the separator goes back in.
-function joinFrom(parts StringArray, first ElementCount, separator String) returns String
+function joinFrom(parts StringArray, first ElementIndex, separator String) returns String
 	var out = ""
 	for i in first upto parts.count() 'each'
 		let part = try parts.get(i) otherwise panic("joinFrom: {parts.count()} parts but index {i} is missing")
@@ -3324,7 +3324,7 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 	end 'underTheMonitor'
 
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
-		return RunCommand.create(Executable.path(modulePath), argv: programArgs)
+		return RunCommand.create(Executable.path(modulePath), argv: programArgs as StringArray)
 	end 'hostSpawn'
 
 	let launch = match externalRunnerFor(effectiveTarget) 'runner'
@@ -3626,8 +3626,8 @@ function spawnGuestSuite(guestExe FilePath, specDir FilePath, filter String, upd
 	// that includes the codes whose meaning is not "a test failed" — `LeakCheckExitCode` and
 	// `NothingRanExitCode`.
 	return match ran.status 'termination'
-		exited(code) gives code
-		signalled(code) gives reportGuestSignalled(code)
+		exited(code) gives code as ExitCode
+		signalled(code) gives reportGuestSignalled(code as ExitCodeValue)
 	end 'termination'
 end 'spawnGuestSuite'
 
@@ -3977,7 +3977,7 @@ end 'launchBatch'
 // bounds only a `wsl` that never returns at all, which the pool's own wedge watchdog would report
 // anyway.
 export function batchDeadlineMs(executions TestTally) returns DurationMs
-	return SpecSpawnTimeoutMs * (executions + 1)
+	return SpecSpawnTimeoutMs * ((executions + 1) as DurationMs)
 end 'batchDeadlineMs'
 
 // What a batch that never had to run reports: no process, no output, no failure. Named because
@@ -4426,7 +4426,7 @@ function compareSectionPrefix(expected ByteArray, actual ByteArray, sectionName 
 		let e = try expected.get(i) otherwise panic("compareSectionPrefix: expected.get OOB at {i} despite the upto bound")
 		let a = try actual.get(i) otherwise panic("compareSectionPrefix: actual.get OOB at {i} — the length was checked above")
 		if e != a 'differs'
-			return TestOutcome.fail("{sectionName} mismatch at byte {i}: expected 0x{hexByte(e)}, got 0x{hexByte(a)}\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
+			return TestOutcome.fail("{sectionName} mismatch at byte {i}: expected 0x{hexByte(e as MachineWord)}, got 0x{hexByte(a as MachineWord)}\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 		end 'differs'
 	end 'eachByte'
 
@@ -4920,7 +4920,7 @@ function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex, t
 		message = "{message}{PositionSeparator}{field}"
 	end 'rejoinMessage'
 
-	return "{prefix}{token}{PositionSeparator}{sourceLine + lineOffset}{PositionSeparator}{column}{message}"
+	return "{prefix}{token}{PositionSeparator}{sourceLine + (lineOffset as ParsedInt)}{PositionSeparator}{column}{message}"
 end 'rewriteDiagnosticLine'
 
 // The path a /specs expectation names for this very test — RECONSTRUCTED, not pattern-matched

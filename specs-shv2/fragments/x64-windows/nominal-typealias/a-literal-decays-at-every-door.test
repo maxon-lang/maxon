@@ -1,0 +1,131 @@
+// Test: a-literal-decays-at-every-door
+typealias Wide = int(0 to u64.max)
+
+enum Fault implements Error
+	failed
+end 'Fault'
+
+type Holder
+	export var w as Wide
+
+	static function create() returns Self
+		return Self{w: 1}
+	end 'create'
+end 'Holder'
+
+function takesWide(w Wide) returns Wide
+	return w
+end 'takesWide'
+
+function mayFail() returns Wide throws Fault
+	throw Fault.failed
+end 'mayFail'
+
+function pick(k Wide) returns Wide
+	return match k 'm'
+		0 gives 8
+		default gives 16
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var w = takesWide(2)
+	w = 32
+	let fallback = try mayFail() otherwise 64
+	let total = h.w + w + fallback + pick(0) + pick(1)
+	print("{total}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @mayFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 48
+    x64.leaRegSlot rbx, slot0
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+  __il_cont#4:
+    x64.callDirect mayFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rax, 64
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 32
+    x64.leaRegRegReg rax, rcx, rax
+  matcharm:
+    x64.movRegImm32 rcx, 8
+  __il_cont#7:
+    x64.leaRegRegReg rax, rax, rcx
+  matchdefault:
+    x64.movRegImm32 rcx, 16
+  __il_cont#6:
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRegImm32 rcx, rbx, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r14, r13, 56
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r14, rbx
+    x64.storeBaseDispReg.word64 [r13 + 0], r14
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect print
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

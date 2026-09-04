@@ -1161,7 +1161,7 @@ function main() returns ExitCode
 	print("{name} count={count} tags={n} second={second} ok={ok}\n")
 	let absent = try doc.getInt(doc.root, key: "missing") otherwise 'absent'
 		print("absent key refused\n")
-		return (count + n + second) as ExitCode
+		return (count + (n as JsonInt) + second) as ExitCode
 	end 'absent'
 	print("UNREACHED {absent}\n")
 	return 0

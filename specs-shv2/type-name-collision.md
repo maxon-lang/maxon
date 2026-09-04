@@ -2065,7 +2065,7 @@ typealias Whole = int(0 to 100)
 function main() returns ExitCode
 	let scaled = trunc(fromA() * 2.0) as Whole
 
-	return scaled + rankOf(fromB())
+	return (scaled as ExitCode) + rankOf(fromB())
 end 'main'
 ```
 ```exitcode
@@ -2112,7 +2112,7 @@ end 'callIt'
 function main() returns ExitCode
 	let boxed = fromB()
 
-	return callIt(three) + boxed.value
+	return callIt(three) + (boxed.value as ExitCode)
 end 'main'
 ```
 ```exitcode
@@ -2334,7 +2334,7 @@ export type Calc
 	end 'create'
 
 	export function divide(n Integer, by Integer) returns Integer throws Fault
-		return n + by + self.count + self.seen
+		return n + by + self.count + (self.seen as Integer)
 	end 'divide'
 end 'Calc'
 

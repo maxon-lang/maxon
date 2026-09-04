@@ -74,7 +74,7 @@ type Array uses Element implements BuiltinArrayLiteral
 		return Self{}
 	end 'create'
 
-	// `stdlib/Array.maxon:363`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
+	// `stdlib/Array.maxon:362`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
 	// container declared here declares it exactly as the library does — the transcription stays in step
 	// with `driftQuicksort.maxon`, whose receiver is that library `Array`.
 	export function clear()
@@ -231,7 +231,7 @@ type Array uses Element implements BuiltinArrayLiteral
 		return Self{}
 	end 'create'
 
-	// `stdlib/Array.maxon:363`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
+	// `stdlib/Array.maxon:362`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
 	// container declared here declares it exactly as the library does — the transcription stays in step
 	// with `driftQuicksort.maxon`, whose receiver is that library `Array`.
 	export function clear()
@@ -319,7 +319,7 @@ typealias StrArray = Array with String
 // any reshuffle of equal keys shows up in the tag sequence.
 function tagged(key Small, tag Small) returns String
 	var s = "{tag mod 10}"
-	while s.byteLength() < key 'grow'
+	while s.byteLength() < (key as BytePos) 'grow'
 		s.append(".")
 	end 'grow'
 	return s

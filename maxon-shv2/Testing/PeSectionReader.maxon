@@ -144,31 +144,31 @@ export function readPeSectionData(path FilePath, sectionName String) returns Byt
 	end 'notDos'
 
 	let peOffset = imageReadU32(image, at: PeSignatureOffsetField)
-	if imageReadU32(image, at: peOffset) != PeSignature 'notPe'
+	if imageReadU32(image, at: peOffset as ByteOffset) != PeSignature 'notPe'
 		throw PeReadError.notAPeFile(path)
 	end 'notPe'
 
 	let coffStart = peOffset + 4
-	let sectionCount = imageReadU16(image, at: coffStart + CoffNumberOfSectionsOffset)
-	let optionalHeaderSize = imageReadU16(image, at: coffStart + CoffSizeOfOptionalHeaderOffset)
+	let sectionCount = imageReadU16(image, at: ((coffStart + CoffNumberOfSectionsOffset) as ByteOffset))
+	let optionalHeaderSize = imageReadU16(image, at: ((coffStart + CoffSizeOfOptionalHeaderOffset) as ByteOffset))
 	let firstSectionHeader = coffStart + CoffHeaderSize + optionalHeaderSize
 
 	for i in 0 upto sectionCount 'eachSection'
 		let header = firstSectionHeader + i * SectionHeaderSize
-		if imageNameAt(image, at: header, maxBytes: SectionNameBytes) != sectionName 'notThisOne'
+		if imageNameAt(image, at: header as ByteOffset, maxBytes: SectionNameBytes) != sectionName 'notThisOne'
 			continue
 		end 'notThisOne'
 
-		let virtualSize = imageReadU32(image, at: header + SectionVirtualSizeOffset)
-		let rawSize = imageReadU32(image, at: header + SectionRawSizeOffset)
-		let rawPointer = imageReadU32(image, at: header + SectionRawPointerOffset)
+		let virtualSize = imageReadU32(image, at: ((header + SectionVirtualSizeOffset) as ByteOffset))
+		let rawSize = imageReadU32(image, at: ((header + SectionRawSizeOffset) as ByteOffset))
+		let rawPointer = imageReadU32(image, at: ((header + SectionRawPointerOffset) as ByteOffset))
 		let size = virtualSize if virtualSize < rawSize else rawSize
 
-		if not imageRangeFits(image, start: rawPointer, count: size) 'runsPastEof'
+		if not imageRangeFits(image, start: rawPointer as ByteOffset, count: size as BytePos) 'runsPastEof'
 			throw PeReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'
 
-		return imageSlice(image, start: rawPointer, count: size)
+		return imageSlice(image, start: rawPointer as ByteOffset, count: size as BytePos)
 	end 'eachSection'
 
 	throw PeReadError.sectionMissing(path, sectionName: sectionName)
@@ -334,7 +334,7 @@ let Utf8TypeName = "utf8"
 
 // A `utf8` value is a double-quoted string; the shortest legal one is the empty `""`.
 let QuoteMark = "\""
-let ShortestQuotedValue = 2 as ByteCount
+let ShortestQuotedValue = 2 as BytePos
 
 // ⭐ **THE BYTES A `utf8` PIN CLAIMS — a SECOND escape decoder, and this file's header is the argument
 // for it.** `Parser.decodeEscapes` turns a SOURCE literal into the bytes the compiler then lays down; if
@@ -489,9 +489,9 @@ end 'parseTypedValueBits'
 // IS f64, so nothing this compiler emits produces one.
 type TypedValueType
 	export let name as String
-	export let byteCount as ByteCount
+	export let byteCount as BytePos
 
-	export static function create(name String, byteCount ByteCount) returns TypedValueType
+	export static function create(name String, byteCount BytePos) returns TypedValueType
 		return Self{name: name, byteCount: byteCount}
 	end 'create'
 end 'TypedValueType'
@@ -527,7 +527,7 @@ function typedValueTypeRoster() returns String
 end 'typedValueTypeRoster'
 
 // The byte width of a `RequiredData` type name — the FIRST reader of the table.
-function typedValueByteCount(typeName String) returns ByteCount throws TypedValueError
+function typedValueByteCount(typeName String) returns BytePos throws TypedValueError
 	for row in typedValueTypes() 'eachRow'
 		if row.name == typeName 'thisOne'
 			return row.byteCount
@@ -537,7 +537,7 @@ function typedValueByteCount(typeName String) returns ByteCount throws TypedValu
 	throw TypedValueError.unknownType(typeName)
 end 'typedValueByteCount'
 
-function appendLittleEndian(out ByteArray, value ParsedInt, byteCount ByteCount)
+function appendLittleEndian(out ByteArray, value ParsedInt, byteCount BytePos)
 	// The value is SIGNED and the shift-and-mask is defined on the unsigned word, so it crosses
 	// once, explicitly, here — the same cast `GlobalDataTable.appendScalar` makes for the same
 	// reason, in the code this gate exists to check independently.

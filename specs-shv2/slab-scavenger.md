@@ -331,7 +331,7 @@ typealias Seed = int(0 to 65536)
 
 function build(seed Seed, n Seed) returns ByteArray
 	var b = ByteArray.create()
-	b.reserve(n)
+	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((seed + i) mod 251) as Byte)
 	end 'fill'

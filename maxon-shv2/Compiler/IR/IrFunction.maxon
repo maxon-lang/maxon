@@ -58,7 +58,6 @@ export type SourcePosition
 	end 'synthesized'
 end 'SourcePosition'
 
-
 // Sum-typed encoding of an optional `throws E` clause. `none` = non-throwing;
 // `throwing(name)` carries the bare error-enum name. Replaces a `""`-sentinel
 // String field so the absent state is structurally distinct.
@@ -284,6 +283,12 @@ export type IrFunction
 	//
 	// Empty on a Std-phase function (`createFromStd`), exactly like `valueTags`.
 	export var valueNameIds as TypeNameIdArray
+	// ⭐ **THE PER-VALUE BRAND COLUMN, DENSE in the same lockstep.** The generic-instance `typealias` a value
+	// was declared, built or read under (`Xs` for an `Array with Integer` an `Xs.create()` produced), or
+	// `UnnamedTypeId` for a value no alias names. An instance id is one type under several brands, and a
+	// brand is compared only once two instance ids agree (`ProgramSignatures.aggregatesConflict`). Interner
+	// ids, remapped at merge exactly as `valueNameIds` is.
+	export var valueBrandIds as TypeNameIdArray
 	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN (P1.5-A2b-2), DENSE by ValueId in lockstep with
 	// `valueTags`.** The environment a function VALUE carries, or 0 when it carries none. A real environment
 	// is always a minted value id (`>= 1` — a heap env block, a companion-env parameter, or a const-0 op is
@@ -654,7 +659,7 @@ export type IrFunction
 	// error, and the stack-guard one is the SIGSEGV the A1r review measured. Passing the position in means a
 	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
 	// caller says so out loud.
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		return Self{
 			name: name,
 			visibility: Visibility.file,
@@ -670,6 +675,7 @@ export type IrFunction
 			maxonParamTypes: maxonParamTypes,
 			valueTags: valueTags,
 			valueNameIds: valueNameIds,
+			valueBrandIds: valueBrandIds,
 			valueClosureEnv: valueClosureEnv,
 			valueIsCapturingClosure: valueIsCapturingClosure,
 			valueWitnessIds: valueWitnessIds,
@@ -734,6 +740,7 @@ export type IrFunction
 			maxonParamTypes: MaxonTypeArray.create(),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
+			valueBrandIds: TypeNameIdArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
@@ -785,6 +792,7 @@ export type IrFunction
 			maxonParamTypes: src.maxonParamTypes,
 			valueTags: src.valueTags,
 			valueNameIds: src.valueNameIds,
+			valueBrandIds: src.valueBrandIds,
 			valueClosureEnv: src.valueClosureEnv,
 			valueIsCapturingClosure: src.valueIsCapturingClosure,
 			valueWitnessIds: src.valueWitnessIds,

@@ -414,7 +414,7 @@ export function smallCount() returns Small
 end 'smallCount'
 
 // --- file: types.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Field
 	export var v as Integer
@@ -432,7 +432,7 @@ typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
 	var out = FieldArray.create()
-	out.push(Field.create(n))
+	out.push(Field.create(n as Integer))
 	return out
 end 'buildFields'
 
@@ -448,7 +448,7 @@ end 'runBuilder'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return (runBuilder() + smallCount()) as ExitCode
+	return (runBuilder() as ExitCode) + (smallCount() as ExitCode)
 end 'main'
 ```
 ```exitcode
@@ -464,7 +464,7 @@ program written twice, and neither half is decoration: the failing half proves t
 proves the fix did not simply refuse everything.
 ```maxon
 // --- file: types.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 
 export type Field
 	export var v as Integer
@@ -482,7 +482,7 @@ typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
 	var out = FieldArray.create()
-	out.push(Field.create(n))
+	out.push(Field.create(n as Integer))
 	return out
 end 'buildFields'
 
@@ -508,7 +508,7 @@ end 'smallCount'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return (runBuilder() + smallCount()) as ExitCode
+	return (runBuilder() as ExitCode) + (smallCount() as ExitCode)
 end 'main'
 ```
 ```exitcode

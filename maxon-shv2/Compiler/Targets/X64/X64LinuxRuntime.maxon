@@ -569,7 +569,7 @@ function x64LinuxEmitZeroSlots(asm X64RuntimeAsm, firstSlot StackSize, slotCount
 	let zeroed = asm.newLabel()
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: x64LinuxBufferDisp(asm, firstSlot: firstSlot, slotCount: slotCount))
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: slotCount)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: slotCount as MachineWord)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 
 	asm.placeLabel(step)
@@ -855,7 +855,7 @@ function buildX64LinuxCpuCountChunk() returns FunctionCodeChunk
 	asm.placeLabel(count)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: x64LinuxBufferDisp(asm, firstSlot: SlotMask, slotCount: runtimeFrameSlots(LinuxCpuSetBytes)))
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: runtimeFrameSlots(LinuxCpuSetBytes))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: runtimeFrameSlots(LinuxCpuSetBytes) as MachineWord)
 
 	asm.placeLabel(wordStep)
 	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)

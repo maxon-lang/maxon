@@ -348,7 +348,7 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return (alpha.pick(2) + alpha.pick(true) + beta.pick(3)) as ExitCode
+	return ((alpha.pick(2) + alpha.pick(true)) as ExitCode) + (beta.pick(3) as ExitCode)
 end 'main'
 ```
 ```maxoncstderr

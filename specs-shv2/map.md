@@ -865,7 +865,7 @@ type Tagged
 	end 'create'
 
 	export function score() returns Count
-		return n + label.byteLength()
+		return n + (label.byteLength() as Count)
 	end 'score'
 end 'Tagged'
 

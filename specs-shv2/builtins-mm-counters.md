@@ -229,8 +229,8 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias PushCount = int(0 to 65536)
 
-function volume() returns ByteCount
-	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as ByteCount
+function volume() returns BytePos
+	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as BytePos
 end 'volume'
 
 function fill(n PushCount)

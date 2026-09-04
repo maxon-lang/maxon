@@ -15,12 +15,12 @@ test 'a register-pressure refusal renders identically at every processor count'
 	let noArguments = StringArray.create()
 
 	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true)
-	let pinnedExit = pinnedRun.exitCode()
+	let pinnedExit = pinnedRun.exitCode() as AssertedInt
 	try Expect.notEqual(pinnedExit, expected: 0, message: "the pressure program COMPILED pinned to one processor. It is seventeen hot values against a pool of fourteen and must be refused; a compile here means the allocator spilled inside the loop or the pool grew.")
 	try Expect.contains(pinnedRun.stderr, needle: RegisterPressureRefusalPhrase, message: "the pressure program was refused pinned to one processor, but not for register pressure. It wrote to stderr: {pinnedRun.stderr}")
 
 	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false)
-	let defaultExit = defaultRun.exitCode()
+	let defaultExit = defaultRun.exitCode() as AssertedInt
 	try Expect.notEqual(defaultExit, expected: 0, message: "the pressure program COMPILED at the default processor count. It is seventeen hot values against a pool of fourteen and must be refused; a compile here means the allocator spilled inside the loop or the pool grew.")
 	try Expect.contains(defaultRun.stderr, needle: RegisterPressureRefusalPhrase, message: "the pressure program was refused at the default processor count, but not for register pressure. It wrote to stderr: {defaultRun.stderr}")
 

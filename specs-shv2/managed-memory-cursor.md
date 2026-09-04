@@ -17,7 +17,7 @@ way to reach an invalid position is to ask for one, and every navigation member
 `createCursor()` itself throws on an EMPTY buffer, because there is no valid position to
 start at.
 
-`stdlib/Array.maxon:490-531`'s `ArrayIterator` is the only consumer and therefore the spec:
+`stdlib/Array.maxon:489-531`'s `ArrayIterator` is the only consumer and therefore the spec:
 it stores one in a field and forwards all six members, re-labelling the buffer's failures
 as `IterationError`.
 
@@ -467,7 +467,7 @@ end 'main'
 ```
 
 <!-- test: a-cursor-stored-in-a-generic-struct-field -->
-⭐⭐ **THIS IS `stdlib/Array.maxon:490-531`'s `ArrayIterator`, AND IT IS WHY THIS TYPE EXISTS.**
+⭐⭐ **THIS IS `stdlib/Array.maxon:489-531`'s `ArrayIterator`, AND IT IS WHY THIS TYPE EXISTS.**
 Naming `__ManagedMemoryCursor with Element` inside a generic type, storing one in a field and
 forwarding its members is the exact shape that module needs, and the measured blocker on
 listing it was `E2055: Type '__ManagedMemoryCursor' has no associated types` at that very
@@ -514,7 +514,7 @@ function main() returns ExitCode
 	total = total + it.current()
 	try it.advance() otherwise return 97
 	total = total + it.current()
-	return total + it.index()
+	return ((total as Integer) + it.index()) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

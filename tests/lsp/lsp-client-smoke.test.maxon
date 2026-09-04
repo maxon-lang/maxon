@@ -19,7 +19,6 @@ let SmokeDocumentUri = "file:///lsp-client-smoke.maxon"
 // The second version `didChange` announces. LSP requires the number to increase, and `didOpen` sent 1.
 let SecondDocumentVersion = 2 as DocumentVersion
 
-
 // JSON-RPC's reserved code for a method the server does not implement, and the wording shv2's server
 // answers with. Both compilers spell the message the same way, which is what lets one client read either.
 let MethodNotFoundCode = -32601 as JsonRpcErrorCode
@@ -47,14 +46,14 @@ end 'the client round-trips a whole LSP session with the shv2 server'
 function assertSession(syncAdvertised bool, refusalCode JsonRpcErrorCode, refusalMessage String, exitCode ProcessExitCode) throws TestFailure
 	try Expect.isTrue(syncAdvertised, message: "the server's `initialize` reply did not advertise `textDocumentSync`. The client declared support for it, and a server that does not offer it cannot be sent a document at all — so every one of the ten language methods is unreachable behind this one capability.")
 
-	let observedRefusal = refusalCode
-	let expectedRefusal = MethodNotFoundCode
+	let observedRefusal = refusalCode as AssertedInt
+	let expectedRefusal = MethodNotFoundCode as AssertedInt
 	try Expect.equal(observedRefusal, expected: expectedRefusal, message: "an unserved method did not answer JSON-RPC's `method not found`. A server that answers a method it never advertised is answering something it does not implement, and a client has no way to tell. It said: {refusalMessage}")
 
 	try Expect.startsWith(refusalMessage, needle: MethodNotFoundMessagePrefix, message: "the refusal carried the right code with the wrong sentence. A client displays this text, so both compilers answer it the same way.")
 
-	let observedExit = exitCode
-	let expectedExit = CleanExitCode
+	let observedExit = exitCode as AssertedInt
+	let expectedExit = CleanExitCode as AssertedInt
 	try Expect.equal(observedExit, expected: expectedExit, message: "the server did not exit 0 after `shutdown` then `exit`. LSP reserves 0 for exactly that order, so a different code means the session ended some other way — and the exit code is the half of this a script reads.")
 end 'assertSession'
 

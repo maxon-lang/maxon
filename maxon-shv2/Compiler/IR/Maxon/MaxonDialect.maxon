@@ -406,8 +406,8 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 		// column so a value of that type round-trips through `maxonTypeOfTag` — which is what makes the
 		// digest's ONE-int width load-bearing rather than incidental. NOT collapsed into a range: other
 		// arms sit between.
-		typeParameter(id) gives id
-		genericInstance(id) gives id
+		typeParameter(id) gives id as TypeNameId
+		genericInstance(id) gives id as TypeNameId
 		boolean to float gives UnnamedTypeId
 		exitCode to unresolved gives UnnamedTypeId
 		// A String is a builtin with no interned name — its identity is the `string` tag, not a name.
@@ -422,7 +422,25 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 	end 'k'
 end 'typeNameIdOf'
 
-// The filler the name column carries for a type that has no name.
+// The id a `genericInstance` / `typeParameter` type carries, in its own domain. Asked only on that
+// arm — the tag is the discriminant, exactly as for `typeNameIdOf`.
+export function genericInstanceIdOf(t MaxonType) returns GenericInstanceId
+	return match t 'k'
+		genericInstance(id) gives id
+		default panic("genericInstanceIdOf: asked of a type whose tag is {maxonTypeTag(t).rawValue}, not genericInstance")
+	end 'k'
+end 'genericInstanceIdOf'
+
+export function typeParamIdOf(t MaxonType) returns TypeParamId
+	return match t 'k'
+		typeParameter(id) gives id
+		default panic("typeParamIdOf: asked of a type whose tag is {maxonTypeTag(t).rawValue}, not typeParameter")
+	end 'k'
+end 'typeParamIdOf'
+
+// The filler the name column carries for a type that has no name, and the brand column for a value that
+// wears none. It is the id of the EMPTY name in every interner (`TypeNameInterner.create`), so
+// `nameOf(UnnamedTypeId)` is `EmptySourceText` rather than the first real name a file interned.
 export let UnnamedTypeId = 0 as TypeNameId
 
 // ⭐ **THE FILLER A STORED TYPE-PARAMETER COLUMN CARRIES FOR A SLOT THAT IS NOT ONE** — `UnnamedTypeId`'s
@@ -493,17 +511,13 @@ end 'countParamsWithTag'
 // shorter road — the callee reads the register the caller filled with the OTHER hidden slot, with no compile
 // error anywhere. Adding a third optional block now means editing one expression per slot instead of two.
 export function fixedElementCountSlotValueId(paramCount ParamCount, witnessParamCount ParamCount) returns ValueId
-	return (paramCount - witnessParamCount - 1) as ValueId
+	return valueIdAtParamPosition(paramCount - witnessParamCount - 1)
 end 'fixedElementCountSlotValueId'
 
 // The layout descriptor sits one block FURTHER IN than the count, so it steps over however many count slots
 // there are (0 or 1) as well as the witness block. Same order, same single home.
-//
-// ⚠ It carries NO `as ValueId` where its sibling above does, and that asymmetry is the range checker's and
-// not a choice: a third subtraction narrows the inferred range far enough that the cast is E3010
-// (*"'ValueId' already fits in 'ValueId'"*). Adding one back does not compile.
 export function layoutDescriptorSlotValueId(paramCount ParamCount, witnessParamCount ParamCount, fixedElementCountSlots ParamCount) returns ValueId
-	return paramCount - witnessParamCount - fixedElementCountSlots - 1
+	return valueIdAtParamPosition(paramCount - witnessParamCount - fixedElementCountSlots - 1)
 end 'layoutDescriptorSlotValueId'
 
 // Rebuild a `MaxonType` from the two columns — the inverse of `maxonTypeTag` +
@@ -542,8 +556,8 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// (see MaxonType). A binding of a `T`-typed value (`let v = b.get()`) types from this. ⚠ W14
 		// changed WHAT the digest means and not its WIDTH, which is why this arm needed no change: the
 		// arm is rebuilt from ONE column int, and a digest is one column int.
-		typeParameter then return MaxonType.typeParameter(nameId)
-		genericInstance then return MaxonType.genericInstance(nameId)
+		typeParameter then return MaxonType.typeParameter(nameId as TypeParamId)
+		genericInstance then return MaxonType.genericInstance(nameId as GenericInstanceId)
 		// A Character rebuilds from the tag alone — it carries no name, exactly as a String does.
 		// `Parser.parseBinding` is the caller that matters: `let c = 'é'`, and the `for c in s` loop
 		// variable, both type their binding from this.
@@ -584,6 +598,16 @@ export function maxonReturnTypeTag(ref MaxonReturnType) returns ValueTypeTag
 		value(inner) then return maxonTypeTag(inner)
 	end 'k'
 end 'maxonReturnTypeTag'
+
+// The declared type itself — what a `return`'s implicit conversion targets (`Parser.admitReturnedAggregate`).
+// Asked only once a value has been found to carry a different identity, so the per-return path stays on the
+// two scalar readers above. Void is the same caller bug it is for them.
+export function maxonReturnTypeInner(ref MaxonReturnType) returns MaxonType
+	match ref 'k'
+		void then panic("maxonReturnTypeInner: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
+		value(inner) then return inner
+	end 'k'
+end 'maxonReturnTypeInner'
 
 // --- MaxonOp ---
 //
@@ -1395,7 +1419,7 @@ export union MaxonOp
 	// ⚠ For a `b"…"` the payload is the DECODED Latin-1 text (`Parser.decodeByteStringLiteral`: escapes
 	// resolved, each source codepoint mapped to one byte, a codepoint above 0xFF already rejected E1004).
 	// For a packed literal it is the LSB-first bit image `Parser.packConstantElements` lays down.
-	constArrayLiteral(result ValueId, elementSize ParsedInt, elementCount ParsedInt, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	constArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 	// --- P1.1b slice 2: the DENSE-match jump table ---
 	//
 	// ⚠ APPENDED AT THE END OF THE UNION, past `constArrayLiteral`, per the band-append invariant: a

@@ -669,7 +669,7 @@ end 'main'
 ### Negative index
 
 A negative index would address BEFORE the buffer — an OOB heap read/write — and it never gets the chance,
-because `ElementIndex` and `ElementCount` are declared `int(0 to i64.max)` and a negative is refused at the
+because `ElementIndex` is declared `int(0 to i64.max)` and a negative is refused at the
 DOOR of every member that takes one. That is a change of mechanism, not merely of message: the accessors
 used to be what stopped it, each in its own way, and they had to, because the aliases were the FULL range
 `int(0 to u64.max)` — the one shape neither compiler guards — so a `-1` arrived in the body intact and
@@ -830,7 +830,7 @@ end 'launder'
 
 function main() returns ExitCode
 	var arr = [10, 20, 30]
-	arr.insert(launder(-1), value: 99)
+	arr.insert(launder(-1) as ElementIndex, value: 99)
 	print("inserted, count is now {arr.count()}\n")
 	return 0
 end 'main'
@@ -839,9 +839,8 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:355: Range check failed: value outside typealias 'ElementIndex'
+panic at insert-laundered-negative-index-panics-at-the-door.test:10: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
-  in Array.insert
   in main
   in mrt_start
 ```
@@ -919,19 +918,19 @@ end 'main'
 
 ### `appendMemory` — the same append, entered through the MEMORY instead of the array
 
-`stdlib/Array.maxon:272` declares `appendMemory(source ElementMemory)`, and `:262` builds
+`stdlib/Array.maxon:271` declares `appendMemory(source ElementMemory)`, and `:262` builds
 `append(other Self)` out of it — `append`'s whole body is `appendMemory(other.managed)`, because the
 array half of `other` was never read. Since the envelope collapse an `Array` IS its
 `__ManagedMemory`, so a caller who already HOLDS the memory would otherwise have to wrap it in an
 `Array` record just to hand it over: `StringBuilder.appendBytes` paid one allocation PER APPEND
-(`stdlib/String.maxon:848`, this member's one corpus caller).
+(`stdlib/String.maxon:846`, this member's one corpus caller).
 
 ⇒ The two spellings are ONE operation, ONE argument rule and ONE emission. What is NOT folded is the
 SENTENCE: `append` declares its parameter `other` and `appendMemory` declares it `source`, so a
 refusal names the parameter of the method the author actually wrote.
 
 <!-- test: appendMemory-copies-a-raw-buffers-elements -->
-### An `Array` receiver takes a raw `__ManagedMemory` — `stdlib/String.maxon:848`'s exact shape
+### An `Array` receiver takes a raw `__ManagedMemory` — `stdlib/String.maxon:846`'s exact shape
 The receiver is a genuine `Array` and the argument is a buffer nothing wrapped, which is the whole
 point of the member existing beside `append`.
 ```maxon
@@ -960,7 +959,7 @@ end 'main'
 ```
 
 <!-- test: appendMemory-takes-another-arrays-managed -->
-### `stdlib/Array.maxon:262`'s own spelling — `append` is a caller of this member
+### `stdlib/Array.maxon:261`'s own spelling — `append` is a caller of this member
 ```maxon
 function main() returns ExitCode
 	var a = [1, 2, 3]
@@ -2450,10 +2449,11 @@ end 'main'
 error E3005: <fragment>:4:4: argument type mismatch for 'other': expected 'Array_int', got 'int'
 ```
 
-<!-- test: append-wider-element-array-takes-a-narrower-one -->
-### The WIDENING direction is safe and stays legal
-Every `Byte` value is a `Small` value, so nothing can be read back out of range. A rule that
-refused both directions would be over-refusal.
+<!-- test: error.append-wider-element-array-refuses-a-narrower-one -->
+### The WIDENING direction is refused too: the element ALIASES differ
+Every `Byte` value would fit a `Small` slot, and that is not the question — `Byte` and `Small` are two
+types, so `Bytes` and `Smalls` are two instances and neither appends into the other
+(`nominal-typealias.md`, `nominal-generic-alias.md`).
 ```maxon
 typealias Byte = int(0 to 100)
 typealias Small = int(0 to 200)
@@ -2468,27 +2468,19 @@ function main() returns ExitCode
 	s.append(b)
 	let first = try s.get(0) otherwise 0
 	let second = try s.get(1) otherwise 0
-	return first + second
+	print("{first} {second}")
+	return 0
 end 'main'
 ```
-```exitcode
-249
+```maxoncstderr
+error E3005: <fragment>:12:4: argument type mismatch for 'other': expected 'Smalls', got 'Bytes'
 ```
 
-<!-- test: appendMemory-wider-element-array-takes-a-narrower-one -->
-### … and the rule is the OPERATION's, so the `appendMemory` spelling admits it identically
-⭐⭐ **THE SAME PROGRAM ONE SPELLING OVER, AND IT IS WHY `appendMemory` IS STILL ON THE SYNTHESIZED
-SURFACE.** `ProgramSignatures.arrayAppendArgAdmits` is ONE rule over ONE operation — `parseArrayAppend`
-serves `append`, `appendMemory` and the buffer's `append` from a single arm — and it admits by VALUE SET
-because append COPIES. The corpus declares `appendMemory(source ElementMemory)`, a NOMINAL parameter that
-cannot carry that fact, so serving this call from `stdlib/Array.maxon` refuses it.
-
-⛔ **MEASURED AT ARR4, WITH THE PREDICTION WRITTEN FIRST**: struck from `arraySurfaceMemberNames`,
-`appendMemory` costs **26 suite failures and NOT ONE of them real** — every one this surface's own refusal
-rendering its list. On the suite alone it is a clean retirement. This program is what the suite could not
-see: unstruck it answers **249**, struck it is `E3005 … expected 'Smalls', got 'Bytes'` naming the formal
-`source`. A rule pinned on one of an operation's two spellings is the shape this project keeps finding, and
-this case is the second pin.
+<!-- test: error.appendMemory-wider-element-array-refuses-a-narrower-one -->
+### … and the rule is the OPERATION's, so the `appendMemory` spelling refuses it identically
+`ProgramSignatures.arrayAppendArgAdmits` is ONE rule over ONE operation — `parseArrayAppend` serves
+`append`, `appendMemory` and the buffer's `append` from a single arm — so the two spellings answer the
+same question the same way, and each names its own formal.
 ```maxon
 typealias Byte = int(0 to 100)
 typealias Small = int(0 to 200)
@@ -2503,11 +2495,12 @@ function main() returns ExitCode
 	s.appendMemory(b.managed)
 	let first = try s.get(0) otherwise 0
 	let second = try s.get(1) otherwise 0
-	return first + second
+	print("{first} {second}")
+	return 0
 end 'main'
 ```
-```exitcode
-249
+```maxoncstderr
+error E3005: <fragment>:12:4: argument type mismatch for 'source': expected 'Smalls', got 'Bytes'
 ```
 
 <!-- test: append-same-alias-arrays -->
@@ -2556,12 +2549,11 @@ end 'main'
 error E3005: <fragment>:12:4: argument type mismatch for 'other': expected 'Wides', got 'Bytes'
 ```
 
-<!-- test: append-reads-the-value-set-never-the-alias-name -->
-### The rule reads the VALUE SET, never the element's name
-`A` and `B` are two names for one value set, which is what `RangedTypeAlias`'s own header means by
-*"two aliases over the same range are the same type"* — so nothing can be read back out of range and
-the append stands. It is the same admission that lets `[1, 2, 3]` (`Array with int`) into an
-`Array with Integer`; only there the two spellings are a primitive and an alias.
+<!-- test: error.append-reads-the-element-alias-name-not-the-value-set -->
+### The rule reads the element's NAME, never the value set
+`A` and `B` spell one value set under two names, and the name is the type: `As` and `Bs` are two brands
+of one instance, and a `Bs` does not append into an `As` (`nominal-generic-alias.md`). What still walks
+in unasked is a `[1, 2, 3]` literal, which carries no brand at all.
 ```maxon
 typealias A = int(0 to 100)
 typealias B = int(0 to 100)
@@ -2574,7 +2566,28 @@ function main() returns ExitCode
 	var b = Bs.create()
 	b.push(9)
 	a.append(b)
-	return (try a.get(0) otherwise 0) + (try a.get(1) otherwise 0)
+	print("{a.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:4: argument type mismatch for 'other': expected 'As', got 'Bs'
+```
+
+<!-- test: append-across-two-brands-of-one-instance-through-as -->
+### The legal twin: two aliases over ONE instance are two brands, `as` re-brands, and the append stands
+```maxon
+typealias A = int(0 to 100)
+typealias As = Array with A
+typealias Bs = Array with A
+
+function main() returns ExitCode
+	var a = As.create()
+	a.push(7)
+	var b = Bs.create()
+	b.push(9)
+	a.append(b as As)
+	return ((try a.get(0) otherwise 0) + (try a.get(1) otherwise 0)) as ExitCode
 end 'main'
 ```
 ```exitcode

@@ -110,7 +110,10 @@ export function maxClassPoolSize(pool RegMask, file RegisterFile) returns RegCou
 	var widest = 0 as RegCount
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
-		widest = maxOf(widest, b: classPoolSizeOf(pool, class: class, file: file))
+		let size = classPoolSizeOf(pool, class: class, file: file)
+		if size > widest 'wider'
+			widest = size
+		end 'wider'
 	end 'eachClass'
 	return widest
 end 'maxClassPoolSize'
@@ -209,7 +212,7 @@ export type EffectivePools
 		// subtraction reads as an enormous positive on a `ColumnLength` the moment the column is
 		// already long enough, and it would corrupt the tally silently.
 		let before = self.sizes.count()
-		self.sizes.growFilled(valueCount, value: classPoolSizeOf(pool, class: class, file: file))
+		self.sizes.growFilled(valueCount as ElementIndex, value: classPoolSizeOf(pool, class: class, file: file))
 
 		if class == RegClass.xmm 'xmmValues'
 			self.xmmValues = self.xmmValues + (self.sizes.count() - before)
@@ -284,7 +287,9 @@ export type RegPoolCensus
 	var classPoolSizes as RegCountColumn
 
 	export static function create() returns RegPoolCensus
-		return Self{byPoolSize: zeroColumn(RegisterFileSize + 1), occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
+		var byPoolSize = RegCountColumn.create()
+		byPoolSize.resize(RegisterFileSize + 1)
+		return Self{byPoolSize: byPoolSize, occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
 
 	export function reset(pool RegMask, file RegisterFile)
@@ -355,7 +360,7 @@ export type RegPoolCensus
 
 		// The smallest effective pool among the live values. `constrained > 0` implies at least one
 		// live value, so `occupied` is non-zero and the trailing-zero count is defined.
-		let smallestPool = trailingZeroCount(self.occupied)
+		let smallestPool = trailingZeroCount(self.occupied) as RegCount
 
 		// O(1) EXACT EARLY-OUT — this is what keeps the screen off the per-op critical path.
 		//
@@ -409,7 +414,7 @@ export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, cens
 			continue
 		end 'alreadySnapshot'
 		ids.push(v)
-		wasLive.push(bitsetTest(row, base: 0, bit: v))
+		wasLive.push(bitsetTest(row, base: 0, bit: v as BitIndex))
 	end 'snapshot'
 
 	stepRowBackwardOverOperands(row, base: 0, buf: buf, liveByClass: liveByClass, classes: classes)
@@ -417,7 +422,7 @@ export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, cens
 	for k in 0 upto ids.count() 'applyDelta'
 		let v = try ids.get(k) otherwise panic("stepCensusBackwardOverOp: ids.get OOB at {k}")
 		let was = try wasLive.get(k) otherwise panic("stepCensusBackwardOverOp: wasLive.get OOB at {k}")
-		let now = bitsetTest(row, base: 0, bit: v)
+		let now = bitsetTest(row, base: 0, bit: v as BitIndex)
 		if was == now 'unchanged'
 			continue
 		end 'unchanged'

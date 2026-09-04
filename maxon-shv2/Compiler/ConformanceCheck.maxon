@@ -7,15 +7,12 @@
 // `checkValueMergeSignatures` (`compileToCodeResult`, before the pipeline), reading the still-unresolved
 // signatures; any diagnostic it records is caught by the pipeline's own error gate after `resolveTypes`.
 //
-// ⭐ **THE MESSAGE PRINTS SOURCE STRINGS; THE COMPARISON CANONICALIZES ALIASES.** An interface method
-// carries its types as rendered strings (see IrInterface); a type's method carries them as `MaxonType`s in
-// the merged module — rendered here through `maxonTypeName` off the same project interner. A `Self` in the
-// interface substitutes the conforming type (`Movable.move returns Self` matches `Point.move returns Point`).
-// The E3016 MESSAGE prints those source spellings, but the agreement TEST runs them through
-// `canonicalTypeName` first, so a ranged typealias collapses to its underlying primitive exactly as
-// `resolveTypes` erases it — two aliases over the same primitive are one type here, as they are everywhere
-// else in shv2 (`takesA(makeB())` compiles). That is the reference oracle's resolved model; comparing raw
-// source spellings would false-reject a valid conformance that reaches a shared type through two alias names.
+// ⭐ **THE MESSAGE AND THE COMPARISON READ ONE STRING — THE SOURCE SPELLING.** An interface method carries
+// its types as rendered strings (see IrInterface); a type's method carries them as `MaxonType`s in the merged
+// module — rendered here through `maxonTypeName` off the same project interner. A `Self` in the interface
+// substitutes the conforming type (`Movable.move returns Self` matches `Point.move returns Point`). A
+// `typealias` names its own type, so `process(v Int)` does not implement `process(v Integer)` however equal
+// the two ranges are, and the E3016 sentence quotes exactly what the test compared.
 //
 // ⭐ **DIVERGENCE FROM THE BOOTSTRAP (toward v1): an UNKNOWN interface is E3015.** The C# bootstrap
 // SILENTLY accepts `implements Bogus`; v1 emits E3015, and so does shv2 — a typo'd interface name should
@@ -256,7 +253,7 @@ end 'checkAssociatedTypeAbiAgreement'
 // position answers to `checkOneHeldPosition` and to nothing else; every other position answers to E3119/E3120
 // behind the dispatch gate. One walk decides it, because the two paths need the same three facts and asking
 // twice is what let the gates drift apart in the first place.
-function checkOneAssociatedPosition(project Project, signatures ProgramSignatures, written DispatchedAssociatedNames, iface IrInterface, name ByteArray, position ElementCount)
+function checkOneAssociatedPosition(project Project, signatures ProgramSignatures, written DispatchedAssociatedNames, iface IrInterface, name ByteArray, position ElementIndex)
 	if let held = try signatures.associatedTypeHeldAt(iface.name, position: position) 'heldAtAnInterface'
 		checkHeldAssociatedTypeBindings(project, signatures: signatures, iface: iface, name: name, position: position, heldAt: held)
 		return
@@ -273,7 +270,7 @@ end 'checkOneAssociatedPosition'
 // walk above reads as the gates it is. `isDispatchedResult` travels rather than being re-derived: it is the
 // same slot walk the caller's gate already ran, and a second one is a second chance to disagree with it about
 // which requirements this program dispatches.
-function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount, isDispatchedResult bool)
+function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementIndex, isDispatchedResult bool)
 	match associatedAbiBindingOf(project.conformances, signatures: signatures, interfaceName: iface.name, position: position) 'binding'
 		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
 		unconformed then break 'binding'
@@ -384,7 +381,7 @@ function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures,
 	end 'notAConstrainedParameter'
 
 	let token = try func.valueNameIds.get(receiver) otherwise return 0
-	return constrainedParamAssociatedBindings(signatures, token: token, interfaceName: interfaceName).count()
+	return constrainedParamAssociatedBindings(signatures, token: token as TypeParamId, interfaceName: interfaceName).count()
 end 'receiverClaimedPositions'
 
 // ⚠ **THE INNER MAP IS REBUILT RATHER THAN WRITTEN INTO, BECAUSE A VALUE FETCHED OUT OF A `Map` BORROWS THE
@@ -513,7 +510,7 @@ end 'unclaimedAssociatedPosition'
 // The declared-conformance index is built once for the whole project and memoized, so asking it here costs
 // one map probe per conformer of one interface; the walk itself is the conformance list, the same one
 // `associatedAbiBindingOf` folds, and it runs only for a position some use site actually holds.
-function checkHeldAssociatedTypeBindings(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount, heldAt ByteArray)
+function checkHeldAssociatedTypeBindings(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementIndex, heldAt ByteArray)
 	let declared = declaredConformanceIndex(project)
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
@@ -528,7 +525,7 @@ end 'checkHeldAssociatedTypeBindings'
 // borrow of `project`, and `checkOneHeldBinding` writes `project`'s diagnostics, so the caller would need
 // the same `try … get(declIndex) otherwise panic(…)` for the lookup AND for the conformer it passes on
 // — one fact, two copies. Same cure as `Parser.conformanceRequiresMethod`.
-function checkOneConformersHeldBinding(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, iface IrInterface, name ByteArray, conformance ConformanceDecl, position ElementCount, heldAt ByteArray)
+function checkOneConformersHeldBinding(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, iface IrInterface, name ByteArray, conformance ConformanceDecl, position ElementIndex, heldAt ByteArray)
 	if let binding = try declAssociatedBinding(conformance, interfaceName: iface.name, position: position) 'bindsThisPosition'
 		checkOneHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformer: conformance, binding: binding, heldAt: heldAt)
 	end 'bindsThisPosition'
@@ -789,9 +786,9 @@ end 'checkOneInstantiation'
 // refused: unchecked it would have no effect whatever, while reading as though it chose the binding.
 //
 // ⚠ **THE COMPARISON IS RAW, EXACTLY AS `associatedAbiBindingOf`'s IS BETWEEN TWO CONFORMERS.** Collapsing a
-// ranged alias to its primitive first (`canonicalTypeName`) would make `Integer` and a `Score = int(0 to 100)`
-// one binding here while E3119 holds them apart one function away — and E3119 holds them apart for a measured
-// reason: the actual 5000 answered 5000 through one and RANGE-PANICKED through the other.
+// ranged alias to its primitive first would make `Integer` and a `Score = int(0 to 100)` one binding here
+// while E3119 holds them apart one function away — and E3119 holds them apart for a measured reason: the
+// actual 5000 answered 5000 through one and RANGE-PANICKED through the other.
 function checkInterfaceInstantiationBindings(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface)
 	let bound = signatures.genericInstanceArgCount(site.gid)
 	for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
@@ -809,7 +806,7 @@ end 'checkInterfaceInstantiationBindings'
 // NOT the claim check are silent on purpose: `unconformed` means no value can ever be widened into this
 // existential, so nothing constrains the spelling; `disagreed` is E3119's, reported against both conformers
 // with their own positions, and a second sentence here would blame the use site for the conformers' quarrel.
-function checkOneAssociatedBinding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount)
+function checkOneAssociatedBinding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex)
 	// ⭐⭐ **A HELD POSITION'S ARGUMENT IS NOT A RESTATEMENT OF A CONFORMER'S BINDING, SO IT IS NOT COMPARED
 	// WITH ONE.** It NAMES the holding — `Bag with (Integer, IntegerCursor)` where the conformers bind
 	// `UpCursor` and `DownCursor` is exactly right, and the raw comparison below would report the
@@ -837,7 +834,7 @@ function checkOneAssociatedBinding(project Project, signatures ProgramSignatures
 	// ⚠ It sits BELOW the held-position arm on purpose. A holding is not a restatement of a conformer's binding
 	// at all (see that arm), and `T` names no interface to hold a position at, so deferring it there would drop
 	// a real refusal rather than move one.
-	if maxonTypeTag(signatures.substitutedInstanceArg(site.gid, position: position)) == ValueTypeTag.typeParameter 'deferredToTheWidening'
+	if maxonTypeTag(signatures.substitutedInstanceArg(site.gid, position: position as TypeParamPosition)) == ValueTypeTag.typeParameter 'deferredToTheWidening'
 		return
 	end 'deferredToTheWidening'
 
@@ -854,21 +851,21 @@ end 'checkOneAssociatedBinding'
 // held at, and every dispatch through it reads the nested table out of a slot laid out for that one holding.
 // The settle records the FIRST site's answer, so a contradicting one is refused here rather than silently
 // losing — which is what "a use site restates a settled fact" means when the fact is a holding.
-function requireWrittenBindingNamesTheHolding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount, heldAt ByteArray)
-	if let written = try signatures.instanceArgHeldInterfaceName(site.gid, position: position) 'namesAnInterface'
+function requireWrittenBindingNamesTheHolding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex, heldAt ByteArray)
+	if let written = try signatures.instanceArgHeldInterfaceName(site.gid, position: position as TypeParamPosition) 'namesAnInterface'
 		if written.equals(heldAt) 'namesTheSettledHolding'
 			return
 		end 'namesTheSettledHolding'
 	end 'namesAnInterface'
 
 	let name = try iface.associatedTypeNames.get(position) otherwise panic("requireWrittenBindingNamesTheHolding: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop bounds this position by that same list")
-	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{String.from(signatures.instanceArgDisplayName(site.gid, position: position))}', but this program HOLDS '{String.from(name)}' at the interface type '{String.from(heldAt)}' — a held position has exactly one holding, because the requirement's shared body is compiled once against it and every dispatch reads the nested table from a slot laid out for that one interface. Write '{String.from(heldAt)}', or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{String.from(signatures.instanceArgDisplayName(site.gid, position: position as TypeParamPosition))}', but this program HOLDS '{String.from(name)}' at the interface type '{String.from(heldAt)}' — a held position has exactly one holding, because the requirement's shared body is compiled once against it and every dispatch reads the nested table from a slot laid out for that one interface. Write '{String.from(heldAt)}', or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'requireWrittenBindingNamesTheHolding'
 
-function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount, conformer ConformanceDecl, binding ByteArray)
+function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex, conformer ConformanceDecl, binding ByteArray)
 	// The SOURCE spelling, which is the side a conformance's `withArgs` is also recorded in — comparing the
 	// compiled name against a source string would report a difference in RENDERING as a difference in type.
-	let written = signatures.instanceArgDisplayName(site.gid, position: position)
+	let written = signatures.instanceArgDisplayName(site.gid, position: position as TypeParamPosition)
 	if written.equals(binding) 'restatesTheSettledBinding'
 		return
 	end 'restatesTheSettledBinding'
@@ -933,7 +930,7 @@ function checkConstraintAssociatedBindings(project Project, signatures ProgramSi
 			continue
 		end 'theArgumentKeepsTheClaim'
 
-		reportPositioned(project, code: ErrorCode.semanticWhereConstraintBindingDisagreement, message: "'{String.from(baseName)}' constrains type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex))}' to '{String.from(constraint.interfaceName)} with {String.from(claimed)}', but '{String.from(signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex))}' binds '{String.from(constraint.interfaceName)}'s associated type '{String.from(associatedTypeNameAt(project.interfaces, interfaceName: constraint.interfaceName, position: position))}' to '{String.from(supplied)}' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		reportPositioned(project, code: ErrorCode.semanticWhereConstraintBindingDisagreement, message: "'{String.from(baseName)}' constrains type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' to '{String.from(constraint.interfaceName)} with {String.from(claimed)}', but '{String.from(signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex))}' binds '{String.from(constraint.interfaceName)}'s associated type '{String.from(associatedTypeNameAt(project.interfaces, interfaceName: constraint.interfaceName, position: position))}' to '{String.from(supplied)}' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 		return
 	end 'eachBoundPosition'
 end 'checkConstraintAssociatedBindings'
@@ -941,7 +938,7 @@ end 'checkConstraintAssociatedBindings'
 // The name at one associated POSITION, for a diagnostic that has the position and owes the reader the word
 // the author wrote. Reaching here means a conformance for that interface was already read at that position,
 // so a missing declaration or a short `uses` list is an internal disagreement rather than a user error.
-function associatedTypeNameAt(interfaces IrInterfaceMap, interfaceName ByteArray, position ElementCount) returns ByteArray
+function associatedTypeNameAt(interfaces IrInterfaceMap, interfaceName ByteArray, position ElementIndex) returns ByteArray
 	match lookupInterface(interfaces, name: interfaceName) 'resolve'
 		notFound then panic("associatedTypeNameAt: interface '{String.from(interfaceName)}' resolves to nothing, and a constraint naming it was just accepted against a conformance")
 		found(iface) then return try iface.associatedTypeNames.get(position) otherwise panic("associatedTypeNameAt: '{String.from(interfaceName)}' declares {iface.associatedTypeNames.count()} associated type(s) and position {position} was bound against it — the `with` clause's length is checked against that same list")
@@ -983,7 +980,7 @@ end 'substitutedBindingIn'
 // (Key, Value)` states a tuple of two parameters, and `MapIterator with (String, Integer)` is what turns it
 // into one. A bare parameter name substitutes to that instantiation's own display name; any richer rendering
 // (a tuple, a nested instance) is one this comparison cannot make concrete, and it says nothing.
-function suppliedConstraintBinding(signatures ProgramSignatures, conformances ConformanceDeclArray, gid GenericInstanceId, constraint WhereConstraint, position ElementCount) returns ByteArray throws MapError
+function suppliedConstraintBinding(signatures ProgramSignatures, conformances ConformanceDeclArray, gid GenericInstanceId, constraint WhereConstraint, position ElementIndex) returns ByteArray throws MapError
 	let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
 	let binding = try conformerAssociatedBinding(conformances, typeName: conformer, interfaceName: constraint.interfaceName, position: position)
 	let conformerParams = signatures.structTypeParamsOf(conformer)
@@ -996,7 +993,7 @@ function suppliedConstraintBinding(signatures ProgramSignatures, conformances Co
 		throw MapError.keyNotFound
 	end 'noInstantiationToSubstituteThrough'
 
-	return try substitutedBindingIn(signatures, gid: typeNameIdOf(typeArg), paramNames: conformerParams, binding: binding)
+	return try substitutedBindingIn(signatures, gid: genericInstanceIdOf(typeArg), paramNames: conformerParams, binding: binding)
 end 'suppliedConstraintBinding'
 
 // ⭐⭐ **DOES ONE `where` CONSTRAINT HOLD AT ONE INSTANTIATION? — THE VERDICT, ONCE, FOR THE TWO READERS THAT
@@ -1018,8 +1015,7 @@ end 'suppliedConstraintBinding'
 // measured it.
 //
 // The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
-// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is
-// `signatureMatches`/`canonicalTypeName`'s split, applied to a `where`-constraint argument.
+// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling.
 //
 // ⭐⭐ **AN OPAQUE TYPE ARGUMENT IS DISCHARGED BY ITS OWNER'S OWN `where` CLAUSE, NOT BY A CONFORMER
 // NAME (W41).** A generic body instantiating another constrained generic binds that callee's
@@ -1035,7 +1031,7 @@ end 'suppliedConstraintBinding'
 export function instantiationMeetsConstraint(signatures ProgramSignatures, interfaces IrInterfaceMap, declared DeclaredConformanceMap, gid GenericInstanceId, constraint WhereConstraint) returns bool
 	let typeArg = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
 	if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
-		return opaqueConstraintIsDischarged(opaqueParamDischarge(signatures, interfaces: interfaces, token: typeNameIdOf(typeArg), interfaceName: constraint.interfaceName))
+		return opaqueConstraintIsDischarged(opaqueParamDischarge(signatures, interfaces: interfaces, token: typeParamIdOf(typeArg), interfaceName: constraint.interfaceName))
 	end 'opaqueArgument'
 
 	let conformerType = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
@@ -1049,7 +1045,7 @@ end 'instantiationMeetsConstraint'
 // comparison uses the canonical name) is exactly the half that would drift.
 function reportUnsatisfiedConstraint(project Project, signatures ProgramSignatures, site GenericInstantiationSite, constraint WhereConstraint, baseName ByteArray)
 	let sourceType = signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex)
-	reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{String.from(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+	reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{String.from(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'reportUnsatisfiedConstraint'
 
 // The NAME of the constrained type parameter — the `T` of `where T is Bar` — for the E3017 sentence, which
@@ -1900,10 +1896,10 @@ end 'checkOneMethod'
 // EXACTLY ONE matches (R10).
 //
 // ⚠ **EXACTLY ONE, because a witness slot holds exactly one address.** Two members can genuinely match one
-// requirement — `signatureMatches` compares CANONICALIZED type names, so two ranged aliases over one
-// primitive are one type here (see `canonicalTypeName`) — and taking the first would be the bare key's
-// order-dependence restored under a different name. The call-site resolver already refuses that same pair as
-// E3007, so refusing it here says the same thing at the declaration.
+// requirement — an overload set whose members differ only in a parameter NAME, or in a type the renderer
+// spells alike — and taking the first would be the bare key's order-dependence restored under a different
+// name. The call-site resolver already refuses that same pair as E3007, so refusing it here says the same
+// thing at the declaration.
 //
 // The candidate list comes from `SemanticCheck.overloadCandidates` — the ONE staleness filter over
 // `overloadSets` — so a member left behind by a previous fold is inert here exactly as it is at a call.
@@ -2333,9 +2329,10 @@ function throwsConformanceSubject(typeName ByteArray, collectedMethod CollectedI
 end 'throwsConformanceSubject'
 
 // Does the impl method's signature match the interface method's? Instance methods carry `__self` at
-// position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. Each side's
-// type is run through `canonicalTypeName` before comparing, so a ranged alias matches by its underlying
-// primitive (shv2's actual type identity) rather than by its source name — the message still prints the name.
+// position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. The two
+// sides are compared as the SOURCE SPELLS them, because a `typealias` names its own type: `process(v Int)`
+// does not implement `process(v Integer)` even where the two ranges are identical, and the diagnostic
+// therefore quotes exactly what it compared.
 //
 // ⚠ **`method` IS ALREADY ASSOCIATED-TYPE-SUBSTITUTED and this function must not do it again** — see
 // `collectInterfaceMethods`. What it still substitutes is `Self`, and that ASYMMETRY WITH THE MESSAGE IS
@@ -2391,35 +2388,44 @@ function signatureMatches(project Project, method InterfaceMethodSig, conforming
 
 		let expected = substituteSelf(try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}"), conformingType: conformingType)
 		let actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
-		if not canonicalTypeName(project, name: expected).equals(canonicalTypeName(project, name: actual)) 'paramDiffers'
-			return false
-		end 'paramDiffers'
+		if expected.equals(actual) or aliasDecaysIntoPrimitive(project, expected: expected, actual: actual) 'oneSpelling'
+			continue
+		end 'oneSpelling'
+
+		// A requirement that spelled a generic-instance ALIAS renders as that alias (`Parser.renderInterfaceParamTypes`),
+		// which no impl rendering equals: the two are compared as an identity through the alias registry AND a
+		// brand against the impl's spelled column, exactly as `aggregatesConflict` compares a value — an
+		// unbranded side fits any brand, two different aliases of one instance do not.
+		if maxonTypeTag(implType) == ValueTypeTag.genericInstance 'aBrandedInstance'
+			if not signatures.instanceIdentityOfSpelling(expected).equals(signatures.canonicalInstanceName(genericInstanceIdOf(implType))) 'differentInstances'
+				return false
+			end 'differentInstances'
+
+			if brandsConflict(signatures.instanceBrandOfSpelling(expected), got: implParamSpelling(implSig, position: i + selfOffset)) 'twoBrandsOfOneInstance'
+				return false
+			end 'twoBrandsOfOneInstance'
+
+			continue
+		end 'aBrandedInstance'
+
+		return false
 	end 'eachParam'
 
 	let expectedReturn = substituteSelf(method.returnTypeName, conformingType: conformingType)
-	return canonicalTypeName(project, name: expectedReturn).equals(canonicalTypeName(project, name: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures)))
+	let actualReturn = renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures)
+	return expectedReturn.equals(actualReturn) or aliasDecaysIntoPrimitive(project, expected: expectedReturn, actual: actualReturn)
 end 'signatureMatches'
 
-// ⭐ **COLLAPSE A RENDERED TYPE-NAME TO THE IDENTITY shv2'S TYPE SYSTEM ACTUALLY COMPARES BY.** A ranged
-// typealias resolves to its UNDERLYING primitive — `resolveNamedType` returns `alias.underlying` and DROPS
-// the range, so two aliases over the same primitive (even over different RANGES) are one type: `takesA` with
-// a `int(0 to 100)` parameter accepts a `int(0 to 200)` argument. The E3016 message still prints the SOURCE
-// spelling (only this COMPARISON canonicalizes), so a valid conformance whose interface and impl reach a
-// shared type through DIFFERENT alias names is not a spurious wrong-signature. Reads the SAME
-// `project.typeAliases`/`.underlying` `resolveNamedType` reads, so it cannot diverge from resolution for the
-// plain-alias case — the concrete parameter/return types this slice supports. A non-alias name (a struct, a
-// primitive keyword, `Self`-substituted, `void`) is not in the registry and passes through unchanged.
-// ⚠ Bare-name for `resolveNamedType`'s reason, and it must MATCH `resolveNamedType`: this comparison
-// exists to agree with resolution, and it asks through the same door — which hands back `underlying`
-// and cannot hand back the range. Scoping it here while resolution stayed bare is precisely the
-// divergence the header above says must not happen.
-function canonicalTypeName(project Project, name ByteArray) returns ByteArray
-	if let underlying = try project.typeAliases.underlyingInAnyFile(name) 'rangedAlias'
-		return maxonTypeName(underlying, typeNames: project.typeNames).toByteArray()
-	end 'rangedAlias'
-
-	return name
-end 'canonicalTypeName'
+// ⭐ **A REQUIREMENT WRITTEN AS A BARE PRIMITIVE IS AN UNNAMED SLOT, AND AN ALIAS OVER THAT PRIMITIVE
+// FITS IT — AT A PARAMETER AND AT THE RETURN.** `take(e float)` — an associated type bound to `float` — is
+// implemented by `take(e Real)`, and `give() returns float` by `give() returns Real`: an unnamed value
+// decays into any alias slot of its class and a named value into an unnamed one
+// (`ProgramSignatures.aggregatesConflict`). The reverse — a requirement spelling an alias, an impl spelling
+// the primitive or another alias — is the nominal refusal `signatureMatches` makes.
+function aliasDecaysIntoPrimitive(project Project, expected ByteArray, actual ByteArray) returns bool
+	let underlying = try project.typeAliases.underlyingInAnyFile(actual) otherwise return false
+	return maxonTypeName(underlying, typeNames: project.typeNames).toByteArray().equals(expected)
+end 'aliasDecaysIntoPrimitive'
 
 // The impl method's signature as a source string — `process(value Float) returns Integer`. Param NAMES
 // come from `funcSignatures` (interner-free); param TYPES from the module's REMAPPED `maxonParamTypes`.
@@ -2432,7 +2438,7 @@ function formatActualSignature(project Project, methodName ByteArray, conforming
 	var paramTypes = ByteArrayArray.create()
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
-		paramTypes.push(renderDeclaredTypeName(try implFunc.maxonParamTypes.get(i) otherwise panic("formatActualSignature: maxonParamTypes.get OOB at {i}"), declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures))
+		paramTypes.push(implParamDisplay(project, implFunc: implFunc, implSig: implSig, position: i, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures))
 	end 'eachParam'
 	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), isStatic: implIsStatic)
 end 'formatActualSignature'
@@ -2441,6 +2447,26 @@ end 'formatActualSignature'
 // its stored (already source-rendered, already associated-type-substituted) columns, through the same
 // assembler the impl side uses. It performs NO substitution of its own, which is the whole point: the
 // sentence and the verdict read one string (`collectInterfaceMethods`).
+// The alias an impl parameter was DECLARED under — the signature's spelled column for a generic-instance
+// parameter (`Parser.paramDeclaredNamesOf`), empty where it was spelled inline.
+function implParamSpelling(implSig FuncSignature, position ParamCount) returns ByteArray
+	return try implSig.paramDeclaredNames.get(position) otherwise panic("implParamSpelling: paramDeclaredNames.get OOB at {position} — a signature's param columns are built in lockstep")
+end 'implParamSpelling'
+
+// How an impl parameter prints in E3016: the alias it was declared under where it was, else the rendered
+// type. The message therefore quotes the same spelling `signatureMatches` compared as a brand.
+function implParamDisplay(project Project, implFunc IrFunction, implSig FuncSignature, position ParamCount, conformingType ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns ByteArray
+	let implType = try implFunc.maxonParamTypes.get(position) otherwise panic("implParamDisplay: maxonParamTypes.get OOB at {position}")
+	if maxonTypeTag(implType) == ValueTypeTag.genericInstance 'maySpellABrand'
+		let spelled = implParamSpelling(implSig, position: position)
+		if not spelled.isEmpty() 'declaredThroughAnAlias'
+			return spelled
+		end 'declaredThroughAnAlias'
+	end 'maySpellABrand'
+
+	return renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
+end 'implParamDisplay'
+
 function formatInterfaceMethodSignature(method InterfaceMethodSig) returns String
 	return assembleMethodSignature(method.name, paramNames: method.paramNames, paramTypes: method.paramTypeNames, returnType: method.returnTypeName, isStatic: method.isStatic)
 end 'formatInterfaceMethodSignature'

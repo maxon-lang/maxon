@@ -817,7 +817,7 @@ function nthPerm4(k Integer) returns IntArray
 		remaining = try (remaining mod d) otherwise panic("nthPerm4: divs entry was 0")
 		let v = try pool.get(idx) otherwise panic("pool OOB")
 		result.push(v)
-		try pool.remove(idx) otherwise panic("pool.remove OOB")
+		try pool.remove(idx as ElementIndex) otherwise panic("pool.remove OOB")
 	end 'pick'
 	return result
 end 'nthPerm4'
@@ -1817,8 +1817,6 @@ merged ascending output.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias ScratchArr = Array with Integer
-typealias Idx = int(0 to u64.max)
 
 function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
@@ -1832,11 +1830,10 @@ function main() returns ExitCode
 	for j in 0 upto 20 'r'
 		a.push(j * 2 + 2)
 	end 'r'
-	var scratch = ScratchArr.create()
-	let cap = 4 as Idx
-	scratch.resize(cap)
+	var scratch = IntArray.create()
+	scratch.resize(4)
 	Log.startCapture()
-	a.mergePartition(0, mid: 20, hi: 40, scratch: scratch, scratchCap: cap, cmp: ascending)
+	a.mergePartition(0, mid: 20, hi: 40, scratch: scratch, scratchCap: 4, cmp: ascending)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "partitionMerge.fire") 'pf'
 		print("partitionMerge.fire ")
@@ -1861,7 +1858,6 @@ by key; equal-key elements from the LEFT run must come before equal-key
 elements from the RIGHT run (use lowerBound for ascending positions).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
 
 type Tagged implements Comparable
 	export var key as Integer
@@ -1877,7 +1873,6 @@ type Tagged implements Comparable
 end 'Tagged'
 
 typealias TaggedArr = Array with Tagged
-typealias ScratchArr = Array with Tagged
 
 function byKey(a Tagged, b Tagged) returns Ordering
 	return a.key.compare(b.key)
@@ -1907,10 +1902,9 @@ function main() returns ExitCode
 	a.push(Tagged.init(4, tag: 107))
 	a.push(Tagged.init(5, tag: 108))
 	a.push(Tagged.init(5, tag: 109))
-	var scratch = ScratchArr.create()
-	let cap = 4 as Idx
-	scratch.growFilled(cap, value: Tagged.init(0, tag: 0))
-	a.mergePartition(0, mid: 10, hi: 20, scratch: scratch, scratchCap: cap, cmp: byKey)
+	var scratch = TaggedArr.create()
+	scratch.growFilled(4, value: Tagged.init(0, tag: 0))
+	a.mergePartition(0, mid: 10, hi: 20, scratch: scratch, scratchCap: 4, cmp: byKey)
 	// Check stability: within each key, all tag-< 100 elements come first.
 	var stable = true
 	var prevKey = 0

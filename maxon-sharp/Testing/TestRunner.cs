@@ -539,13 +539,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// batch executable once per test that requires execution. Returns one
   /// TestResult per test in the batch (in the same order as item.Tests).
   ///
-  /// Batching is an internal optimization. Any failure shape that betrays
-  /// batching (compile failure of the shared source, a test missing from the
-  /// batched binary's output, a binary that produced no output at all)
-  /// transparently falls back to the per-fragment path so callers see the
-  /// same individual pass/fail they would see with --no-batch. Successful
-  /// batches still produce per-test slice mismatches (Stdout / exit code) that
-  /// are indistinguishable from single-test failures.
+  /// Batching is an internal optimization. A RUN failure that betrays batching (a test missing
+  /// from the batched binary's output, a binary that produced no output at all) transparently
+  /// falls back to the per-fragment path so callers see the same individual pass/fail they would
+  /// see with --no-batch. A COMPILE failure of the shared source also falls back, so every test
+  /// still gets a verdict — but it is reported, not absorbed: see
+  /// <see cref="FallbackAfterBatchCompileFailure"/>. Successful batches still produce per-test
+  /// slice mismatches (Stdout / exit code) that are indistinguishable from single-test failures.
   /// </summary>
   private TestResult[] ProcessSpecBatch(SpecBatchWorkItem item, FragmentTally tally) {
     // Step 1: build the batched source. All rewritten fragments + the
@@ -582,13 +582,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       if (!result.Success) {
         var compileError = string.Join("\n", result.Errors.Select(e => e.Format()));
-        return FallbackBatchToSingles(item, $"batch compile failed: {compileError}", tally);
+        return FallbackAfterBatchCompileFailure(item, notInBatchedModule.Count, $"batch compile failed: {compileError}", tally);
       }
       batchedArchIr = result.ArchIr;
     } catch (Exception ex) {
       compileSw.Stop();
       Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
-      return FallbackBatchToSingles(item, $"batch compile threw: {ex.Message}", tally);
+      return FallbackAfterBatchCompileFailure(item, notInBatchedModule.Count, $"batch compile threw: {ex.Message}", tally);
     }
 
     // Step 2: Run the batched binary ONCE. The dispatcher runs every
@@ -869,6 +869,24 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       results[i] = RunOneAsSingle(item.SpecName, item.Tests[i], item.SpecFile, FragmentSource.ThisCompile, tally);
     }
     return results;
+  }
+
+  /// <summary>
+  /// A batched module that does not compile is a compiler or rewriter defect, never a property of
+  /// the spec: whether a test can be batched at all is decided per test before this point
+  /// (<c>IsBatchable</c>, <c>[BATCH SKIP]</c>), so every test that reached the module compiles on
+  /// its own. The fallback still runs each one, but the goldens it mints and compares have a
+  /// per-fragment shape that no unfiltered batched run produces — they gate nothing — so the
+  /// failure goes into the tally, which reaches the normal output and the exit code, rather than a
+  /// debug line that only a run nobody makes would show.
+  /// </summary>
+  private TestResult[] FallbackAfterBatchCompileFailure(SpecBatchWorkItem item, int rejectedByRewriter, string reason, FragmentTally tally) {
+    var batched = item.Tests.Length - rejectedByRewriter;
+    tally.Errors.Add(
+      $"[BATCH COMPILE] {item.SpecName}: the batched module did not compile, so its {batched} batchable "
+      + $"golden(s) were compared or written from per-fragment compiles that no authoritative run "
+      + $"produces — {reason}");
+    return FallbackBatchToSingles(item, reason, tally);
   }
 
   /// <summary>

@@ -279,7 +279,7 @@ function main() returns ExitCode
 	let big = wide(u64.max)
 	let small = narrow(3 as Narrow)
 
-	if big > small 'ordered'
+	if big > (small as Wide) 'ordered'
 		return 42
 	end 'ordered'
 	return 1

@@ -33,7 +33,7 @@ let NarrowestIndentWidth = 1 as IndentWidth
 let WidestIndentWidth = 64 as IndentWidth
 
 // A `tabSize` a caller asked for, before it is known to be one this formatter will spend.
-typealias RequestedIndentWidth = int(i64.min to i64.max)
+module typealias RequestedIndentWidth = int(i64.min to i64.max)
 
 // How many `newline` tokens have arrived since the last real one. 1 terminates a line; every further
 // one is a blank line the author wrote, whose fate the forced-blank rule decides.
@@ -172,7 +172,7 @@ type SourceLines
 	export function textIn(index LineIndex, from ByteOffset, to ByteOffset) returns String
 		let lo = self.startOf(index) + from
 		let hi = self.startOf(index) + to
-		let span = try bytes.slice(lo, endIndex: hi) otherwise panic("SourceLines.textIn: [{lo}, {hi}) outside the {bytes.count()}-byte source")
+		let span = try bytes.slice(lo as ElementIndex, endIndex: hi as ElementIndex) otherwise panic("SourceLines.textIn: [{lo}, {hi}) outside the {bytes.count()}-byte source")
 		return String.from(span)
 	end 'textIn'
 
@@ -368,7 +368,7 @@ type CommentScan
 	end 'recordSegment'
 
 	function record(index LineIndex, comment SourceComment)
-		self.comments.upsert(index + 1, value: comment)
+		self.comments.upsert(((index + 1) as LineNumber), value: comment)
 	end 'record'
 
 	function nextByteIs(b Byte) returns bool
@@ -1287,7 +1287,7 @@ type FormatState
 	function sourceSpanBetween(first TokenIndex, last TokenIndex) returns String
 		let opening = try tokens.get(first) otherwise panic("FormatState.sourceSpanBetween: index {first} below the {tokens.count()}-token stream")
 		let closing = try tokens.get(last) otherwise panic("FormatState.sourceSpanBetween: index {last} below the {tokens.count()}-token stream")
-		let span = try source.slice(opening.startByte, endIndex: closing.endByte) otherwise panic("FormatState.sourceSpanBetween: [{opening.startByte}, {closing.endByte}) outside the {source.count()}-byte source")
+		let span = try source.slice(opening.startByte as ElementIndex, endIndex: closing.endByte as ElementIndex) otherwise panic("FormatState.sourceSpanBetween: [{opening.startByte}, {closing.endByte}) outside the {source.count()}-byte source")
 		return String.from(span)
 	end 'sourceSpanBetween'
 
@@ -1402,7 +1402,7 @@ function formatCore(source String, options FormatOptions) returns String
 	let bytes = source.toByteArray()
 	let lines = SourceLines.of(bytes)
 	var scan = CommentScan.create(lines)
-	var state = FormatState.create(tokens, options: options, source: bytes, comments: scan.run(), lineCount: lines.count())
+	var state = FormatState.create(tokens, options: options, source: bytes, comments: scan.run(), lineCount: lines.count() as LineNumber)
 	return state.run()
 end 'formatCore'
 
@@ -1431,7 +1431,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
 end 'findSectionSeparator'
 
 function sliceOf(bytes ByteArray, from ByteOffset, to ByteOffset) returns String
-	let span = try bytes.slice(from, endIndex: to) otherwise panic("sliceOf: [{from}, {to}) outside the {bytes.count()}-byte source")
+	let span = try bytes.slice(from as ElementIndex, endIndex: to as ElementIndex) otherwise panic("sliceOf: [{from}, {to}) outside the {bytes.count()}-byte source")
 	return String.from(span)
 end 'sliceOf'
 

@@ -104,7 +104,7 @@ function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns Val
 	// edge, which is the direction the usefulness fixpoint walks. `buildCsr`'s counting sort buckets
 	// the pairs by arg in O(pairs + args).
 	let pairs = collectPhiOperands(module, func: func, refByBlockId: refByBlockId)
-	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound)
+	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound as CsrIndex)
 
 	// USEFUL IS KEPT: this pass's whole answer is which block-args survive, so it hands the shared
 	// dropper its column directly.
@@ -165,10 +165,11 @@ end 'flagOf'
 // second copy of "how the edge slots line up with the block-args" is a second chance to mis-pair a
 // phi with someone else's value — the one mistake the positional model cannot survive.
 export type PhiOperandPairs
-	export var args as ValueIdArray
-	export var incoming as ValueIdArray
+	// `CsrColumn`s because the pairs are the edge list `buildCsr` reads; a read casts back to the value.
+	export var args as CsrColumn
+	export var incoming as CsrColumn
 
-	export static function create(args ValueIdArray, incoming ValueIdArray) returns PhiOperandPairs
+	export static function create(args CsrColumn, incoming CsrColumn) returns PhiOperandPairs
 		return Self{args: args, incoming: incoming}
 	end 'create'
 
@@ -187,8 +188,8 @@ end 'PhiOperandPairs'
 
 // Collect them. One walk over every edge of every block, in O(edge slots).
 export function collectPhiOperands(module StdModule, func IrFunction, refByBlockId ValueIdArray) returns PhiOperandPairs
-	var args = ValueIdArray.create()
-	var incoming = ValueIdArray.create()
+	var args = CsrColumn.create()
+	var incoming = CsrColumn.create()
 
 	for blockRef in func.blockRefs 'eachPred'
 		let pred = try module.blocks.get(blockRef) otherwise panic("collectPhiOperands: blockRef from func.blockRefs not in module.blocks")
@@ -267,12 +268,12 @@ function computeUsefulBlockArgs(module StdModule, func IrFunction, isBlockArg Va
 
 	while worklist.count() > 0 'propagate'
 		let p = try worklist.pop() otherwise panic("pruneDeadBlockArgs: pop from a non-empty worklist")
-		for k in 0 upto feeders.degree(p) 'eachFeeder'
-			let incoming = feeders.neighbour(p, k: k)
+		for k in 0 upto feeders.degree(p as CsrIndex) 'eachFeeder'
+			let incoming = feeders.neighbour(p as CsrIndex, k: k)
 			// Only a block-arg can be pruned, so the walk stops at the first non-block-arg on
 			// every feeder chain — an op result or a parameter is already a real def.
-			if flagOf(isBlockArg, v: incoming) and not flagOf(useful, v: incoming) 'newlyUseful'
-				markUseful(incoming, useful: useful, worklist: worklist)
+			if flagOf(isBlockArg, v: incoming as ValueId) and not flagOf(useful, v: incoming as ValueId) 'newlyUseful'
+				markUseful(incoming as ValueId, useful: useful, worklist: worklist)
 			end 'newlyUseful'
 		end 'eachFeeder'
 	end 'propagate'

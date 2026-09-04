@@ -1,0 +1,40 @@
+// Test: a-widening-cast-emits-no-guard
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+
+function widen(n Narrow) returns Wide
+	return n as Wide
+end 'widen'
+
+function main() returns ExitCode
+	return widen(9) as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __rc_ok#6:
+    x64.movRegImm32 r8, 9
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-widening-cast-emits-no-guard.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

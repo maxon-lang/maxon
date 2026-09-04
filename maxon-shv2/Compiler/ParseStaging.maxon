@@ -116,14 +116,12 @@ export type FuncReturnTypeEntry
 
 	// The bare NAME the `returns` clause wrote, when it wrote one — `DenseColumn` for
 	// `returns DenseColumn`, and EMPTY for `returns Array with Integer`, for a primitive, or for no
-	// return clause at all. It is the CALL RESULT's half of P1.6-C's provenance: after R-1 two ranged
-	// aliases over one range are one instance, so the gid a call hands back cannot say which alias the
-	// callee's signature named, and only this can.
+	// return clause at all. It is the CALL RESULT's BRAND: two generic aliases over one instance share the
+	// gid a call hands back, so only this can say which alias the callee's signature named.
 	//
 	// ⚠ **IT IS THE TOKEN'S TEXT AND NOTHING IS ASKED ABOUT IT HERE.** Whether the name IS a generic
 	// alias is a whole-program question, and this entry is built during the declaration SWEEP that
-	// answers it — the same trap R-1's first implementation fell into. The consumer asks, at parse time,
-	// with the index complete.
+	// answers it. The consumer asks, at parse time, with the index complete.
 	export var returnAliasName as ByteArray
 
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS — because a default expression belongs to
@@ -464,21 +462,21 @@ export type FileParseArtifact
 	export function emitOp(block IrBlock, op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
 		self.module.appendOp(block, op: op)
-		self.opRanges.record(opIndex, range: range)
-		self.recordValueOrigin(op, opIndex: opIndex)
+		self.opRanges.record(opIndex as OpIndex, range: range)
+		self.recordValueOrigin(op, opIndex: opIndex as OpIndex)
 	end 'emitOp'
 
 	// Record an `async <call>` spawn's SOURCE TEXT against the op `emitOp` is about to append. The caller reads
 	// `self.module.opCount()` through this rather than being handed an index, so the text lands on the same op
 	// the very next `emitOp` creates and the two cannot be wired to different ops by a later edit.
 	export function recordAsyncSpawnSite(site AsyncSpawnSite)
-		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
+		self.asyncSpawnSites.upsert(self.module.opCount() as OpIndex, value: site)
 	end 'recordAsyncSpawnSite'
 
 	// The SV2 twin, on the same read-it-through-here contract and for its reason: the site lands on the op
 	// the parser is ABOUT to append, so the key is the current count.
 	export function recordServiceAwaitSite(site ServiceAwaitSite)
-		self.serviceAwaitSites.upsert(self.module.opCount(), value: site)
+		self.serviceAwaitSites.upsert(self.module.opCount() as OpIndex, value: site)
 	end 'recordServiceAwaitSite'
 
 	// The E3143 twin, on the same read-it-through-here contract. ⚠ Here the key is the op the assignment
@@ -486,20 +484,20 @@ export type FileParseArtifact
 	// is all its one reader needs: it asks which FUNCTION the write sits in, and every op the statement emits
 	// belongs to that one.
 	export function recordModuleVarAccessSite(site ModuleVarAccessSite)
-		self.moduleVarAccessSites.upsert(self.module.opCount(), value: site)
+		self.moduleVarAccessSites.upsert(self.module.opCount() as OpIndex, value: site)
 	end 'recordModuleVarAccessSite'
 
 	// Record the mm-trace TAG of the box the op `emitOp` is about to append allocates — the same
 	// read-it-through-here contract `recordAsyncSpawnSite` states, and for its reason: the tag lands on the
 	// op the very next append creates, so the two cannot be wired to different ops by a later edit.
 	export function recordAllocTagSite(tag MmTag)
-		self.allocTagSites.upsert(self.module.opCount(), value: tag)
+		self.allocTagSites.upsert(self.module.opCount() as OpIndex, value: tag)
 	end 'recordAllocTagSite'
 
 	// Record the compile-time NAME the `__ds_name_id` marker `emitOp` is about to append interns — the same
 	// read-it-through-here contract its two neighbours state, and for their reason.
 	export function recordDebugStreamNameSite(name ByteArray)
-		self.debugStreamNameSites.upsert(self.module.opCount(), value: name)
+		self.debugStreamNameSites.upsert(self.module.opCount() as OpIndex, value: name)
 	end 'recordDebugStreamNameSite'
 
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
@@ -532,8 +530,8 @@ export type FileParseArtifact
 
 		let opIndex = self.module.opCount()
 		self.module.setTerminator(block, op: op)
-		self.opRanges.record(opIndex, range: range)
-		self.recordValueOrigin(op, opIndex: opIndex)
+		self.opRanges.record(opIndex as OpIndex, range: range)
+		self.recordValueOrigin(op, opIndex: opIndex as OpIndex)
 	end 'emitTerminator'
 
 	// Record the origin of the value `op` defines (if any) as this file's contribution
@@ -761,11 +759,11 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	// state (see `Queries.resetMergeTargets`). Asked ONCE per round, at the first file, which is O(1) and is
 	// where the answer is knowable: a round begins with every one of them emptied or with none of them.
 	if opOffset == 0 'theFirstFileOfARound'
-		requireOpKeyedTableIsEmpty("moduleVarAccessSites", held: project.moduleVarAccessSites.count())
-		requireOpKeyedTableIsEmpty("serviceAwaitSites", held: project.serviceAwaitSites.count())
-		requireOpKeyedTableIsEmpty("asyncSpawnSites", held: project.asyncSpawnSites.count())
-		requireOpKeyedTableIsEmpty("allocTagSites", held: project.allocTagSites.count())
-		requireOpKeyedTableIsEmpty("debugStreamNameSites", held: project.debugStreamNameSites.count())
+		requireOpKeyedTableIsEmpty("moduleVarAccessSites", held: project.moduleVarAccessSites.count() as OpCount)
+		requireOpKeyedTableIsEmpty("serviceAwaitSites", held: project.serviceAwaitSites.count() as OpCount)
+		requireOpKeyedTableIsEmpty("asyncSpawnSites", held: project.asyncSpawnSites.count() as OpCount)
+		requireOpKeyedTableIsEmpty("allocTagSites", held: project.allocTagSites.count() as OpCount)
+		requireOpKeyedTableIsEmpty("debugStreamNameSites", held: project.debugStreamNameSites.count() as OpCount)
 		requireOpKeyedTableIsEmpty("valueOrigins", held: project.valueOrigins.count())
 	end 'theFirstFileOfARound'
 
@@ -779,7 +777,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitParserDiagnosticSites(project, artifact: artifact, opOffset: opOffset)
 	commitAllocTagSites(project, artifact: artifact, opOffset: opOffset)
 	commitDebugStreamNameSites(project, artifact: artifact, opOffset: opOffset)
-	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
+	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset as FuncIndex, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 	commitOverloadSets(project, artifact: artifact)
@@ -1292,6 +1290,14 @@ function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
 			remappedNames.push(remapValueNameId(tag, nameId: nameId, remap: remap))
 		end 'eachValue'
 		func.valueNameIds = remappedNames
+
+		// The brand column holds interner ids throughout — `UnnamedTypeId` included, which is the empty
+		// name in every interner — so it remaps without the tag.
+		var remappedBrands = TypeNameIdArray.create()
+		for k in 0 upto func.valueBrandIds.count() 'eachBrand'
+			remappedBrands.push(remap.apply(try func.valueBrandIds.get(k) otherwise panic("remapArtifact: valueBrandIds.get OOB at {k} — the brand column is pushed in lockstep with the type columns")))
+		end 'eachBrand'
+		func.valueBrandIds = remappedBrands
 	end 'eachFunc'
 
 	for j in 0 upto artifact.funcReturnTypes.count() 'eachEntry'

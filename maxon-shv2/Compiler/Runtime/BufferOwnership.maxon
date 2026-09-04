@@ -190,7 +190,7 @@ export let ManagedRecordElementDestroyOffset = 40 as ByteOffset
 // is one function over both, and `LowerMaxonToStd` sizes the `__mm_alloc` of a literal's record from it.
 // ⚠ A STRING record is this plus one slot; `StringRuntime.StringRecordBytes` DERIVES itself from this
 // number rather than restating it, so the two cannot drift.
-export let ManagedRecordBytes = 48 as ByteCount
+export let ManagedRecordBytes = 48 as BytePos
 
 // `capacity < 0` — ⭐ **THE ONE HOME OF THE NOT-MINE TEST**, asked by the places that must act on it and
 // reached by no other: `__managed_cow_detach` (such a buffer cannot be WRITTEN in place, so replace it),
@@ -305,7 +305,7 @@ end 'emitRecordIsImmortal'
 // only ever against a declared provenance, and asking it about `0` or `length` is a different question with
 // a different emitter (`emitBufferNotOwned`, or the `>` in the router).
 function emitCapacityIsSentinel(module StdModule, block IrBlock, capacity ValueId, sentinel NotOwnedBufferCapacity, ids ValueMinter) returns ValueId
-	let value = emitConst(module, block: block, value: sentinel, ids: ids)
+	let value = emitConst(module, block: block, value: sentinel as ParsedInt, ids: ids)
 	return emitCmp(module, block: block, a: capacity, b: value, pred: StdCmpPred.eq, ids: ids)
 end 'emitCapacityIsSentinel'
 

@@ -5,11 +5,6 @@
 // is why a message this file cannot frame is reported as `framingError` and ends the session rather than
 // being skipped.
 
-// Bytes off standard input. `__Builtins.readStdin` hands back a `__ManagedMemory`, which is an array of
-// these.
-typealias LspByte = int(0 to u8.max)
-typealias LspByteArray = Array with LspByte
-
 // A `Content-Length` value: the body's size in bytes.
 typealias LspContentLength = int(0 to i64.max)
 
@@ -70,9 +65,9 @@ module function readLspMessage() returns LspIncoming
 		return LspIncoming.framingError("message header carries no Content-Length")
 	end 'noContentLength'
 
-	var body = LspByteArray.create()
+	var body = ByteArray.create()
 	while body.count() < contentLength 'fill'
-		let chunk = LspByteArray.init(__Builtins.readStdin(contentLength - body.count()))
+		let chunk = ByteArray.init(__Builtins.readStdin(contentLength - body.count()))
 
 		if chunk.count() == 0 'truncated'
 			return LspIncoming.framingError("stream ended after {body.count()} of {contentLength} body bytes")
@@ -94,11 +89,11 @@ end 'writeLspMessage'
 // The only CR a header line may carry is the first half of its CRLF terminator, so a CR is never
 // content; skipping it here also reads a client that sends bare LF.
 function readHeaderLine() returns String throws LspFramingError
-	var line = LspByteArray.create()
+	var line = ByteArray.create()
 	var complete = false
 
 	while not complete 'scan'
-		let chunk = LspByteArray.init(__Builtins.readStdin(HeaderScanByteBudget))
+		let chunk = ByteArray.init(__Builtins.readStdin(HeaderScanByteBudget))
 
 		if chunk.count() == 0 'streamClosed'
 			throw LspFramingError.streamEnded

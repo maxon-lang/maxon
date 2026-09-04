@@ -296,7 +296,7 @@ export function insertOpRef(block IrBlock, at BlockOpPos, opIdx OpIndex)
 		panic("insertOpRef: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={block.opRefs.count()})")
 	end 'oob'
 
-	block.opRefs.insert(at, value: opIdx)
+	block.opRefs.insert(at as ElementIndex, value: opIdx)
 end 'insertOpRef'
 
 // An index into a BATCH of pending splices — a position in the caller's parallel (position, opIndex)
@@ -333,7 +333,7 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
 	// documents that trap). Geometric growth makes the same sequence amortized linear. The zeros it
 	// writes into the added tail are all overwritten by the pass below; that fill is the price of using
 	// the one extension operation rather than a second one.
-	block.opRefs.growFilled(oldCount + pending, value: 0)
+	block.opRefs.growFilled(((oldCount + pending) as ElementIndex), value: 0)
 
 	var write = oldCount + pending
 	var read = oldCount

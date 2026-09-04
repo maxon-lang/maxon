@@ -125,7 +125,7 @@ function main() returns ExitCode
 	var failed = Conf.create(900)
 	failed.argv.push("b")
 	failed.argv.push("c")
-	return ok.argv.count() + ok.n + failed.argv.count() + failed.n as ExitCode
+	return ((ok.argv.count() as Integer) + ok.n + (failed.argv.count() as Integer) + failed.n) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -162,7 +162,7 @@ end 'Conf'
 
 function main() returns ExitCode
 	let c = try Conf.create(900) otherwise return 9
-	return c.n + c.argv.count() as ExitCode
+	return (c.n + (c.argv.count() as Integer)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -189,13 +189,13 @@ function mayFail(n Integer) returns Integer throws Boom
 end 'mayFail'
 
 function take(argv StrArray, n Integer) returns Integer
-	return argv.count() + n
+	return (argv.count() as Integer) + n
 end 'take'
 
 function main() returns ExitCode
 	let a = take(["x", "y"], n: try mayFail(900) otherwise 5)
 	let b = take(["z"], n: try mayFail(2) otherwise 5)
-	return a + b as ExitCode
+	return (a + b) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -220,7 +220,7 @@ function consume(argv StrArray, n Integer) returns Integer throws Boom
 	if n > 100 'big'
 		throw Boom.bad
 	end 'big'
-	return argv.count() + n
+	return (argv.count() as Integer) + n
 end 'consume'
 
 function run(n Integer) returns Integer
@@ -233,7 +233,7 @@ function run(n Integer) returns Integer
 end 'run'
 
 function main() returns ExitCode
-	return run(900) + run(200) + run(1) as ExitCode
+	return (run(900) + run(200) + run(1)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -270,7 +270,7 @@ end 'run'
 function main() returns ExitCode
 	let a = try run(900) otherwise 3
 	let b = try run(200) otherwise 3
-	return a + b as ExitCode
+	return (a + b) as ExitCode
 end 'main'
 ```
 ```exitcode

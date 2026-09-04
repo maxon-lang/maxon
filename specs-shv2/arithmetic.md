@@ -86,7 +86,7 @@ typealias NonZero = int(1 to i64.max)
 
 function divLive(a Integer, b NonZero, x Integer) returns Integer
 	let preserved = x + 1
-	let result = a / b
+	let result = try (a / (b as Integer)) otherwise panic("b is never zero")
 	return trunc(result + preserved)
 end 'divLive'
 
@@ -106,7 +106,7 @@ typealias NonZero = int(1 to i64.max)
 
 function modLive(a Integer, b NonZero, x Integer) returns Integer
 	let preserved = x + 1
-	let result = a mod b
+	let result = try (a mod (b as Integer)) otherwise panic("b is never zero")
 	return result + preserved
 end 'modLive'
 
@@ -152,7 +152,7 @@ function helper(x Integer) returns Integer
 end 'helper'
 
 function divCall(a Integer, b NonZero) returns Integer
-	let temp = trunc(a / b)
+	let temp = trunc(try (a / (b as Integer)) otherwise panic("b is never zero"))
 	let result = helper(temp)
 	return result + temp
 end 'divCall'
@@ -172,8 +172,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
 
 function multiDiv(a Integer, b NonZero, c Integer, d NonZero) returns Integer
-	let r1 = a / b
-	let r2 = c / d
+	let r1 = try (a / (b as Integer)) otherwise panic("b is never zero")
+	let r2 = try (c / (d as Integer)) otherwise panic("d is never zero")
 	return trunc(r1 + r2)
 end 'multiDiv'
 

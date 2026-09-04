@@ -114,32 +114,23 @@ Break any of 1, 2 or 4 and the return guard is emitted exactly as before. That i
 and `entry-guard-covers-a-return-inside-a-branch` pin the elision itself, the first by keying on the
 VALUE (not on "is there a ranged parameter") and the second on clause 3.
 
-### ⭐⭐ A value the destination PROVABLY ADMITS gets no check — the same containment E3010 reports (A4f)
+### ⭐⭐ A value the destination PROVABLY ADMITS gets no check (A4f)
 
-A `Byte = int(0 to u8.max)` returned from a `returns ExitCode` function cannot be outside `ExitCode`'s
-range on **any** target — `int(0 to u32.max)` on Windows *strictly* contains `0 to 255`, and
-`int(0 to 255)` on Linux, macOS and WASI *is* `0 to 255`, which is contained in itself. **No range check
-is emitted there**, and the reason is not an optimization: the compiler *already says so out loud* at the
-neighbouring door. Write the cast and it refuses the program —
-
-```text
-error E3010: unneeded cast: 'Byte' already fits in 'ExitCode'
-```
-
-— which is a **proof** that the source range lies inside the destination. A runtime bounds cascade behind
-that proof tests a value that cannot fail it, so **deleting the redundant cast used to ADD
-a dead guard**: with the `as` the site recorded nothing, without it the implicit conversion guarded. The
-diagnostic and the emitter were answering one question from two places, and only one of them was reading
-the ranges.
+A `Byte = int(0 to u8.max)` cast to `ExitCode` cannot be outside `ExitCode`'s range on **any** target —
+`int(0 to u32.max)` on Windows *strictly* contains `0 to 255`, and `int(0 to 255)` on Linux, macOS and
+WASI *is* `0 to 255`, which is contained in itself. The cast is REQUIRED — a `Byte` is not an `ExitCode`,
+and `as` is the one door between two aliases (`nominal-typealias.md`) — and **no range check is emitted
+for it**: the containment is a **proof** that the source range lies inside the destination, and a runtime
+bounds cascade behind that proof tests a value that cannot fail it. E3010 is a different question, asked
+of the NAMES: it refuses a cast to the value's own alias, and never one between two aliases whatever
+their ranges.
 
 **The rule is the containment relation and nothing else** — *emit nothing when the source's declared range
-is inside the destination's* — asked through the one predicate E3010 asks (`TypeRules.rangeCoversRange`).
-It is not a rule about `ExitCode`, about builtins, or about which alias is "wide":
+is inside the destination's* — asked through one predicate (`TypeRules.rangeCoversRange`). It is not a
+rule about `ExitCode`, about builtins, or about which alias is "wide":
 
 - **Every door asks it**, because every door holds both ends: a `return`, an explicit `as`, a
-  struct-literal field, a field store, a field's declared default, an array element. (At an `as` the
-  answer is unobservable *by construction* — containment there IS E3010, so such a program does not
-  build. The door asks anyway; the redundancy belongs to the diagnostic, not to the emitter.)
+  struct-literal field, a field store, a field's declared default, an array element.
 - **A source that names no alias proves nothing**, and that is the direction that keeps the check: a bare
   `int` local, a folded literal, a `trunc` result. So the **compile-time E3005 half is untouched** —
   `InsertRangeChecks` reports it only for a value it can fold, and a folded literal denotes no alias.
@@ -206,16 +197,15 @@ end 'grow'
 
 function main() returns ExitCode
   let big = grow(1)
-  return clamp(big)
+  return clamp(big as Percent) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'
+panic at range-check-panic.upper-bound.test:15: Range check failed: value outside typealias 'Percent'
 Stack trace:
-  in clamp
   in main
   in mrt_start
 ```
@@ -239,16 +229,15 @@ end 'neg'
 
 function main() returns ExitCode
   let below = neg(1)
-  return check(below)
+  return check(below as Natural) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.lower-bound.test:5: Range check failed: value outside typealias 'Natural'
+panic at range-check-panic.lower-bound.test:15: Range check failed: value outside typealias 'Natural'
 Stack trace:
-  in check
   in main
   in mrt_start
 ```
@@ -363,20 +352,19 @@ function opaque(n Integer) returns Integer
 end 'opaque'
 
 function divide(a Integer, by NonZero) returns Integer
-  return a / by
+  return ((a as NonZero) / by) as Integer
 end 'divide'
 
 function main() returns ExitCode
-  return divide(10, by: opaque(0))
+  return divide(10, by: opaque(0) as NonZero) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.runtime-argument.test:9: Range check failed: value outside typealias 'NonZero'
+panic at range-check-panic.runtime-argument.test:14: Range check failed: value outside typealias 'NonZero'
 Stack trace:
-  in divide
   in main
   in mrt_start
 ```
@@ -448,7 +436,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
 
 function divide(a Integer, by NonZero) returns Integer
-  return a / by
+  return ((a as NonZero) / by) as Integer
 end 'divide'
 
 function main() returns ExitCode
@@ -483,16 +471,15 @@ function unused(_ NonZero) returns Integer
 end 'unused'
 
 function main() returns ExitCode
-  return unused(opaque(0)) as ExitCode
+  return unused(opaque(0) as NonZero) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.entry-guard-on-a-parameter-no-body-reads.test:9: Range check failed: value outside typealias 'NonZero'
+panic at range-check-panic.entry-guard-on-a-parameter-no-body-reads.test:14: Range check failed: value outside typealias 'NonZero'
 Stack trace:
-  in unused
   in main
   in mrt_start
 ```
@@ -516,11 +503,11 @@ function opaque(n Integer) returns Integer
 end 'opaque'
 
 function divide(a Integer, b NonZero) returns Integer
-  return a / b
+  return ((a as NonZero) / b) as Integer
 end 'divide'
 
 function apply(f DivFn, a Integer, b Integer) returns Integer
-  return f(a, b)
+  return f(a, b as NonZero)
 end 'apply'
 
 function main() returns ExitCode
@@ -532,10 +519,8 @@ end 'main'
 1
 ```
 ```stderr
-panic at range-check-panic.argument-through-a-function-value-is-guarded.test:10: Range check failed: value outside typealias 'NonZero'
+panic at range-check-panic.argument-through-a-function-value-is-guarded.test:15: Range check failed: value outside typealias 'NonZero'
 Stack trace:
-  in divide
-  in __fnref_divide
   in apply
   in main
   in mrt_start
@@ -558,7 +543,7 @@ end 'opaque'
 
 function check(x SmallInt) returns SmallInt
   var y = x
-  y = opaque(99)
+  y = opaque(99) as SmallInt
   return y
 end 'check'
 
@@ -570,7 +555,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at range-check-panic.return-of-a-reassigned-shadow-is-still-guarded.test:12: Range check failed: value outside typealias 'SmallInt'
+panic at range-check-panic.return-of-a-reassigned-shadow-is-still-guarded.test:11: Range check failed: value outside typealias 'SmallInt'
 Stack trace:
   in check
   in main
@@ -678,16 +663,15 @@ function pick(x SmallInt, flag Integer) returns SmallInt
 end 'pick'
 
 function main() returns ExitCode
-  return pick(opaque(99), flag: 1)
+  return pick(opaque(99) as SmallInt, flag: 1) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.entry-guard-covers-a-return-inside-a-branch.test:9: Range check failed: value outside typealias 'SmallInt'
+panic at range-check-panic.entry-guard-covers-a-return-inside-a-branch.test:17: Range check failed: value outside typealias 'SmallInt'
 Stack trace:
-  in pick
   in main
   in mrt_start
 ```
@@ -696,11 +680,10 @@ Stack trace:
 <!-- test: range-check-panic.a-contained-return-emits-no-guard -->
 ⭐ **THE A4f REPRODUCER.** `pick` returns a `Byte`, `main` returns an `ExitCode`, and `int(0 to 255)` is
 inside `ExitCode`'s range on every target — strictly, under Windows' `int(0 to u32.max)`; as an equal
-range, under the `int(0 to 255)` Linux, macOS and WASI carry — so `main`'s `return` gets nothing on any
-of them. Its FRAGMENT is the evidence: `pick`
-keeps its own cascade (the `Integer` it computes from is NOT inside `Byte`, so that one is earned), and
-`main` is a `bl` and a `ret`. Writing `pick() as ExitCode` instead is E3010, which is the same fact said
-in words.
+range, under the `int(0 to 255)` Linux, macOS and WASI carry — so the `as ExitCode` that `main`'s
+`return` owes gets nothing on any of them. Its FRAGMENT is the evidence: `pick` keeps its own cascade
+(the `Integer` it computes from is NOT inside `Byte`, so that one is earned), and `main` is a `bl` and a
+`ret`.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias Integer = int(i64.min to i64.max)
@@ -837,13 +820,13 @@ end 'small'
 
 function fieldStore() returns Wide
   var b = Box.create()
-  b.v = small()
+  b.v = small() as Wide
   return b.v
 end 'fieldStore'
 
 function elementStore() returns Wide
   var a = Wides.create()
-  a.push(small())
+  a.push(small() as Wide)
   return try a.get(0) otherwise panic("no slot")
 end 'elementStore'
 
@@ -884,7 +867,7 @@ end 'loose'
 
 function main() returns ExitCode
   var b = Box.create()
-  b.v = loose()
+  b.v = loose() as Wide
   print("v={b.v}\n")
   return 0
 end 'main'
@@ -1154,7 +1137,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias RegNum = int(0 to 63)
 
 function weigh(table Integer, regNum RegNum) returns Integer
-  return table + regNum
+  return table + (regNum as Integer)
 end 'weigh'
 
 function main() returns ExitCode
@@ -1181,7 +1164,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias RegNum = int(0 to 63)
 
 function weigh(table Integer, regNum RegNum) returns Integer
-  return table + regNum
+  return table + (regNum as Integer)
 end 'weigh'
 
 function main() returns ExitCode
@@ -1215,7 +1198,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias RegNum = int(0 to 63)
 
 function weigh(table Integer, regNum RegNum) returns Integer
-  return table + regNum
+  return table + (regNum as Integer)
 end 'weigh'
 
 function twice(table Integer, reg RegNum) returns Integer
@@ -1243,11 +1226,11 @@ typealias RegNum = int(0 to 63)
 typealias Wide = int(0 to 1000)
 
 function weigh(table Integer, regNum RegNum) returns Integer
-  return table + regNum
+  return table + (regNum as Integer)
 end 'weigh'
 
 function twice(table Integer, reg Wide) returns Integer
-  return weigh(table, regNum: reg) + weigh(table, regNum: reg)
+  return weigh(table, regNum: reg as RegNum) + weigh(table, regNum: reg as RegNum)
 end 'twice'
 
 function main() returns ExitCode
@@ -1259,9 +1242,8 @@ end 'main'
 1
 ```
 ```stderr
-panic at range-check-panic.a-wider-parameter-does-not-prove-a-narrower-one.test:6: Range check failed: value outside typealias 'RegNum'
+panic at range-check-panic.a-wider-parameter-does-not-prove-a-narrower-one.test:11: Range check failed: value outside typealias 'RegNum'
 Stack trace:
-  in weigh
   in twice
   in main
   in mrt_start

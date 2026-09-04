@@ -68,7 +68,7 @@ a.push(7)     // count() == 1
 
 ### `resize` accepts only a length it can produce
 
-`resize(newLength ElementCount)` takes an `ElementCount`, which is
+`resize(newLength ElementIndex)` takes an `ElementIndex`, which is
 `int(0 to i64.max)` — the count of elements the array will have afterwards, and
 `i64.max` because the buffer beneath it measures its length in a signed machine
 word. A value that cannot be a length is not a request the operation can honour,
@@ -1289,7 +1289,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:355: Range check failed: value outside typealias 'ElementIndex'
+panic at Array.maxon:354: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in __Array_i64.insert
   in main
@@ -1371,7 +1371,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:267: Range check failed: value outside typealias 'ElementIndex'
+panic at Array.maxon:266: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in __Array_i64.set
   in main
@@ -1568,7 +1568,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/arrays/error.array-resize-negative-length-is-refused.test:4:4: Value -2 is outside the range of 'ElementCount' (int(0 to 9223372036854775807))
+error E3005: specs/fragments/arrays/error.array-resize-negative-length-is-refused.test:4:4: Value -2 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
 <!-- test: array-literal-resize-out-of-range-panics -->
@@ -1595,7 +1595,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
+panic at Array.maxon:436: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in __Array_i64.resize
   in main
@@ -1628,7 +1628,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
+panic at Array.maxon:436: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in IntArray.resize
   in main

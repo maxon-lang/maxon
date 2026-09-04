@@ -104,7 +104,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// non-negative HashValue range, but cheaper. It is the SPREAD hash that is masked,
 		// never the raw one: see `spreadHash` for the measured quadratic that costs.
 		let mask = capacity - 1
-		var index = spreadHash(hash) and mask
+		var index = (spreadHash(hash) and mask) as TableSlotIndex
 
 		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
 		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
@@ -195,7 +195,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
 		let mask = capacity - 1
-		var index = spreadHash(hash) and mask
+		var index = (spreadHash(hash) and mask) as TableSlotIndex
 
 		var probes = 0
 		while probes < capacity 'probe'
@@ -245,7 +245,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
 		let mask = capacity - 1
-		var index = spreadHash(hash) and mask
+		var index = (spreadHash(hash) and mask) as TableSlotIndex
 
 		var probes = 0
 		while probes < capacity 'probe'
@@ -349,7 +349,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				// Re-insert into new arrays using insert logic
 				if let element = try oldElements.get(i) 'get_elem'
 					let hash = try oldHashes.get(i) otherwise element.hash()
-					var index = spreadHash(hash) and mask
+					var index = (spreadHash(hash) and mask) as TableSlotIndex
 
 					// Find empty slot (no deleted slots in fresh array)
 					var currentState = try states.get(index) otherwise SlotState.Empty

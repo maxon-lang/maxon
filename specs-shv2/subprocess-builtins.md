@@ -1247,8 +1247,8 @@ BEFORE the "is enough buffered?" test, because `bufferedBytes >= count` is VACUO
 count — so the request falls straight through into the consume with a negative length. That produced a
 `String` record claiming a negative length AND, because the consume publishes `buffered - taken`, a stream
 buffer whose recorded length had been driven UP past what it holds: the corruption outlives the call and
-the NEXT reader walks it. MEASURED before the guard existed: `panic at String.maxon:283: Range check
-failed: value outside typealias 'ByteCount'`, exit 1.
+the NEXT reader walks it. MEASURED before the guard existed: `panic at String.maxon:281: Range check
+failed: value outside typealias 'BytePos'`, exit 1.
 
 ⚠ **`still=abcd` IS THE HALF THAT MAKES THIS A TEST.** An empty answer alone would also come from a
 reader that had quietly eaten the stream; reading four real bytes afterwards is what says the refusal

@@ -308,7 +308,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 
 function slotOf(v Vec3, at Int) returns Int
-	return try v.get(at) otherwise -1
+	return try v.get(at as ElementIndex) otherwise -1
 end 'slotOf'
 
 function main() returns ExitCode
@@ -333,8 +333,8 @@ end 'whichSlot'
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	try v.set(whichSlot(), value: 18) otherwise panic("test invariant: set OOB")
-	return try v.get(whichSlot()) otherwise 0
+	try v.set(whichSlot() as ElementIndex, value: 18) otherwise panic("test invariant: set OOB")
+	return (try v.get(whichSlot() as ElementIndex) otherwise 0) as ExitCode
 end 'main'
 ```
 ```exitcode

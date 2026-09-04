@@ -390,9 +390,9 @@ export function testRunJson(report TestRunReport, showTiming bool, emptyReason S
 	end 'nothingRan'
 
 	let tally = tallyTestRun(report.files)
-	pushJsonNumber(doc, keys: keys, children: children, key: "total", value: tally.total)
-	pushJsonNumber(doc, keys: keys, children: children, key: "passed", value: tally.passed)
-	pushJsonNumber(doc, keys: keys, children: children, key: "failed", value: tally.failed)
+	pushJsonNumber(doc, keys: keys, children: children, key: "total", value: tally.total as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: "passed", value: tally.passed as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: "failed", value: tally.failed as JsonFloat)
 	pushJsonNumber(doc, keys: keys, children: children, key: "files", value: report.files.count())
 
 	// `compiled` belongs INSIDE the timing block, with the durations it is reported beside: it is the
@@ -401,8 +401,8 @@ export function testRunJson(report TestRunReport, showTiming bool, emptyReason S
 	// deliver the byte-reproducible stdout it promises.
 	if showTiming 'withTiming'
 		pushJsonBool(doc, keys: keys, children: children, key: "compiled", value: CompiledEveryRun)
-		pushJsonNumber(doc, keys: keys, children: children, key: "compileMs", value: report.compileMs)
-		pushJsonNumber(doc, keys: keys, children: children, key: "runMs", value: report.runMs)
+		pushJsonNumber(doc, keys: keys, children: children, key: "compileMs", value: report.compileMs as JsonFloat)
+		pushJsonNumber(doc, keys: keys, children: children, key: "runMs", value: report.runMs as JsonFloat)
 	end 'withTiming'
 
 	// Only when TRUE: a flag that is false in almost every run is a column of one value. It is here at
@@ -433,13 +433,13 @@ function testResultNode(doc JsonDoc, path FilePath, result UnitTestResult, showT
 	pushJsonString(doc, keys: keys, children: children, key: "file", value: reportPathDisplay(path))
 	pushJsonString(doc, keys: keys, children: children, key: "name", value: result.test.displayName)
 	pushJsonString(doc, keys: keys, children: children, key: "symbol", value: String.from(result.test.symbol))
-	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: result.test.line)
+	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: result.test.line as JsonFloat)
 	pushJsonString(doc, keys: keys, children: children, key: "state", value: outcomeSpelling(result.outcome).jsonState)
 
 	// ABSENT rather than zero for an outcome that never produced one: a test that crashed did not take
 	// 0.00ms, and a machine reader must be able to tell "fast" from "never measured".
 	if showTiming and measuredItsOwnDuration(result.outcome) 'measured'
-		pushJsonNumber(doc, keys: keys, children: children, key: "nanos", value: result.nanos)
+		pushJsonNumber(doc, keys: keys, children: children, key: "nanos", value: result.nanos as JsonFloat)
 	end 'measured'
 
 	match result.thrown 'unhandledError'
@@ -461,7 +461,7 @@ function pushThrownNode(doc JsonDoc, keys StringArray, children JsonNodeIdArray,
 	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "errorType", value: error.errorType)
 	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "errorCase", value: error.errorCase)
 	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "file", value: error.file)
-	pushJsonNumber(doc, keys: thrownKeys, children: thrownChildren, key: "line", value: error.line)
+	pushJsonNumber(doc, keys: thrownKeys, children: thrownChildren, key: "line", value: error.line as JsonFloat)
 
 	keys.push("threw")
 	children.push(doc.add(JsonNode.objectNode(thrownKeys, children: thrownChildren)))
@@ -498,7 +498,7 @@ function listedTestNode(doc JsonDoc, path FilePath, test DiscoveredTest) returns
 	pushJsonString(doc, keys: keys, children: children, key: "file", value: reportPathDisplay(path))
 	pushJsonString(doc, keys: keys, children: children, key: "name", value: test.displayName)
 	pushJsonString(doc, keys: keys, children: children, key: "symbol", value: String.from(test.symbol))
-	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: test.line)
+	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: test.line as JsonFloat)
 
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'listedTestNode'

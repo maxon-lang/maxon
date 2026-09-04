@@ -608,11 +608,11 @@ end 'arenaLaneLabel'
 // `SLAB_MCACHE_ROW_STRIDE = 144` written as what it is instead of as a number a regenerated ladder
 // invalidates in silence.
 function slabMcacheRowStride() returns ParsedInt
-	return slabClassCount() * WordBytes
+	return (slabClassCount() as ParsedInt) * WordBytes
 end 'slabMcacheRowStride'
 
 function slabStateMcacheOffset() returns ParsedInt
-	return SlabStateMcentralOffset + slabClassCount() * WordBytes
+	return SlabStateMcentralOffset + (slabClassCount() as ParsedInt) * WordBytes
 end 'slabStateMcacheOffset'
 
 function slabStateBytes() returns ParsedInt
@@ -1801,7 +1801,7 @@ function buildSlabScavenge(module StdModule, sharded bool)
 	let classIdx = ids.mint()
 	classLoop.blockArgs.push(IrBlockArg.create(classIdx, argType: StdType.i64))
 
-	let classCount = emitConst(module, block: classLoop, value: slabClassCount(), ids: ids)
+	let classCount = emitConst(module, block: classLoop, value: slabClassCount() as ParsedInt, ids: ids)
 	let swept = emitCmp(module, block: classLoop, a: classIdx, b: classCount, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(classLoop, op: StdOp.condBranch(swept, thenBlockId: arenas.id, elseBlockId: classStart.id))
 

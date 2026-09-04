@@ -186,8 +186,8 @@ end 'registerByteArrayLiteralBlob'
 // `resize(-2)` exits 0, the leak gate stays green, `capacity()` reads 3 (proving the detach fired) and
 // `count()` publishes -2. A louder failure mode became a silent one, which is why the guard is here.
 //
-// ⭐ THE CANONICAL CONTRACT ALREADY SAYS SO, IN A TYPE: `stdlib/Array.maxon`'s `resize(newLength ElementCount)`
-// takes `ElementCount = int(0 to u64.max)` (`:11`), so a negative length is not a value the operation accepts
+// ⭐ THE CANONICAL CONTRACT ALREADY SAYS SO, IN A TYPE: `stdlib/Array.maxon`'s `resize(newLength ElementIndex)`
+// takes `ElementIndex = int(0 to i64.max)`, so a negative length is not a value the operation accepts
 // — the reference stdlib expresses that as a RANGE and gets the rejection from the type system. shv2's builtin
 // array methods pass their argument through as a plain integer (the same reason `get`/`set`/`remove` bounds-
 // check a negative INDEX at runtime rather than inheriting `ElementIndex`'s range), so the range has to be
@@ -1428,7 +1428,7 @@ function emitCopyRun(module StdModule, func IrFunction, cur IrBlock, dest ValueI
 
 	if fromTheTop 'highestChunkFirst'
 		let span = emitBin(module, block: cur, a: from, b: to, opcode: StdBinOpcode.add, ids: ids)
-		let stride = emitConst(module, block: cur, value: copyChunkStride(chunk), ids: ids)
+		let stride = emitConst(module, block: cur, value: copyChunkStride(chunk) as ParsedInt, ids: ids)
 		let mirror = emitBin(module, block: cur, a: span, b: stride, opcode: StdBinOpcode.sub, ids: ids)
 		srcAnchor = emitBin(module, block: cur, a: src, b: mirror, opcode: StdBinOpcode.add, ids: ids)
 		destAnchor = emitBin(module, block: cur, a: dest, b: mirror, opcode: StdBinOpcode.add, ids: ids)
@@ -2040,11 +2040,12 @@ end 'StrideDispatchPlan'
 // call. That is the opposite polarity from `emitStrideDispatch` above, where a wrong stamp would take an arm
 // the runtime would not.
 export function strideDispatchPlanForStamp(stamp ElementStride) returns StrideDispatchPlan
-	if stamp == singleOpStrideBytes(SingleOpStride.word) 'oneMachineWord'
+	let stampBytes = stamp as ParsedInt
+	if stampBytes == singleOpStrideBytes(SingleOpStride.word) 'oneMachineWord'
 		return StrideDispatchPlan.singleArm(SingleOpStride.word)
 	end 'oneMachineWord'
 
-	if stamp == singleOpStrideBytes(SingleOpStride.byte) 'oneByteOrTheWordSlotOfASharedBody'
+	if stampBytes == singleOpStrideBytes(SingleOpStride.byte) 'oneByteOrTheWordSlotOfASharedBody'
 		return StrideDispatchPlan.runtimeFork
 	end 'oneByteOrTheWordSlotOfASharedBody'
 

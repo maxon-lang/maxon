@@ -21,8 +21,10 @@ same -> same      // No-op (any type to itself)
 ```
 
 Casts between ranged-int typealiases (e.g. `int(0 to u8.max)` to `int(i64.min to i64.max)`) are
-always permitted; out-of-range literals are rejected at compile time, and out-of-range expressions
-are rejected at runtime by the function-return range check.
+always permitted, and they are REQUIRED: every `typealias` is a nominally distinct type, and `as` is
+the only door between two of them, in both directions (`nominal-typealias.md`). Out-of-range literals
+are rejected at compile time; out-of-range expressions are rejected at runtime by the target's range
+check, which a widening cast provably cannot fail and so does not emit.
 
 ### Syntax
 
@@ -338,8 +340,9 @@ error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot c
 
 ### Unneeded Casts (Compile Error E3010)
 
-A cast that does not narrow the source range is rejected: the surrounding context
-already auto-widens, so the explicit cast contributes nothing.
+A cast whose target names the value's OWN alias is rejected: it converts nothing.
+A cast naming a DIFFERENT alias is real work whichever way the two ranges run — it
+re-declares the value's type and carries the target's range check — so it compiles.
 
 <!-- test: error.unneeded.same-type-int -->
 ```maxon
@@ -447,7 +450,9 @@ end 'main'
 error E3010: specs/fragments/type-casting/error.unneeded.same-alias-float.test:11:12: unneeded cast: 'Float' already fits in 'Float'
 ```
 
-<!-- test: error.unneeded.widening-byte-to-integer -->
+<!-- test: widening-byte-to-integer-is-a-real-cast -->
+`Byte` fits inside `Integer`, and that is not what decides: the two are different types, so `b as
+Integer` is the cast that lets a `Byte` reach an `Integer` parameter at all.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -463,20 +468,40 @@ function main() returns ExitCode
 	return asInteger(i)
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.widening-byte-to-integer.test:12:12: unneeded cast: 'Byte' already fits in 'Integer'
+```exitcode
+42
 ```
 
 ### A RANGE-CONTESTED alias is quoted as SOURCE spells it, here as everywhere
 
 `typealias Byte = int(0 to 200)` beside an `Array with Byte` CONTESTS the stdlib's own `Byte`, and a
 contested name is stored under the compiler's mint (`Byte$0_200`) so the two declarations can occupy one
-registry. That spelling names no line the author wrote, and E3005 has said so since N2 —
-`literalOutOfRangeMessage` routes every alias name it prints through `sourceSpelledAliasName` precisely
-because "quoted as source spells it" is a property of the diagnostic VOCABULARY and not of one E-code.
-E3010 did not, and printed **`unneeded cast: 'Byte$0_200' already fits in 'Wide'`** (X6 review, measured).
+registry. That spelling names no line the author wrote, so every alias name a diagnostic prints goes
+through `sourceSpelledAliasName` — "quoted as source spells it" is a property of the diagnostic
+VOCABULARY and not of one E-code. E3010 prints both sides of the cast through it.
 
 <!-- test: error.unneeded.contested-alias-quoted-as-source-spells-it -->
+```maxon
+
+typealias Byte = int(0 to 200)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns Byte
+	return (try b.get(0) otherwise 0) as Byte
+end 'takes'
+
+function main() returns ExitCode
+	var a = Bytes.create()
+	a.push(7)
+	return takes(a)
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.contested-alias-quoted-as-source-spells-it.test:7:36: unneeded cast: 'Byte' already fits in 'Byte'
+```
+
+<!-- test: a-contested-alias-cast-to-another-alias-is-a-real-cast -->
+The legal twin: the contested `Byte` reaches a `Wide` through the one door there is.
 ```maxon
 
 typealias Byte = int(0 to 200)
@@ -493,11 +518,12 @@ function main() returns ExitCode
 	return takes(a)
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.contested-alias-quoted-as-source-spells-it.test:8:36: unneeded cast: 'Byte' already fits in 'Wide'
+```exitcode
+7
 ```
 
-<!-- test: error.unneeded.widening-int-to-float -->
+<!-- test: widening-int-to-float-is-a-real-cast -->
+An `Integer` into a float alias is a conversion AND a change of type, and `as` is how both are spelled.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -513,8 +539,8 @@ function main() returns ExitCode
 	return trunc(f)
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.widening-int-to-float.test:12:12: unneeded cast: 'Integer' already fits in 'JsonFloat'
+```exitcode
+42
 ```
 
 <!-- test: error.unneeded.call-result-same-alias -->
@@ -671,27 +697,35 @@ error E3010: <fragment>:15:11: unneeded cast: 'Num' already fits in 'Num'
 
 ### The SOURCES that state a declared alias — a field read and a `try` result
 
-⭐⭐ **E3010's gate is "both ends are DECLARED ranged typealiases", and the question that gate turns on is
-WHICH EXPRESSIONS STATE ONE.** The cases above all read a local. These two pin the other two sources shv2
-carries an alias through, and they are pinned because a self-compile found **seven genuinely redundant
-casts in shv2's own source** behind exactly them — `segment.base as ParsedInt` (a field read) and
-`try text.get(k) otherwise panic(…) as ParsedInt` (a `try` result), plus four int→float twins.
-
-⛔ **THE REFERENCE BOOTSTRAP DOES NOT REPORT THESE, AND IT IS THE BLIND ONE.** MEASURED, same program on
-both: shv2 reports `unneeded cast: 'RungIndex' already fits in 'JsonFloat'` on `result.rung as JsonFloat`
-where `maxon.exe` compiles it and prints `3.0`. That is a place where shv2 knows more — a struct field
-carries its declared type, and a `try … otherwise` result carries its callee's — and the divergence is
-deliberate rather than accidental. It is also why shv2's own source compiled under the bootstrap for
-months while carrying casts that do nothing.
-
-⚠ **AND THE VERDICT IS CHECKABLE, WHICH IS WHAT MAKES IT SAFE.** A diagnostic saying "delete this" is only
-right if the program still compiles once you do. The last case below is that proof for the int→float
-shape — the one where "unneeded" is least obvious, because the cast performs a real `cvtsi2sd`. It is
-unneeded anyway: the conversion happens at the argument regardless, on BOTH compilers, to the same
-printed digits.
+⭐⭐ **E3010's gate is "the cast names the value's OWN alias", and the question that gate turns on is
+WHICH EXPRESSIONS STATE ONE.** The cases above all read a local. A struct field states the alias it is
+DECLARED with, and a `try … otherwise` result states its callee's declared return type. Each door is
+pinned twice: the same-alias cast E3010 refuses, and the cross-alias cast through the same door that is
+the one legal way across.
 
 <!-- test: error.unneeded.through-a-struct-field-read -->
-A struct field states the alias it was DECLARED with.
+```maxon
+typealias Narrow = int(0 to u32.max)
+
+type Segment
+	export let base as Narrow
+
+	export static function create(base Narrow) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Segment'
+
+function main() returns ExitCode
+	let seg = Segment.create(7)
+	let w = seg.base as Narrow
+	return w as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-struct-field-read.test:14:19: unneeded cast: 'Narrow' already fits in 'Narrow'
+```
+
+<!-- test: a-struct-field-read-cast-to-another-alias-is-a-real-cast -->
 ```maxon
 typealias Narrow = int(0 to u32.max)
 typealias Wide = int(i64.min to i64.max)
@@ -710,12 +744,25 @@ function main() returns ExitCode
 	return w as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-struct-field-read.test:15:19: unneeded cast: 'Narrow' already fits in 'Wide'
+```exitcode
+7
 ```
 
 <!-- test: error.unneeded.through-a-try-otherwise-result -->
-A `try … otherwise` result states its callee's declared return type — here `ByteArray.get`'s `Byte`.
+`ByteArray.get` returns the stdlib's `Byte`, and the `try … otherwise` result states it.
+```maxon
+function main() returns ExitCode
+	let bytes = b"A"
+	let ch = try bytes.get(0) otherwise panic("get")
+	let w = ch as Byte
+	return (w - 23) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:5:13: unneeded cast: 'Byte' already fits in 'Byte'
+```
+
+<!-- test: a-try-otherwise-result-cast-to-another-alias-is-a-real-cast -->
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -726,14 +773,40 @@ function main() returns ExitCode
 	return (w - 23) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:7:13: unneeded cast: 'Byte' already fits in 'Wide'
+```exitcode
+42
 ```
 
-<!-- test: an-int-alias-reaches-a-float-parameter-with-no-cast -->
-⭐ **THE PROOF THAT "UNNEEDED" MEANS IT.** Both the widening int→int and the int→float casts E3010 refuses
-are deletable, and this is the harder half: an `Integer` argument reaches a `Ratio` parameter with no cast
-at all, because the promotion is the ARGUMENT's, not the cast's. Measured identical on the bootstrap.
+### An int alias and a float alias are two types, and the promotion does not cross them
+
+<!-- test: error.an-int-alias-does-not-reach-a-float-alias-parameter -->
+An `Integer` is not a `Ratio`. The int→float promotion is a conversion of the VALUE; it does not change
+which type the argument carries, so the argument door refuses it as it refuses any other alias mismatch.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Ratio = float(f64.min to f64.max)
+
+function identity(n Integer) returns Integer
+	return n
+end 'identity'
+
+function showRatio(r Ratio)
+	print("r={r}")
+end 'showRatio'
+
+function main() returns ExitCode
+	showRatio(identity(42))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:2: argument type mismatch for 'r': expected 'Ratio', got 'Integer'
+```
+
+<!-- test: an-int-alias-reaches-a-float-alias-parameter-through-as -->
+The legal twin, both kinds of crossing: an `Integer` into a `Ratio` parameter, and a `Narrow` into an
+`Integer` one. The int→float cast converts the value AND re-declares its type; the int→int cast re-declares
+only, and neither is E3010.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Ratio = float(f64.min to f64.max)
@@ -756,8 +829,8 @@ function narrow(n Narrow) returns Narrow
 end 'narrow'
 
 function main() returns ExitCode
-	showRatio(identity(42))
-	showWide(narrow(7))
+	showRatio(identity(42) as Ratio)
+	showWide(narrow(7) as Integer)
 	return 0
 end 'main'
 ```
@@ -768,13 +841,10 @@ end 'main'
 r=42.0v=7
 ```
 
-## A CONTAINER IS NOT A CAST TARGET
+## A DIFFERENT CONTAINER INSTANCE IS NOT A CAST TARGET
 
-⛔⛔ **THIS SPELLING USED TO BE ACCEPTED AND THEN IGNORED.** `col as RegNumColumn` parsed, handed back a value
-still wearing its ORIGINAL type, and failed later at whatever use site first noticed — naming neither the cast
-nor its target. Nothing in the suite covered it, which is how a silently ignored cast survived.
-
-⚠ **AND IT COULD NOT HAVE BEEN MADE A RETAGGING, WHICH IS WHY THIS IS A REFUSAL AND NOT A GAP.**
+A cast to another alias of the value's OWN generic instance is a re-brand and costs nothing
+(`nominal-generic-alias.md`). A cast to a DIFFERENT instance is refused, and it cannot be a retagging:
 `Array with int(0 to u64.max)` strides EIGHT bytes per element and `Array with int(0 to 63)` strides ONE
 (`rangedAliasStorageBytes`), so retagging one as the other hands every later read a stride the buffer was not
 written at — the silent wrong answer `bytearray-element-size.md` measures at length. Converting instead would
@@ -808,12 +878,9 @@ error E3131: specs/fragments/type-casting/error.a-generic-instance-is-not-a-cast
 
 <!-- test: a-scalar-alias-is-still-a-cast-target -->
 ⭐ **THE CONTROL, AND IT IS WHAT SAYS THE REFUSAL DID NOT WIDEN.** The refusal reads the tag the cast TARGET
-denotes, so a ranged alias — the overwhelmingly common `as` target — is untouched. Lose this and every `as` in
-the corpus would be refused with it.
-
-⚠ The widening leg (`n as Wide`) is deliberately absent: shv2 answers **E3010 unneeded cast** for it, because
-`Narrow` already fits `Wide`. That is a rule about redundancy and not about containers, so asserting it here
-would tie this case to a diagnostic it is not about.
+denotes, so a ranged alias — the overwhelmingly common `as` target — is untouched, in both directions: the
+narrowing leg (`w as Narrow`) keeps its guard, and the widening leg (`n as Wide`) is a real cast between
+two types and not E3010. Lose this and every `as` in the corpus would be refused with it.
 ```maxon
 typealias Wide = int(0 to u64.max)
 typealias Narrow = int(0 to 63)
@@ -821,7 +888,8 @@ typealias Narrow = int(0 to 63)
 function main() returns ExitCode
 	let w = 5 as Wide
 	let n = w as Narrow
-	print("n={n}")
+	let back = n as Wide
+	print("n={n} back={back}")
 	return 0
 end 'main'
 ```
@@ -829,5 +897,5 @@ end 'main'
 0
 ```
 ```stdout
-n=5
+n=5 back=5
 ```

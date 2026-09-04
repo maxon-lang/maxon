@@ -312,7 +312,7 @@ type LeafPlan
 end 'LeafPlan'
 
 function buildLeafPlan(module StdModule) returns LeafPlan
-	var plan = LeafPlan.create(module.funcCount())
+	var plan = LeafPlan.create(module.funcCount() as FuncIndex)
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 		plan.record(funcIndex, scan: scanLeafBody(module, func: func), module: module, func: func)
@@ -632,7 +632,7 @@ function inlineWithNameIndex(project Project, module StdModule, byName FunctionN
 	// Built ONCE, over the eligible callees alone — see `ValueOriginTable.indexRowsOfFunctions` for why
 	// the alternative (`lookup` per copied value) is a quadratic against a table with one row per
 	// value-producing op in the program.
-	let origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount())
+	let origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount() as FuncIndex)
 	var stats = InlineLeafStats.create()
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -708,7 +708,7 @@ type LeafInliner
 			return self.ids
 		end 'already'
 
-		self.ids = ValueMinter.create(nextFreeValueId(self.module, func: self.func))
+		self.ids = ValueMinter.create(nextFreeValueId(self.module, func: self.func) as ParamCount)
 		self.seeded = true
 		return self.ids
 	end 'valueIds'
@@ -927,7 +927,7 @@ type LeafInliner
 			let arg = try args.get(i) otherwise panic("LeafInliner.buildValueColumn: args.get OOB at {i} despite the arity check")
 			try subst.set(i, value: arg) otherwise panic("LeafInliner.buildValueColumn: '{String.from(calleeFunc.name)}' declares {calleeFunc.paramCount} parameter(s) but its value space is only {bound} wide — parameters occupy ids 0..paramCount-1 by the Std ABI's convention")
 		end 'eachParam'
-		for v in calleeFunc.paramCount upto bound 'eachBodyValue'
+		for v in valueIdAtParamPosition(calleeFunc.paramCount) upto bound 'eachBodyValue'
 			try subst.set(v, value: self.valueIds().mint()) otherwise panic("LeafInliner.buildValueColumn: subst.set OOB at {v}")
 		end 'eachBodyValue'
 		return subst
@@ -977,15 +977,16 @@ type LeafInliner
 	// ⚠ A LINEAR SCAN over this function's own cascades, which is one per narrowed parameter and never
 	// more than its arity — the bound `entryGuardAlreadyCovers` and `paramAliasOf` already carry.
 	function callerParamProves(arg ValueId, alias RangedTypeAlias) returns bool
-		if arg >= self.func.paramCount 'notAParameterOfThisFrame'
+		if arg >= valueIdAtParamPosition(self.func.paramCount) 'notAParameterOfThisFrame'
 			return false
 		end 'notAParameterOfThisFrame'
-		if maskHasParam(self.func.reassignedParamMask, param: arg) 'arrivesAsACellAddress'
+		let position = paramPositionOfValueId(arg)
+		if maskHasParam(self.func.reassignedParamMask, param: position) 'arrivesAsACellAddress'
 			return false
 		end 'arrivesAsACellAddress'
 
 		for ownGuard in self.func.paramGuards 'eachOwnGuard'
-			if ownGuard.index == arg 'thisParameter'
+			if ownGuard.index == position 'thisParameter'
 				return rangeCoversRange(alias, source: ownGuard.alias)
 			end 'thisParameter'
 		end 'eachOwnGuard'
@@ -1351,7 +1352,7 @@ function refuseNotAParamOp()
 end 'refuseNotAParamOp'
 
 function requireParamValueIsItsIndex(resultId ValueId, index ParamCount, calleeFunc IrFunction)
-	if resultId != index 'conventionBroken'
+	if resultId != valueIdAtParamPosition(index) 'conventionBroken'
 		panic("LeafInliner: parameter {index} of '{String.from(calleeFunc.name)}' defines value {resultId} — the Std ABI reserves ids 0..paramCount-1 for the parameters IN ORDER, and the splice's value column maps them onto the call's arguments by that identity")
 	end 'conventionBroken'
 	if index >= calleeFunc.paramCount 'pastTheDeclaration'

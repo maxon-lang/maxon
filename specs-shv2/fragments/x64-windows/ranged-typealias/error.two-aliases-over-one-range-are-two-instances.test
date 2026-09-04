@@ -1,0 +1,21 @@
+// Test: error.two-aliases-over-one-range-are-two-instances
+typealias DenseInt = int(0 to u64.max)
+typealias RegCount = int(0 to u64.max)
+typealias DenseColumn = Array with DenseInt
+typealias RegCountColumn = Array with RegCount
+
+function widthOf(c RegCountColumn) returns DenseInt
+	return c.count() as DenseInt
+end 'widthOf'
+
+function main() returns ExitCode
+	var d = DenseColumn.create()
+	d.push(7)
+	d.push(9)
+	let w = widthOf(d)
+	print("width={w}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:15:10: argument type mismatch for 'c': expected 'RegCountColumn', got 'DenseColumn'

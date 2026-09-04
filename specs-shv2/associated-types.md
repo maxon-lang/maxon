@@ -615,7 +615,7 @@ mechanism it pins.
 ### A conformance may bind an associated type to the CONFORMER'S OWN type parameter
 
 `type ArrayIterator uses Element implements BidirectionalIterator with Element` is how every generic
-container in `stdlib/` declares its conformance (`Array.maxon:490`, `List.maxon:158`, `Map.maxon:343`,
+container in `stdlib/` declares its conformance (`Array.maxon:489`, `List.maxon:158`, `Map.maxon:343`,
 `Set.maxon:356`), so this is the shape the feature exists for and not a corner.
 
 It was a wrong REJECTION until R5, on the IMPL side rather than the interface side: an interface requirement
@@ -1050,18 +1050,18 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: <fragment>:11:6: Partial interface implementation: type 'Sack' has 1 method(s) with wrong signature:
-  - take(xs Array_String) returns Integer (expected take(xs Array_Integer) returns Integer)
+  - take(xs StrArray) returns Integer (expected take(xs IntArray) returns Integer)
 ```
 
 
-### …and TWO ALIAS SPELLINGS of ONE instance still conform, which is why the identity is the canonical name
+### …and TWO ALIAS SPELLINGS of ONE instance do NOT conform — the comparison reads the spelled alias
 
-The negative control for the case above, and the reason the fix is the canonical instance name rather than
-a refusal to compare instances at all: `IntArray` and `AlsoIntArray` are two names for one type, and a
-comparison that read either alias's own spelling would REJECT this program. `canonicalInstanceName` collapses
-both to one string, exactly as it does for every other comparison site in the compiler.
+The instance identity says whether two requirements name the same LAYOUT; the alias spelled on each side
+says whether they name the same TYPE, and a conformance compares the spelling (`nominal-generic-alias.md`).
+`IntArray` and `AlsoIntArray` are two brands of one instance, so `take(xs AlsoIntArray)` does not implement
+`take(xs IntArray)`, and the diagnostic prints the two spellings rather than the instance mint.
 
-<!-- test: two-alias-spellings-of-one-generic-instance-conform -->
+<!-- test: error.two-alias-spellings-of-one-generic-instance-do-not-conform -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1088,7 +1088,45 @@ function main() returns ExitCode
 	let s = Sack.create()
 	var f = IntArray.create()
 	f.push(7)
-	return s.take(f)
+	print("{s.take(f)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:11:6: Partial interface implementation: type 'Sack' has 1 method(s) with wrong signature:
+  - take(xs AlsoIntArray) returns Integer (expected take(xs IntArray) returns Integer)
+```
+
+<!-- test: two-alias-spellings-of-one-generic-instance-meet-through-as -->
+The legal twin: the conformer spells the interface's alias, and a caller holding the OTHER spelling
+re-brands at the call.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias AlsoIntArray = Array with Integer
+
+interface Bag
+	function take(xs IntArray) returns Integer
+end 'Bag'
+
+type Sack implements Bag
+	let n as Integer
+
+	function take(xs IntArray) returns Integer
+		return n + xs.count()
+	end 'take'
+
+	static function create() returns Self
+		return Self{n: 41}
+	end 'create'
+end 'Sack'
+
+function main() returns ExitCode
+	let s = Sack.create()
+	var f = AlsoIntArray.create()
+	f.push(7)
+	return s.take(f as IntArray) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1601,7 +1639,7 @@ type Runner implements Taker with ExitCode
 	let base as Integer
 
 	function take(e ExitCode) returns Integer
-		return base + e
+		return base + (e as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -1645,7 +1683,7 @@ type Runner implements Taker with ExitCode
 	let base as Integer
 
 	function take(e ExitCode) returns Integer
-		return base + e
+		return base + (e as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -1712,6 +1750,43 @@ typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 40
+```
+
+<!-- test: associated-types.assoc-bound-to-float-returned-through-an-alias -->
+An associated type bound to `float` in a RETURN position, implemented by a method declared `returns Real`:
+the requirement is an unnamed slot and a named value decays into it, exactly as `take(e Real)` implements
+`take(e Element)` above. Prints `1.5`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(-1000.0 to 1000.0)
+
+interface Giver uses Element
+	function give() returns Element
+end 'Giver'
+
+type Runner implements Giver with float
+	let base as Integer
+
+	function give() returns Real
+		return 1.5 as Real
+	end 'give'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function main() returns ExitCode
+	let r = Runner.create(1)
+	print("{r.give()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1.5
 ```
 
 <!-- test: associated-types.assoc-bound-to-float-takes-a-float-actual -->
@@ -1797,7 +1872,7 @@ type B implements Taker with Score
 	let base as Integer
 
 	function take(e Score) returns Integer
-		return base + e
+		return base + (e as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -1942,7 +2017,7 @@ type TextRunner implements Taker with String
 	let base as Integer
 
 	function take(e String) returns Integer
-		return base + e.byteLength()
+		return base + (e.byteLength() as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -2053,7 +2128,7 @@ type Narrow implements Tally with Score
 	let base as Integer
 
 	function take(e Score) returns Integer
-		return base + e
+		return base + (e as Integer)
 	end 'take'
 
 	function label() returns Integer
@@ -3011,7 +3086,7 @@ type TextRunner implements Taker with String
 	let base as Integer
 
 	function take(e String) returns Integer
-		return base + e.byteLength()
+		return base + (e.byteLength() as Integer)
 	end 'take'
 
 	static function create(base Integer) returns Self
@@ -3108,7 +3183,7 @@ function firstOf(b IntBag) returns Integer
 end 'firstOf'
 
 function main() returns ExitCode
-	return (firstOf(GoodBag.create(7)) + BadBag.create(1).cursor().item().byteLength()) as ExitCode
+	return (firstOf(GoodBag.create(7)) + (BadBag.create(1).cursor().item().byteLength() as Integer)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3582,8 +3657,9 @@ end 'main'
 
 The half that says this is about ALIASES and not about associated types. `interface Sink` binds nothing, so
 the substitution has nothing to do and the EXPANSION is the whole of the work — which is why the check's
-fast path asks two questions rather than one (`collectInterfaceMethods`). It was equally broken:
-`expected write(data Sink.Bytes)` against the conformer's `Array_Byte`.
+fast path asks two questions rather than one (`collectInterfaceMethods`). The conformer spells the same
+`Bytes` the interface does, in its own body: an alias is a brand, and `write(data Bytes)` is the signature
+the requirement names (`nominal-generic-alias.md`). `single` hands `main` a `Bytes` under that brand.
 
 <!-- test: w61.interface-alias-over-a-concrete-type -->
 ```maxon
@@ -3594,16 +3670,21 @@ interface Sink
 	function write(data Bytes)
 end 'Sink'
 
-typealias Buf = Array with Byte
-
 type Log implements Sink
-	var kept as Buf = Buf.create()
+	typealias Bytes = Array with Byte
+	var kept as Bytes = Bytes.create()
 
 	export static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function write(data Buf)
+	export static function single(v Byte) returns Bytes
+		var b = Bytes.create()
+		b.push(v)
+		return b
+	end 'single'
+
+	export function write(data Bytes)
 		kept = data.clone()
 	end 'write'
 
@@ -3614,9 +3695,7 @@ end 'Log'
 
 function main() returns ExitCode
 	var l = Log.create()
-	var b = Buf.create()
-	b.push(7)
-	l.write(b)
+	l.write(Log.single(7))
 	print("{l.count()}\n")
 	return 0
 end 'main'
@@ -3757,5 +3836,5 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/associated-types/error.w61.wrong-signature-under-an-expanded-alias-names-the-expanded-type.test:12:6: Partial interface implementation: type 'Crate' has 1 method(s) with wrong signature:
-  - absorb(value Array_Other) returns void (expected absorb(value Array_Num) returns void)
+  - absorb(value OtherStore) returns void (expected absorb(value Array_Num) returns void)
 ```

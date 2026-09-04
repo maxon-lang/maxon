@@ -343,7 +343,7 @@ function regionBlocks(cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns B
 	end 'inLoop'
 
 	var everyBlock = BoolArray.create()
-	everyBlock.refill(cfg.topo.numBlocks, value: true)
+	everyBlock.refill(cfg.topo.numBlocks as ElementIndex, value: true)
 	return everyBlock
 end 'regionBlocks'
 
@@ -375,7 +375,7 @@ end 'firstOriginLineOfOp'
 // than moving the reference-typed candidates around (moving them would mutate the array while
 // an element borrow is live, which the borrow checker rejects).
 function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
-	let wordsPerRow = bitsetWordsFor(cfg.valueCount)
+	let wordsPerRow = bitsetWordsFor(cfg.valueCount as BitIndex)
 	var candidates = PressureCandidateArray.create()
 
 	for v in 0 upto cfg.valueCount 'eachValue'
@@ -527,10 +527,10 @@ end 'defRangeOf'
 // `visited` bounds the recursion (a phi's back-edge incoming can transitively reference the phi;
 // a lineage chase is acyclic but shares the guard), so each value is explored once.
 function collectReachableRanges(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
-	if bitsetTest(visited, base: 0, bit: valueId) 'seen'
+	if bitsetTest(visited, base: 0, bit: valueId as BitIndex) 'seen'
 		return
 	end 'seen'
-	bitsetAdd(visited, base: 0, bit: valueId)
+	bitsetAdd(visited, base: 0, bit: valueId as BitIndex)
 
 	match classifyValue(project, funcIndex: funcIndex, valueId: valueId, lineage: lineage) 'src'
 		param(range) then out.push(range)

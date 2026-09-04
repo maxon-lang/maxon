@@ -105,7 +105,7 @@ type AllocProfile
 		return Self{name: name, counts: counts, bytes: bytes}
 	end 'create'
 
-	export function add(rung RungIndex, size ByteCount)
+	export function add(rung RungIndex, size HeapByteCount)
 		let count = try self.counts.get(rung) otherwise panic("AllocProfile.add: rung {rung} outside the traced range")
 		try self.counts.set(rung, value: count + 1) otherwise panic("AllocProfile.add: counts.set OOB at rung {rung}")
 
@@ -145,7 +145,7 @@ type AllocProfileTable
 		return Self{keyHeading: keyHeading, profiles: AllocProfileArray.create(), indexByName: ProfileIndexMap.create(), tracedRungs: tracedRungs}
 	end 'create'
 
-	export function record(key String, rung RungIndex, size ByteCount)
+	export function record(key String, rung RungIndex, size HeapByteCount)
 		let index = try self.indexByName.get(key) otherwise 'newKey'
 			let fresh = self.profiles.count() as ProfileIndex
 			var profile = AllocProfile.create(key, rungs: self.tracedRungs)
@@ -199,7 +199,7 @@ type TraceTables
 		}
 	end 'create'
 
-	export function record(typeName String, scope String, rung RungIndex, size ByteCount)
+	export function record(typeName String, scope String, rung RungIndex, size HeapByteCount)
 		self.byType.record(typeName, rung: rung, size: size)
 		self.byScope.record(scope, rung: rung, size: size)
 	end 'record'
@@ -655,7 +655,7 @@ end 'nonEmptyFields'
 // The `size=<bytes>` field. A line without a readable one contributes zero BYTES and still
 // contributes its COUNT — the count is the signal this pass is built around, and dropping the whole
 // allocation because its size field was malformed would lose the more important half.
-function traceLineSize(fields StringArray) returns ByteCount
+function traceLineSize(fields StringArray) returns HeapByteCount
 	for field in fields 'each'
 		if field.startsWith(TraceSizePrefix) 'isSize'
 			let size = try parseCount(field.replace(TraceSizePrefix, with: "")) otherwise 'malformed'
@@ -708,7 +708,7 @@ end 'reportTable'
 // prints. It replaced a fitted exponent over all the traced rungs, which was a different unit for the
 // same fact and one more thing for a reader to hold in their head.
 function printProfileRow(profile AllocProfile, keyWidth ColumnWidth, tracedRungs RungCount)
-	var totalBytes = 0 as ByteCount
+	var totalBytes = 0 as BytePos
 	for value in profile.bytes 'eachByte'
 		totalBytes = totalBytes + value
 	end 'eachByte'
@@ -726,7 +726,7 @@ function topTracedGrowth(profile AllocProfile, tracedRungs RungCount) returns Gr
 
 	let top = (tracedRungs - 1) as RungIndex
 	let below = (tracedRungs - 2) as RungIndex
-	return growthOf(profile.countAt(top), previous: profile.countAt(below))
+	return growthOf(profile.countAt(top) as MeasuredQuantity, previous: profile.countAt(below) as MeasuredQuantity)
 end 'topTracedGrowth'
 
 // Rank by total allocations, descending. A selection sort: the table has a few dozen types, and a

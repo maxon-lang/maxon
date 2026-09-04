@@ -539,7 +539,7 @@ type Counter
 
 	export function add(by Integer) returns Integer
 		let p = Polite.create()
-		self.count = self.count + by + describe(p).count()
+		self.count = self.count + by + (describe(p).count() as Integer)
 		return self.count
 	end 'add'
 end 'Counter'

@@ -33,7 +33,7 @@ end 'DefinitionProbe'
 export function expectDefinitionAt(source String, line LspCoordinate, character LspCoordinate, startLine LspCoordinate, note String) throws TestFailure
 	let probe = probeDefinition(source, line: line, character: character)
 	let located = try locatedRange(probe)
-	try Expect.equal(located.startLine, expected: startLine, message: note)
+	try Expect.equal(located.startLine as AssertedInt, expected: startLine as AssertedInt, message: note)
 end 'expectDefinitionAt'
 
 // ⭐⭐ **THE WHOLE RANGE, FOR THE TESTS WHOSE SUBJECT IS THE COORDINATE ITSELF.** A `character` is a count
@@ -44,11 +44,11 @@ export function expectDefinitionRangeAt(source String, line LspCoordinate, chara
 	let probe = probeDefinition(source, line: line, character: character)
 	let located = try locatedRange(probe)
 
-	try Expect.equal(located.startLine, expected: startLine, message: "{note} The jump landed on line {located.startLine}.")
+	try Expect.equal(located.startLine as AssertedInt, expected: startLine as AssertedInt, message: "{note} The jump landed on line {located.startLine}.")
 
-	try Expect.equal(located.startCharacter, expected: startCharacter, message: "{note} The declaration begins at character {startCharacter} counted in UTF-16 code units; the server said {located.startCharacter}.")
+	try Expect.equal(located.startCharacter as AssertedInt, expected: startCharacter as AssertedInt, message: "{note} The declaration begins at character {startCharacter} counted in UTF-16 code units; the server said {located.startCharacter}.")
 
-	try Expect.equal(located.endCharacter, expected: endCharacter, message: "{note} The name ends at character {endCharacter}; the server said {located.endCharacter}. An end that is wrong while the start is right means the SPAN was measured in the wrong unit rather than the anchor.")
+	try Expect.equal(located.endCharacter as AssertedInt, expected: endCharacter as AssertedInt, message: "{note} The name ends at character {endCharacter}; the server said {located.endCharacter}. An end that is wrong while the start is right means the SPAN was measured in the wrong unit rather than the anchor.")
 end 'expectDefinitionRangeAt'
 
 // The absence rewrite: the two recovered "returns nothing" tests asserted an EMPTY URI, and this is the

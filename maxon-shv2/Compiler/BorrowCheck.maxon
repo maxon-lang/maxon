@@ -472,10 +472,10 @@ end 'mutationSiteWrites'
 // borrows already proved DEAD, which no later site need look at again. It is advanced here and read
 // nowhere else.
 function reportFirstLiveBorrow(project Project, func IrFunction, facts BorrowFacts, bySubject CsrGraph, walked CsrColumn, site MutationSite)
-	let degree = bySubject.degree(site.subject)
+	let degree = bySubject.degree(site.subject as CsrIndex)
 	var k = try walked.get(site.subject) otherwise panic("reportFirstLiveBorrow: walked.get OOB at subject {site.subject}, a key the CSR was built over")
 	while k < degree 'eachBorrowOfThisSubject'
-		let borrow = borrowAt(facts, index: bySubject.neighbour(site.subject, k: k))
+		let borrow = borrowAt(facts, index: bySubject.neighbour(site.subject as CsrIndex, k: k))
 
 		// NOT YET BOUND at this write (a `try` handler's, or anything earlier in the body): the
 		// borrowing name does not exist there, so there is nothing to conflict with — and neither is any

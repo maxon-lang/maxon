@@ -81,7 +81,7 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 	// the frame as a whole), and it is 0 for every function whose calls fit the eight register slots of
 	// each file — for which the encoder emits exactly the frame it always did.
 	let recordOffset = func.outgoingArgSize
-	let frameSize = alignUp(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
+	let frameSize = alignUpStack(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
 
 	// Resolve the isel's slot-only `arm64LoadIncomingArg`s now that BOTH terms of their displacement are
 	// known — this is the pass that knows them, and the reason the op exists at all.
@@ -92,12 +92,12 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 		var block = try module.blocks.get(blockRef) otherwise panic("insertArm64PrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
-			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize, recordOffset: recordOffset)
+			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount as SpillSlot, frameSize: frameSize, recordOffset: recordOffset)
 		end 'entry'
 		isFirstBlock = false
 
 		if blockEndsWithArm64Return(module, block: block) 'returnBlock'
-			appendArm64EpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize, recordOffset: recordOffset)
+			appendArm64EpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount as SpillSlot, frameSize: frameSize, recordOffset: recordOffset)
 		end 'returnBlock'
 	end 'eachBlock'
 end 'insertArm64FrameForFunction'
@@ -136,7 +136,7 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 			let opIdx = try block.opRefs.get(pos) otherwise panic("resolveArm64IncomingArgs: opRefs.get OOB at {pos}")
 			let op = try module.ops.get(opIdx) otherwise panic("resolveArm64IncomingArgs: opIdx {opIdx} not in module.ops")
 			match op 'o'
-				arm64LoadIncomingArg(dest, slot) then resolveOneArm64IncomingArg(module, opIdx: opIdx, at: pos, dest: dest, byteOffset: incomingBase + slot * SpillSlotBytes, foldPositions: foldPositions, foldOps: foldOps)
+				arm64LoadIncomingArg(dest, slot) then resolveOneArm64IncomingArg(module, opIdx: opIdx, at: pos, dest: dest, byteOffset: incomingBase + (slot as StackSize) * SpillSlotBytes, foldPositions: foldPositions, foldOps: foldOps)
 				prologue to callMem then break 'o'
 				arm64StoreOutgoingArg then break 'o'
 				// Both bit reinterpretations are already concrete — each names two registers and no frame fact.
@@ -197,8 +197,8 @@ function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at Block
 		return
 	end 'direct'
 
-	let scratchBase = arm64WideFrameScratchBase(byteOffset)
-	let residue = (byteOffset - scratchBase) as Imm32
+	let scratchBase = arm64WideFrameScratchBase(byteOffset as MachineWord)
+	let residue = ((byteOffset as MachineWord) - scratchBase) as Imm32
 	foldPositions.push(at)
 	foldOps.push(module.ops.count())
 	module.ops.push(TargetOp.arm64AddImm(arm64PhysVReg(Arm64Ip1RegNum), src: arm64PhysVReg(Arm64FramePointerRegNum), imm: scratchBase as Imm32))

@@ -47,7 +47,7 @@ typealias Depth = int(-1 to 50)
 
 function recurse(n Depth) returns Depth
 	var v = BigVec.create()
-	try v.set(2047, value: n) otherwise panic("test invariant: set OOB")
+	try v.set(2047, value: n as Integer) otherwise panic("test invariant: set OOB")
 	if n <= 0 'base'
 		return 0
 	end 'base'

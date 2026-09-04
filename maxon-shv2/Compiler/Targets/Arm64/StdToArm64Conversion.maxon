@@ -652,7 +652,7 @@ type StdToArm64Lowering
 	// over the whole argument list is how many landed on the stack, one `SpillSlotBytes` slot each. AAPCS64
 	// puts them at `[SP + 0 ..)`, with no shadow space, so the region IS the slot count times the stride.
 	function callOutgoingArgBytes(argFloatMask ArgFloatMask, argCount ParamCount) returns StackSize
-		return abiStackSlotsBefore(argFloatMask, index: argCount, capacity: arm64RegisterArgCapacity()) * SpillSlotBytes
+		return (abiStackSlotsBefore(argFloatMask, index: argCount, capacity: arm64RegisterArgCapacity()) as StackSize) * SpillSlotBytes
 	end 'callOutgoingArgBytes'
 
 	// Scoped reads of a Std block: each returns a scalar or a COPIED op, never a borrowed block, so the
@@ -1121,7 +1121,7 @@ type StdToArm64Lowering
 			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstRef: dstRef)
 			return
 		end 'float'
-		self.emit(dstRef, op: TargetOp.arm64MovImm(TargetVReg.virtual(resultId), value: value))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(TargetVReg.virtual(resultId), value: value as MachineWord))
 	end 'lowerConst'
 
 	// Materialize a FLOAT constant: register its IEEE bits as a `.rdata` island and load them with the
@@ -1334,7 +1334,7 @@ type StdToArm64Lowering
 	// (the splitter splices between them, measured) and for what actually is.
 	function materialiseIntoScratch(imm Imm32, dstRef BlockRef) returns TargetVReg
 		let scratch = arm64PhysReg(Arm64Scratch)
-		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm32ToWord(imm)))
 		return scratch
 	end 'materialiseIntoScratch'
 
@@ -1678,7 +1678,7 @@ type StdToArm64Lowering
 	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramFloatMask ArgFloatMask, dstRef BlockRef)
 		let capacity = arm64RegisterArgCapacity()
 		if abiArgIsOnStack(paramFloatMask, index: index, capacity: capacity) 'stackParam'
-			self.emit(dstRef, op: TargetOp.arm64LoadIncomingArg(TargetVReg.virtual(resultId), slot: abiStackSlotsBefore(paramFloatMask, index: index, capacity: capacity)))
+			self.emit(dstRef, op: TargetOp.arm64LoadIncomingArg(TargetVReg.virtual(resultId), slot: abiStackSlotsBefore(paramFloatMask, index: index, capacity: capacity) as SpillSlot))
 			return
 		end 'stackParam'
 
@@ -1817,7 +1817,7 @@ type StdToArm64Lowering
 				continue
 			end 'inRegister'
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
-			self.emit(dstRef, op: TargetOp.arm64StoreOutgoingArg(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity), srcReg: TargetVReg.virtual(argId)))
+			self.emit(dstRef, op: TargetOp.arm64StoreOutgoingArg(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity) as SpillSlot, srcReg: TargetVReg.virtual(argId)))
 		end 'eachStackArg'
 
 		for k in 0 upto args.count() 'eachRegisterArg'

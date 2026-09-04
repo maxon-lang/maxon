@@ -441,6 +441,9 @@ public class IrStructType : IrType {
   // Inner ranged primitive typealiases declared inside this generic type body.
   // Each concrete instantiation gets a nominally distinct copy of these aliases.
   public Dictionary<string, IrRangedPrimitiveType> InnerRangedAliases { get; } = [];
+  // Ranged typealiases an `extension` block declares over this generic type. ONE type for every
+  // instantiation, reachable through the `Instance.Alias` spelling as well as by its bare name.
+  public Dictionary<string, IrRangedPrimitiveType> ExtensionRangedAliases { get; } = [];
   // How many of the TRAILING entries of AssociatedTypeNames may be omitted at a use site.
   // Zero for every user type: `Map with Key` is an arity error, and should be.
   //

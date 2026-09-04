@@ -870,7 +870,7 @@ end 'Holder'
 
 export function makeHolder() returns Holder
 	var xs = ItemArray.create()
-	xs.push(Item.create(itemValue(Item.create(7))))
+	xs.push(Item.create(itemValue(Item.create(7)) as Integer))
 	return Holder.create(xs)
 end 'makeHolder'
 
@@ -956,7 +956,7 @@ function read(h Holder) returns Integer
 end 'read'
 
 function main() returns ExitCode
-	return read(Holder.make()) + clampish(0)
+	return read(Holder.make()) + (clampish(0) as Integer)
 end 'main'
 ```
 ```maxoncstderr

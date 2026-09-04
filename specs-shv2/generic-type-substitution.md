@@ -82,6 +82,8 @@ exactly why the case above passes and the one below did not.
 
 <!-- test: bare-generic-name-in-a-generic-body -->
 ### A composite parameter of ANOTHER generic type, and its return
+Both bodies spell the composite as `TArr`: an alias is a brand, and the value `Outer` hands to
+`Inner.make` must carry the name `make` declares (`nominal-generic-alias.md`).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -97,9 +99,9 @@ type Inner uses T
 end 'Inner'
 
 type Outer uses T
-	typealias OArr = Array with T
-	var items as OArr
-	export static function create(items OArr) returns Self
+	typealias TArr = Array with T
+	var items as TArr
+	export static function create(items TArr) returns Self
 		return Self{items: items}
 	end 'create'
 	export function wrap() returns Inner

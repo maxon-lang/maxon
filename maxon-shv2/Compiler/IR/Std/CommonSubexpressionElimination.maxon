@@ -196,12 +196,12 @@ function analyzeFunc(module StdModule, func IrFunction, subst ValueIdArray, scra
 		let position = walk.currentBlock()
 		let nextChild = walk.takeNextChildSlot()
 
-		if nextChild >= tree.children.degree(position) 'everyChildVisited'
+		if nextChild >= tree.children.degree(position as CsrIndex) 'everyChildVisited'
 			walk.leave(scratch)
 			continue
 		end 'everyChildVisited'
 
-		walk.enter(module, func: func, position: tree.children.neighbour(position, k: nextChild), subst: subst, scratch: scratch)
+		walk.enter(module, func: func, position: tree.children.neighbour(position as CsrIndex, k: nextChild) as BlockRefIndex, subst: subst, scratch: scratch)
 	end 'depthFirst'
 end 'analyzeFunc'
 
@@ -214,12 +214,12 @@ end 'analyzeFunc'
 // every call site.
 type CseDominatorWalk
 	var block as BlockPositionColumn
-	var nextChild as BlockPositionColumn
+	var nextChild as CsrColumn
 	var entryMark as CseEntryIndexColumn
 	var callsOnEntry as CallBarrierCountColumn
 
 	static function create() returns CseDominatorWalk
-		return Self{block: BlockPositionColumn.create(), nextChild: BlockPositionColumn.create(), entryMark: CseEntryIndexColumn.create(), callsOnEntry: CallBarrierCountColumn.create()}
+		return Self{block: BlockPositionColumn.create(), nextChild: CsrColumn.create(), entryMark: CseEntryIndexColumn.create(), callsOnEntry: CallBarrierCountColumn.create()}
 	end 'create'
 
 	// Whether any block's scope is still open — the walk's termination test.
@@ -233,7 +233,7 @@ type CseDominatorWalk
 
 	// Which child of the open scope's block comes next, ADVANCING the cursor as it answers — the two
 	// were never useful apart, and reading without advancing is how a DFS loops forever.
-	function takeNextChildSlot() returns BlockRefIndex
+	function takeNextChildSlot() returns CsrIndex
 		let top = self.block.count() - 1
 		let slot = try self.nextChild.get(top) otherwise panic("CseDominatorWalk.takeNextChildSlot: the walk is empty")
 		try self.nextChild.set(top, value: slot + 1) otherwise panic("CseDominatorWalk.takeNextChildSlot: nextChild.set OOB at {top}")
@@ -346,7 +346,8 @@ end 'canonicalExpressionOf'
 // column and still no `Map` — what changed is that the key now identifies an expression rather than one
 // of its operands. Collisions are ordinary and cost only a `computesSameValueAs` that answers false.
 function bucketOf(operands StdArithOperands, bucketCount CseBucketCount) returns CseBucketIndex
-	return (operands.lhs * FirstOperandStride + secondKeyOf(operands)) mod bucketCount
+	let key = (operands.lhs as CseKeyPart) * FirstOperandStride + secondKeyOf(operands)
+	return (try (key mod (bucketCount as CseKeyPart)) otherwise panic("bucketOf: a bucket count of 0 past its own type")) as CseBucketIndex
 end 'bucketOf'
 
 // An odd multiplier for the first operand, so `lhs` and the second key cannot cancel each other out for
@@ -574,8 +575,8 @@ type CseExpressionTable
 	function beginFunction(buckets CseBucketCount)
 		self.bucketCount = buckets
 		self.callsOnPath = 0
-		self.bucketHasEntry.growFilled(buckets, value: false)
-		self.bucketHead.growFilled(buckets, value: 0)
+		self.bucketHasEntry.growFilled(buckets as ElementIndex, value: false)
+		self.bucketHead.growFilled(buckets as ElementIndex, value: 0)
 	end 'beginFunction'
 
 	// Where this scope's entries will start. Paired with `rollbackTo`.

@@ -134,9 +134,8 @@ let StdoutPinHolds = "everything this case's run must write to stdout"
 let StderrPinHolds = "everything this case's run must write to stderr"
 let ExitPinHolds = "the status this case's run must exit with, as one integer"
 
-
-// An exit code as a fixture states it and as a run produces it. `Subprocess`'s own `ExitInt` is
-// file-private there, so this is the same range spelled where it is used.
+// An exit code as a fixture states it. It meets the run's own `ExitInt` only inside an assertion, where
+// both are cast to the alias `Expect` compares.
 typealias RunExitCode = int(i64.min to i64.max)
 
 // A file count as the summary line states it. FULL WIDTH deliberately: it is parsed out of text, so
@@ -233,7 +232,7 @@ test 'an option ahead of the command word is still refused'
 	arguments.push(TestedCommandName)
 	let run = spawnCompiler(arguments, workingDirectory: staged, what: "the option-ahead-of-command probe")
 
-	try Expect.notEqual(run.exitCode(), expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
+	try Expect.notEqual(run.exitCode() as AssertedInt, expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
 
 	let after = fileBody(staged.join("Ugly.maxon"))
 	try Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
@@ -387,8 +386,8 @@ type FixtureCase
 	// empty on both sides. ONE place, so that order and the sentence explaining each question exist
 	// once rather than once per caller.
 	function checkStreams(run CollectedOutput, expectedStdout String, expectedStderr String, runLabel String) throws TestFailure
-		let observedExit = run.exitCode()
-		let expectedStatus = expectedExit()
+		let observedExit = run.exitCode() as AssertedInt
+		let expectedStatus = expectedExit() as AssertedInt
 		let observedStderr = normalized(run.stderr)
 		try Expect.equal(observedExit, expected: expectedStatus, message: "'{self.name}' exited differently from its {ExpectedExitFileName} on {runLabel}. The status is the half of this report a SCRIPT reads, and the half that decides whether a refusal stops anything. It wrote to stderr: {observedStderr}")
 
@@ -778,7 +777,6 @@ function listing(dir FilePath) returns FixturePathArray
 	return try Directory.list(dir) otherwise panic("fmt-fixtures.test: the gate could not run — could not list {dir.toString()}")
 end 'listing'
 
-
 // ============================================================================================
 // THE CASES
 // ============================================================================================
@@ -1047,6 +1045,7 @@ end 'a second path is refused rather than silently ignored'
 test 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
 	try checkFixture("unlexable-file-left-alone")
 end 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
+
 // ============================================================================================
 // REAL SOURCES, AT SCALE
 // ============================================================================================
@@ -1303,7 +1302,7 @@ end 'spawnCompiler'
 // A run that REFUSED wrote nothing, so every census would agree and a `fmt` that failed outright would
 // pass as a green. The status is therefore asked before anything is compared.
 function requireCensusRunSucceeded(run CollectedOutput, runLabel String) throws TestFailure
-	let observed = run.exitCode()
+	let observed = run.exitCode() as AssertedInt
 	let expected = SuccessExitCode
 	try Expect.equal(observed, expected: expected, message: "`{TestedCommandName}` did not succeed on {runLabel} over the real sources staged from the tree. A run that refused wrote nothing, so every census this test takes would agree and the failure would read as a pass. It wrote to stderr: {run.stderr}")
 end 'requireCensusRunSucceeded'

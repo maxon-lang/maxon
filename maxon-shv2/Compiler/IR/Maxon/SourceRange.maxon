@@ -101,7 +101,7 @@ export type SourceRangeTable
 	// columns. `opIndex` must be the next unrecorded slot — that is what keeps the
 	// table parallel to `module.ops`.
 	export function record(opIndex OpIndex, range SourceRange)
-		if opIndex != self.count() 'outOfStep'
+		if opIndex != self.count() as OpIndex 'outOfStep'
 			panic("SourceRangeTable.record: op {opIndex} recorded into slot {self.count()} — an op was appended without a span, and every later span would be misattributed")
 		end 'outOfStep'
 		self.startBytes.push(range.startByte)
@@ -120,7 +120,7 @@ export type SourceRangeTable
 	// together by `record`, so once the index is in range all four hold it — their
 	// `otherwise` arms are unreachable-by-construction, not error handling.
 	export function get(opIndex OpIndex) returns SourceRange
-		if opIndex >= self.count() 'noSpan'
+		if opIndex >= self.count() as OpIndex 'noSpan'
 			panic("SourceRangeTable.get: op {opIndex} has no recorded span (table holds {self.count()}) — an op was created without going through FileParseArtifact.emitOp")
 		end 'noSpan'
 		let startByte = try self.startBytes.get(opIndex) otherwise panic("SourceRangeTable.get: startBytes column out of step at op {opIndex}")

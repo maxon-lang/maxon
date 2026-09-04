@@ -286,7 +286,7 @@ function printChunkBytes(chunk FunctionCodeChunk) returns String
 	for (iter, b) in chunk.code.withIterator() 'eachByte'
 		let column = iter.index() mod ChunkBytesPerLine
 		if column == 0 'opensALine'
-			sb.append("{OpIndent}{hexOffset(iter.index())}{ChunkOffsetSeparator}")
+			sb.append("{OpIndent}{hexOffset(iter.index() as CodeOffset)}{ChunkOffsetSeparator}")
 		end 'opensALine' else 'continuesOne'
 			sb.append(ChunkByteSeparator)
 		end 'continuesOne'
@@ -321,7 +321,7 @@ function hexOffset(offset CodeOffset) returns String
 
 	var out = StringBuilder.create()
 	for i in 0 upto digits 'eachDigit'
-		out.append(hexDigit((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and HexDigitMask))
+		out.append(hexDigit((((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and HexDigitMask) as MachineWord)))
 	end 'eachDigit'
 	return out.build()
 end 'hexOffset'
@@ -351,7 +351,7 @@ end 'hexByte'
 // One lowercase hex digit.
 function hexDigit(nibble MachineWord) returns String
 	let digits = b"0123456789abcdef"
-	return oneByteText(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`"))
+	return oneByteText((try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`") as MachineWord))
 end 'hexDigit'
 
 // ONE byte as a one-character String. A `ByteArray` of length one rather than a `String` index: both
@@ -389,7 +389,7 @@ let RdataNoteSeparator = "  ; "
 //
 // The cap counts the payload's OWN bytes, not the rendered escapes, so a run of unprintables cannot move
 // it.
-let RdataNoteMaxBytes = 160 as ElementCount
+let RdataNoteMaxBytes = 160 as ElementIndex
 
 // What marks a note as cut short. OUTSIDE the closing quote, so it can never be read as content: a
 // payload really ending in three dots renders `"a..."` and a truncated one renders `"a"...`.
@@ -440,7 +440,7 @@ function quotedPayloadText(bytes ByteArray) returns String
 	var out = StringBuilder.create()
 	out.append(DoubleQuoteText)
 
-	var shown = 0 as ElementCount
+	var shown = 0 as ElementIndex
 	for b in bytes 'eachByte'
 		if b == NulTerminator 'endOfText'
 			break
@@ -450,7 +450,7 @@ function quotedPayloadText(bytes ByteArray) returns String
 			return "{out.build()}{DoubleQuoteText}{RdataNoteEllipsis}"
 		end 'capped'
 
-		out.append(escapedPayloadByte(b))
+		out.append(escapedPayloadByte(b as MachineWord))
 		shown = shown + 1
 	end 'eachByte'
 
@@ -608,7 +608,7 @@ let BlockNameIdSeparator = "#"
 
 // How many of a function's blocks share one label — the count that decides whether a name needs
 // disambiguating at all.
-typealias BlockLabelOccurrences = Map with (ByteArray, ElementCount)
+typealias BlockLabelOccurrences = Map with (ByteArray, ElementIndex)
 
 // Every block's printed name, KEYED BY ITS BlockId. A map rather than an id-indexed array because a
 // function's live ids are sparse (passes delete blocks), so an array would need a filler in the gaps
@@ -644,7 +644,7 @@ typealias BlockPrintNameSet = Set with String
 function buildBlockPrintNames(funcBlocks IrBlockArray) returns BlockPrintNames
 	var occurrences = BlockLabelOccurrences.create()
 	for block in funcBlocks 'countLabels'
-		var seen = 0 as ElementCount
+		var seen = 0 as ElementIndex
 		if let counted = try occurrences.get(block.label) 'known'
 			seen = counted
 		end 'known'
@@ -677,7 +677,7 @@ end 'buildBlockPrintNames'
 // One block's printed name: bare when its label is the function's only one of that spelling, and
 // suffixed with the block's own id when it is not. `shared` is how many blocks of the function carry
 // this label — the caller counts it once for the whole function rather than re-deriving it per block.
-function blockNameFor(block IrBlock, shared ElementCount) returns String
+function blockNameFor(block IrBlock, shared ElementIndex) returns String
 	let label = String.from(block.label)
 
 	if shared > 1 'collides'
@@ -1070,7 +1070,7 @@ function formatJumpTableSlots(caseTargets BlockIdArray, names BlockPrintNames) r
 
 	var out = StringBuilder.create()
 	var afterFirst = false
-	var runStart = 0 as ElementCount
+	var runStart = 0 as ElementIndex
 	var runTarget = try caseTargets.get(0) otherwise panic("formatJumpTableSlots: caseTargets.get(0) on non-empty")
 	for i in 1 upto caseTargets.count() 'each'
 		let target = try caseTargets.get(i) otherwise panic("formatJumpTableSlots: caseTargets.get OOB at {i}")
@@ -1086,7 +1086,7 @@ function formatJumpTableSlots(caseTargets BlockIdArray, names BlockPrintNames) r
 	return out.build()
 end 'formatJumpTableSlots'
 
-function appendJumpTableRun(out StringBuilder, afterFirst bool, runStart ElementCount, runEnd ElementCount, target BlockId, names BlockPrintNames)
+function appendJumpTableRun(out StringBuilder, afterFirst bool, runStart ElementIndex, runEnd ElementIndex, target BlockId, names BlockPrintNames)
 	if afterFirst 'separator'
 		out.append(", ")
 	end 'separator'

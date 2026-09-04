@@ -240,8 +240,8 @@ public static class AliasScope {
     // here indistinguishable, at equal depth, and the ordinal break below gave the name to whichever
     // PATH sorted first. MEASURED, with `stdlib/Json.maxon`'s file-private `BytePos` narrowed to
     // `int(0 to 9)`: a project file's `BytePos` resolved to THAT one rather than to
-    // `stdlib/String.maxon`'s `export typealias BytePos = int(0 to u64.max)`, and 5000 was refused
-    // E3005. The five such names in today's stdlib — `Byte`, `ByteArray`, `ByteCount`, `BytePos`,
+    // `stdlib/String.maxon`'s `export typealias BytePos = int(0 to i64.max)`, and 5000 was refused
+    // E3005. The four such names in today's stdlib — `Byte`, `ByteArray`, `BytePos`,
     // `StringArray` — are each written over identical ranges wherever they are declared, so the
     // wrong winner is invisible until one of them moves.
     //

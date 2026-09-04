@@ -281,7 +281,7 @@ function machoImportSymbols() returns StringArray
 	return names
 end 'machoImportSymbols'
 
-function machoImportCount() returns ByteCount
+function machoImportCount() returns BytePos
 	return OsImportSlot.allCases.count()
 end 'machoImportCount'
 
@@ -302,9 +302,9 @@ function writeMachoName(buf ByteArray, name String)
 	end 'pad'
 end 'writeMachoName'
 
-function writeSegmentCommand(buf ByteArray, segname String, vmaddr MachineWord, vmsize MachineWord, fileoff MachineWord, filesize MachineWord, maxprot MachineWord, initprot MachineWord, nsects ByteCount)
+function writeSegmentCommand(buf ByteArray, segname String, vmaddr MachineWord, vmsize MachineWord, fileoff MachineWord, filesize MachineWord, maxprot MachineWord, initprot MachineWord, nsects BytePos)
 	writeDword(buf, value: LcSegment64)
-	writeDword(buf, value: SegmentCommandBaseSize + SectionHeaderSize * nsects)
+	writeDword(buf, value: ((SegmentCommandBaseSize + SectionHeaderSize * nsects) as MachineWord))
 	writeMachoName(buf, name: segname)
 	writeQword(buf, value: vmaddr)
 	writeQword(buf, value: vmsize)
@@ -312,7 +312,7 @@ function writeSegmentCommand(buf ByteArray, segname String, vmaddr MachineWord, 
 	writeQword(buf, value: filesize)
 	writeDword(buf, value: maxprot)
 	writeDword(buf, value: initprot)
-	writeDword(buf, value: nsects)
+	writeDword(buf, value: nsects as MachineWord)
 	writeDword(buf, value: 0)  // flags
 end 'writeSegmentCommand'
 
@@ -353,7 +353,7 @@ end 'writeMachoSectionHeader'
 function buildGot() returns ByteArray
 	var got = ByteArray.create()
 	let count = machoImportCount()
-	got.reserve(count * MachoGotEntryBytes)
+	got.reserve(((count * MachoGotEntryBytes) as ElementIndex))
 
 	if count * MachoGotEntryBytes > MachoPageSize 'gotCrossesPage'
 		panic("buildGot: the __got is {count * MachoGotEntryBytes} bytes and no longer fits the single page its unbroken bind chain assumes — cut the chain at each page boundary and give buildMachoDataPageStarts one start per page the GOT touches (see 6-MachOWriter.cs, which does exactly this)")
@@ -445,7 +445,7 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 	var targets = ByteOffsetArray.create()
 	for fixup in globalData.stringBufferFixups 'collectStringBuffers'
 		offsets.push(globalData.rdataOffsetOf(fixup.recordLabel) + StringBufferOffset)
-		targets.push(constImageOffset + globalData.rdataOffsetOf(fixup.blobLabel))
+		targets.push(constImageOffset + (globalData.rdataOffsetOf(fixup.blobLabel) as MachineWord))
 	end 'collectStringBuffers'
 
 	// The PIE counterpart of the fixed-base `bakeFuncAbs64Relocs`: same slots, same resolution through the
@@ -455,7 +455,7 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 	for reloc in globalData.pendingRdataRelocs 'collectFuncSlots'
 		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("writeMachoRdataRebases: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — it was never installed (a DCE-root gap where the slot's owner was built), so its address cannot be resolved")
 		offsets.push(rdataFuncSlotOffset(globalData, reloc: reloc))
-		targets.push(textImageOffset + funcOffset)
+		targets.push(textImageOffset + (funcOffset as MachineWord))
 	end 'collectFuncSlots'
 
 	sortMachoRebases(offsets, targets: targets)
@@ -501,7 +501,7 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 			end 'samePage'
 		end 'hasNext'
 		let entry = (nextField shl DyldChainedNextShift) or (target and DyldChainedRebaseTargetMask)
-		patchQword(rdata, offset: slotOffset, value: entry)
+		patchQword(rdata, offset: slotOffset, value: entry as MachineWord)
 	end 'write'
 
 	return slots
@@ -512,7 +512,7 @@ end 'writeMachoRdataRebases'
 // whose page-aligned start puts its first import bind at in-page offset 0. Its length is the page
 // count the chained-fixups header advertises; the prelude pages beyond carry no fixups and are
 // simply not indexed. v1's `buildMachoDataPageStarts`.
-function buildMachoDataPageStarts(rebaseSlots ByteOffsetArray, rdataPages ByteCount) returns ByteOffsetArray
+function buildMachoDataPageStarts(rebaseSlots ByteOffsetArray, rdataPages BytePos) returns ByteOffsetArray
 	var pageStarts = ByteOffsetArray.create()
 	for page in 0 upto rdataPages 'rdataPage'
 		let pageBase = page * MachoPageSize
@@ -560,9 +560,9 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffse
 	// dyld_chained_fixups_header (0x20 bytes).
 	writeDword(cf, value: 0)  // fixups_version
 	writeDword(cf, value: startsOffset)
-	writeDword(cf, value: importsOffset)
-	writeDword(cf, value: symbolsOffset)
-	writeDword(cf, value: importCount)
+	writeDword(cf, value: importsOffset as MachineWord)
+	writeDword(cf, value: symbolsOffset as MachineWord)
+	writeDword(cf, value: importCount as MachineWord)
 	writeDword(cf, value: DyldChainedImportFormat)
 	writeDword(cf, value: 0)  // symbols_format (uncompressed)
 	writeDword(cf, value: 0)  // pad to startsOffset (0x20)
@@ -582,7 +582,7 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffse
 	writeDword(cf, value: 0)  // max_valid_pointer
 	writeWord(cf, value: dataPageCount)
 	for start in pageStarts 'eachPage'
-		writeWord(cf, value: start)
+		writeWord(cf, value: start as MachineWord)
 	end 'eachPage'
 
 	padTo(cf, size: importsOffset)
@@ -622,8 +622,8 @@ end 'buildChainedFixups'
 // shared patchers turn a blown reach into a loud link error, not a wrong page.
 function patchImportRelocations(code ByteArray, relocations RelocationArray, textSectionVmAddr MachineWord, gotSectionVmAddr MachineWord)
 	for reloc in relocations 'patch'
-		let gotEntryVa = gotSectionVmAddr + reloc.slotIndex * MachoGotEntryBytes
-		let adrpVa = textSectionVmAddr + reloc.codeOffset
+		let gotEntryVa = gotSectionVmAddr + (reloc.slotIndex as MachineWord) * MachoGotEntryBytes
+		let adrpVa = textSectionVmAddr + (reloc.codeOffset as MachineWord)
 		patchArm64AdrpPair(code, adrpOffset: reloc.codeOffset, instrVa: adrpVa, targetVa: gotEntryVa)
 	end 'patch'
 end 'patchImportRelocations'
@@ -654,7 +654,7 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, execSegLi
 	let codeSignatureSize = SuperBlobHeaderSize + cdSize
 
 	var sig = ByteArray.create()
-	sig.reserve(codeSignatureSize)
+	sig.reserve(codeSignatureSize as ElementIndex)
 
 	// SuperBlob header + BlobIndex[0].
 	writeDwordBE(sig, value: CsMagicEmbeddedSignature)
@@ -802,7 +802,8 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 
 	// --- __TEXT layout: __text only ---
 	let textSectionOffset = alignUp(MachHeaderSize + loadCommandsSize, alignment: 4)
-	let textSectionVmAddr = MachoTextVmAddr + textSectionOffset
+	let imageBase = MachoTextVmAddr as MachineWord
+	let textSectionVmAddr = imageBase + (textSectionOffset as MachineWord)
 	let textSegmentFileSize = alignUp(textSectionOffset + codeSize, alignment: MachoPageSize)
 
 	// --- __DATA layout: __const (rebased rdata) | __got | __data (globals) ---
@@ -814,31 +815,31 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// image base and __DATA follows contiguously (vmaddr = MachoTextVmAddr + fileoff), so a rebase
 	// target is `dataSegmentFileOff + blobOffset`.
 	let dataSegmentFileOff = textSegmentFileSize
-	let dataSegmentVmAddr = MachoTextVmAddr + textSegmentFileSize
+	let dataSegmentVmAddr = imageBase + (textSegmentFileSize as MachineWord)
 	let constSectionVmAddr = dataSegmentVmAddr  // rdata begins at the segment start
 	let rdataAreaSize = alignUp(rdataSize, alignment: MachoPageSize) if hasRdata else 0
 	let rdataPages = rdataAreaSize / MachoPageSize
 	let gotOffsetInData = rdataAreaSize
-	let gotSectionVmAddr = dataSegmentVmAddr + gotOffsetInData
+	let gotSectionVmAddr = dataSegmentVmAddr + (gotOffsetInData as MachineWord)
 	let got = buildGot()
 	let gotSize = got.count()
 	let constGotFileSize = alignUp(gotOffsetInData + gotSize, alignment: MachoPageSize)
 	let dataSectionFileOff = dataSegmentFileOff + constGotFileSize
-	let dataSectionVmAddr = dataSegmentVmAddr + constGotFileSize  // globals begin after the got
+	let dataSectionVmAddr = dataSegmentVmAddr + (constGotFileSize as MachineWord)  // globals begin after the got
 	let preludeAreaSize = alignUp(preludeSize, alignment: MachoPageSize) if hasPrelude else 0
 	let dataSegmentFileSize = constGotFileSize + preludeAreaSize
 
 	// --- __LINKEDIT layout ---
 	let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
-	let linkeditVmAddr = dataSegmentVmAddr + alignUp(dataSegmentFileSize, alignment: MachoPageSize)
+	let linkeditVmAddr = dataSegmentVmAddr + (alignUp(dataSegmentFileSize, alignment: MachoPageSize) as MachineWord)
 
 	// Turn every absolute pointer in the rdata image — String `buffer@0` fixups and `funcAbs64InRdata`
 	// slots alike — into dyld rebases patched into that image, then build the __DATA page_start table
 	// (rdata pages + the got page) and the chained-fixups payload that threads both the rebases and the
 	// import binds. `textSectionOffset` is __text's offset from the image base, since __TEXT is at file 0.
-	let rebaseSlots = writeMachoRdataRebases(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, constImageOffset: dataSegmentFileOff, textImageOffset: textSectionOffset)
+	let rebaseSlots = writeMachoRdataRebases(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, constImageOffset: dataSegmentFileOff as MachineWord, textImageOffset: textSectionOffset as MachineWord)
 	let dataPageStarts = buildMachoDataPageStarts(rebaseSlots, rdataPages: rdataPages)
-	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, pageStarts: dataPageStarts)
+	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff as MachineWord, pageStarts: dataPageStarts)
 	let chainedFixupsOff = linkeditFileOff
 	let chainedFixupsSize = chainedFixupsData.count()
 
@@ -878,7 +879,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// slide moves the table and its target blocks together, leaving the delta invariant.
 	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textSectionVmAddr, rdataAddr: constSectionVmAddr)
 
-	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
+	let entryOff = textSectionOffset + (codeResult.mainCallFixupOffset as BytePos)
 	// macOS arm64 forces PIE — the kernel SIGKILLs a non-PIE main executable. MH_PIE
 	// lets dyld slide the image; all code addressing is PC-relative (ADRP), and the
 	// only absolute values (GOT binds) are dyld-resolved, so the slide is safe.
@@ -886,7 +887,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 
 	// --- Emit ---
 	var macho = ByteArray.create()
-	macho.reserve(codeSignatureOff + 4096)
+	macho.reserve(((codeSignatureOff + 4096) as ElementIndex))
 
 	// mach_header_64.
 	writeDword(macho, value: MhMagic64)
@@ -902,28 +903,28 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeSegmentCommand(macho, segname: "__PAGEZERO", vmaddr: 0, vmsize: MachoPageZeroSize, fileoff: 0, filesize: 0, maxprot: 0, initprot: 0, nsects: 0)
 
 	// __TEXT — __text only (rdata has moved to __DATA).
-	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MachoTextVmAddr, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VmProtRead or VmProtExecute, initprot: VmProtRead or VmProtExecute, nsects: textSectionCount)
-	writeMachoSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVmAddr, size: codeSize, offset: textSectionOffset, alignLog2: 2, flags: SAttrPureInstructions or SAttrSomeInstructions or SRegular)
+	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MachoTextVmAddr, vmsize: textSegmentFileSize as MachineWord, fileoff: 0, filesize: textSegmentFileSize as MachineWord, maxprot: VmProtRead or VmProtExecute, initprot: VmProtRead or VmProtExecute, nsects: textSectionCount)
+	writeMachoSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVmAddr, size: codeSize, offset: textSectionOffset as MachineWord, alignLog2: 2, flags: SAttrPureInstructions or SAttrSomeInstructions or SRegular)
 
 	// __DATA — __const (rebased rdata) | __got | __data (globals).
-	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVmAddr, vmsize: dataSegmentFileSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VmProtRead or VmProtWrite, initprot: VmProtRead or VmProtWrite, nsects: dataSectionCount)
+	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVmAddr, vmsize: dataSegmentFileSize as MachineWord, fileoff: dataSegmentFileOff as MachineWord, filesize: dataSegmentFileSize as MachineWord, maxprot: VmProtRead or VmProtWrite, initprot: VmProtRead or VmProtWrite, nsects: dataSectionCount)
 	if hasRdata 'writeConstHeader'
-		writeMachoSectionHeader(macho, sectname: "__const", segname: "__DATA", addr: constSectionVmAddr, size: rdataSize, offset: dataSegmentFileOff, alignLog2: 3, flags: SRegular)
+		writeMachoSectionHeader(macho, sectname: "__const", segname: "__DATA", addr: constSectionVmAddr, size: rdataSize, offset: dataSegmentFileOff as MachineWord, alignLog2: 3, flags: SRegular)
 	end 'writeConstHeader'
-	writeMachoSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVmAddr, size: gotSize, offset: dataSegmentFileOff + gotOffsetInData, alignLog2: 3, flags: SRegular)
+	writeMachoSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVmAddr, size: gotSize, offset: ((dataSegmentFileOff + gotOffsetInData) as MachineWord), alignLog2: 3, flags: SRegular)
 	if hasPrelude 'writeDataHeader'
-		writeMachoSectionHeader(macho, sectname: "__data", segname: "__DATA", addr: dataSectionVmAddr, size: preludeSize, offset: dataSectionFileOff, alignLog2: 3, flags: SRegular)
+		writeMachoSectionHeader(macho, sectname: "__data", segname: "__DATA", addr: dataSectionVmAddr, size: preludeSize, offset: dataSectionFileOff as MachineWord, alignLog2: 3, flags: SRegular)
 	end 'writeDataHeader'
 
 	// __LINKEDIT.
-	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVmAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VmProtRead, initprot: VmProtRead, nsects: 0)
+	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVmAddr, vmsize: linkeditFileSize as MachineWord, fileoff: linkeditFileOff as MachineWord, filesize: linkeditFileSize as MachineWord, maxprot: VmProtRead, initprot: VmProtRead, nsects: 0)
 
 	// LC_SYMTAB.
 	writeDword(macho, value: LcSymtab)
 	writeDword(macho, value: SymtabCommandSize)
-	writeDword(macho, value: symtabOff)
+	writeDword(macho, value: symtabOff as MachineWord)
 	writeDword(macho, value: nsyms)
-	writeDword(macho, value: strtabOff)
+	writeDword(macho, value: strtabOff as MachineWord)
 	writeDword(macho, value: strtabSize)
 
 	// LC_DYSYMTAB — all emitted symbols are local defined symbols.
@@ -946,7 +947,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// LC_MAIN.
 	writeDword(macho, value: LcMain)
 	writeDword(macho, value: MainCommandSize)
-	writeQword(macho, value: entryOff)
+	writeQword(macho, value: entryOff as MachineWord)
 	writeQword(macho, value: 0)  // stacksize
 
 	// LC_UUID.
@@ -974,20 +975,20 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// LC_DYLD_CHAINED_FIXUPS.
 	writeDword(macho, value: LcDyldChainedFixups)
 	writeDword(macho, value: ChainedFixupsCommandSize)
-	writeDword(macho, value: chainedFixupsOff)
+	writeDword(macho, value: chainedFixupsOff as MachineWord)
 	writeDword(macho, value: chainedFixupsSize)
 
 	// LC_DYLD_EXPORTS_TRIE.
 	writeDword(macho, value: LcDyldExportsTrie)
 	writeDword(macho, value: ExportsTrieCommandSize)
-	writeDword(macho, value: exportsTrieOff)
+	writeDword(macho, value: exportsTrieOff as MachineWord)
 	writeDword(macho, value: exportsTrieSize)
 
 	// LC_CODE_SIGNATURE.
 	writeDword(macho, value: LcCodeSignature)
 	writeDword(macho, value: CodeSignatureCommandSize)
-	writeDword(macho, value: codeSignatureOff)
-	writeDword(macho, value: codeSignatureSize)
+	writeDword(macho, value: codeSignatureOff as MachineWord)
+	writeDword(macho, value: codeSignatureSize as MachineWord)
 
 	// --- Section contents ---
 	padTo(macho, size: textSectionOffset)
@@ -1017,11 +1018,11 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 		let nType = NExt or NSect
 		for (iter, sym) in codeResult.debugSymbols.withIterator() 'eachSym'
 			let nameOff = try symtab.nameOffsets.get(iter.index()) otherwise panic("writeMachO: symtab nameOffsets[{iter.index()}] OOB ({symtab.nameOffsets.count()} entries)")
-			writeDword(macho, value: nameOff)  // n_strx
+			writeDword(macho, value: nameOff as MachineWord)  // n_strx
 			macho.push(nType and 0xFF)  // n_type
 			macho.push(MachoTextSectionIndex and 0xFF)  // n_sect
 			writeWord(macho, value: 0)  // n_desc
-			writeQword(macho, value: textSectionVmAddr + sym.codeOffset)  // n_value
+			writeQword(macho, value: textSectionVmAddr + (sym.codeOffset as MachineWord))  // n_value
 		end 'eachSym'
 	end 'writeSyms'
 
@@ -1030,7 +1031,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	padTo(macho, size: codeSignatureOff)
 
 	// --- Sign, append, finalize ---
-	let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff, execSegLimit: textSegmentFileSize, identifier: identifier)
+	let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff as MachineWord, execSegLimit: textSegmentFileSize as MachineWord, identifier: identifier)
 	macho.append(sig)
 	padTo(macho, size: linkeditFileOff + linkeditFileSize)
 
@@ -1045,7 +1046,7 @@ end 'writeMachO'
 // `commandSize`. `nameOffset` is where the string begins within the command (the
 // header bytes already written before this call), so the pad count is exactly the
 // slack after the header + string + NUL.
-function writeMachoLcString(buf ByteArray, text String, commandSize ByteCount, nameOffset ByteCount)
+function writeMachoLcString(buf ByteArray, text String, commandSize BytePos, nameOffset BytePos)
 	let bytes = text.toByteArray()
 	buf.append(bytes)
 	buf.push(0)

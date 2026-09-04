@@ -84,7 +84,7 @@ module function completionAnswer(request LspRequest) returns LspAnswer throws Ls
 	for offer in offersAt(tokens, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri) 'eachOffer'
 		var item = LspJsonObject.create(doc)
 		item.put(LabelKey, value: JsonNode.stringNode(offer.label))
-		item.put(LspKindKey, value: JsonNode.numberNode(offer.kind))
+		item.put(LspKindKey, value: JsonNode.numberNode(offer.kind as JsonFloat))
 		items.push(item.finish())
 	end 'eachOffer'
 
@@ -117,7 +117,7 @@ union CompletionSubject
 	nothingToOffer
 end 'CompletionSubject'
 
-function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset LspByteOffset, uri String) returns CompletionOfferArray
+function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset, uri String) returns CompletionOfferArray
 	var offers = CompletionOfferArray.create()
 	var offered = OfferedLabelSet.create()
 
@@ -151,7 +151,7 @@ end 'subjectTypeName'
 // punctuator's `startByte`/`endByte` are both 0 (`Token`), so a dot cannot be located by offset at all.
 // What CAN be: the last token carrying source bytes that ends at or before the cursor — which, after
 // `arr.` and after `arr.pu`, is the receiver either way.
-function subjectAt(tokens TokenArray, blocks LspDocumentBlockArray, offset LspByteOffset) returns CompletionSubject
+function subjectAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset) returns CompletionSubject
 	let receiver = receiverIndexBefore(tokens, offset: offset)
 	if receiver >= tokens.count() 'noReceiver'
 		return CompletionSubject.nothingToOffer
@@ -181,7 +181,7 @@ end 'valueSubject'
 
 // The index of the receiver token, or `tokens.count()` when the cursor is not after a member access. The
 // count is not a sentinel inside the index domain: it is one past the last index, which no token has.
-function receiverIndexBefore(tokens TokenArray, offset LspByteOffset) returns TokenIndex
+function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns TokenIndex
 	var candidate = tokens.count()
 
 	for (position, token) in tokens.withIterator() 'eachToken'

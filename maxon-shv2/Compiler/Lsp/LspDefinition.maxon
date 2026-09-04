@@ -40,7 +40,7 @@ module function definitionAnswer(request LspRequest) returns LspAnswer throws Ls
 end 'definitionAnswer'
 
 // The token that DECLARES whatever the cursor is on.
-function definitionTarget(tokens TokenArray, at LspByteOffset) returns Token throws DefinitionLookupError
+function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws DefinitionLookupError
 	// Which token the cursor is on is `lspTokenAtCursor`'s answer and not one taken here: `textDocument/hover`
 	// renders the same one, and an editor that jumped to a name that hover described as something else would
 	// be reading two different rules.
@@ -253,7 +253,7 @@ end 'definitionParameterNamed'
 // Where the document declares `name`, in the order the file states it.
 function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws DefinitionLookupError
 	for (iter, keyword) in tokens.withIterator() 'eachToken'
-		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index(), name: name) otherwise continue
+		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index() as TokenIndex, name: name) otherwise continue
 		return declared
 	end 'eachToken'
 

@@ -58,11 +58,6 @@ let RatioFractionDigits = 2
 // be taken of", which is the set `ScaleMeasure` (ScaleTestRunner) enumerates.
 export typealias MeasuredQuantity = int(0 to u64.max)
 
-// One of those quantities proven non-zero — the divisor type when computing a growth ratio. Integer
-// `/` is fallible (a zero divisor throws); `previous` is guarded non-zero above the divide, so it is
-// cast to this to make the divide provably safe.
-typealias NonZeroCount = int(1 to u64.max)
-
 // The growth of one rung over the rung below it.
 //
 // A union, not a ratio of zero, and not a "0" that a reader could mistake for "it shrank to nothing".
@@ -78,8 +73,8 @@ export function growthOf(now MeasuredQuantity, previous MeasuredQuantity) return
 		return GrowthReading.noBaseline
 	end 'nothingToGrowFrom'
 
-	let base = previous as NonZeroCount
-	return GrowthReading.measured(((now * RatioScale) / base) as GrowthRatio)
+	// `previous` is guarded non-zero above; `otherwise panic` is the project's form for a `try` that must not fail.
+	return GrowthReading.measured((try ((now * RatioScale) / previous) otherwise panic("growthOf: previous was 0 past its own guard")) as GrowthRatio)
 end 'growthOf'
 
 // `x2.00`, or `-` when there is no rung below to compare against (rung 0), or when the rung below
@@ -110,5 +105,5 @@ end 'zeroPad2'
 // place in this suite where a comparison decides whether the run is BROKEN (ScaleCorpus's degeneracy
 // check).
 export function grewBy(now MeasuredQuantity, previous MeasuredQuantity, minimum GrowthRatio) returns bool
-	return now * RatioScale >= previous * minimum
+	return now * RatioScale >= previous * (minimum as MeasuredQuantity)
 end 'grewBy'

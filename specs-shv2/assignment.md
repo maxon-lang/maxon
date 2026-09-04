@@ -424,9 +424,9 @@ end 'main'
 25
 ```
 
-<!-- disabled-test: assign-widening-byte-to-int -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3010: <fragment>:10:11: unneeded cast: 'Byte' already fits in 'ExitCode'` — a LEGAL program refused, and the one failure here that is a real compiler defect rather than a spelling. Root cause measured: under on-the-fly SSA, `i = b` rebinds `i` to `b`'s OWN ValueId, so `i`'s denoted ranged alias becomes `Byte` and E3010 reads the VALUE's alias where the rule is about the binding's DECLARED `Integer`. The runtime answers are untouched (probed: `i - 100` gives -93, and a 64-bit multiply and divide after the rebind are both correct) — only the static alias moves. The cure must MINT a value rather than re-tag: the id is shared with `b`, and `recordValueDeclaredAlias`'s own header records that writing an alias onto a shared id corrupts the other name. That alias is also what the divide's signedness (`domainDeclaringAlias`), `divisorProof` and A4f's guard-death test read, so it is its own rung. -->
-Widening stays implicit: a `Byte` is assignable to an `int` because every `Byte` IS an `int`.
+<!-- test: assign-widening-byte-to-int -->
+A `Byte` reaches an `Integer` variable through `as`, and the cast MINTS an `Integer`: after the rebind
+`i` denotes `Integer`, not `b`'s `Byte`, so `i as ExitCode` is a cast between two types and not E3010.
 ```maxon
 
 typealias Byte = int(0 to u8.max)
@@ -435,7 +435,7 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	var i = 0 as Integer
 	let b = 7 as Byte
-	i = b
+	i = b as Integer
 	return i as ExitCode
 end 'main'
 ```

@@ -410,7 +410,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/structs/error.return-union-as-scalar.test:17:2: Cannot return 'Holder' from function declared to return 'int'
+error E3005: specs/fragments/structs/error.return-union-as-scalar.test:17:2: Cannot return 'Holder' from function declared to return 'Integer'
 ```
 
 <!-- test: error.callarg-wrong-struct-consumed -->
@@ -697,7 +697,7 @@ function main() returns ExitCode
 	var sum = 0
 	for _ in 0 upto 14 'trip'
 		let handle = t.itself()
-		sum = sum + handle.n + handle.label.count()
+		sum = sum + handle.n + (handle.label.count() as Integer)
 	end 'trip'
 	return sum as ExitCode
 end 'main'

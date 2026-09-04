@@ -137,7 +137,7 @@ export let InterfaceWitnessHalfOffset = MachineWordBytes
 // the header size and slot stride combine, so the blob's slot layout and the fused call's memory offset
 // cannot drift.
 export function witnessMethodSlotOffset(index WitnessMethodIndex) returns ByteOffset
-	return WitnessTableHeaderBytes + WitnessSlotBytes * index
+	return WitnessTableHeaderBytes + WitnessSlotBytes * (index as ByteOffset)
 end 'witnessMethodSlotOffset'
 
 // ⭐⭐ **THE SECOND TABLE A HELD ASSOCIATED TYPE NEEDS, AND WHERE IT RIDES.** An interface with an
@@ -157,8 +157,8 @@ end 'witnessMethodSlotOffset'
 // ⚠ **THE SLOT HOLDS A SELF-RELATIVE BYTE OFFSET, NOT AN ADDRESS** — see
 // `GlobalDataTable.recordRdataSelfRelativeOffset` for why `.rdata` cannot point at itself with any
 // relocation this compiler has, and why a distance can.
-export function witnessAssociatedSlotOffset(methodCount WitnessMethodIndex, position ElementCount) returns ByteOffset
-	return WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + position)
+export function witnessAssociatedSlotOffset(methodCount WitnessMethodIndex, position TypeParamPosition) returns ByteOffset
+	return witnessMethodSlotOffset(methodCount + (position as WitnessMethodIndex))
 end 'witnessAssociatedSlotOffset'
 
 // ⭐⭐ **THE SEPARATOR THE WITNESS LABEL JOINS ITS TWO NAMES WITH, AND THE CHARACTER CLASS *IS* THE
@@ -603,7 +603,7 @@ export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, t
 	// where the old position subscript would have rendered ANOTHER declaration's parameter name for a token
 	// that happens to be in range, a token this declaration did not mint now fails loudly.
 	if tag == ValueTypeTag.typeParameter 'typeParameterType'
-		let position = try typeParamPositionIn(typeNameIdOf(t), declarationName: declarationName, paramNames: typeParamNames) otherwise panic("renderDeclaredTypeName: type-parameter token {typeNameIdOf(t)} names no parameter of '{String.from(declarationName)}', whose own `uses` list holds {typeParamNames.count()} — that list is what its signatures were resolved against")
+		let position = try typeParamPositionIn(typeParamIdOf(t), declarationName: declarationName, paramNames: typeParamNames) otherwise panic("renderDeclaredTypeName: type-parameter token {typeNameIdOf(t)} names no parameter of '{String.from(declarationName)}', whose own `uses` list holds {typeParamNames.count()} — that list is what its signatures were resolved against")
 		return try typeParamNames.get(position) otherwise panic("renderDeclaredTypeName: typeParamNames.get OOB at {position}, a position `typeParamPositionIn` just read out of the same list")
 	end 'typeParameterType'
 
@@ -618,11 +618,11 @@ export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, t
 	// so this is the spelling the two sides have to meet at; it also keeps the mangled name out of the
 	// DIAGNOSTIC, where it named a type no author can write.
 	if tag == ValueTypeTag.genericInstance 'genericInstanceType'
-		if signatures.instanceIsDeclarationSelf(typeNameIdOf(t), declarationName: declarationName, paramNames: typeParamNames) 'theDeclarationsOwnInstance'
+		if signatures.instanceIsDeclarationSelf(genericInstanceIdOf(t), declarationName: declarationName, paramNames: typeParamNames) 'theDeclarationsOwnInstance'
 			return declarationName
 		end 'theDeclarationsOwnInstance'
 
-		return signatures.canonicalInstanceName(typeNameIdOf(t))
+		return signatures.canonicalInstanceName(genericInstanceIdOf(t))
 	end 'genericInstanceType'
 
 	return maxonTypeName(t, typeNames: typeNames).toByteArray()
@@ -667,7 +667,7 @@ end 'IrInterface'
 // a handful at most, so the scan is cheaper than building a map would be and it allocates nothing. Absence is a
 // THROW rather than a sentinel index or a `count()`-means-no answer, both of which are exactly the shape this
 // project forbids; `MapError.keyNotFound` is the absence channel every other registry here already speaks.
-export function namePositionIn(names ByteArrayArray, name ByteArray) returns ElementCount throws MapError
+export function namePositionIn(names ByteArrayArray, name ByteArray) returns TypeParamPosition throws MapError
 	for i in 0 upto names.count() 'eachName'
 		if (try names.get(i) otherwise panic("namePositionIn: names.get OOB at {i} below count {names.count()}")).equals(name) 'isThisOne'
 			return i
@@ -785,7 +785,7 @@ end 'unreadConformanceSeed'
 let NoSourceLine = 0 as LineNumber
 let NoSourceColumn = 0 as ColumnNumber
 
-export function associatedAbiBindingOf(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementCount) returns AssociatedAbiBinding
+export function associatedAbiBindingOf(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex) returns AssociatedAbiBinding
 	// The pre-first-match seed. It is never READ — `sawOne` gates every use — and it exists because a `var`
 	// must hold something before the walk finds the first conformer. `CompilerOwnedDeclFilePath` is the empty
 	// path the other synthesized declarations use, so the seed names no file rather than a wrong one.
@@ -835,7 +835,7 @@ end 'associatedAbiBindingOf'
 //
 // A miss — no such conformance, or one that bound too few arguments — is `MapError.keyNotFound` rather than
 // an empty name: both are E3016's to report, and a caller must not stamp a slot naming a type nobody bound.
-export function conformerAssociatedBinding(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementCount) returns ByteArray throws MapError
+export function conformerAssociatedBinding(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
 	for decl in conformances 'eachDeclaringType'
 		if not decl.typeName.equals(typeName) 'anotherType'
 			continue
@@ -852,7 +852,7 @@ end 'conformerAssociatedBinding'
 // COST, not a spelling: a walk that asked by name for each declaration it was already standing on would scan
 // the whole list per element — the quadratic this project's ladder exists to find — and the first cut of
 // `checkHeldAssociatedTypeBindings` did exactly that.
-export function declAssociatedBinding(decl ConformanceDecl, interfaceName ByteArray, position ElementCount) returns ByteArray throws MapError
+export function declAssociatedBinding(decl ConformanceDecl, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
 	for entry in decl.interfaces 'eachInterface'
 		if not entry.interfaceName.equals(interfaceName) 'otherInterface'
 			continue

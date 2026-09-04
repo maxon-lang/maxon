@@ -337,9 +337,10 @@ end 'deriveSignedMagic'
 // TOTAL — see that typealias. Both call sites pass a magnitude the classifier has already proven to be
 // at least 2, or an `anc` derived from one.
 function divideTwoToThe63(m PositiveModulus, quotient ParsedInt, remainder ParsedInt)
-	let q0 = i64.max / m
-	let r0 = i64.max - q0 * m
-	if r0 + 1 == m 'theIncrementCompletesOneMoreDivisor'
+	let modulus = m as ParsedInt
+	let q0 = (i64.max / m) as ParsedInt
+	let r0 = i64.max - q0 * modulus
+	if r0 + 1 == modulus 'theIncrementCompletesOneMoreDivisor'
 		quotient = q0 + 1
 		remainder = 0
 		return
@@ -488,7 +489,7 @@ function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction Divi
 	// of this map is an integer by construction.
 	let constMap = collectConstValues(module, opIndices: opIndices, def: def)
 
-	var mint = ValueMinter.create(nextFreeValueId(module, func: func))
+	var mint = ValueMinter.create(nextFreeValueId(module, func: func) as ParamCount)
 	// The divisor `const`s of every site this pass rewrote. A rewritten division reads its divisor
 	// NOWHERE — the magic and the multiply-back are fresh constants — so such a `const` is left with
 	// one fewer reader, and is dead when it had no other. Same narrow rule `foldConstOperands` owns
@@ -650,7 +651,7 @@ end 'emitReducedRemainder'
 // replaces.
 function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
 	if reduction.isUnsigned 'logicalShift'
-		let count = emitReducedConst(module, value: reduction.shift, mint: mint, rebuilt: rebuilt)
+		let count = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
 		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: count, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 		return
 	end 'logicalShift'
@@ -660,13 +661,13 @@ function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend Val
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(signBroadcast, lhs: dividend, rhs: signBitCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 
 	let bias = mint.mint()
-	let biasCount = emitReducedConst(module, value: ReducedWordBits - reduction.shift, mint: mint, rebuilt: rebuilt)
+	let biasCount = emitReducedConst(module, value: ((ReducedWordBits - reduction.shift) as ParsedInt), mint: mint, rebuilt: rebuilt)
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(bias, lhs: signBroadcast, rhs: biasCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 
 	let biased = mint.mint()
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(biased, lhs: dividend, rhs: bias, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
 
-	let quotientCount = emitReducedConst(module, value: reduction.shift, mint: mint, rebuilt: rebuilt)
+	let quotientCount = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: biased, rhs: quotientCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 end 'emitPowerOfTwoQuotient'
 
@@ -705,7 +706,7 @@ function emitMagicQuotient(module StdModule, resultId ValueId, dividend ValueId,
 
 	if reduction.shift > 0 'scaleDown'
 		let shifted = mint.mint()
-		let scaleCount = emitReducedConst(module, value: reduction.shift, mint: mint, rebuilt: rebuilt)
+		let scaleCount = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
 		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(shifted, lhs: high, rhs: scaleCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 		high = shifted
 	end 'scaleDown'

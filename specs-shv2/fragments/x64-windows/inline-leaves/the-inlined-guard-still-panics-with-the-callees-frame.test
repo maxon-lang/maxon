@@ -1,18 +1,16 @@
 // Test: the-inlined-guard-still-panics-with-the-callees-frame
-typealias Integer = int(i64.min to i64.max)
 typealias Percent = int(0 to 100)
 
 function clampPct(x Percent) returns Percent
 	return x
 end 'clampPct'
 
-function grow(n Integer) returns Integer
-	return n * 101
-end 'grow'
-
 function main() returns ExitCode
-	let big = grow(1)
-	return clampPct(big)
+	var last = 0
+	for i in 1 to 1 'once'
+		last = clampPct(i * 101)
+	end 'once'
+	return last as ExitCode
 end 'main'
 ---
 ExitCode: 1
@@ -28,7 +26,7 @@ func @clampPct {
     x64.cmpRegImm32 rcx, 100
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-inlined-guard-still-panics-with-the-callees-frame.test:5: Range check failed: value outside typealias 'Percent'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-inlined-guard-still-panics-with-the-callees-frame.test:4: Range check failed: value outside typealias 'Percent'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -45,13 +43,47 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rbx, 1
+  forhdr:
+    x64.cmpRegImm32 rbx, 1
+    x64.jcc greater, forexit
+  once:
+    x64.imulRegRegImm32 rcx, rbx, 101
   __il_body:
-    x64.movRegImm32 rcx, 101
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#11:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc lessEqual, __rc_ok#10
   __il_slow:
     x64.callDirect clampPct
-  __il_cont:
-    x64.epilogue 32
+    x64.jmp forstep
+  __rc_ok#10:
+    x64.movRegReg r8, rcx
+  forstep:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#7:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok#5
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-inlined-guard-still-panics-with-the-callees-frame.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#5:
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

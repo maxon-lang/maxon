@@ -637,7 +637,7 @@ typealias IntHolder = Holder with Int
 function main() returns ExitCode
 	var v = Vec3.create()
 	var h = IntHolder.create()
-	return v.count() + h.size()
+	return ((v.count() as Int) + h.size()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -712,9 +712,9 @@ end 'main'
 error E3005: <fragment>:12:9: argument type mismatch for 'v': expected 'Vec4', got 'Vec3'
 ```
 
-<!-- test: same-size-aliases-are-one-type -->
-Two names for one size are one type, and stay interchangeable — separating the sizes must not
-separate two spellings of the same one.
+<!-- test: error.same-size-aliases-are-two-brands -->
+Two names for one size are one INSTANCE under two brands, and the brand is the type: a `Triple` does
+not reach a `Vec3` parameter unasked (`nominal-generic-alias.md`).
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -727,7 +727,31 @@ end 'first'
 function main() returns ExitCode
 	var t = Triple.create()
 	try t.set(0, value: 21) otherwise panic("test invariant: set OOB")
-	return first(t) + t.count()
+	let f = first(t)
+	print("{f} {t.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:13:10: argument type mismatch for 'v': expected 'Vec3', got 'Triple'
+```
+
+<!-- test: same-size-aliases-cross-through-as -->
+The legal twin: `t as Vec3` re-brands the same three slots, and separating the sizes has not separated
+two spellings of one size.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Triple = Vector with 3 Int
+
+function first(v Vec3) returns Int
+	return try v.get(0) otherwise 0
+end 'first'
+
+function main() returns ExitCode
+	var t = Triple.create()
+	try t.set(0, value: 21) otherwise panic("test invariant: set OOB")
+	return (first(t as Vec3) + (t.count() as Int)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -995,7 +1019,7 @@ end 'fill'
 
 function main() returns ExitCode
 	_ = fill()
-	return (try shared.get(0) otherwise 0) + (try shared.get(2) otherwise 0) + shared.count()
+	return ((try shared.get(0) otherwise 0) + (try shared.get(2) otherwise 0) + (shared.count() as Int)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1039,13 +1063,13 @@ function main() returns ExitCode
 	var made = Vec3.create()
 	var lit = Vector from [1, 2, 3]
 	var refused = 0
-	try made.set(runtimeIndex(3), value: 99) otherwise 'madePastEnd'
+	try made.set(runtimeIndex(3) as ElementIndex, value: 99) otherwise 'madePastEnd'
 		refused = refused + 1
 	end 'madePastEnd'
-	try lit.set(runtimeIndex(3), value: 99) otherwise 'litPastEnd'
+	try lit.set(runtimeIndex(3) as ElementIndex, value: 99) otherwise 'litPastEnd'
 		refused = refused + 1
 	end 'litPastEnd'
-	let madeRead = try made.get(runtimeIndex(3)) otherwise -1
+	let madeRead = try made.get(runtimeIndex(3) as ElementIndex) otherwise -1
 	print("refused={refused} madeRead={madeRead} madeCount={made.count()} litCount={lit.count()}\n")
 	return refused as ExitCode
 end 'main'
@@ -1089,11 +1113,11 @@ type Holder uses Element
 	end 'create'
 
 	export function put(index Int, value Element)
-		try slot.set(index, value: value) otherwise panic("put")
+		try slot.set(index as ElementIndex, value: value) otherwise panic("put")
 	end 'put'
 
 	export function at(index Int) returns Element
-		return try slot.get(index) otherwise panic("at")
+		return try slot.get(index as ElementIndex) otherwise panic("at")
 	end 'at'
 
 	export function size() returns Int
@@ -1202,7 +1226,7 @@ end 'Sized'
 extension Sized
 	export function tallyTwice() returns Int
 		var v = Slot.create()
-		return v.count() + tally()
+		return (v.count() as Int) + tally()
 	end 'tallyTwice'
 end 'Sized'
 
@@ -1614,7 +1638,7 @@ function main() returns ExitCode
 	var v = Vec3.create()
 	var got = v.part()
 	got.clear()
-	return ((got.length() as Int) + (10 * v.count())) as ExitCode
+	return ((got.length() as Int) + (10 * (v.count() as Int))) as ExitCode
 end 'main'
 ```
 ```exitcode

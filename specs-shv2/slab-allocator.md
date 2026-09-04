@@ -122,7 +122,7 @@ typealias Len = int(0 to 4096)
 
 function build(n Len) returns ByteArray
 	var b = ByteArray.create()
-	b.reserve(n)
+	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
 	end 'fill'
@@ -242,7 +242,7 @@ function roundTrip(r Round) returns Integer
 	var wrong = 0
 	for i in 0 upto 512 'check'
 		let got = try big.get(i) otherwise return 1
-		if got != ((r + i) mod 251) 'value'
+		if (got as Round) != ((r + i) mod 251) 'value'
 			wrong = wrong + 1
 		end 'value'
 	end 'check'
@@ -283,7 +283,7 @@ typealias Index = int(0 to 255)
 
 function build(k Index) returns ByteArray
 	var b = ByteArray.create()
-	b.reserve(280000 + k * 4096)
+	b.reserve((280000 + k * 4096) as ElementIndex)
 	for i in 0 upto 64 'fill'
 		b.push(((k * 7 + i) mod 251) as Byte)
 	end 'fill'
@@ -384,7 +384,7 @@ typealias Len = int(0 to 4096)
 
 function build(n Len, seed Len) returns ByteArray
 	var b = ByteArray.create()
-	b.reserve(n)
+	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + seed) mod 251) as Byte)
 	end 'fill'
@@ -398,7 +398,7 @@ function verify(b ByteArray, n Len, seed Len) returns Integer
 	var wrong = 0
 	for i in 0 upto n 'bytes'
 		let got = try b.get(i) otherwise return 1
-		if got != ((i + seed) mod 251) 'value'
+		if (got as Len) != ((i + seed) mod 251) 'value'
 			wrong = wrong + 1
 		end 'value'
 	end 'bytes'
@@ -536,7 +536,7 @@ let SweepCount = 26
 
 function build(n Len) returns ByteArray
 	var b = ByteArray.create()
-	b.reserve(n)
+	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
 	end 'fill'
@@ -602,7 +602,7 @@ typealias Len = int(0 to 65536)
 
 function build(n Len, seed Len) returns ByteArray
 	var b = ByteArray.create()
-	b.reserve(n)
+	b.reserve(n as ElementIndex)
 	for i in 0 upto 32 'fill'
 		b.push(((i + seed) mod 251) as Byte)
 	end 'fill'
@@ -654,7 +654,7 @@ typealias Len = int(0 to 65536)
 
 function build(n Len, seed Len) returns ByteArray
 	var b = ByteArray.create()
-	b.reserve(n)
+	b.reserve(n as ElementIndex)
 	for i in 0 upto 16 'fill'
 		b.push(((i + seed) mod 251) as Byte)
 	end 'fill'

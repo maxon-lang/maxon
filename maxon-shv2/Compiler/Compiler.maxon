@@ -1261,19 +1261,19 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// installers, appended already-lowered after the pipeline for the same reason. Only the cloners the module
 	// references (directly through a `funcAddr(__clone_<T>)` element-cloner stamp, or through a nested cascade
 	// `noteCascadeUsage` closed the set over) are built (`usage.neededCloners`).
-	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners, action: CascadeAction.clone)
-	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners, action: CascadeAction.clone)
+	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
+	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
 	// The per-instance DEEP-CLONER cascade (W162) — the clone twin of `installGenericInstanceDestructors` above,
 	// installed beside the struct/union cloners for the same reason they sit beside their own destructors. It
 	// takes `project` (which the destructor twin does not) for one fact the instance registry cannot answer: the
 	// MM tag index a fresh box is allocated under lives in `project.globalData`.
-	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners, action: CascadeAction.clone)
+	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
 	// The per-type SOLENESS WALKS — the third twin of the two families above, over the same node space
 	// and installed in the same band. Only the walks the module references (a transfer door's emitted call, or
 	// a nested cascade `noteCascadeUsage` closed the set over) are built (`usage.neededSoleWalks`).
-	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks, action: CascadeAction.soleWalk)
-	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks, action: CascadeAction.soleWalk)
-	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks, action: CascadeAction.soleWalk)
+	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
+	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
+	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
 	// The `__fnref_` env-thunks for plain functions used as first-class values — collected before the pipeline
 	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
 	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).

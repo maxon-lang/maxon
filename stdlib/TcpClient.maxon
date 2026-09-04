@@ -4,7 +4,7 @@ typealias NetworkPort = int(1 to 65535)
 
 // Bytes sent or received in one call. Each is a length into a `ByteArray` the caller owns, so the
 // backing `__ManagedMemory`'s signed machine-word length is the ceiling.
-typealias ByteCount = int(0 to i64.max)
+typealias BytePos = int(0 to i64.max)
 
 /// TCP networking errors
 public enum NetworkError implements Error
@@ -35,7 +35,7 @@ public type TcpClient
 	/// Send all bytes of a string over this connection.
 	/// Loops internally to handle partial sends.
 	/// Returns the total number of bytes sent.
-	public function send(data String) returns ByteCount throws NetworkError
+	public function send(data String) returns BytePos throws NetworkError
 		// Materialized ONCE, outside the loop: a partial send drives this round again, and under
 		// Stage 4b asking a short string for its bytes allocates and copies. Per-string, not per-send.
 		let bytes = data.addressableBytes()
@@ -60,7 +60,7 @@ public type TcpClient
 
 	/// Receive data as a string (up to bufferSize bytes).
 	/// Returns the received data. Throws connectionClosed if the peer closed.
-	public function recv(bufferSize ByteCount) returns String throws NetworkError
+	public function recv(bufferSize BytePos) returns String throws NetworkError
 		var managed = try __ManagedMemory.create(bufferSize + 1, 1) otherwise 'createErr'
 			panic("TcpClient.recv: create — bufferSize+1 >= 0 guaranteed")
 		end 'createErr'

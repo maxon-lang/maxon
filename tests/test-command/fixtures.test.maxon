@@ -127,8 +127,8 @@ let ProjectProductsDirName = ".maxon"
 // reads, not a loop counter.
 typealias FixtureCaseTally = int(0 to i64.max)
 
-// An exit code as a fixture states it and as a run produces it. `Subprocess`'s own `ExitInt` is
-// file-private there, so this is the same range spelled where it is used.
+// An exit code as a fixture states it. It meets the run's own `ExitInt` only inside an assertion, where
+// both are cast to the alias `Expect` compares.
 typealias RunExitCode = int(i64.min to i64.max)
 
 // A list of paths one directory walk produced. Declared HERE rather than reached for: stdlib's own
@@ -149,8 +149,8 @@ test 'the fixture corpus is covered case for case'
 	// (E3007, naming the `i64`, `String` and `i1` overloads); shv2 resolves the identical source without
 	// complaint. MEASURED both ways 2026-09-02. Since these tests must compile under BOTH, they take the
 	// spelling both accept — which also puts the two values a reader compares on lines of their own.
-	let cases = countFixtureCases()
-	let files = countCaseFiles()
+	let cases = countFixtureCases() as AssertedInt
+	let files = countCaseFiles() as AssertedInt
 	try Expect.equal(files, expected: cases, message: "the corpus under {FixturesDir} and the case files in {ProjectDir} do not correspond one to one. Each case directory needs a `<case>.test.maxon` beside {SharedHelperFileName}; a case with no test proves nothing and reads exactly like one that passed.")
 end 'the fixture corpus is covered case for case'
 
@@ -217,8 +217,8 @@ export function checkFixture(caseName String) throws TestFailure
 
 	// ⚠ Bound to locals first for `the fixture corpus is covered case for case`'s reason: a CALL in
 	// `Expect.equal`'s `expected:` slot is E3007 on the bootstrap and fine on shv2.
-	let expectedExit = expectedExitCodeIn(caseDir, caseName: caseName)
-	let observedExit = run.exitCode()
+	let expectedExit = expectedExitCodeIn(caseDir, caseName: caseName) as AssertedInt
+	let observedExit = run.exitCode() as AssertedInt
 	try Expect.equal(observedExit, expected: expectedExit, message: "'{caseName}' exited differently from its {ExpectedExitFileName}. The exit code is the half of this report a SCRIPT reads, and the half that decides whether a red run stops anything. It printed: {run.stdout}")
 	let expectedStdout = requiredFixtureText(caseDir, fileName: ExpectedStdoutFileName, caseName: caseName, holds: "the exact stdout this case's run must print")
 	let observedStdout = run.stdout

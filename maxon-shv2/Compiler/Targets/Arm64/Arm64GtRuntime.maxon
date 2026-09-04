@@ -81,7 +81,7 @@ let Arm64GtRegistersPerPair = 2
 // ⭐ Enforce the cross-tier byte-match. Called at chunk-build time, so an async compile for arm64 panics
 // the moment the two sides disagree.
 function assertArm64GtFrameConsistent(target Target)
-	let framedBytes = arm64GtSavedPairCount() * Arm64GtPairBytes
+	let framedBytes = (arm64GtSavedPairCount() as ParsedInt) * Arm64GtPairBytes
 	let declared = gtInitialFrameBytes(target)
 
 	if framedBytes != declared 'drift'
@@ -456,11 +456,11 @@ let arm64MorestackSavedFps = [Arm64Register.d0, Arm64Register.d1, Arm64Register.
 // restore hands the guarded function a frame pointer into the new stack. Derived from the register list's
 // own position rather than written as a number, exactly as x64's `savedRbpDisp` is.
 function arm64MorestackFrameSlot(index RegCount) returns MachineWord
-	return Arm64MorestackSaveBase + index * SpillSlotBytes
+	return Arm64MorestackSaveBase + (index as MachineWord) * SpillSlotBytes
 end 'arm64MorestackFrameSlot'
 
 function arm64MorestackFpSlot(index RegCount) returns MachineWord
-	return arm64MorestackFrameSlot(arm64MorestackSavedGprs.count()) + index * SpillSlotBytes
+	return arm64MorestackFrameSlot(arm64MorestackSavedGprs.count()) + (index as MachineWord) * SpillSlotBytes
 end 'arm64MorestackFpSlot'
 
 // The whole frame, 16-aligned. SP at the `bl mmap` is `systemStackTop - frameBytes`, and the system stack's
@@ -468,8 +468,8 @@ end 'arm64MorestackFpSlot'
 // on AAPCS64's required residue. Asserted rather than assumed, because a misaligned SP on AArch64 is an
 // alignment FAULT at the first frame access inside libSystem and names nothing that caused it.
 function arm64MorestackFrameBytes() returns StackSize
-	let raw = arm64MorestackFpSlot(arm64MorestackSavedFps.count())
-	return alignUp(raw, alignment: StackFrameAlignment)
+	let raw = arm64MorestackFpSlot(arm64MorestackSavedFps.count()) as StackSize
+	return alignUpStack(raw, alignment: StackFrameAlignment)
 end 'arm64MorestackFrameBytes'
 
 function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
@@ -714,7 +714,7 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 
 	// projected = SP - (frameBytes + margin + the cold path's own cell); enough room (>= gt.stackGuard) → skip.
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MorestackEntrySysTopReg))
-	arm64EmitAddSubImmWide(asm.code, opcode: Arm64OpSubImm, rd: arm64RuntimeReg(Arm64MorestackEntrySysTopReg), rn: arm64RuntimeReg(Arm64MorestackEntrySysTopReg), imm: frameBytes + (margin as StackSize) + Arm64GuardSaveBytes)
+	arm64EmitAddSubImmWide(asm.code, opcode: Arm64OpSubImm, rd: arm64RuntimeReg(Arm64MorestackEntrySysTopReg), rn: arm64RuntimeReg(Arm64MorestackEntrySysTopReg), imm: ((frameBytes + (margin as StackSize) + Arm64GuardSaveBytes) as MachineWord))
 	arm64EmitLoadWord64At(asm, dest: Arm64GuardScratchReg, base: Arm64MorestackEntryGtReg, byteOffset: GtOffStackGuard)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MorestackEntrySysTopReg, rhs: Arm64GuardScratchReg)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: skip)

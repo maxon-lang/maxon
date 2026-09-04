@@ -241,7 +241,7 @@ export type X64RuntimeAsm
 	// 16, which is what keeps every `call` in the body aligned (see FrameAlignment).
 	export static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
 		let slotAreaBytes = slots * SpillSlotBytes
-		let frameBytes = alignUp(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: StackFrameAlignment)
+		let frameBytes = alignUpStack(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: StackFrameAlignment)
 
 		// The prologue is emitted into the buffer BEFORE the struct owns it — `Self{…}` is
 		// then a single immutable construction rather than a build-then-mutate.
@@ -542,7 +542,7 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 	let SlotIndex = 1
 	let SlotBuffer = 2
 	let bufferSlots = alignUp(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
-	var asm = X64RuntimeAsm.beginFunction(SlotBuffer + bufferSlots)
+	var asm = X64RuntimeAsm.beginFunction(((SlotBuffer + bufferSlots) as StackSize))
 
 	let loop = asm.newLabel()
 	let loopDone = asm.newLabel()
@@ -551,7 +551,7 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 
 	// The buffer occupies slots SlotBuffer.. upward in memory, so its first byte is at the
 	// LOWEST of them — slots grow downward from rbp, so that is the LAST slot index.
-	let bufferDisp = asm.slotDisp(SlotBuffer + bufferSlots - 1)
+	let bufferDisp = asm.slotDisp(((SlotBuffer + bufferSlots - 1) as StackSize))
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rcx)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
@@ -876,7 +876,7 @@ end 'buildFaultBacktraceChunk'
 function emitFaultCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Register, excCode ExceptionCode, kind IntegerFaultKind, prefixSlot StackSize, classified BlockId)
 	let next = asm.newLabel()
 
-	encodeMovRegImm32(asm.code, dest: scratch, value: excCode)
+	encodeMovRegImm32(asm.code, dest: scratch, value: excCode as MachineWord)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: codeReg, src: scratch, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: next)
 

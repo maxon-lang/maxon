@@ -740,7 +740,7 @@ union Op
 end 'Op'
 
 function firstByte(b ByteArray) returns Idx
-	return try b.get(0) otherwise 0 as Idx
+	return (try b.get(0) otherwise 0) as Idx
 end 'firstByte'
 
 function nameOf(op Op) returns Idx

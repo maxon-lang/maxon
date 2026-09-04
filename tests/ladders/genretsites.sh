@@ -12,7 +12,7 @@
 # cannot see this one at all: no store or cast makes a function RETURN a narrow alias.
 #
 # ⚠ **`ScaleCorpus.maxon` COULD NOT EITHER, UNTIL A2a — and the reason it could not is worth keeping.**
-# `ScaleXHoldValue`, `ScaleMeasure<N>`, `ScaleElement` and the rest are all declared
+# `ScaleInt`, the alias every other generated `return` declares, is
 # `int(i64.min to i64.max)`, and `rangeIsFull` discards a full range before a site can be recorded at
 # all, so not one generated function had a non-full ranged RETURN type and `phase:insertRangeChecks` read
 # a flat Δ0 for this whole path at every rung — the CORPUS blind spot, which no amount of CPU-column

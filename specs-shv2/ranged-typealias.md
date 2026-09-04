@@ -13,8 +13,9 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 - Type-qualified `min`/`max` bounds: `typealias FullInt = int(i64.min to i64.max)`
 - Type-qualified bounds: `typealias Handle = int(0 to u32.max)`
 - Construction: `42 as Age` (compile-time checked for literals, runtime checked for expressions)
+- Every typealias is a nominally distinct type: a value of one alias reaches a slot of another only through `as`, in either direction (`nominal-typealias.md`)
 - `int / int` produces `int` (truncating), not `float`
-- Standard library defines purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `Offset`, `MathValue`, `ExitCode`)
+- The standard library exports the cross-cutting aliases `ExitCode`, `HashValue` and `Codepoint`; every other alias is declared by the module that owns it, named for its purpose
 
 ## Docs
 
@@ -48,12 +49,13 @@ typealias Age = int(0 to 150)
 var myAge = 25 as Age
 ```
 
-In most cases the cast is unnecessary — when a literal flows into a slot
-that already has a known ranged type (a function parameter, struct field,
-or function return), the literal is checked against that target type
-without an explicit cast. Use `as TypeName` when the type association
-needs to be visible at the use site, or when narrowing a wider value to
-a smaller range triggers a runtime check.
+A literal needs no cast — when it flows into a slot that already has a
+known ranged type (a function parameter, struct field, or function
+return), the literal is checked against that target type directly. Between
+two ALIASES the cast is required: an `Age` is not a `Year` whatever their
+ranges, and `as` is the one door between them. A narrowing cast carries a
+runtime range check; a widening cast provably cannot fail one and emits
+none.
 
 ### Runtime range checks
 
@@ -74,9 +76,10 @@ Functions with a ranged return type have their return values checked:
 
 - **Compile time**: returning a literal outside the range is a compile error
 - **Runtime**: returning a computed expression emits a range check that panics on violation
-- A check is elided only where the value's declared range provably fits the destination's
-  (`range-check-panic.md`), which a type whose range covers its full representation satisfies against
-  everything. ⚠ **`ExitCode` is NOT such a type in general** — its range is the compile TARGET's,
+- A value of ANOTHER alias reaches the return only through `as`, and the cast is where its check
+  lands: elided where the value's declared range provably fits the target's (`range-check-panic.md`),
+  which a type whose range covers its full representation satisfies against everything; emitted
+  otherwise. ⚠ **`ExitCode` is NOT such a type in general** — its range is the compile TARGET's,
   `int(0 to u32.max)` on Windows but `int(0 to 255)` on Linux, macOS and WASI (`stdlib/Process.maxon`),
   and on those three it is far narrower than the `u32` it rides in. A computed `returns ExitCode` is
   checked there like any other narrow alias.
@@ -380,8 +383,9 @@ Stack trace:
 ### Float range check: a full-range alias is NOT guarded
 
 `float(f64.min to f64.max)` admits every finite double, so no guard is emitted
-at all. A guard that compared the f64 BIT PATTERNS as signed integers would
-reject this value; the elision is what stops it.
+at all — the `as Wide` here is a cast from an unproven `Pct`-typed product, and
+it is still guard-free. A guard that compared the f64 BIT PATTERNS as signed
+integers would reject this value; the elision is what stops it.
 
 <!-- test: float-full-range-guard-elided -->
 ```maxon
@@ -585,10 +589,13 @@ end 'main'
 type is what lets the compiler select a narrower or an unsigned machine operation, and for `+`, `-`,
 `and`, `or` the answer survives taking it from whichever operand happens to carry one — a "32-bit"
 binop is emitted at 64 bits on both backends. `idiv`/`div`/`sdiv`/`udiv` is the one family whose
-width and signedness are REAL, so it is the one family that shortcut could reach.
+width and signedness are REAL, so it is the one family that shortcut could reach. Two NAMED operands
+of different aliases never meet in a `/` at all (`nominal-typealias.md`); the pair that can is a named
+divisor beside an UNNAMED dividend, which adopts the divisor's alias as its TYPE and must not adopt its
+range as the machine width.
 
 **No ranged type does not mean "no constraint" — it means "the whole of `i64`".** Reading it as
-"no constraint" is what let the OTHER operand narrow a 64-bit dividend into a 32-bit divide, and read
+"no constraint" is what lets the OTHER operand narrow a 64-bit dividend into a 32-bit divide, and read
 a negative one as unsigned.
 
 `stdlib`'s own integer formatter is what found it. It divides a 64-bit pattern by a
@@ -602,19 +609,22 @@ a negative one as unsigned.
 typealias Integer = int(i64.min to i64.max)
 typealias HalfRadix = int(1 to 8)
 
+// A global initialised from a literal has no alias, so `bits shr 1` carries no ranged type of its
+// own and the divisor's `int(1 to 8)` is the only range in the division.
+var bits = 0
+
 function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-function quotient(bits Integer, halfRadix HalfRadix) returns Integer
-	// `bits shr 1` carries no ranged type of its own, which is the whole of how the divisor's
-	// `int(1 to 8)` came to supply the division's width.
+function quotient(halfRadix HalfRadix) returns Integer
 	let half = bits shr 1
 	return half / halfRadix
 end 'quotient'
 
 function main() returns ExitCode
-	print("{quotient(ident(i64.max), halfRadix: 8)}\n")
+	bits = ident(i64.max)
+	print("{quotient(8)}\n")
 	return 0
 end 'main'
 ```
@@ -639,12 +649,12 @@ end 'ident'
 
 function quotient(bits Integer, halfRadix HalfRadix) returns Integer
 	let half = bits shr 1
-	return half / halfRadix
+	return try (half / (halfRadix as Integer)) otherwise panic("halfRadix is never zero")
 end 'quotient'
 
 function remainder(bits Integer, halfRadix HalfRadix) returns Integer
 	let half = bits shr 1
-	return half mod halfRadix
+	return try (half mod (halfRadix as Integer)) otherwise panic("halfRadix is never zero")
 end 'remainder'
 
 function main() returns ExitCode
@@ -675,11 +685,11 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function quotient(a Small, b NegativeOnly) returns Integer
-	return a / b
+	return try ((a as Integer) / (b as Integer)) otherwise panic("b is never zero")
 end 'quotient'
 
 function remainder(a Small, b NegativeOnly) returns Integer
-	return a mod b
+	return try ((a as Integer) mod (b as Integer)) otherwise panic("b is never zero")
 end 'remainder'
 
 function main() returns ExitCode
@@ -711,7 +721,7 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function quotient(w MachineWord, halfRadix HalfRadix) returns MachineWord
-	return w / halfRadix
+	return try (w / (halfRadix as MachineWord)) otherwise panic("halfRadix is never zero")
 end 'quotient'
 
 function main() returns ExitCode
@@ -758,21 +768,21 @@ function main() returns ExitCode
 
 	// The operand is a CALL RESULT — a value no binding shares.
 	let s = ident(8) as Small
-	print("q={try (w / s) otherwise 999} r={try (w mod s) otherwise 999}\n")
+	print("q={try (w / (s as MachineWord)) otherwise 999} r={try (w mod (s as MachineWord)) otherwise 999}\n")
 
 	// The operand is a BARE LOCAL — `b` and `a` would be one value, so the cast has to mint.
 	let a = ident(8)
 	let b = a as Small
-	print("q={try (w / b) otherwise 999} r={try (w mod b) otherwise 999}\n")
+	print("q={try (w / (b as MachineWord)) otherwise 999} r={try (w mod (b as MachineWord)) otherwise 999}\n")
 
 	// ⚠ And `a` itself must be UNTOUCHED by that mint: it is still a plain signed `int`.
 	print("a={ident(-20) / 3}\n")
 
 	let e = ident(8) as ExitCode
-	print("q={try (w / e) otherwise 999}\n")
+	print("q={try (w / (e as MachineWord)) otherwise 999}\n")
 	let a2 = ident(8)
 	let e2 = a2 as ExitCode
-	print("q={try (w / e2) otherwise 999}\n")
+	print("q={try (w / (e2 as MachineWord)) otherwise 999}\n")
 
 	return 0
 end 'main'
@@ -812,11 +822,11 @@ function widen(v Integer) returns Integer
 end 'widen'
 
 function quotient(byteOffset Imm32) returns Integer
-	return widen(byteOffset / 8)
+	return widen((byteOffset / 8) as Integer)
 end 'quotient'
 
 function remainder(byteOffset Imm32) returns Integer
-	return widen(byteOffset mod 8)
+	return widen((byteOffset mod 8) as Integer)
 end 'remainder'
 
 function main() returns ExitCode
@@ -907,7 +917,7 @@ function main() returns ExitCode
 	let q = offset / 8
 	let r = offset mod 8
 	if offset < 0 'neg'
-		print("q={widen(q)} r={widen(r)}\n")
+		print("q={widen(q as Integer)} r={widen(r as Integer)}\n")
 	end 'neg'
 	return 0
 end 'main'
@@ -939,7 +949,7 @@ function main() returns ExitCode
 	let offset = ident(-65) as Imm32
 	let difference = offset - 1
 	if offset < 0 'neg'
-		print("difference={widen(difference)}\n")
+		print("difference={widen(difference as Integer)}\n")
 	end 'neg'
 	return 0
 end 'main'
@@ -1774,15 +1784,15 @@ end 'main'
 ```
 
 <!-- test: cast-to-stdlib-internal-typealias -->
-<!-- needs stdlib/Array.maxon, which declares ElementCount — see cast-target-type-resolution.md -->
+<!-- needs stdlib/Array.maxon, which declares ElementIndex — see cast-target-type-resolution.md -->
 A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal
-ranged aliases (`ElementCount`, `NodeIndex`, …) appear in the public collection
-API, so user code must be able to name them in an `as` cast — `5 as ElementCount`
+ranged aliases (`ElementIndex`, `NodeIndex`, …) appear in the public collection
+API, so user code must be able to name them in an `as` cast — `5 as ElementIndex`
 resolves rather than failing with "Expected type name after 'as'".
 ```maxon
 function main() returns ExitCode
-	let n = 5 as ElementCount
+	let n = 5 as ElementIndex
 	return n as ExitCode
 end 'main'
 ```
@@ -2159,8 +2169,8 @@ end 'grow'
 
 function main() returns ExitCode
 	var b = Box.create()
-	b.v = grow(5)
-	return b.v
+	b.v = grow(5) as Percent
+	return b.v as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2311,7 +2321,7 @@ end 'grow'
 function main() returns ExitCode
 	var a = PA.create()
 	a.push(3)
-	a.insert(0, value: grow(5))
+	a.insert(0, value: grow(5) as Percent)
 	return a.count()
 end 'main'
 ```
@@ -2431,8 +2441,8 @@ end 'grow'
 
 function main() returns ExitCode
 	var b = PB.create(1)
-	b.put(grow(5))
-	return b.v
+	b.put(grow(5) as Percent)
+	return b.v as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2475,8 +2485,8 @@ end 'grow'
 
 function main() returns ExitCode
 	var b = PB.create(1)
-	b.put(grow(5))
-	return b.v
+	b.put(grow(5) as Percent)
+	return b.v as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2835,7 +2845,7 @@ end 'widen'
 function main() returns ExitCode
 	var b = Box.make()
 	let bad = widen(100)
-	b.v = bad
+	b.v = bad as Percent
 	print("stored\n")
 	print("v={b.v}\n")
 	return 0
@@ -2965,9 +2975,9 @@ function main() returns ExitCode
 	var b = Box.make()
 	print("default={b.v}\n")
 	let a = widen(9)
-	b.v = a
+	b.v = a as Percent
 	print("stored={b.v}\n")
-	let c = Box.holding(a)
+	let c = Box.holding(a as Percent)
 	print("literal={c.v}\n")
 	let d = widen(3) as NonZero
 	print("q={100 / d}\n")
@@ -3163,31 +3173,31 @@ function main() returns ExitCode
 	let v21 = widen(21)
 	let v22 = widen(22)
 	let v23 = widen(23)
-	b.f0 = v0
-	b.f1 = v1
-	b.f2 = v2
-	b.f3 = v3
-	b.f4 = v4
-	b.f5 = v5
-	b.f6 = v6
-	b.f7 = v7
-	b.f8 = v8
-	b.f9 = v9
-	b.f10 = v10
-	b.f11 = v11
-	b.f12 = v12
-	b.f13 = v13
-	b.f14 = v14
-	b.f15 = v15
-	b.f16 = v16
-	b.f17 = v17
-	b.f18 = v18
-	b.f19 = v19
-	b.f20 = v20
-	b.f21 = v21
-	b.f22 = v22
-	b.f23 = v23
-	return b.f23
+	b.f0 = v0 as Small
+	b.f1 = v1 as Small
+	b.f2 = v2 as Small
+	b.f3 = v3 as Small
+	b.f4 = v4 as Small
+	b.f5 = v5 as Small
+	b.f6 = v6 as Small
+	b.f7 = v7 as Small
+	b.f8 = v8 as Small
+	b.f9 = v9 as Small
+	b.f10 = v10 as Small
+	b.f11 = v11 as Small
+	b.f12 = v12 as Small
+	b.f13 = v13 as Small
+	b.f14 = v14 as Small
+	b.f15 = v15 as Small
+	b.f16 = v16 as Small
+	b.f17 = v17 as Small
+	b.f18 = v18 as Small
+	b.f19 = v19 as Small
+	b.f20 = v20 as Small
+	b.f21 = v21 as Small
+	b.f22 = v22 as Small
+	b.f23 = v23 as Small
+	return b.f23 as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3225,7 +3235,7 @@ end 'pad'
 
 function main() returns ExitCode
 	let j = pad(100, b: 200, c: 300)
-	return apply(function(n Wide) gives (n - j) as Small, x: 605)
+	return apply(function(n Wide) gives ((n - j) as Small) as Wide, x: 605) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3247,7 +3257,7 @@ function apply(f Fn1, x Wide) returns Wide
 end 'apply'
 
 function main() returns ExitCode
-	return apply(function(n Wide) gives (n + 1) as Small, x: 605)
+	return apply(function(n Wide) gives ((n + 1) as Small) as Wide, x: 605) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3604,10 +3614,9 @@ instance from the user-visible `Byte`, because the admission between them is one
 prefix for that reason; `array-hashable/byte-array-hash` is the case that measured it, having gone red for
 exactly this when the exclusion was absent.
 
-<!-- test: two-aliases-over-one-range-are-one-instance -->
-The shape from shv2's own source: a value built through one alias reaches a parameter declared with the
-other, and is READ THROUGH that parameter -- which is what proves it is the same container and not a
-conversion.
+<!-- test: error.two-aliases-over-one-range-are-two-instances -->
+Two ranged aliases over one range are two element types, so the containers over them are two instances: a
+value built through one alias does not reach a parameter declared with the other.
 ```maxon
 typealias DenseInt = int(0 to u64.max)
 typealias RegCount = int(0 to u64.max)
@@ -3622,21 +3631,18 @@ function main() returns ExitCode
 	var d = DenseColumn.create()
 	d.push(7)
 	d.push(9)
-	print("width={widthOf(d)}")
+	let w = widthOf(d)
+	print("width={w}")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-width=2
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.two-aliases-over-one-range-are-two-instances.test:15:10: argument type mismatch for 'c': expected 'RegCountColumn', got 'DenseColumn'
 ```
 
 <!-- test: error.two-aliases-over-different-ranges-are-still-two-types -->
-⭐ **THE CONTROL.** The only difference from the case above is that the two ranges differ. `e4146cf8e`'s
-rule stands, the two columns are two types, and the bootstrap answers with this message character for
-character.
+The same refusal when the two ranges differ as well: the element alias's NAME decides, and the range never
+enters into it.
 ```maxon
 typealias Wide = int(0 to u64.max)
 typealias Narrow = int(0 to 63)
@@ -3659,21 +3665,10 @@ error E3005: specs/fragments/ranged-typealias/error.two-aliases-over-different-r
 
 <!-- test: error.a-diagnostic-names-the-alias-the-site-wrote -->
 ### A diagnostic names the alias the SITE wrote, not the first one declared
-⛔⛔ **R-1 MADE THE `GenericInstanceId` AN INSUFFICIENT ANSWER TO "WHAT IS THIS VALUE'S TYPE CALLED?"** `WideCol`
-and `OtherCol` are one instance here, so a per-gid display can only pick one of them — and it picked the one
-declared FIRST, naming `WideCol` in a statement that says `OtherCol`. The bootstrap names the site's spelling,
-and this case pins that shv2 now does too.
-
-⭐ **THE PROVENANCE COLUMN ALREADY EXISTED AND THIS DOOR NEVER WROTE IT.** `valueInstanceAlias` was built for
-P1.6-C to carry *"the provenance the shared `GenericInstanceId` cannot carry (`WrapperA` and `WrapperB` share
-one gid)"* — the identical sentence, one type-family over. It was stamped only by
-`retypeGenericAliasConstructorResult`, which a BUILTIN container's factory never reaches: its result is already
-an instance rather than the shared body's base `structRef`, so it falls out of that door's first guard.
-MEASURED with a probe: ZERO calls to it for `OtherCol.create()`. `emitOwnedContainerCreate` stamps it now.
-
-⚠ **THE VALUE IS READ BACK THROUGH A `var`, DELIBERATELY.** A case that passed the factory result straight into
-the call would not say whether the provenance survives a binding — and the binding is the shape a real program
-writes.
+`WideCol` and `OtherCol` are declared over one range, in that order; the value was built through `OtherCol`,
+and the diagnostic says so. The value is read back through a `var`, deliberately: a case that passed the
+factory result straight into the call would not say whether the name survives a binding, and the binding is
+the shape a real program writes.
 ```maxon
 typealias Wide = int(0 to u64.max)
 typealias Other = int(0 to u64.max)
@@ -3691,14 +3686,16 @@ function takesNarrow(c NarrowCol) returns ExitCode
 end 'takesNarrow'
 
 function main() returns ExitCode
+	var w = WideCol.create()
+	w.push(1)
+	let a = widthOf(w)
 	var o = OtherCol.create()
 	o.push(2)
-	let w = widthOf(o)
-	return takesNarrow(o) + w
+	return takesNarrow(o) + a
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote.test:21:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
+error E3005: specs/fragments/ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote.test:23:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
 ```
 
 <!-- test: error.a-call-results-type-is-named-by-its-callees-returns-clause -->

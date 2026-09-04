@@ -43,7 +43,7 @@ inline `managed` IS the receiver's record, so writing it writes the caller's own
 it, and `let s = "hello"; s.append(" world")` is still E3019.
 
 What ACTUALLY held `setByte` back was one token in the corpus, and it was not about ownership or
-lowering at all: `stdlib/String.maxon:676`, where `mapAsciiCase` wrote `try work.setByte(i, b + delta)`
+lowering at all: `stdlib/String.maxon:674`, where `mapAsciiCase` wrote `try work.setByte(i, b + delta)`
 with the second argument POSITIONAL. `specs/parameter-labels.md` rules that every argument after the
 first must be named; shv2 enforces it (E2053) and the bootstrap does not — so the declared
 `String.setByte` could not serve its own only caller, and `stdlib/` would have refused itself. Writing

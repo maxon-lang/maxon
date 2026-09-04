@@ -221,15 +221,15 @@ export type Scope
 	// REFERENCE (see the header): the parser keeps mutable bindings in its loop-phi
 	// list as the objects themselves, so a nested block that shadows the NAME cannot
 	// misdirect a phi write to the shadow.
-	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value))
+	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value, brandId: brandId))
 	end 'declareValueBinding'
 
 	// Declare a PARAMETER's value binding. Identical to `declareValueBinding` in everything the scope
 	// does with it, and different in the one bit the binding carries (`VarInfo.isParameter`), which is
 	// what tells "may this name be rebound?" from "may the container it denotes be written?".
-	export function declareParameterBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, mutable: mutable, boundValue: value))
+	export function declareParameterBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, mutable: mutable, boundValue: value, brandId: brandId))
 	end 'declareParameterBinding'
 
 	// Declare a CELL-RESIDENT binding (PBR-2): `name` denotes the 8-byte heap cell `cell`, so a read is a
@@ -240,8 +240,8 @@ export type Scope
 	//
 	// It shares `declareBinding` with the three above, so the self-field shadow rule stays the one rule for
 	// every name a scope installs.
-	export function declareCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, mutable: mutable, cell: cell, isParameter: isParameter))
+	export function declareCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, mutable: mutable, cell: cell, isParameter: isParameter, brandId: brandId))
 	end 'declareCellBinding'
 
 	// The shared body of the four value-binding declarations above: refuse a name that would shadow a

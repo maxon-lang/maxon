@@ -68,6 +68,7 @@ export let SubpWaitExitName = b"__gt_subp_wait_exit"
 export let SubpWriteAllName = b"__gt_subp_write_all"
 export let SubpReadOutBytesName = b"__gt_subp_read_out_bytes"
 export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
+
 // The EXACT-COUNT reader's managed wrapper. It rides `buildSubpReadBytes` with every other owned-buffer
 // reader in this file because the conversion is the same one: the difference between an exact read and a
 // line read lives entirely in `GtRuntime`'s two stopping rules, and nothing about the record shape.
@@ -479,7 +480,7 @@ export function emitSubpLiteralCString(module StdModule, block IrBlock, ids Valu
 
 	var offset = 0 as ByteOffset
 	for ch in bytes 'each'
-		let value = emitConst(module, block: block, value: ch, ids: ids)
+		let value = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
 		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: offset, valueId: value, valueType: StdType.u8))
 		offset = offset + 1
 	end 'each'
@@ -685,7 +686,7 @@ end 'buildSubpEnvVector'
 
 // The environment vector builder's state, in memory — the file header's rule, one walk further on.
 let EvBuf = 0 as ByteOffset
-let EvVec = 8 as ByteOffset   // unset until the counting pass ends, which is what tells the two passes apart
+let EvVec = 8 as ByteOffset  // unset until the counting pass ends, which is what tells the two passes apart
 let EvPos = 16 as ByteOffset  // read cursor into the environment block
 let EvEntry = 24 as ByteOffset
 let EvBytes = 32 as ParsedInt

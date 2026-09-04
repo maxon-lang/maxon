@@ -87,8 +87,8 @@ end 'make_point'
 
 function describe(s Shape) returns Integer
 	return match s 'describe'
-		circle(label) gives label.count()
-		square(label) gives label.count()
+		circle(label) gives label.count() as Integer
+		square(label) gives label.count() as Integer
 		blank gives 0
 	end 'describe'
 end 'describe'
@@ -183,7 +183,7 @@ function main() returns ExitCode
 
 	// --- section 9: closure capturing a managed value ---
 	let prefix = "pfx_"
-	let builder = function(n Integer) gives "{prefix}{n}".count()
+	let builder = function(n Integer) gives "{prefix}{n}".count() as Integer
 	total = total + apply(builder, x: 7)
 	total = total + apply(builder, x: 8)
 

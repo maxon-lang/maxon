@@ -113,7 +113,7 @@ export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, l
 		for edge in predBlock.branchEdges 'eachEdge'
 			let plan = buildEdgePlan(module, topo: topo, predBlock: predBlock, predLocal: predLocal, edge: edge, alloc: alloc)
 			if plan.moveCount() > 0 'hasMoves'
-				counters.copiesInserted = counters.copiesInserted + plan.moveCount()
+				counters.copiesInserted = counters.copiesInserted + (plan.moveCount() as EventCount)
 				plans.push(plan)
 			end 'hasMoves'
 		end 'eachEdge'
@@ -149,10 +149,10 @@ end 'buildEdgePlan'
 // successor; at the successor's start when it has one predecessor; otherwise the
 // edge is CRITICAL and gets its own split block.
 function classifyPlacement(topo FuncTopology, predLocal CfgIndex, succLocal CfgIndex) returns EdgePlacement
-	if topo.succ.degree(predLocal) == 1 'predSingleSucc'
+	if topo.succ.degree(predLocal as CsrIndex) == 1 'predSingleSucc'
 		return EdgePlacement.predEnd
 	end 'predSingleSucc'
-	if topo.pred.degree(succLocal) == 1 'succSinglePred'
+	if topo.pred.degree(succLocal as CsrIndex) == 1 'succSinglePred'
 		return EdgePlacement.succStart
 	end 'succSinglePred'
 	return EdgePlacement.split
@@ -234,8 +234,8 @@ function isAnySource(ps RegNumColumn, reg RegNum) returns bool
 end 'isAnySource'
 
 function removeMoveAt(pd RegNumColumn, ps RegNumColumn, idx MoveIndex)
-	_ = try pd.remove(idx) otherwise panic("removeMoveAt: pd.remove OOB")
-	_ = try ps.remove(idx) otherwise panic("removeMoveAt: ps.remove OOB")
+	_ = try pd.remove(idx as ElementIndex) otherwise panic("removeMoveAt: pd.remove OOB")
+	_ = try ps.remove(idx as ElementIndex) otherwise panic("removeMoveAt: ps.remove OOB")
 end 'removeMoveAt'
 
 // After `xchg a, b`, registers a and b hold each other's old contents, so a pending
@@ -392,7 +392,7 @@ end 'vregIsPhysical'
 // Are the ops at `pos` and `pos + 1` of `block` BOTH capture moves? The caller has already established that
 // the previous op was a call and that `pos + 1` is in range; this reads the two ops and answers, holding
 // neither — see the caller for why that matters.
-function isCaptureMovePairAt(module TargetModule, block IrBlock, pos ElementCount) returns bool
+function isCaptureMovePairAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
 	let opIdx = try block.opRefs.get(pos) otherwise panic("isCaptureMovePairAt: opRefs.get OOB at {pos}")
 	let op = try module.ops.get(opIdx) otherwise panic("isCaptureMovePairAt: opIdx {opIdx} not in module.ops")
 	if not isCaptureMove(op) 'notTheFirstHalf'
@@ -407,7 +407,7 @@ end 'isCaptureMovePairAt'
 // The pair at `pos`, resequenced. The FOUR NUMBERS are read out first and the ops released, because the
 // sequencer below pushes onto the very array they were borrowed from — and four numbers is all a capture
 // move ever contributed: one destination register and one source register each.
-function emitResequencedCaptureAt(module TargetModule, block IrBlock, pos ElementCount, alloc Allocation, newRefs OpIndexArray)
+function emitResequencedCaptureAt(module TargetModule, block IrBlock, pos ElementIndex, alloc Allocation, newRefs OpIndexArray)
 	let opIdx = try block.opRefs.get(pos) otherwise panic("emitResequencedCaptureAt: opRefs.get OOB at {pos}")
 	let op = try module.ops.get(opIdx) otherwise panic("emitResequencedCaptureAt: opIdx {opIdx} not in module.ops")
 	let resultDst = alloc.regNumOf(captureMoveDestId(op))
@@ -648,7 +648,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 		let predBlock = blockAt(module, topo: topo, local: predLocal)
 		for edge in predBlock.branchEdges 'eachEdge'
 			let succLocal = try topo.localByBlockId.get(edge.targetBlockId) otherwise panic("splitCriticalEdgesInFunc: succ block id out of range")
-			if topo.pred.degree(succLocal) > 1 'critical'
+			if topo.pred.degree(succLocal as CsrIndex) > 1 'critical'
 				predRefs.push(try topo.blockRefByLocal.get(predLocal) otherwise panic("splitCriticalEdgesInFunc: predLocal out of range"))
 				succIds.push(edge.targetBlockId)
 			end 'critical'

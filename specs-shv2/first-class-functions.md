@@ -3557,17 +3557,17 @@ end 'main'
 3 40
 ```
 
-<!-- test: first-class-function.nested-function-type-agrees-by-shape -->
-A function type whose own PARAMETER is a function type. The rule is the same one level down — RESOLVED
-shape, not the alias NAME — so `Outer = function(f InnerA)` accepts a function declared `(f InnerB)`
-when `InnerA` and `InnerB` resolve alike. Comparing the nested types by name instead refuses a program
-both reference compilers accept, and prints both sides identically while doing it.
+<!-- test: first-class-function.nested-function-type-agrees-by-alias-name -->
+A function type whose own PARAMETER is a function type. The descent is the same one level down, and it
+stops at an alias NAME: `Outer = function(f InnerA)` accepts a function declared `(f InnerA)`, and a
+function declared over a different alias of the same shape is refused there
+(`nominal-function-alias.md`'s `error.nested-alias-position-is-nominal`).
 
 ⚠ NOT a wasm case, and the reason is a BACKEND defect rather than anything about this rule: passing a
 function value into a parameter whose function type has a function-typed parameter emits a wasm module
-that fails validation (`expected i64 but nothing on stack`). It reproduces byte-for-byte on the parent
-commit, with the SAME alias on both sides and with no indirect call anywhere, so it is neither this
-rule's nor newly reachable — it is filed for its own rung.
+that fails validation (`expected i64 but nothing on stack`). It reproduces with the SAME alias on both
+sides and with no indirect call anywhere, so it is neither this rule's nor newly reachable — it is filed
+for its own rung.
 
 ⚠ **The marker also excludes both arm64 targets, and NOTHING above explains that** — the wasm reason
 does not reach arm64, which shares the register backend x64 uses. Flagged by the 2026-07-28 targets
@@ -3579,18 +3579,17 @@ passes** — an unexplained exclusion is the shape a "it was red once" gate hide
 
 typealias Integer = int(i64.min to i64.max)
 typealias InnerA = function(x Integer) returns Integer
-typealias InnerB = function(x Integer) returns Integer
 typealias Outer = function(f InnerA) returns Integer
 
 function dbl(x Integer) returns Integer
 	return x * 2
 end 'dbl'
 
-function runner(f InnerB) returns Integer
+function runner(f InnerA) returns Integer
 	return f(21)
 end 'runner'
 
-// The door under test is the ARGUMENT one: `runner` is an `fn(InnerB) returns Integer` arriving where an
+// The door under test is the ARGUMENT one: `runner` is an `fn(InnerA) returns Integer` arriving where an
 // `Outer` — an `fn(InnerA) returns Integer` — is declared.
 function drive(o Outer) returns Integer
 	return o(dbl)

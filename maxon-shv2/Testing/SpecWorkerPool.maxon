@@ -663,7 +663,7 @@ function buildPlans(specDir FilePath, filter String, effectiveTarget Target, inc
 		var weight = 0 as JobWeight
 		for test in tests 'eachTest'
 			testNames.push(test.name)
-			weight = weight + test.source.byteLength()
+			weight = weight + (test.source.byteLength() as JobWeight)
 		end 'eachTest'
 
 		plans.push(SpecPlan.create(specName, testNames: testNames, weight: weight))
@@ -1193,7 +1193,7 @@ function takeJobCpuRecord(lines StringArray, specName String) returns SuiteCpuTa
 	let ticks = splitAtFieldSep(sliceAfterPrefix(last, prefix: WorkerJobCpuMarker), expected: "reported-count", line: last)
 	let reported = splitAtFieldSep(ticks.rest, expected: "unreported-count", line: last)
 
-	return SuiteCpuTally.create(decodeCpuField(ticks.field, what: "tick total", line: last), reported: decodeCpuField(reported.field, what: "reported count", line: last) as TestTally, unreported: decodeCpuField(reported.rest, what: "unreported count", line: last) as TestTally)
+	return SuiteCpuTally.create(decodeCpuField(ticks.field, what: "tick total", line: last) as CpuTicks, reported: decodeCpuField(reported.field, what: "reported count", line: last) as TestTally, unreported: decodeCpuField(reported.rest, what: "unreported count", line: last) as TestTally)
 end 'takeJobCpuRecord'
 
 // One decimal field of the CPU record. `parseCount` is the suite's ONE decimal parser (see
@@ -2445,8 +2445,8 @@ function anySlotBusy(busy BoolArray) returns bool
 	return false
 end 'anySlotBusy'
 
-// `slot` reduced modulo the pool size. Spelled as a subtract-divide because Maxon has no remainder
-// operator; `poolSize` is never zero, since a pool with no workers never reaches the dispatch loop.
+// `slot` reduced modulo the pool size. `poolSize` is never zero, since a pool with no workers never
+// reaches the dispatch loop; `otherwise panic` is the project's form for a `try` that must not fail.
 function wrapSlot(slot WorkerId, poolSize WorkerCount) returns WorkerId
-	return slot - (slot / poolSize) * poolSize
+	return try (slot mod (poolSize as WorkerId)) otherwise panic("wrapSlot: a pool of no workers never reaches the dispatch loop")
 end 'wrapSlot'

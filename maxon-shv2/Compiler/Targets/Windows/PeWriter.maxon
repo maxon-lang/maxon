@@ -15,6 +15,17 @@
 // relocation paths are likewise deferred to the arm64 milestone — x64 only today.
 
 typealias Rva = int(0 to u64.max)
+
+// The RVA `offset` bytes into the section based at `base`, and the same as the word a directory
+// field holds.
+function rvaAt(base Rva, offset ByteOffset) returns Rva
+	return base + (offset as Rva)
+end 'rvaAt'
+
+function rvaWord(base Rva, offset ByteOffset) returns MachineWord
+	return rvaAt(base, offset: offset) as MachineWord
+end 'rvaWord'
+
 typealias SectionFlags = int(0 to u64.max)
 typealias SymbolTally = int(0 to u64.max)
 
@@ -559,7 +570,7 @@ end 'slotIsEmitted'
 // Bytes one DLL's thunk run occupies in ONE pass: its emitted imports plus the null qword ending the run.
 // ⭐ **THAT TRAILING NULL IS THE WHOLE DIFFERENCE A SECOND DLL MAKES.** With one DLL it sat past every slot
 // and no offset had to account for it, which is why `iatSlotByteOffset` could be `slotIndex * PointerSize`.
-function dllThunkRunBytes(dll ImportDll, optionalImports bool) returns ByteCount
+function dllThunkRunBytes(dll ImportDll, optionalImports bool) returns BytePos
 	return (importNamesFor(dll, optionalImports: optionalImports).count() + 1) * PointerSize
 end 'dllThunkRunBytes'
 
@@ -579,7 +590,7 @@ function dllRunOffset(dll ImportDll, optionalImports bool, sockets bool) returns
 end 'dllRunOffset'
 
 // Total bytes of the thunk table in one pass, across every emitted DLL.
-function thunkTableBytes(optionalImports bool, sockets bool) returns ByteCount
+function thunkTableBytes(optionalImports bool, sockets bool) returns ByteOffset
 	var total = 0
 	for d in ImportDll.allCases 'walk'
 		if dllIsEmitted(d, sockets: sockets) 'live'
@@ -590,7 +601,7 @@ function thunkTableBytes(optionalImports bool, sockets bool) returns ByteCount
 end 'thunkTableBytes'
 
 // Total bytes of the Hint/Name table across every emitted DLL — where the DLL-name strings begin.
-function totalHintBytes(optionalImports bool, sockets bool) returns ByteCount
+function totalHintBytes(optionalImports bool, sockets bool) returns ByteOffset
 	var total = 0
 	for d in ImportDll.allCases 'walk'
 		if dllIsEmitted(d, sockets: sockets) 'live'
@@ -615,11 +626,11 @@ type ImportSection
 	export var data as ByteArray
 	export var iatRva as Rva
 	export var importDirRva as Rva
-	export var importDirSize as ByteCount
+	export var importDirSize as BytePos
 	// Byte size of the IAT run (thunks + null terminator) for data-directory #12.
-	export var iatDirSize as ByteCount
+	export var iatDirSize as BytePos
 
-	static function create(data ByteArray, iatRva Rva, importDirRva Rva, importDirSize ByteCount, iatDirSize ByteCount) returns ImportSection
+	static function create(data ByteArray, iatRva Rva, importDirRva Rva, importDirSize BytePos, iatDirSize BytePos) returns ImportSection
 		return Self{data: data, iatRva: iatRva, importDirRva: importDirRva, importDirSize: importDirSize, iatDirSize: iatDirSize}
 	end 'create'
 end 'ImportSection'
@@ -634,13 +645,13 @@ end 'ImportSection'
 // one-byte disagreement yields a perfectly well-formed import table in which every thunk after the first
 // points into the middle of its neighbour's entry, and the loader binds the wrong function with no
 // diagnostic anywhere.
-function importHintNameBodyBytes(name String) returns ByteCount
+function importHintNameBodyBytes(name String) returns ByteOffset
 	return ImportHintFieldBytes + name.toByteArray().count() + ImportHintNameNulBytes
 end 'importHintNameBodyBytes'
 
 // Byte size of one Hint/Name entry for `name`: the body, padded up to an even total (PE requires even
 // alignment). This is the number a thunk RVA advances by.
-function importHintNameEntrySize(name String) returns ByteCount
+function importHintNameEntrySize(name String) returns ByteOffset
 	let body = importHintNameBodyBytes(name)
 	if body mod 2 != 0 'odd'
 		return body + 1
@@ -665,7 +676,7 @@ end 'appendImportHintNameEntry'
 
 // Sum of Hint/Name entry sizes across a run of imports — the offset delta from
 // the first entry to whatever follows the run in the table.
-function sumHintSizes(names StringArray) returns ByteCount
+function sumHintSizes(names StringArray) returns BytePos
 	var total = 0
 	for name in names 'each'
 		total = total + importHintNameEntrySize(name)
@@ -711,7 +722,7 @@ function appendThunkPass(data ByteArray, idataRva Rva, hintNameOffset ByteOffset
 		if dllIsEmitted(dll, sockets: sockets) 'live'
 			let names = importNamesFor(dll, optionalImports: optionalImports)
 			for name in names 'thunk'
-				writeQword(data, value: idataRva + running)
+				writeQword(data, value: rvaWord(idataRva, offset: running))
 				running = running + importHintNameEntrySize(name)
 			end 'thunk'
 			writeQword(data, value: 0)
@@ -732,12 +743,12 @@ function buildImportSection(idataRva Rva, optionalImports bool, sockets bool) re
 	data.reserve(256)
 
 	let thunkBytes = thunkTableBytes(optionalImports, sockets: sockets)
-	let iatOffset = 0
+	let iatOffset = 0 as ByteOffset
 	let iltOffset = thunkBytes
 	// ⚠ `ImportThunkPasses`, not a literal 2: the SAME constant drives the emission loop below, so the
 	// directory can never land on top of a pass this writer actually wrote.
 	let importDirOffset = thunkBytes * ImportThunkPasses
-	let importDirBytes = ImportDirEntrySize * (emittedDllCount(sockets) + 1)
+	let importDirBytes = ImportDirEntrySize * ((emittedDllCount(sockets) + 1) as ByteOffset)
 	let hintNameOffset = importDirOffset + importDirBytes
 
 	// IAT then ILT (identical): each thunk holds the RVA of its Hint/Name entry, and an all-zero qword
@@ -752,10 +763,10 @@ function buildImportSection(idataRva Rva, optionalImports bool, sockets bool) re
 	for dll in ImportDll.allCases 'descriptors'
 		if dllIsEmitted(dll, sockets: sockets) 'live'
 			let runOffset = dllRunOffset(dll, optionalImports: optionalImports, sockets: sockets)
-			writeDword(data, value: idataRva + iltOffset + runOffset)  // OriginalFirstThunk (ILT RVA)
+			writeDword(data, value: rvaWord(idataRva, offset: iltOffset + runOffset))  // OriginalFirstThunk (ILT RVA)
 			writeZeros(data, n: 8)  // TimeDateStamp + ForwarderChain
-			writeDword(data, value: idataRva + nameCursor)  // Name RVA
-			writeDword(data, value: idataRva + iatOffset + runOffset)  // FirstThunk (IAT RVA)
+			writeDword(data, value: rvaWord(idataRva, offset: nameCursor))  // Name RVA
+			writeDword(data, value: rvaWord(idataRva, offset: iatOffset + runOffset))  // FirstThunk (IAT RVA)
 			nameCursor = nameCursor + dllNameField(dllFileName(dll)).count()
 		end 'live'
 	end 'descriptors'
@@ -776,7 +787,7 @@ function buildImportSection(idataRva Rva, optionalImports bool, sockets bool) re
 		end 'live'
 	end 'dllNames'
 
-	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: ImportDirEntrySize * emittedDllCount(sockets), iatDirSize: thunkBytes)
+	return ImportSection.create(data, iatRva: rvaAt(idataRva, offset: iatOffset), importDirRva: rvaAt(idataRva, offset: importDirOffset), importDirSize: ((ImportDirEntrySize * emittedDllCount(sockets)) as BytePos), iatDirSize: thunkBytes as BytePos)
 end 'buildImportSection'
 
 // ⭐⭐ **BYTE OFFSET OF A SLOT WITHIN THE IAT — and it ASKS `slotDll` rather than deducing the DLL.**
@@ -795,7 +806,7 @@ end 'buildImportSection'
 function iatSlotByteOffset(slotIndex RelocSlotIndex, optionalImports bool, sockets bool) returns ByteOffset
 	for slot in IatSlot.allCases 'find'
 		if iatSlotIndex(slot) == slotIndex 'found'
-			return dllRunOffset(slotDll(slot), optionalImports: optionalImports, sockets: sockets) + slotPositionInRun(slot, optionalImports: optionalImports) * PointerSize
+			return dllRunOffset(slotDll(slot), optionalImports: optionalImports, sockets: sockets) + (slotPositionInRun(slot, optionalImports: optionalImports) * PointerSize) as ByteOffset
 		end 'found'
 	end 'find'
 
@@ -805,7 +816,7 @@ end 'iatSlotByteOffset'
 // How many of `slot`'s OWN DLL's emitted imports precede it — its index within that DLL's thunk run.
 // Counts through the same `slotIsEmitted` membership test `importNamesFor` builds the run with, so the
 // position and the run cannot disagree.
-function slotPositionInRun(slot IatSlot, optionalImports bool) returns ByteCount
+function slotPositionInRun(slot IatSlot, optionalImports bool) returns BytePos
 	let dll = slotDll(slot)
 	var position = 0
 	for other in IatSlot.allCases 'walk'
@@ -829,10 +840,10 @@ end 'slotPositionInRun'
 // its IAT entry, relative to the end of the instruction.
 function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva, optionalImports bool, sockets bool)
 	for reloc in relocations 'patch'
-		let ripAtReloc = textRva + reloc.codeOffset + X64Disp32Width
-		let iatEntryRva = idataRva + iatSlotByteOffset(reloc.slotIndex, optionalImports: optionalImports, sockets: sockets)
+		let ripAtReloc = textRva + (reloc.codeOffset as Rva) + X64Disp32Width
+		let iatEntryRva = rvaAt(idataRva, offset: iatSlotByteOffset(reloc.slotIndex, optionalImports: optionalImports, sockets: sockets))
 		let rel = iatEntryRva - ripAtReloc
-		patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rel, what: PatchSite.x64IatDisp32, targetAddr: iatEntryRva)
+		patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rel as MachineWord, what: PatchSite.x64IatDisp32, targetAddr: iatEntryRva as MachineWord)
 	end 'patch'
 end 'patchRelocationsX86'
 
@@ -849,7 +860,7 @@ end 'patchRelocationsX86'
 // instead of a silently unpatched zero displacement.
 function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, dataRva Rva)
 	for reloc in rdataRelocs 'patch'
-		let ripAtReloc = textRva + reloc.codeOffset + X64Disp32Width
+		let ripAtReloc = textRva + (reloc.codeOffset as Rva) + X64Disp32Width
 		match reloc.kind 'kind'
 			ripRelDisp32 then patchSectionRipRel(code, reloc: reloc, sectionRva: rdataRva, ripAtReloc: ripAtReloc)
 			dataSectionRipRelDisp32 then patchSectionRipRel(code, reloc: reloc, sectionRva: dataRva, ripAtReloc: ripAtReloc)
@@ -865,8 +876,8 @@ end 'patchRdataRelocationsX86'
 // it: the arithmetic is identical and only the section differs, so writing it once means a `.data`
 // reference and an `.rdata` one cannot drift on the end-of-field convention.
 function patchSectionRipRel(code ByteArray, reloc RdataRelocation, sectionRva Rva, ripAtReloc Rva)
-	let targetRva = sectionRva + reloc.rdataOffset
-	patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: targetRva - ripAtReloc, what: PatchSite.x64RdataDisp32, targetAddr: targetRva)
+	let targetRva = rvaAt(sectionRva, offset: reloc.rdataOffset)
+	patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: ((targetRva - ripAtReloc) as MachineWord), what: PatchSite.x64RdataDisp32, targetAddr: targetRva as MachineWord)
 end 'patchSectionRipRel'
 
 // ⭐ **BAKE EACH STRING LITERAL'S `buffer@0`** (P1.2 wave A). A String record's buffer field holds the
@@ -882,7 +893,7 @@ function patchStringBufferFixups(rdata ByteArray, fixups StringBufferFixupArray,
 	for fixup in fixups 'each'
 		let recordOffset = globalData.rdataOffsetOf(fixup.recordLabel)
 		let blobOffset = globalData.rdataOffsetOf(fixup.blobLabel)
-		let absVa = ImageBase + rdataRva + blobOffset
+		let absVa = (ImageBase + rvaAt(rdataRva, offset: blobOffset)) as MachineWord
 		patchQword(rdata, offset: recordOffset + StringBufferOffset, value: absVa)
 	end 'each'
 end 'patchStringBufferFixups'
@@ -900,15 +911,15 @@ function writeSectionName(buf ByteArray, name String)
 	end 'pad'
 end 'writeSectionName'
 
-function writeSectionHeader(buf ByteArray, name String, virtualSize ByteCount, virtualAddress Rva, rawDataSize ByteCount, rawDataPointer ByteOffset, characteristics SectionFlags)
+function writeSectionHeader(buf ByteArray, name String, virtualSize BytePos, virtualAddress Rva, rawDataSize BytePos, rawDataPointer ByteOffset, characteristics SectionFlags)
 	writeSectionName(buf, name: name)
-	writeDword(buf, value: virtualSize)
-	writeDword(buf, value: virtualAddress)
-	writeDword(buf, value: rawDataSize)
-	writeDword(buf, value: rawDataPointer)
+	writeDword(buf, value: virtualSize as MachineWord)
+	writeDword(buf, value: virtualAddress as MachineWord)
+	writeDword(buf, value: rawDataSize as MachineWord)
+	writeDword(buf, value: rawDataPointer as MachineWord)
 	// PointerToRelocations, PointerToLinenumbers, NumberOfRelocations, NumberOfLinenumbers — all zero.
 	buf.append(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-	writeDword(buf, value: characteristics)
+	writeDword(buf, value: characteristics as MachineWord)
 end 'writeSectionHeader'
 
 // --- COFF symbol table (trailing, for debuggers; the loader ignores it) ---
@@ -917,9 +928,9 @@ end 'writeSectionHeader'
 // symbol's format-5 auxiliary record).
 type PeSectionRec
 	export var name as String
-	export var rawSize as ByteCount
+	export var rawSize as BytePos
 
-	static function create(name String, rawSize ByteCount) returns PeSectionRec
+	static function create(name String, rawSize BytePos) returns PeSectionRec
 		return Self{name: name, rawSize: rawSize}
 	end 'create'
 end 'PeSectionRec'
@@ -959,10 +970,10 @@ function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, secti
 	var total = 0 as SymbolTally
 	for (iter, section) in sections.withIterator() 'sectionSyms'
 		// Static-class symbol, no type, one section-definition auxiliary record.
-		writeCoffSymbolEntry(pe, stringTable: stringTable, name: section.name, value: 0, sectionNumber: iter.index() + 1, symType: CoffSymTypeNone, storageClass: CoffSymClassStatic, numAux: CoffAuxCountSection)
+		writeCoffSymbolEntry(pe, stringTable: stringTable, name: section.name, value: 0, sectionNumber: ((iter.index() + 1) as MachineWord), symType: CoffSymTypeNone, storageClass: CoffSymClassStatic, numAux: CoffAuxCountSection)
 		total = total + 1
 		// Auxiliary format 5 (section definition): 18 bytes.
-		writeDword(pe, value: section.rawSize)  // Length
+		writeDword(pe, value: section.rawSize as MachineWord)  // Length
 		writeWord(pe, value: 0)  // NumberOfRelocations
 		writeWord(pe, value: 0)  // NumberOfLinenumbers
 		writeDword(pe, value: 0)  // CheckSum
@@ -975,7 +986,7 @@ function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, secti
 	// Function symbols all live in .text, typed DTYPE_FUNCTION with external
 	// storage class and no auxiliary record.
 	for sym in debugSymbols 'funcSyms'
-		writeCoffSymbolEntry(pe, stringTable: stringTable, name: String.from(sym.name), value: sym.codeOffset, sectionNumber: TextSectionNumber, symType: CoffSymTypeFunction, storageClass: CoffSymClassExternal, numAux: CoffAuxCountNone)
+		writeCoffSymbolEntry(pe, stringTable: stringTable, name: String.from(sym.name), value: sym.codeOffset as MachineWord, sectionNumber: TextSectionNumber, symType: CoffSymTypeFunction, storageClass: CoffSymClassExternal, numAux: CoffAuxCountNone)
 		total = total + 1
 	end 'funcSyms'
 
@@ -986,7 +997,7 @@ end 'writeCoffSymbolTable'
 
 // Build the emitted-section list in emission order — the section-symbol numbering
 // must match the section header order in `writePe`.
-function buildSectionList(codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, hasData bool, dataSize ByteCount, idataSize ByteCount, rsrcSize ByteCount) returns PeSectionList
+function buildSectionList(codeSize BytePos, hasRdata bool, rdataSize BytePos, hasSymdata bool, symdataSize BytePos, hasData bool, dataSize BytePos, idataSize BytePos, rsrcSize BytePos) returns PeSectionList
 	var sections = PeSectionList.create()
 	sections.push(PeSectionRec.create(".text", rawSize: codeSize))
 	if hasRdata 'rdata'
@@ -1044,7 +1055,7 @@ function writeResourceDirHeader(buf ByteArray, idEntries ResourceEntryCount)
 	writeWord(buf, value: 0)  // MajorVersion
 	writeWord(buf, value: 0)  // MinorVersion
 	writeWord(buf, value: 0)  // NumberOfNamedEntries
-	writeWord(buf, value: idEntries)
+	writeWord(buf, value: idEntries as MachineWord)
 end 'writeResourceDirHeader'
 
 // Build the minimal 3-level resource tree carrying the single RT_MANIFEST resource.
@@ -1071,7 +1082,7 @@ function buildRsrcSection(rsrcRva Rva) returns ByteArray
 
 	// IMAGE_RESOURCE_DATA_ENTRY: the manifest's RVA is image-relative (NOT
 	// section-relative, unlike the directory-entry offsets above).
-	writeDword(rsrc, value: rsrcRva + RsrcManifestOffset)
+	writeDword(rsrc, value: ((rsrcRva + RsrcManifestOffset) as MachineWord))
 	writeDword(rsrc, value: manifest.count())
 	writeDword(rsrc, value: 0)  // CodePage
 	writeDword(rsrc, value: 0)  // Reserved
@@ -1155,7 +1166,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// binary byte-identical across this rung.
 	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection
 	let sockets = codeResult.stdModule.usesSockets
-	let idata = buildImportSection(idataRva, optionalImports: optionalImports, sockets: sockets)
+	let idata = buildImportSection(idataRva as Rva, optionalImports: optionalImports, sockets: sockets)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)
@@ -1165,7 +1176,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// data-entry pointer is image-relative, so `.rsrc`'s own RVA must be fixed before the
 	// section is built.
 	let rsrcRva = idataRva + idataSizeVirtual
-	let rsrcData = buildRsrcSection(rsrcRva)
+	let rsrcData = buildRsrcSection(rsrcRva as Rva)
 	let rsrcSize = rsrcData.count()
 	let rsrcSizeAligned = alignUp(rsrcSize, alignment: FileAlignment)
 	let rsrcSizeVirtual = alignUp(rsrcSize, alignment: SectionAlignment)
@@ -1173,13 +1184,13 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let imageSize = rsrcRva + rsrcSizeVirtual
 
 	// Patch IAT + rdata relocations in the code image before it is written.
-	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva, optionalImports: optionalImports, sockets: sockets)
-	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, dataRva: dataRva)
+	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva as Rva, optionalImports: optionalImports, sockets: sockets)
+	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva as Rva, dataRva: dataRva as Rva)
 	// Bake each String literal's `buffer@0` into the `.rdata` IMAGE now that `rdataRva` is fixed.
-	patchStringBufferFixups(codeResult.rdata, fixups: codeResult.globalData.stringBufferFixups, globalData: codeResult.globalData, rdataRva: rdataRva)
+	patchStringBufferFixups(codeResult.rdata, fixups: codeResult.globalData.stringBufferFixups, globalData: codeResult.globalData, rdataRva: rdataRva as Rva)
 	// Patch each dense-`match` jump table's `.rdata` slots to `targetBlockRva − tableBaseRva` now that both
 	// sections' RVAs are fixed (the image is fixed-base, so an RVA delta IS the runtime address delta).
-	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textRva, rdataAddr: rdataRva)
+	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textRva, rdataAddr: rdataRva as MachineWord)
 	// Bake every `.rdata` slot holding a `.text` address — a witness-table method slot, or a managed-opaque
 	// descriptor's `destroyFunc@40`/`copyFunc@32` — with the target's absolute `.text` VA. A fixed-base image,
 	// so `ImageBase + textRva + funcOffset` IS the runtime address (P1.7 slice 3b-ii / P1.7a slice 2a).
@@ -1210,18 +1221,18 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// === Optional header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")  // Magic (PE32+), MajorLinkerVersion 14, MinorLinkerVersion 0
-	writeDword(pe, value: codeSizeAligned)  // SizeOfCode
-	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned + rsrcSizeAligned)  // SizeOfInitializedData
+	writeDword(pe, value: codeSizeAligned as MachineWord)  // SizeOfCode
+	writeDword(pe, value: ((rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned + rsrcSizeAligned) as MachineWord))  // SizeOfInitializedData
 	pe.append(b"\x00\x00\x00\x00")  // SizeOfUninitializedData
-	writeDword(pe, value: entryPointRva)  // AddressOfEntryPoint
+	writeDword(pe, value: entryPointRva as MachineWord)  // AddressOfEntryPoint
 	writeDword(pe, value: textRva)  // BaseOfCode
 
 	// ImageBase(0x140000000), SectionAlignment(4096), FileAlignment(512),
 	// MajorOSVersion(6) MinorOSVersion(0) MajorImageVersion(0) MinorImageVersion(0)
 	// MajorSubsystemVersion(6) MinorSubsystemVersion(0) Win32VersionValue(0)
 	pe.append(b"\x00\x00\x00\x40\x01\x00\x00\x00\x00\x10\x00\x00\x00\x02\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00")
-	writeDword(pe, value: imageSize)  // SizeOfImage
-	writeDword(pe, value: headersAligned)  // SizeOfHeaders
+	writeDword(pe, value: imageSize as MachineWord)  // SizeOfImage
+	writeDword(pe, value: headersAligned as MachineWord)  // SizeOfHeaders
 	// CheckSum(0), Subsystem(3=CONSOLE), DllCharacteristics(0x8100 = NX_COMPAT |
 	// TERMINAL_SERVER_AWARE; DYNAMIC_BASE cleared so ImageBase is pinned),
 	// StackReserve(0x100000) StackCommit(0x1000) HeapReserve(0x100000)
@@ -1232,33 +1243,33 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// #2 Resource: the .rsrc manifest. #3-#11 (9 entries): empty. #12 IAT.
 	// #13-#15 (3 entries): empty.
 	writeZeros(pe, n: DataDirEntrySize)
-	writeDword(pe, value: idata.importDirRva)
-	writeDword(pe, value: idata.importDirSize)
-	writeDword(pe, value: rsrcRva)
+	writeDword(pe, value: idata.importDirRva as MachineWord)
+	writeDword(pe, value: idata.importDirSize as MachineWord)
+	writeDword(pe, value: rsrcRva as MachineWord)
 	writeDword(pe, value: rsrcSize)
 	writeZeros(pe, n: DataDirEntrySize * 9)
-	writeDword(pe, value: idata.iatRva)
-	writeDword(pe, value: idata.iatDirSize)
+	writeDword(pe, value: idata.iatRva as MachineWord)
+	writeDword(pe, value: idata.iatDirSize as MachineWord)
 	writeZeros(pe, n: DataDirEntrySize * 3)
 
 	// === Section headers ===
 	var nextFilePointer = headersAligned + codeSizeAligned
-	writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned, characteristics: SectionTextFlags)
+	writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned as ByteOffset, characteristics: SectionTextFlags)
 	if hasRdata 'rdataHeader'
-		writeSectionHeader(pe, name: ".rdata", virtualSize: rdataSize, virtualAddress: rdataRva, rawDataSize: rdataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionRdataFlags)
+		writeSectionHeader(pe, name: ".rdata", virtualSize: rdataSize, virtualAddress: rdataRva as Rva, rawDataSize: rdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRdataFlags)
 		nextFilePointer = nextFilePointer + rdataSizeAligned
 	end 'rdataHeader'
 	if hasSymdata 'symtabHeader'
-		writeSectionHeader(pe, name: ".symtab", virtualSize: symdataSize, virtualAddress: symdataRva, rawDataSize: symdataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionSymtabFlags)
+		writeSectionHeader(pe, name: ".symtab", virtualSize: symdataSize, virtualAddress: symdataRva as Rva, rawDataSize: symdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionSymtabFlags)
 		nextFilePointer = nextFilePointer + symdataSizeAligned
 	end 'symtabHeader'
 	if hasData 'dataHeader'
-		writeSectionHeader(pe, name: ".data", virtualSize: dataSize, virtualAddress: dataRva, rawDataSize: dataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionDataFlags)
+		writeSectionHeader(pe, name: ".data", virtualSize: dataSize, virtualAddress: dataRva as Rva, rawDataSize: dataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionDataFlags)
 		nextFilePointer = nextFilePointer + dataSizeAligned
 	end 'dataHeader'
-	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionIdataFlags)
+	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva as Rva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionIdataFlags)
 	nextFilePointer = nextFilePointer + idataSizeAligned
-	writeSectionHeader(pe, name: ".rsrc", virtualSize: rsrcSize, virtualAddress: rsrcRva, rawDataSize: rsrcSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionRsrcFlags)
+	writeSectionHeader(pe, name: ".rsrc", virtualSize: rsrcSize, virtualAddress: rsrcRva as Rva, rawDataSize: rsrcSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRsrcFlags)
 
 	padTo(pe, size: headersAligned)
 
@@ -1293,7 +1304,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		let sections = buildSectionList(codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, hasData: hasData, dataSize: dataSize, idataSize: idataSize, rsrcSize: rsrcSize)
 		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, sections: sections)
 		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
-		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount)
+		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount as MachineWord)
 	end 'writeCoff'
 
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'

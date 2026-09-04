@@ -1,6 +1,6 @@
 // Shared byte-writing utilities and typealiases used across emitters and writers.
 
-// `ByteCount` is NOT declared here: `stdlib/String.maxon` exports it, identically, and a count of
+// `BytePos` is NOT declared here: `stdlib/String.maxon` exports it, identically, and a count of
 // bytes is one fact. Two more copies lived here and in `Compiler/PhaseProbe.maxon` until the flat
 // namespace check refused them.
 export typealias ByteOffset = int(0 to u64.max)
@@ -20,15 +20,7 @@ export typealias ByteOffsetArray = Array with ByteOffset
 // never between two `MachineWord`s, it was inside one of them. The two names still do not collide,
 // because that one is module-private while this one is `export`ed.
 //
-// `NonZeroWord` below is the one place they DO still differ (`1 to u64.max` here against
-// `1 to i64.max` there): that one's sole use casts an `ElementStride` at a divide, where a stride
-// above `i64.max` is not a value the type must admit, so the narrower range keeps its door guarded.
 export typealias MachineWord = int(0 to u64.max)
-
-// A machine word proven non-zero — the divisor type for `/`/`mod`. Integer division is fallible
-// (a zero divisor throws), so a divisor that is structurally non-zero but typed 0-inclusive is
-// cast to this at the divide, making the divide provably safe (a bare divide, no check).
-export typealias NonZeroWord = int(1 to u64.max)
 
 // A signed 32-bit immediate / displacement operand — the value an x64 instruction
 // carries in a `id` (imm32) or a `disp32` field: a group-1 immediate ALU op's
@@ -66,7 +58,7 @@ export function writeQword(buf ByteArray, value MachineWord)
 	buf.push((value shr 56) and 0xFF)
 end 'writeQword'
 
-export function writeZeros(buf ByteArray, n ByteCount)
+export function writeZeros(buf ByteArray, n BytePos)
 	for _ in 0 upto n 'zeros'
 		buf.push(0)
 	end 'zeros'
@@ -83,7 +75,7 @@ function writeAscii(buf ByteArray, text String)
 	buf.push(0)
 end 'writeAscii'
 
-export function padTo(buf ByteArray, size ByteCount)
+export function padTo(buf ByteArray, size BytePos)
 	while buf.count() < size 'pad'
 		buf.push(0)
 	end 'pad'
@@ -100,7 +92,7 @@ end 'padTo'
 export union ByteReadError implements Error
 	// A read crossed `buf.count()`. `offset`/`width`/`available` pin down the
 	// overrun for the caller's panic/log message.
-	outOfRange(offset ByteOffset, width ByteCount, available ByteCount)
+	outOfRange(offset ByteOffset, width BytePos, available BytePos)
 end 'ByteReadError'
 
 export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord throws ByteReadError
@@ -113,7 +105,7 @@ export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord 
 		let b1 = buf.get(offset + 1)
 		let b2 = buf.get(offset + 2)
 		let b3 = buf.get(offset + 3)
-		result = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+		result = (b0 as MachineWord) or ((b1 as MachineWord) shl 8) or ((b2 as MachineWord) shl 16) or ((b3 as MachineWord) shl 24)
 	end 'readBytes' otherwise (e) 'badRead'
 		match e 'kind'
 			// Bounds were just checked, so an OOB here is impossible; an empty slot
@@ -176,7 +168,7 @@ export function writeQwordBE(buf ByteArray, value MachineWord)
 	writeDwordBE(buf, value: value and 0xFFFFFFFF)
 end 'writeQwordBE'
 
-export function alignUp(value ByteCount, alignment ByteCount) returns ByteCount
+export function alignUp(value BytePos, alignment BytePos) returns BytePos
 	return (value + alignment - 1) and not (alignment - 1)
 end 'alignUp'
 
@@ -234,7 +226,7 @@ export let X64Disp32Width = 4
 // miscompiled function addresses past ±1 MiB.
 export function patchX64Rel32(code ByteArray, codeOffset CodeOffset, rel MachineWord, what PatchSite, targetAddr MachineWord)
 	assertSignedReach(rel, bits: 32, what: what, codeOffset: codeOffset, targetAddr: targetAddr)
-	patchDword(code, offset: codeOffset, value: rel)
+	patchDword(code, offset: codeOffset as ByteOffset, value: rel)
 end 'patchX64Rel32'
 
 // Patch an ARM64 ADR instruction (imm21, byte-scaled, ±1 MiB) to point to a target
@@ -245,10 +237,10 @@ export function patchArm64Adr(code ByteArray, codeOffset CodeOffset, instrAddr M
 	assertSignedReach(byteOff, bits: 21, what: PatchSite.arm64Adr, codeOffset: codeOffset, targetAddr: targetAddr)
 	let immlo = byteOff and 0x3
 	let immhi = (byteOff shr 2) and 0x7FFFF
-	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64Adr: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
+	let origInsn = try readDword(code, offset: codeOffset as ByteOffset) otherwise panic("patchArm64Adr: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let rd = origInsn and 0x1F
 	let patched = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
-	patchDword(code, offset: codeOffset, value: patched)
+	patchDword(code, offset: codeOffset as ByteOffset, value: patched)
 end 'patchArm64Adr'
 
 // Patch an ARM64 LDR-literal instruction (imm19, word-scaled, ±1 MiB) to point to a
@@ -258,9 +250,9 @@ export function patchArm64LdrLiteral(code ByteArray, codeOffset CodeOffset, inst
 	assertSignedReach(byteOff, bits: 21, what: PatchSite.arm64LdrLiteral, codeOffset: codeOffset, targetAddr: targetAddr)
 	let wordOff = byteOff / 4
 	let imm19 = wordOff and 0x7FFFF
-	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64LdrLiteral: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
+	let origInsn = try readDword(code, offset: codeOffset as ByteOffset) otherwise panic("patchArm64LdrLiteral: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let patched = (origInsn and 0xFF00001F) or (imm19 shl 5)
-	patchDword(code, offset: codeOffset, value: patched)
+	patchDword(code, offset: codeOffset as ByteOffset, value: patched)
 end 'patchArm64LdrLiteral'
 
 // Patch an ARM64 ADRP instruction (imm21, 4 KiB-page-scaled, ±4 GiB) to the page of
@@ -278,10 +270,10 @@ export function patchArm64Adrp(code ByteArray, codeOffset CodeOffset, instrAddr 
 	let pageOffShifted = pageOff shr 12
 	let immlo = pageOffShifted and 0x3
 	let immhi = (pageOffShifted shr 2) and 0x7FFFF
-	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64Adrp: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
+	let origInsn = try readDword(code, offset: codeOffset as ByteOffset) otherwise panic("patchArm64Adrp: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let rd = origInsn and 0x1F
 	let patched = (immlo shl 29) or 0x90000000 or (immhi shl 5) or rd
-	patchDword(code, offset: codeOffset, value: patched)
+	patchDword(code, offset: codeOffset as ByteOffset, value: patched)
 end 'patchArm64Adrp'
 
 // Patch the within-page byte offset of `targetAddr` into the imm12 of an ADD/LDR/STR
@@ -292,15 +284,14 @@ end 'patchArm64Adrp'
 // 0x7FF8 scaled covers the whole page), so no range guard is needed.
 export function patchArm64PageOff(code ByteArray, codeOffset CodeOffset, targetAddr MachineWord)
 	let pageOffset = targetAddr and 0xFFF
-	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64PageOff: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
+	let origInsn = try readDword(code, offset: codeOffset as ByteOffset) otherwise panic("patchArm64PageOff: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let topByte = (origInsn shr 24) and 0xFF
 	let scale = 8 if topByte == 0xF9 else 1  // 0xF9 = LDR/STR Xn (scaled by 8); 0x91 = ADD imm (unscaled)
 	if topByte != 0xF9 and topByte != 0x91 'badOpcode'
 		panic("patchArm64PageOff: instruction at codeOffset {codeOffset} is neither ADD-imm (0x91) nor LDR/STR Xn (0xF9) — opcode top byte 0x{topByte} — emitter/reloc mismatch")
 	end 'badOpcode'
-	// `scale` is 1 or 8 — always non-zero; cast so the divide is provably safe.
-	let s = scale as NonZeroWord
-	let imm12 = (pageOffset / s) and 0xFFF
+	// `scale` is 1 or 8, never zero; `otherwise panic` is the project's form for a `try` that must not fail.
+	let imm12 = (try (pageOffset / scale) otherwise panic("patchArm64PageOff: scale was 0 past its own two-valued choice")) and 0xFFF
 	let patched = (origInsn and 0xFFC003FF) or (imm12 shl 10)
-	patchDword(code, offset: codeOffset, value: patched)
+	patchDword(code, offset: codeOffset as ByteOffset, value: patched)
 end 'patchArm64PageOff'

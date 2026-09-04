@@ -9,12 +9,10 @@ public enum StringError implements Error
 end 'StringError'
 
 // A string's bytes live in ONE `__ManagedMemory`, whose length is a signed machine word, so no honest
-// byte count or byte position can exceed `i64.max`; a grapheme is at least one byte, so no grapheme
-// count or index can exceed the byte count. The upper bound is what makes these doors GUARDED — a
-// full `int(0 to u64.max)` is the one shape both compilers leave unchecked — and it is also what pins
-// every ordering comparison on them to the signed reading.
-public typealias ByteCount = int(0 to i64.max)
-public typealias GraphemeCount = int(0 to i64.max)
+// byte position can exceed `i64.max`; a grapheme is at least one byte, so no grapheme index can exceed
+// the byte position beside it. The upper bound is what makes these doors GUARDED — a full
+// `int(0 to u64.max)` is the one shape both compilers leave unchecked — and it is also what pins every
+// ordering comparison on them to the signed reading.
 public typealias BytePos = int(0 to i64.max)
 public typealias GraphemeIndex = int(0 to i64.max)
 
@@ -27,14 +25,9 @@ public typealias GraphemeIndex = int(0 to i64.max)
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-// The UTF-8 bytes behind a `String`, nameable at FILE scope — `String.ByteMemory` is not, and a
-// generic cannot be instantiated inline in a parameter type. `StringBuilder.appendBytes` needs to say
-// it, so it is said once here.
-typealias ByteBuffer = __ManagedMemory with Byte
-
-// The signed shift between an ASCII letter and its opposite case: +32 upper->lower, -32 lower->upper.
-// `String.mapAsciiCase` adds it to a byte in the A-Z / a-z range.
-typealias AsciiCaseDelta = int(-32 to 32)
+// The one bit that separates an ASCII letter from its opposite case: `A` is 65 and `a` is 97.
+// `String.mapAsciiCase` flips it on every byte in the A-Z / a-z range, so one mapping serves both directions.
+let AsciiCaseBit = 32 as Byte
 
 // The lowest non-ASCII byte value: at or above this, a byte begins a multi-byte UTF-8 codepoint.
 let AsciiLimit = 128 as Byte
@@ -299,7 +292,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// workload, with mm-trace byte-identical, so no allocation gate could see it. The bodies below
 	/// stay as the NORMATIVE definition of what the compiler emits for them (2-Parser.cs,
 	/// TryEmitBuiltinStringMethod), and are what any future compiler must reproduce.
-	public function byteLength() returns ByteCount
+	public function byteLength() returns BytePos
 		return managed.length()
 	end 'byteLength'
 
@@ -347,7 +340,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// allocation that owns its bytes and references nothing.
 	///
 	/// Callers must guarantee `pos + len <= byteLength()`; the lowering's bounds check panics.
-	module function makeCharFromBytes(pos BytePos, len ByteCount) returns Character
+	module function makeCharFromBytes(pos BytePos, len BytePos) returns Character
 		return managed.makeCharFromBytes(pos, len)
 	end 'makeCharFromBytes'
 
@@ -393,7 +386,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Get grapheme cluster count (number of user-perceived characters).
 	/// Cost is O(n) in the byte length for non-ASCII strings; callers that
 	/// need the count repeatedly should cache it themselves.
-	public function count() returns GraphemeCount
+	public function count() returns GraphemeIndex
 		return countGraphemes(self)
 	end 'count'
 
@@ -513,7 +506,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return sliceBytes(start.bytePos(), endPos: endIndex.bytePos(), singleByteGraphemes: singleByteGraphemesFlag)
 	end 'slice'
 
-	public function slice(start StringIndex, length GraphemeCount) returns String
+	public function slice(start StringIndex, length GraphemeIndex) returns String
 		let endBytePos = graphemeOffsetToBytePos(self, startBytePos: start.bytePos(), count: length)
 		return sliceBytes(start.bytePos(), endPos: endBytePos, singleByteGraphemes: singleByteGraphemesFlag)
 	end 'slice'
@@ -686,7 +679,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// String whose inline bytes are written in place — no record, no allocation. Materializing a
 	// mutable buffer instead would allocate on every `toLower` of a short string, and short derived
 	// strings are precisely what SSO exists for.
-	function mapAsciiCase(lo Byte, hi Byte, delta AsciiCaseDelta) returns String
+	function mapAsciiCase(lo Byte, hi Byte) returns String
 		let len = byteLength()
 		if len == 0 'empty'
 			return clone()
@@ -697,7 +690,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		for i in 0 upto len 'convert'
 			let b = try work.byteAt(i) otherwise panic("String.mapAsciiCase: byteAt OOB — i < len invariant")
 			if b >= lo and b <= hi 'inRange'
-				try work.setByte(i, value: b + delta) otherwise panic("String.mapAsciiCase: setByte OOB — i < len invariant")
+				try work.setByte(i, value: b xor AsciiCaseBit) otherwise panic("String.mapAsciiCase: setByte OOB — i < len invariant")
 			end 'inRange'
 		end 'convert'
 		return work
@@ -705,12 +698,12 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
 	public function toLower() returns String
-		return mapAsciiCase(65, hi: 90, delta: 32)
+		return mapAsciiCase(65, hi: 90)
 	end 'toLower'
 
 	// ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
 	public function toUpper() returns String
-		return mapAsciiCase(97, hi: 122, delta: -32)
+		return mapAsciiCase(97, hi: 122)
 	end 'toUpper'
 
 	/// The byte position of the first grapheme NOT in `chars`, scanning forward from the start —
@@ -852,8 +845,8 @@ public type StringBuilder
 	/// the answer can have ONE allocation of exactly the right size, with no re-copies and nothing
 	/// wasted, which is strictly better than any growth policy can be. (It is what the compiler
 	/// already does for an interpolated string: it measures every part, then allocates once.)
-	public function reserve(byteCount ByteCount)
-		bytes.reserve(byteCount)
+	public function reserve(byteCount BytePos)
+		bytes.reserve(byteCount as ElementIndex)
 	end 'reserve'
 
 	public function append(other String)
@@ -868,7 +861,7 @@ public type StringBuilder
 	/// The bytes are COPIED in. The range may point into a buffer this builder is about to reallocate
 	/// (`replace` slices the very string it is rebuilding), so borrowing it would be a use-after-free
 	/// waiting for the next growth.
-	function appendBytes(piece ByteBuffer, singleByteGraphemes bool)
+	function appendBytes(piece ByteMemory, singleByteGraphemes bool)
 		bytes.appendMemory(piece)
 
 		if not singleByteGraphemes 'clearFlag'
@@ -876,7 +869,7 @@ public type StringBuilder
 		end 'clearFlag'
 	end 'appendBytes'
 
-	public function byteLength() returns ByteCount
+	public function byteLength() returns BytePos
 		return bytes.count()
 	end 'byteLength'
 
@@ -997,7 +990,7 @@ end 'StringIndex'
 /// to answer an out-of-range byte with a bare `break`, which fell out of the loop and returned
 /// TRUE — an OOB read would have reported a MATCH. The length checks above every caller made it
 /// unreachable, so it was a silent wrong answer waiting for the first caller that got them wrong.
-function bytesEqual(a String, aOffset BytePos, b String, bOffset BytePos, len ByteCount) returns bool
+function bytesEqual(a String, aOffset BytePos, b String, bOffset BytePos, len BytePos) returns bool
 	for i in 0 upto len 'compare_loop'
 		let ab = try a.byteAt(aOffset + i) otherwise panic("bytesEqual: byteAt OOB — caller guarantees aOffset + len <= a.byteLength()")
 		let bb = try b.byteAt(bOffset + i) otherwise panic("bytesEqual: byteAt OOB — caller guarantees bOffset + len <= b.byteLength()")
@@ -1019,7 +1012,7 @@ end 'bytesEqual'
 /// compare one byte. Measured: without this check, a 576K-position miss ran ~4% slower than the
 /// old code, which had the compare loop written out inline here (one of the five copies this
 /// rung removed). With it, the dedup costs nothing and the search is faster than what it replaced.
-function findIn(haystack String, offset BytePos, len ByteCount, needle String) returns BytePos throws StringError
+function findIn(haystack String, offset BytePos, len BytePos, needle String) returns BytePos throws StringError
 	let needleLen = needle.byteLength()
 
 	if needleLen == 0 'empty_needle'
@@ -1052,7 +1045,7 @@ end 'findIn'
 /// because a pure call whose answer nobody wants is the wrong call. What is left, and what is right, is
 /// to consume the ONE half of `findIn`'s answer this caller has a use for: the THROW. `otherwise return
 /// false` says "the search did not find it" in as many words, and nothing here reads as a value test.
-function needleOccursIn(haystack String, len ByteCount, needle String) returns bool
+function needleOccursIn(haystack String, len BytePos, needle String) returns bool
 	try findIn(haystack, offset: 0, len: len, needle: needle) otherwise return false
 	return true
 end 'needleOccursIn'

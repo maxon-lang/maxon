@@ -55,7 +55,7 @@ export type Arm64RuntimeAsm
 	// `mrt_panic` SEEDS the walk from its own x29, and a chunk with no record would leave a hole in
 	// the very chain it is about to print.
 	export static function beginFunction(slots StackSize) returns Arm64RuntimeAsm
-		let frameBytes = alignUp(Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
+		let frameBytes = alignUpStack(Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
 
 		var code = ByteArray.create()
 		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: NoOutgoingArgRegion)
@@ -150,7 +150,7 @@ export type Arm64RuntimeAsm
 		if index >= self.slotCount 'outOfFrame'
 			panic("Arm64RuntimeAsm.slotOffset: slot {index} is outside the {self.slotCount} this frame reserved — `beginFunction` was asked for too few slots")
 		end 'outOfFrame'
-		return arm64SlotDisplacement(index)
+		return arm64SlotDisplacement(index as SpillSlot)
 	end 'slotOffset'
 end 'Arm64RuntimeAsm'
 

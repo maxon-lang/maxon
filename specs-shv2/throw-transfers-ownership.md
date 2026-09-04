@@ -336,7 +336,7 @@ end 'probe'
 
 function whyLen(e Err) returns Integer
 	return match e 'l'
-		bad(why) gives why.byteLength()
+		bad(why) gives why.byteLength() as Integer
 	end 'l'
 end 'whyLen'
 

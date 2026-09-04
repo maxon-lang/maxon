@@ -219,6 +219,7 @@ let OpcodeSyscallSecondByte = 0x05
 // that follows indivisible against every other core. Only a small set of instructions accept it, and all
 // three atomics below are in it.
 let LockPrefix = 0xF0
+
 // EXPORTED: the x64-Linux green-thread floor's hand-assembled chunks publish and take a futex word with it —
 // an auto-reset event's `0 -> 1` and `1 -> 0`, and the recursive mutex's three acquire steps — and a chunk has
 // no `StdOp.atomicCas` to lower through.
@@ -1154,7 +1155,7 @@ end 'chooseDispMod'
 // ⚠ `scale` IS IGNORED BY THE HARDWARE WHEN THERE IS NO INDEX, so the three unindexed callers pass
 // `byOne` — the identity, and the only honest answer for a field that scales nothing.
 function sibByte(scale MemoryIndexScale, indexBits MachineWord, baseBits MachineWord) returns MachineWord
-	return (memoryIndexScaleShift(scale) shl SibScaleShift) or (indexBits shl 3) or baseBits
+	return ((memoryIndexScaleShift(scale) as MachineWord) shl SibScaleShift) or (indexBits shl 3) or baseBits
 end 'sibByte'
 
 // `imul dest, src, imm32` — the 3-operand signed multiply (REX.W 69 /r id): reg field
@@ -1640,7 +1641,7 @@ end 'emitDataStore'
 // displacement math at each. `patchX64Rel32` guards the ±2 GiB reach.
 function patchChunkRel32(code ByteArray, codeOffset CodeOffset, targetOffset CodeOffset, what PatchSite)
 	let rel = targetOffset - (codeOffset + X64Disp32Width)
-	patchX64Rel32(code, codeOffset: codeOffset, rel: rel, what: what, targetAddr: targetOffset)
+	patchX64Rel32(code, codeOffset: codeOffset, rel: rel as MachineWord, what: what, targetAddr: targetOffset as MachineWord)
 end 'patchChunkRel32'
 
 // Patch every chunk-local rel32/disp32 to the chunk-local displacement of its target label
@@ -2024,7 +2025,7 @@ end 'resolveXmm'
 // `slot * SpillSlotBytes`. Named so the frame-slot arithmetic is spelled once. The cast is
 // safe: shv2's frames are far below i32.max, and the splitter caps slot count at valueCount.
 function slotDisplacement(spillBaseDisp StackSize, slot SpillSlot) returns Imm32
-	return (spillBaseDisp + slot * SpillSlotBytes) as Imm32
+	return (spillBaseDisp + (slot as StackSize) * SpillSlotBytes) as Imm32
 end 'slotDisplacement'
 
 // Encode one TargetOp into `code`, recording call / IAT / block-jump fixups as it
@@ -2446,7 +2447,7 @@ end 'concatX64FunctionChunks'
 // asking the wrong one is not a near miss: both would answer a small integer, and the reference
 // would resolve into the wrong section's bytes. So a kind with no table here PANICS rather than
 // defaulting to either.
-function sectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns CodeOffset
+function sectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns ByteOffset
 	return match reloc.kind 'kind'
 		ripRelDisp32 gives globalData.rdataOffsetOf(reloc.rdataLabel)
 		dataSectionRipRelDisp32 gives globalData.dataSectionOffsetOf(reloc.rdataLabel)

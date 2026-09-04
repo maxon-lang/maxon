@@ -1350,7 +1350,7 @@ end 'Wrap'
 
 function main() returns ExitCode
 	let w = Wrap.make("outer")
-	return (w.v.count() + w.mark) as ExitCode
+	return ((w.v.count() as Tally) + w.mark) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1376,13 +1376,13 @@ type Wrap
 
 	export static function make(p String) returns Wrap
 		let (p, q) = pairOf()
-		return Wrap{v: p, n: q.count()}
+		return Wrap{v: p, n: q.count() as Tally}
 	end 'make'
 end 'Wrap'
 
 function main() returns ExitCode
 	let w = Wrap.make("the argument")
-	return (w.v.count() + w.n) as ExitCode
+	return ((w.v.count() as Tally) + w.n) as ExitCode
 end 'main'
 ```
 ```exitcode

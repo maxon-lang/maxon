@@ -169,11 +169,11 @@ function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex
 	// The column is 1-based BYTES (the lexer counts one per consumed byte), and 0 is the same absence
 	// one level down from a line of 0 — an anchor on the line but at no column in it, which is the
 	// line's first byte.
-	let lineStart = index.offsetOf(source, position: LspPosition.create(diagnostic.line - 1, character: 0))
+	let lineStart = index.offsetOf(source, position: LspPosition.create(((diagnostic.line - 1) as LspLineNumber), character: 0))
 	let byteColumn = 1 if diagnostic.column == 0 else diagnostic.column
-	let anchor = (lineStart + byteColumn - 1) as LspByteOffset
+	let anchor = (lineStart + byteColumn - 1) as ByteOffset
 
-	return LspSpan.create(anchor, endByte: (anchor + 1) as LspByteOffset)
+	return LspSpan.create(anchor, endByte: (anchor + 1) as ByteOffset)
 end 'diagnosticSpan'
 
 // `PublishDiagnosticsParams` for `uri`, framed and written. The document travels with the items because

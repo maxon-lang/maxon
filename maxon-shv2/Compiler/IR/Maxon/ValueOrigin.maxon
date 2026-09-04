@@ -35,8 +35,8 @@
 // which IS op-defined and so IS in this table); the E5001 diagnostic does precisely that.
 
 // A dense column of function indices, one per recorded value origin. Same dense-int
-// representation as `ValueIdArray`/`OpIndexArray` (they interconvert freely), named apart
-// because it holds function indices.
+// representation as `ValueIdArray`/`OpIndexArray` and a DIFFERENT type from either — each names its own
+// quantity, and `as` is the door between two of them.
 export typealias FuncIndexArray = Array with FuncIndex
 
 // The result-value of a Maxon op: `value(id)` for an op that DEFINES an SSA value
@@ -400,7 +400,7 @@ export type ValueOriginTable
 			try rowStarts.set(at, value: prior + 1) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.set OOB at {at}")
 		end 'countEach'
 
-		var total = 0 as OpCount
+		var total = 0 as OpIndex
 		for f in 0 upto funcCount + 1 'prefixSum'
 			total = total + (try rowStarts.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.get OOB at {f}"))
 			try rowStarts.set(f, value: total) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.set OOB at {f}")
@@ -464,7 +464,7 @@ export type ValueOriginTable
 			let row = index.rowAt(k)
 			let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
 			let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
-			if v < calleeParamCount 'rowNamesAParameter'
+			if v < valueIdAtParamPosition(calleeParamCount) 'rowNamesAParameter'
 				continue
 			end 'rowNamesAParameter'
 

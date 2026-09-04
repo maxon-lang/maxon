@@ -1061,7 +1061,7 @@ error E3070: specs/fragments/borrow-liveness/receiver-method-writes-transitively
 ⛔⛔ **THE SAME WRITE, SPELLED THROUGH A CORPUS-DECLARED MEMBER, AND IT WAS A USE-AFTER-FREE ON THIS
 TREE.** Every case above writes through `clear`, which `Parser.arraySurfaceMemberNames` still serves —
 so the parser settles the write itself and stamps the enclosing method's `storageWrittenParamMask`
-directly. `truncate` has NEVER been on that roster: it is `stdlib/Array.maxon:426`, an ordinary
+directly. `truncate` has NEVER been on that roster: it is `stdlib/Array.maxon:425`, an ordinary
 declared function, and the enclosing method's bit then had to arrive through the call graph instead.
 It did not. `SemanticCheck.collectCallParamEdges` records an edge only for an argument that IS one of
 the caller's own parameters, and `items` is a FIELD of one — so `wipe` was summarised as writing
@@ -1365,7 +1365,7 @@ type Bag
 	function ok() returns Integer
 		let s = try items.get(0) otherwise ""
 		let n = self.size()
-		return s.byteLength() + n
+		return (s.byteLength() as Integer) + n
 	end 'ok'
 end 'Bag'
 

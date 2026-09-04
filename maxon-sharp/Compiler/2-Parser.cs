@@ -73,6 +73,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   // Tracks the ranged primitive type name from the most recent construction expression (e.g., Age{42})
   private string? _lastRangedTypeName;
+  // The call result `_lastRangedTypeName` was last set for. The E3010 source lookup reads the name
+  // only for THIS value: every other expression that reaches an `as` carries its own name or none.
+  private MaxonValue? _lastRangedTypeCarrier;
   // Set by ResolveExprValue: true when the resolved expression was a mutable variable reference
   private bool _lastExprWasMutableVar;
   // Set by ResolveExprValue: the variable name of the last resolved expression (null for non-variable expressions)
@@ -3831,12 +3834,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // its last parameter may be left off; every other generic keeps a fixed arity.
     if (typeName == PromiseType.TypeName)
       completedStruct.OptionalTrailingTypeParamCount = PromiseType.OptionalTrailingTypeParams;
-    // Apply any inner ranged typealiases collected during body parsing
-    if (_pendingInnerRangedAliases.TryGetValue(typeName, out var pendingRanged)) {
-      foreach (var (innerName, innerRanged) in pendingRanged) {
-        completedStruct.InnerRangedAliases[innerName] = innerRanged;
-      }
-      _pendingInnerRangedAliases.Remove(typeName);
+    ApplyPendingInnerRangedAliases(completedStruct, typeName, perInstance: true);
+    // An `extension` scanned AHEAD of this declaration — the stdlib orders its helper files before its
+    // top-level ones — declared its aliases onto the pre-registered placeholder this entry still holds;
+    // the completed struct inherits them, or `Instance.Alias` resolves for no alias the extension
+    // declared.
+    if (_typeRegistry.TryGetValue(typeName, out var placeholder) && placeholder is IrStructType declaredAhead) {
+      foreach (var (innerName, innerRanged) in declaredAhead.ExtensionRangedAliases)
+        completedStruct.ExtensionRangedAliases.TryAdd(innerName, innerRanged);
     }
     _typeRegistry[typeName] = completedStruct;
     _locallyDefinedTypes.Add(typeName);
@@ -5312,6 +5317,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// <summary>
   /// Parse an extension block: parse method bodies for each concrete type conforming to the interface.
   /// </summary>
+  /// <summary>
+  /// Moves the ranged typealiases collected while parsing <paramref name="typeName"/>'s body onto the
+  /// struct as its per-instance inner aliases, or — when they were collected from an extension body
+  /// over it — as its shared extension aliases (see <see cref="IrStructType.ExtensionRangedAliases"/>).
+  /// </summary>
+  private void ApplyPendingInnerRangedAliases(IrStructType owner, string typeName, bool perInstance) {
+    if (!_pendingInnerRangedAliases.TryGetValue(typeName, out var pendingRanged)) return;
+
+    var target = perInstance ? owner.InnerRangedAliases : owner.ExtensionRangedAliases;
+    foreach (var (innerName, innerRanged) in pendingRanged) {
+      target[innerName] = innerRanged;
+    }
+    _pendingInnerRangedAliases.Remove(typeName);
+  }
+
   private void ParseExtensionBlock(IrModule<MaxonOp> module) {
     ProcessExtensionBlock(module, (m, positions, typeName) => {
       foreach (var pos in positions) {
@@ -5412,6 +5432,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // legitimately means "neither" cannot be mistaken for one that forgot a half.
         PreScanTypeAlias(isExported: false, isModuleVisible: false);
       }
+      ApplyPendingInnerRangedAliases(targetStruct, interfaceName, perInstance: false);
 
       var addedConstraints = InjectWhereConstraints(targetStruct, extensionWhereConstraints);
       var filteredFuncPositions = FilterConflictingExtensionMethods(
@@ -6351,6 +6372,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _typeRegistry[dotName] = concreteRanged;
       _typeAliasSources[dotName] = innerRanged.Name;
       newStruct.InnerRangedAliases[innerName] = concreteRanged;
+      InheritInstanceAliasVisibility(aliasName, concreteInnerName);
+      InheritInstanceAliasVisibility(aliasName, dotName);
+    }
+
+    // An alias an `extension` declares over the type is ONE type for every instance — no per-instance
+    // copy is minted — but the `Instance.Alias` spelling resolves to it, so shared source may write the
+    // qualified form (`newIdx as IrBlockArray.SortIndex`).
+    foreach (var (extensionAliasName, extensionRanged) in sourceStruct.ExtensionRangedAliases) {
+      var dotName = $"{effectiveAliasName}.{extensionAliasName}";
+      _typeRegistry[dotName] = extensionRanged;
+      _typeAliasSources[dotName] = extensionRanged.Name;
+      newStruct.ExtensionRangedAliases[extensionAliasName] = extensionRanged;
+      InheritInstanceAliasVisibility(aliasName, dotName);
     }
 
     _typeAliasSources[effectiveAliasName] = sourceName;
@@ -6366,6 +6400,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Propagate export status to the mangled name
     if (effectiveAliasName != aliasName && _exportedTypeAliases.Contains(aliasName))
       _exportedTypeAliases.Add(effectiveAliasName);
+  }
+
+  /// A qualified alias name is as visible as the instance alias it is spelled through: a file that may
+  /// write <c>IntArr</c> may write <c>IntArr.SortIndex</c>.
+  private void InheritInstanceAliasVisibility(string instanceAliasName, string qualifiedName) {
+    if (_exportedTypeAliases.Contains(instanceAliasName)) _exportedTypeAliases.Add(qualifiedName);
+    if (_moduleVisibleTypeAliases.Contains(instanceAliasName)) _moduleVisibleTypeAliases.Add(qualifiedName);
   }
 
   private void RegisterConcreteEnumAlias(
@@ -11653,7 +11694,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Continue block: load result
     _currentBlock = _currentFunction!.Body.AddBlock(continueBlockLabel);
 
-    return new ExprResult.Direct(EmitVarRefOp(resultVarName, resultKind, structTypeName));
+    // The merged result denotes the callee's declared alias: the default arm was just checked against
+    // that alias's range, so both arms agree on it.
+    var calleeRangedName = tryInfo.CalleeReturnType is IrRangedPrimitiveType calleeRanged ? calleeRanged.Name : null;
+    return new ExprResult.Direct(EmitVarRefOp(resultVarName, resultKind, structTypeName), RangedTypeName: calleeRangedName);
   }
 
   private void ParseAnnotatedDecl() {
@@ -11774,7 +11818,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       FixupTempOwnership();
     } else if (initValue is MaxonFunctionPtr) {
       var kind = MaxonValueKind.Function;
-      var fnType = GetFunctionTypeFromLastOp();
+      var fnType = FunctionTypeOf(initExpr);
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, fnType: fnType);
       TrackCapturingClosureBinding(name, initValue);
@@ -11960,6 +12004,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
+  /// <summary>
+  /// The signature of the function value <paramref name="expr"/> produced.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ THE EXPRESSION IS ASKED FIRST AND THAT ORDER IS THE RULE, not a preference. A NAMED binding
+  /// carries its signature on its VarInfo and is position-independent, while an unnamed value (a
+  /// bare function reference, a closure literal, a call returning a function) left it on the op that
+  /// minted it — which is all <see cref="GetFunctionTypeFromLastOp"/> can read. A same-block read of
+  /// a binding (`let g = f`) reuses the SSA value and emits NO op, so the scan alone would be
+  /// reading whatever statement came before and answering about that.
+  /// </remarks>
+  private IrFunctionType FunctionTypeOf(ExprResult expr) =>
+    ResolveCallableFnType(expr, directFnType: null) ?? GetFunctionTypeFromLastOp();
+
   private IrFunctionType GetFunctionTypeFromLastOp() {
     var lastOp = _currentBlock!.Operations.LastOrDefault();
     return lastOp switch {
@@ -12040,7 +12098,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (!resolved.IsMutable) throw ImmutableAssignmentError(name, nameToken);
 
-    var newVal = ResolveExprValue(ParseExpression());
+    var rhs = ParseExpression();
+    var newVal = ResolveExprValue(rhs);
     if (_lastExprVarName == name) {
       throw new CompileError(ErrorCode.SemanticSelfAssignment,
         $"self-assignment has no effect: '{name} = {name}'",
@@ -12081,7 +12140,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           $"store a closure that captures in payload binding '{name}'",
           nameToken.Line, nameToken.Column);
 
-      var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
+      var fnType = varInfo.Kind == MaxonValueKind.Function ? FunctionTypeOf(rhs) : null;
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
       _reassignedVars.Add(name);
       FixupTempOwnership();
@@ -18473,6 +18532,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var sourceRanged = TryGetSourceRangedType(lhs, snapshottedRangedName);
       var asToken = Advance(); // consume 'as'
       _lastCastRangedType = null;
+      if (TryConsumeRebrandTarget(ref lhs)) continue;
       var targetKind = ParseTypeKeyword();
       var inputVal = ResolveExprValue(lhs);
       var sourceKind = DetermineValueKind(inputVal);
@@ -18497,20 +18557,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // is therefore not preserved by `as`.
       MaxonValue valueToCast = inputVal;
       IrRangedPrimitiveType? rangedTarget = _lastCastRangedType;
-      // E3010: when the target's range fully covers the source's range,
-      // the `as` cast is a no-op that should be deleted from source. Fires
-      // only when BOTH sides resolve to a named ranged-primitive type;
-      // bare-literal sources (`42 as Byte`) and bare-bool targets are
-      // skipped. Position: after ValidateCast (so kind-incompatible
-      // casts hit E3009 first) and before ValidateAndEmitRangeCheck (no
-      // point synthesizing runtime guard code for code about to error).
+      // E3010: the cast names the value's OWN alias, so it converts nothing and should be
+      // deleted from source. A cast to a DIFFERENT alias is real work whichever way the two
+      // ranges run — it re-declares the value's type — and is the only door between two
+      // aliases shv2 offers, so shared source spells it and this compiler must accept it.
+      // Fires only when BOTH sides resolve to a named ranged-primitive type; bare-literal
+      // sources (`42 as Byte`) and bare-bool targets are skipped. Position: after
+      // ValidateCast (so kind-incompatible casts hit E3009 first) and before
+      // ValidateAndEmitRangeCheck (no point synthesizing runtime guard code for code about
+      // to error).
       //
-      // Recorded as a recoverable diagnostic instead of thrown: the cast is
-      // a no-op by definition (source already fits), so the source value
-      // can flow through unchanged. This lets the parser keep walking the
-      // function and report every unneeded cast in the file in one compile.
+      // Recorded as a recoverable diagnostic instead of thrown: the cast is a no-op by
+      // definition (source and target are one type), so the source value can flow through
+      // unchanged. This lets the parser keep walking the function and report every unneeded
+      // cast in the file in one compile.
       if (sourceRanged != null && rangedTarget != null
-          && TargetCoversSource(rangedTarget, sourceRanged)) {
+          && sourceRanged.Name == rangedTarget.Name) {
         RecordError(ErrorCode.SemanticUnneededCast,
           $"unneeded cast: '{sourceRanged.Name}' already fits in '{rangedTarget.Name}'",
           asToken.Line, asToken.Column);
@@ -18521,9 +18583,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         lhs = new ExprResult.Direct(inputVal);
         continue;
       }
-      if (rangedTarget != null) {
+      // The guard compares the value against the target's bounds IN THE TARGET'S KIND. An integer
+      // source already meets that for an integer target — the narrowing to i8/i16 rides on the
+      // cast op below and is representational — but a FLOAT target's bounds are floating, so the
+      // conversion has to run first or the lowering is handed an i64 where it needs an f64
+      // (`v as Small` over `float(0.0 to 10.0)` died there as E9001, StdI64 to StdF64).
+      //
+      // The CONSTANT is therefore refused, or proved, against the source as the author wrote it:
+      // the conversion mints a value no literal scan reaches, and without this `300 as Small` would
+      // drop from a compile error to a runtime panic.
+      var convertBeforeGuard = sourceKind != targetKind && rangedTarget is { IsFloatBased: true };
+      var provenBeforeConversion = false;
+      if (convertBeforeGuard) {
+        provenBeforeConversion = RangeIsProvenAtCompileTime(inputVal, rangedTarget!, asToken);
+        valueToCast = EmitCast(inputVal, targetKind);
+      }
+
+      if (rangedTarget != null && !provenBeforeConversion) {
         var expectedKind = rangedTarget.BaseType.ToValueKind();
-        valueToCast = ValidateAndEmitRangeCheck(inputVal, rangedTarget, expectedKind, asToken);
+        valueToCast = ValidateAndEmitRangeCheck(valueToCast, rangedTarget, expectedKind, asToken);
       }
       // Skip the explicit base-kind cast op when source and target share
       // the same value kind — emitting a self-targeting MaxonCastOp would
@@ -18531,20 +18609,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // existing RequiredIR expectations. The range-check above is the
       // semantically meaningful work; no MaxonCastOp is needed when no
       // kind change is happening.
-      MaxonValue castResult;
-      if (sourceKind == targetKind) {
-        castResult = valueToCast;
-      } else {
-        var castOp = new MaxonCastOp(valueToCast, targetKind);
-        _currentBlock!.AddOp(castOp);
-        castResult = castOp.Result;
-      }
+      var castResult = sourceKind == targetKind || convertBeforeGuard
+        ? valueToCast
+        : EmitCast(valueToCast, targetKind);
       // When casting to a ranged type, propagate the type name
       if (rangedTarget != null) {
         _lastRangedTypeName = rangedTarget.Name;
         _lastCastRangedType = null;
       }
-      lhs = new ExprResult.Direct(castResult);
+      // The result states the target's alias itself, so a chained `x as A as B` reads `A` off THIS
+      // value rather than off the shared last-name field.
+      lhs = new ExprResult.Direct(castResult, RangedTypeName: rangedTarget?.Name);
     }
 
     while ((BinaryOperators.TryGetValue(Current().Type, out var entry) && entry.Precedence >= minPrecedence)
@@ -19342,7 +19417,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     RejectCapturingClosureAsTernaryArm(armVal, ifToken);
 
-    return ResolveCallableFnType(arm, directFnType: null) ?? GetFunctionTypeFromLastOp();
+    return FunctionTypeOf(arm);
   }
 
   /// <summary>
@@ -21797,7 +21872,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// When false, a value the compiler cannot fold is left ALONE rather than guarded at run time.
   /// The compile-time half still throws. See the call-argument site for why one caller needs this.
   /// </param>
+  private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType,
+      MaxonValueKind expectedKind, Token errorToken, bool emitRuntimeCheck = true) {
+    if (RangeIsProvenAtCompileTime(value, rangedType, errorToken) || !emitRuntimeCheck) return value;
+
+    return EmitRuntimeRangeCheck(value, rangedType, expectedKind, errorToken.Line, _sourceFilePath);
+  }
+
+  /// <summary>
+  /// Whether nothing a runtime guard could test can still fail — the range admits every bit pattern
+  /// of its base type, or the compiler is HOLDING the value (a literal, a constants-enum case's raw
+  /// value) and has just proved it in range. An out-of-range constant THROWS from here.
+  /// </summary>
   /// <remarks>
+  /// ⚠ ASKED ON ITS OWN BY THE `as` CAST, which converts between the two halves: the constant is
+  /// refused against the source AS THE AUTHOR WROTE IT, while the guard compares in the TARGET's
+  /// kind. Every other caller holds one value for both and goes through
+  /// <see cref="ValidateAndEmitRangeCheck"/>.
+  ///
   /// ⚠⚠ THE LITERAL IS ASKED BEFORE <see cref="IrRangedPrimitiveType.IsFullBaseRange"/>, AND THE
   /// OTHER ORDER WAS A SILENT WRONG ANSWER. A full range admits every 64-bit PATTERN, which is the
   /// whole of what a RUNTIME guard could test — so eliding the guard is right. It is not the whole
@@ -21807,12 +21899,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// clean. The signed-full `int(i64.min to i64.max)` is unaffected either way: every integer
   /// satisfies it, so the literal arm answers in-range for it and always will.
   ///
-  /// The full-range test still gates the ENUM-constant scan and the runtime emit below, because
-  /// those are the halves it is genuinely about — and the enum scan walks the whole function, which
-  /// a full-range door must not start paying for.
+  /// The full-range test still gates the ENUM-constant scan, because that is the half it is
+  /// genuinely about — and the enum scan walks the whole function, which a full-range door must not
+  /// start paying for.
   /// </remarks>
-  private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType,
-      MaxonValueKind expectedKind, Token errorToken, bool emitRuntimeCheck = true) {
+  private bool RangeIsProvenAtCompileTime(MaxonValue value, IrRangedPrimitiveType rangedType,
+      Token errorToken) {
     bool isLiteral = false;
     // Search all blocks in the current function for the literal that defined this value,
     // not just the last op — the value may have been defined earlier (e.g. before an assign).
@@ -21825,14 +21917,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
     if (litOp != null) {
       if (rangedType.IsFloatBased) {
+        // An INTEGER literal at a float door is the same constant written without a point, and it
+        // is folded for the same reason a written float is: `300 as Small` is a number the compiler
+        // is holding and can refuse. Leaving it to the runtime guard would also hand the lowering
+        // an i64 where the bounds are f64.
         if (litOp.ValueKind is MaxonValueKind.Float or MaxonValueKind.Float32) {
           isLiteral = true;
-          var upperLimit = rangedType.UpperInclusive ? rangedType.FloatUpper : rangedType.FloatUpper - 1;
-          if (litOp.FloatValue < rangedType.FloatLower || litOp.FloatValue > upperLimit) {
-            throw new CompileError(ErrorCode.SemanticTypeMismatch,
-              $"Value {litOp.FloatValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
-              errorToken.Line, errorToken.Column);
-          }
+          RefuseFloatConstantOutOfRange(litOp.FloatValue, rangedType, errorToken);
+        } else if (litOp.ValueKind is MaxonValueKind.Integer or MaxonValueKind.Byte) {
+          isLiteral = true;
+          RefuseFloatConstantOutOfRange(litOp.IntValue, rangedType, errorToken);
         }
       } else if (litOp.ValueKind is MaxonValueKind.Integer or MaxonValueKind.Byte) {
         isLiteral = true;
@@ -21847,7 +21941,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Every 64-bit pattern is admissible, so nothing below can fire: the enum scan's verdict would
     // be "in range" for any value it found, and there is no runtime check to emit. See the remarks
     // for why this stands HERE and not in front of the literal check.
-    if (rangedType.IsFullBaseRange) return value;
+    if (rangedType.IsFullBaseRange) return true;
 
     // A constants-enum case's raw value is every bit as constant as a literal, but it arrives as a
     // `MaxonEnumRawValueOp` rather than a `MaxonLiteralOp`, so the scan above cannot see it. Without
@@ -21870,11 +21964,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
 
-    if (!isLiteral && emitRuntimeCheck) {
-      value = EmitRuntimeRangeCheck(value, rangedType, expectedKind, errorToken.Line, _sourceFilePath);
-    }
+    return isLiteral;
+  }
 
-    return value;
+  /// Refuses a constant the compiler is holding when it falls outside a FLOAT-ranged type. Both
+  /// spellings of that constant — written with a point and written without one — land here, so the
+  /// bound and the wording are decided once.
+  private static void RefuseFloatConstantOutOfRange(double constant, IrRangedPrimitiveType rangedType,
+      Token errorToken) {
+    var upperLimit = rangedType.UpperInclusive ? rangedType.FloatUpper : rangedType.FloatUpper - 1;
+    if (constant < rangedType.FloatLower || constant > upperLimit) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Value {constant} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
+        errorToken.Line, errorToken.Column);
+    }
   }
 
   private MaxonValue EmitRuntimeRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType, MaxonValueKind kind, int sourceLine, string? sourceFilePath) {
@@ -22732,60 +22835,115 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// Resolves the source value's ranged-primitive type for the E3010
-  /// "unneeded cast" diagnostic. Two sources are tried in order:
-  ///   1. The LHS is a direct variable reference whose VarInfo records a
-  ///      ranged-primitive struct-type name (`let s Score = ...`).
-  ///   2. A snapshot of `_lastRangedTypeName` captured at the top of the
-  ///      current `as`-loop iteration. This handles chained casts
-  ///      (`x as A as B` — at iteration 2 the LHS is a Direct holding the
-  ///      result of `x as A`, but `_lastRangedTypeName` still carries `A`)
-  ///      and call returns (e.g. `score() as Score` where the callee
-  ///      return propagates via `_lastRangedTypeName`).
-  /// Returns null when neither source resolves — bare literals and
-  /// anonymous arithmetic deliberately skip the diagnostic so
-  /// literal-narrowing (`42 as Byte`) stays legal.
+  /// "unneeded cast" diagnostic. Four sources, each tied to the expression
+  /// that is being cast: a variable reference's declared alias; a Direct's
+  /// own stated alias (a field read, a `try … otherwise`, a chained cast);
+  /// and, for the one value a call produced, the ranged return that call
+  /// recorded in `_lastRangedTypeName`. Returns null when none resolves —
+  /// bare literals and anonymous arithmetic deliberately skip the
+  /// diagnostic so literal-narrowing (`42 as Byte`) stays legal.
   private IrRangedPrimitiveType? TryGetSourceRangedType(ExprResult lhs, string? snapshottedRangedName) {
-    if (lhs is ExprResult.VarRef vr && vr.Info.StructTypeName != null
-        && _typeRegistry.TryGetValue(vr.Info.StructTypeName, out var t)
-        && t is IrRangedPrimitiveType rpt) return rpt;
+    // A variable reference states its own declared alias or none. It never falls through to the
+    // snapshot: `_lastRangedTypeName` is whatever the PREVIOUS expression left — the first cast's
+    // target in `(a as W) shl 24 or (b as W)` — and reading it for a bare local reported E3010 on a
+    // cast that names nothing the local carries.
+    if (lhs is ExprResult.VarRef vr) {
+      return vr.Info.StructTypeName != null
+          && _typeRegistry.TryGetValue(vr.Info.StructTypeName, out var t)
+          && t is IrRangedPrimitiveType rpt ? rpt : null;
+    }
     // 3. The expression STATED a declared alias without being a variable — a struct field read, or a
     //    `try … otherwise` whose both arms agree on one. Tried ahead of the snapshot because it belongs to
     //    THIS expression, where the snapshot is whatever the previous one happened to leave.
     if (lhs is ExprResult.Direct dr && dr.RangedTypeName != null
         && _typeRegistry.TryGetValue(dr.RangedTypeName, out var t3)
         && t3 is IrRangedPrimitiveType rpt3) return rpt3;
+    // 4. A CALL RESULT, whose ranged return the call recorded in the shared field. Only the value that
+    //    call produced may read it: an arithmetic result or a parenthesized expression parsed AFTER the
+    //    call reaches here as a Direct too, and the field still names the call's alias — reading it for
+    //    them reported E3010 on `f() + ((n + 1) as A)` for an `A`-returning `f`.
     if (snapshottedRangedName != null
+        && lhs is ExprResult.Direct carried && ReferenceEquals(carried.Value, _lastRangedTypeCarrier)
         && _typeRegistry.TryGetValue(snapshottedRangedName, out var t2)
         && t2 is IrRangedPrimitiveType rpt2) return rpt2;
     return null;
   }
 
-  /// Returns true when `target`'s range fully contains `source`'s range —
-  /// meaning the cast loses no representable values. Used to detect
-  /// unneeded `as` casts (E3010). Cross-kind int → float and
-  /// byte/short → float are treated as covered because the float ranges
-  /// used in practice (JsonFloat, ParsedFloat) span the full f64 range
-  /// and contain every i64 value within ±2^53 exactly. Cross-kind
-  /// narrowing combinations are unreachable here — ValidateCast already
-  /// rejects them with E3009 before this helper runs.
-  private static bool TargetCoversSource(IrRangedPrimitiveType target, IrRangedPrimitiveType source) {
-    var srcKind = source.BaseType.ToValueKind();
-    var tgtKind = target.BaseType.ToValueKind();
-    if ((srcKind == MaxonValueKind.Integer || srcKind == MaxonValueKind.Byte || srcKind == MaxonValueKind.Short)
-        && (tgtKind == MaxonValueKind.Float || tgtKind == MaxonValueKind.Float32)) {
-      return true;
+  /// <summary>
+  /// Consumes an <c>as</c> target that names the type its operand ALREADY has — a generic-instance
+  /// alias (<c>xs as Ints</c>) or a function-type alias (<c>f as UnaryOp</c>) — and reports that it
+  /// did. The two names denote one type, so the cast converts nothing and emits nothing; a struct
+  /// value is RELABELLED with the target alias, because the match-arm and ternary merges compare a
+  /// generic alias by its name and would otherwise refuse two arms both cast to one alias.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ IT EXISTS FOR SHARED SOURCE. shv2 holds every typealias nominally distinct and an explicit
+  /// <c>as</c> is its only door between two of them, so <c>stdlib/</c> and <c>maxon-shv2/</c> spell
+  /// the cast and it has to parse here. This compiler's own rule is unchanged — the two aliases are
+  /// one type, which is exactly why nothing is emitted.
+  ///
+  /// ⚠ A TARGET NAMING A DIFFERENT INSTANCE OR A DIFFERENT FUNCTION SHAPE IS LEFT UNCONSUMED, for
+  /// <see cref="ParseTypeKeyword"/> to refuse alongside every other name that cannot be a cast
+  /// target. A refusal of its own here would say the same thing in a second place.
+  /// </remarks>
+  private bool TryConsumeRebrandTarget(ref ExprResult lhs) {
+    // `Outer.Inner` is a per-instance inner alias and belongs wholly to ParseTypeKeyword: matching
+    // `Outer` here would consume half of it and leave the parser mid-name.
+    if (!Check(TokenType.Identifier) || PeekNext().Type == TokenType.Dot) return false;
+
+    var nameToken = Current();
+    if (!_typeRegistry.TryGetValue(nameToken.Value, out var target)) return false;
+    // An interface alias and a plain struct name are not second spellings of the operand's own
+    // type, so they stay with the refusal; only a generic INSTANCE alias and a function type are.
+    var isRebrandable = target is IrFunctionType
+      || (target is IrStructType { IsInterfaceAlias: false, TypeParams.Count: > 0 }
+          && _typeAliasSources.ContainsKey(nameToken.Value));
+    if (!isRebrandable) return false;
+
+    RequireUnambiguousTypeName(nameToken.Value, nameToken);
+    if (!ExpressionAlreadyHasType(lhs, nameToken.Value, target)) return false;
+
+    Advance();
+    _usedTypeAliases.Add(nameToken.Value);
+
+    // A var-ref stays a var-ref — its name and mutability still reach the argument and receiver
+    // rules — under a copy of its info naming the target, so the var-ref op it later emits carries
+    // that name while the binding's own info is untouched. A Direct is this expression's own result.
+    if (lhs is ExprResult.VarRef { Info.Kind: MaxonValueKind.Struct } structVar)
+      lhs = new ExprResult.VarRef(structVar.VarName, structVar.Info with { StructTypeName = nameToken.Value });
+    else if (lhs is ExprResult.Direct { Value: MaxonStruct structValue })
+      structValue.TypeName = nameToken.Value;
+
+    return true;
+  }
+
+  /// <summary>
+  /// Whether <paramref name="lhs"/> already denotes <paramref name="target"/>.
+  /// </summary>
+  /// <remarks>
+  /// Asked of the EXPRESSION rather than of a resolved value because its one caller emits nothing:
+  /// resolving here would mint a var-ref op that the outer resolve then mints again.
+  ///
+  /// A function target demands a function-KINDED operand before the shapes are compared, because
+  /// <see cref="FunctionShapeAccepts"/> is permissive about an unknown signature — a struct handed
+  /// to it as "no signature recorded" would be accepted as any function type at all.
+  /// </remarks>
+  private bool ExpressionAlreadyHasType(ExprResult lhs, string targetName, IrType target) {
+    if (target is IrFunctionType targetSignature) {
+      if (lhs is ExprResult.VarRef { Info.Kind: MaxonValueKind.Function } fnVar)
+        return FunctionShapeAccepts(targetSignature, fnVar.Info.FnType);
+      if (lhs is ExprResult.Direct { Value: MaxonFunctionPtr fnPtr } fnDirect)
+        return FunctionShapeAccepts(targetSignature, fnDirect.FnType ?? fnPtr.FunctionType);
+
+      return false;
     }
-    if (srcKind != tgtKind) return false;
-    // When the two integer ranges disagree on signedness — e.g.
-    // `MachineWord = int(0 to u64.max)` (upper wraps to -1) vs.
-    // `ParsedInt = int(i64.min to i64.max)` — neither subsumes the
-    // other in a single 64-bit representation, so don't fire E3010.
-    if (!source.IsFloatBased) {
-      var srcUnsigned = source.IntLower >= 0 && source.IntUpper < 0;
-      var tgtUnsigned = target.IntLower >= 0 && target.IntUpper < 0;
-      if (srcUnsigned != tgtUnsigned) return false;
-    }
-    return source.IsSubsetOf(target);
+
+    if (lhs is ExprResult.VarRef { Info.StructTypeName: { } declaredName })
+      return IsStructTypeCompatible(declaredName, targetName);
+    if (lhs is ExprResult.Direct { Value: MaxonStruct structValue })
+      return IsStructTypeCompatible(structValue.TypeName, targetName);
+
+    return false;
   }
 
   /// Numeric-kind widening table guard. Returns false (without throwing) when
@@ -26330,6 +26488,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
     _lastRangedTypeName = ResolveCallReturnRangedType(callee.ReturnType, args);
+    _lastRangedTypeCarrier = callOp.Result;
     // Struct call returns need a temp variable so refcounting tracks the intermediate
     if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);

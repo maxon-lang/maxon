@@ -40,7 +40,7 @@ Four properties are what these tests pin, and each is a decision rather than an 
   REASON.** This section used to say they were, because shv2 had no lazy view and both spellings reached
   one emitter. The reference distinguishes them by laziness and by nothing else: `bytes()` is a view over
   the receiver's buffer and `toByteArray()` must COPY, because a plain view onto an OWNED buffer is a
-  read-after-free the moment the owner appends (`stdlib/String.maxon:143-161`, whose `managed.slice` is
+  read-after-free the moment the owner appends (`stdlib/String.maxon:141-161`, whose `managed.slice` is
   that copy). Both are now the corpus's, each with the body its own doc describes.
 - **A copy is INDEPENDENT, and that is the CONTRACT.** `clone()` may not be `return self`: the receiver's
   record would gain a second owner and the caller's drop would take the receiver's bytes with it.
@@ -234,7 +234,7 @@ error E3005: <fragment>:3:17: argument type mismatch for 'bytes': expected 'Byte
 them" is not a promise the stdlib can let arbitrary code make), and there is no `String.from(codepoints)`.
 
 ⚠ **This case was named `error.string-has-exactly-one-static` until R4.2, and the rename is the point.**
-The exported set became TWO when R4.2 added `init(managed)` (`stdlib/String.maxon:114`) beside
+The exported set became TWO when R4.2 added `init(managed)` (`stdlib/String.maxon:112`) beside
 `from(bytes)` (`:119`), so a name asserting the COUNT was made false by the very rung that changed it —
 while what the case actually pins never moved: an unknown static is refused **at its own span** rather
 than mangled into a `String.create` callee no file declares. A test whose NAME claims one fact and whose
@@ -331,12 +331,13 @@ through the ranged `CodeUnit16`, and a codepoint far past the supplementary plan
 `u16.max` — so the exit code tells a fired guard from a silent wrong answer, and the message says which
 guard fired. `targets:` for the reason stated at the head of this group.
 
-⚠ **THE CODEPOINT ARRIVES THROUGH `widen`, AND IT HAS TO.** `utf16LeadSurrogate(1000000000)` — which is
-what this case read while a call argument's declared range went unenforced — is now the compile-time
-E3005 `range-check-panic.md` promises at every position ("a literal argument never reaches a runtime
-check because it never builds"), measured identically on the bootstrap. The subject here is the RUNTIME
-guard on the reachable stdlib function's ranged `return`, so the codepoint must be a value no constant
-folds to; `widen` is the smallest way to say that.
+⚠ **THE CODEPOINT ARRIVES THROUGH A LOOP COUNTER, AND IT HAS TO.** `utf16LeadSurrogate(1000000000)` is
+the compile-time E3005 `range-check-panic.md` promises at every position ("a literal argument never
+reaches a runtime check because it never builds"), measured identically on the bootstrap. The subject
+here is the RUNTIME guard on the reachable stdlib function, so the codepoint must be a value no constant
+folds to — and one carrying no typealias, since an alias-typed value reaches `Codepoint` only through an
+`as`, whose guard would fire at the call site instead of at the callee's door. A counted loop's variable
+is both.
 
 ⭐⭐ **A1f CHANGED WHICH ALIAS THIS NAMES, AND THE NEW ANSWER IS THE VIOLATION THAT ACTUALLY HAPPENED.**
 `utf16LeadSurrogate(codepoint Codepoint) returns CodeUnit16` is handed `1,000,000,000`. That is outside
@@ -348,14 +349,11 @@ refuses it at `utf16.maxon:49`, naming `Codepoint` — the premise the caller ac
 earlier, before `codepoint - 65536` underflows on a value the type said could not occur. Nothing about
 the program changed; the compiler simply stopped reporting the consequence in place of the cause.
 ```maxon
-typealias Wide = int(0 to u32.max)
-
-function widen(n Wide) returns Wide
-	return n * 1000000
-end 'widen'
-
 function main() returns ExitCode
-	let lead = utf16LeadSurrogate(widen(1000))
+	var lead = 0
+	for i in 1000000000 to 1000000000 'once'
+		lead = utf16LeadSurrogate(i)
+	end 'once'
 	return 7 if lead > 65535 else 9
 end 'main'
 ```
@@ -394,7 +392,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteSeq = Array with Byte
 
 function show(label String, bytes ByteSeq)
-	let s = String.from(bytes)
+	let s = String.from(bytes as ByteArray)
 	var cps = ""
 	for c in s.codepoints() 'eachCp'
 		cps = "{cps}{c},"
@@ -456,8 +454,10 @@ Stack trace:
 
 <!-- test: ranged-codepoint-alias-stays-legal -->
 ### A RANGED `typealias Codepoint` is still legal, exactly as one over `ExitCode` is
-The carve-out is the same one every compiler-owned name gets: a ranged alias mints no nominal identity,
-it erases to the same `integer` the builtin does, so the two answers agree and there is nothing to refuse.
+A ranged alias is one type wherever its NAME is declared over one range, so this declaration restates the
+compiler's own `Codepoint` rather than competing with it: the user's `Codepoint` and the builtin's are the
+same alias, a value cast to it flows to `main`'s return as that alias, and there is nothing to refuse. A
+`type Codepoint` is a SECOND identity under the name, which is what the case above refuses.
 ```maxon
 typealias Codepoint = int(0 to 1114111)
 
@@ -506,12 +506,9 @@ the literal's element, strides eight, and hands `String.from` every eighth byte 
 silent wrong answer the case above exists to forbid, committed as an expectation, and is why this one had
 to stop asking `String.from` the question.
 
-⭐⭐ **THIS PARAGRAPH ONCE ENDED "shv2 REFUSES THAT PROGRAM INSTEAD, WHICH IS THE BETTER ANSWER". SINCE R-1
-IT DOES NOT REFUSE, AND ITS ANSWER IS BETTER STILL: it prints `Hi`.** Two ranged aliases over one range are
-one type, so `Octet` IS `Byte` and `OctetArray` is a `ByteArray` whose element provably strides 1 — there is
-nothing to refuse and nothing to truncate. See `from-admits-a-user-ranged-byte-alias` below, which pins BOTH
-routes and records that the bootstrap still answers `H ` on the literal one.
-⇒ **What the case pins is unchanged and is now asserted where it belongs: at the RECORD.**
+⇒ **What the case pins is asserted where it belongs: at the RECORD.** `String.from` cannot be asked, because
+`Octet` is a different type from `Byte` and `OctetArray` a different instance from `ByteArray` — see
+`error.from-refuses-a-user-ranged-byte-alias` below.
 `aggregatesConflict` is nominal over containers, so a `readBack(bytes OctetArray)` parameter admits an
 argument whose element kept the name `Octet` and refuses an `Array_int`; reading the two elements back
 THROUGH that parameter is what proves the STRIDE as well as the name. Both compilers print `177`.
@@ -543,27 +540,16 @@ end 'main'
 177
 ```
 
-<!-- test: from-admits-a-user-ranged-byte-alias -->
-### `String.from` takes any element whose RANGE is a byte's
-⛔⛔ **THIS CASE PINNED A REFUSAL UNTIL R-1, AND THE REASON IT GAVE WAS MEASURED FALSE.** It read *"an
-`OctetArray` holds one byte per element exactly as a `ByteArray` does, and is still a DIFFERENT type …
-refused on its NAME rather than admitted on its layout"*, and justified that with *"the bootstrap accepts
-this program and prints a truncated string"*. **MEASURED, both compilers, this exact program: both print
-`Hi`.** The truncation is real but it belongs to the array-LITERAL form in the case above, which is a
-different program reaching `String.from` by a different route — the prose had imported one program's defect
-into a claim about another, which is how a refusal came to be justified by a wrong answer it does not
-produce.
+<!-- test: error.from-refuses-a-user-ranged-byte-alias -->
+### `String.from` takes a `ByteArray`, and a user's own byte alias is not one
+`Octet` is declared over `Byte`'s exact range and still names a different type, so `Array with Octet` is a
+different instance from `Array with Byte` and neither a pushed `OctetArray` nor a literal of its elements
+reaches `String.from(bytes ByteArray)`. A rebrand cannot cross instances and no door converts an array
+element-wise, so there is no cast that makes this program legal.
 
-⭐⭐ **R-1 (user ruling, 2026-08-22) SETTLES IT THE OTHER WAY: two ranged aliases over one range are ONE
-type.** `Octet` is declared `int(0 to u8.max)`, which is `Byte`'s range, so `OctetArray` *is* `ByteArray` —
-not a lookalike admitted on its layout, the same instance. Nominal typing over containers is untouched and
-is still what refuses an `Array_int` at the `readBack` parameter above; what changed is which names denote
-the same element.
-
-⭐ **BOTH ROUTES ARE PINNED, AND THE SECOND IS ONE WHERE shv2 IS NOW RIGHT AND THE ORACLE IS WRONG.** The
-pushed array and the array literal reach `String.from` differently, and the literal is the one W55 measured:
-the bootstrap erases its element, strides EIGHT over a stride-1 buffer and prints `H `. shv2 prints `Hi` for
-both. A case that pinned only the pushed form would not have caught that.
+⇒ **What a user must do instead: build the array as a `ByteArray` — stdlib's own alias, not a user alias
+over `Byte`** (the two cases below). `error.from-rejects-a-non-byte-array` is the same parameter check
+refusing a different instance for a different reason (an eight-byte stride).
 ```maxon
 typealias Octet = int(0 to u8.max)
 typealias OctetArray = Array with Octet
@@ -580,9 +566,52 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```maxoncstderr
+error E3005: <fragment>:11:22: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'
+error E3005: <fragment>:12:23: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'
+```
+
+<!-- test: from-admits-a-byte-array-by-both-routes -->
+### The legal program: the array is a `ByteArray`
+A pushed `ByteArray` and a literal of its elements both reach `String.from`, and both keep the one-byte
+stride: `Hi`, two bytes.
+```maxon
+function main() returns ExitCode
+	var a = ByteArray.create()
+	a.push(72)
+	a.push(105)
+	let x = try a.get(0) otherwise 0
+	let y = try a.get(1) otherwise 0
+	let pushed = String.from(a)
+	let literal = String.from([x, y])
+	print("pushed={pushed} literal={literal} len={pushed.byteLength()}")
+	return 0
+end 'main'
+```
 ```exitcode
 0
 ```
 ```stdout
 pushed=Hi literal=Hi len=2
+```
+
+<!-- test: error.from-refuses-a-user-alias-over-byte -->
+### A user alias over `Byte` is the same instance but a different BRAND
+`Bytes = Array with Byte` names the instance `ByteArray` names, and is still refused: two aliases of one
+instance are two brands, and a brand fits only its own slot. Declaring over `Byte` is not enough; the
+array must be a `ByteArray`.
+```maxon
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var a = Bytes.create()
+	a.push(72)
+	a.push(105)
+	let pushed = String.from(a)
+	print("pushed={pushed} len={pushed.byteLength()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:22: argument type mismatch for 'bytes': expected 'ByteArray', got 'Bytes'
 ```

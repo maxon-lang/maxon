@@ -347,12 +347,13 @@ end 'elementStrideOf'
 // literal's `.rdata` blob — and a second, byte-only spelling there would size a packed blob as though its
 // negative stride were a byte width.
 function elementsByteLen(count ParsedInt, stride ElementStride) returns ParsedInt
+	let byteStride = stride as ParsedInt
 	if stride < 0 'subBytePacked'
-		let bits = count * -stride
+		let bits = count * -byteStride
 		return (bits + (BitsPerByte - 1)) / BitsPerByte
 	end 'subBytePacked'
 
-	return count * stride
+	return count * byteStride
 end 'elementsByteLen'
 
 // ⭐ **THE BITS IN A BYTE — ONE DECLARATION FOR BOTH ENDS OF THE PACKED ARITHMETIC.** Named rather than an
@@ -415,7 +416,7 @@ function constantElementsImage(values ParsedIntArray, stride ElementStride) retu
 
 	var out = ByteArray.create()
 	for value in values 'eachElement'
-		appendLittleEndianScalar(out, value: value, byteCount: stride as ByteCount)
+		appendLittleEndianScalar(out, value: value, byteCount: stride as BytePos)
 	end 'eachElement'
 
 	return out
@@ -435,7 +436,7 @@ end 'constantElementsImage'
 // The value is SIGNED (a `ParsedInt`) and the shift-and-mask is defined on the unsigned word, so it crosses
 // once, explicitly, here. Truncation to `byteCount` is the CONTRACT and not a loss: a `-1` in a one-byte
 // slot is the byte `0xFF`, which is what the sign-extending read turns back into `-1`.
-export function appendLittleEndianScalar(image ByteArray, value ParsedInt, byteCount ByteCount)
+export function appendLittleEndianScalar(image ByteArray, value ParsedInt, byteCount BytePos)
 	let bits = value as MachineWord
 	for i in 0 upto byteCount 'eachByte'
 		image.push((bits shr (i * BitsPerByte)) and ByteMask)
@@ -466,7 +467,7 @@ let ByteMask = 0xFF as MachineWord
 // byte-strided run is the stride's to make and not a caller's.
 function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) returns ByteArray
 	var out = ByteArray.create()
-	out.resize(elementsByteLen(values.count(), stride: -packedBits) as ElementCount)
+	out.resize(elementsByteLen(values.count(), stride: -packedBits) as ElementIndex)
 
 	let fieldMask = (1 shl packedBits) - 1
 	for i in 0 upto values.count() 'eachElement'
@@ -474,7 +475,7 @@ function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) 
 		let bitPos = (i as ParsedInt) * packedBits
 		let byteIndex = (bitPos / BitsPerByte) as ElementIndex
 		let shift = bitPos mod BitsPerByte
-		let occupied = try out.get(byteIndex) otherwise panic("packConstantElements: byte {byteIndex} is past a buffer sized to hold every element — `elementsByteLen` and this walk disagree about the layout")
+		let occupied = (try out.get(byteIndex) otherwise panic("packConstantElements: byte {byteIndex} is past a buffer sized to hold every element — `elementsByteLen` and this walk disagree about the layout")) as ParsedInt
 		// A packed width DIVIDES a byte, so `shift + packedBits <= 8` and the shifted field never leaves the
 		// byte it starts in. The `and 0xFF` states that rather than relying on it: it is the one line where a
 		// straddle would silently corrupt the next element instead of failing.
@@ -645,7 +646,7 @@ end 'LayoutDescriptor'
 // has no field-offset blob, so nothing patches them and the blob needs no relocation.
 module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypeParamPosition) returns ByteArray
 	var buf = ByteArray.create()
-	buf.reserve(layoutDescriptorBytesFor(typeParamCount))
+	buf.reserve(layoutDescriptorBytesFor(typeParamCount) as ElementIndex)
 	for _ in 0 upto typeParamCount 'eachTypeParam'
 		writeLayoutWord(buf, value: d.size)
 		writeLayoutWord(buf, value: d.alignment)
@@ -687,13 +688,13 @@ end 'encodeLayoutDescriptor'
 // same in every block, so block `i` is a complete dictionary for parameter `i` and a reader never has
 // to hold two pointers.
 function layoutDescriptorBytesFor(typeParamCount TypeParamPosition) returns ByteOffset
-	return LAYOUT_DESCRIPTOR_BYTE_SIZE * typeParamCount
+	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (typeParamCount as ByteOffset)
 end 'layoutDescriptorBytesFor'
 
 // The byte offset of type parameter `position`'s own dictionary block — what a reader adds to the
 // descriptor address before using any of the field offsets above. THE one speller of the stride.
 export function layoutBlockOffsetFor(position TypeParamPosition) returns ByteOffset
-	return LAYOUT_DESCRIPTOR_BYTE_SIZE * position
+	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (position as ByteOffset)
 end 'layoutBlockOffsetFor'
 
 // Append one machine word as `LAYOUT_FIELD_BYTES` little-endian bytes — the same shift-and-mask the

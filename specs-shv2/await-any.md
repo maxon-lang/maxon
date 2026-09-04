@@ -156,7 +156,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function slow(ms Integer) returns Integer
-	sleep(ms)
+	sleep(ms as Milliseconds)
 	return 1
 end 'slow'
 
@@ -289,7 +289,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function nap(ms Integer, tag Integer) returns Integer
-	sleep(ms)
+	sleep(ms as Milliseconds)
 	return tag
 end 'nap'
 

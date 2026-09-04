@@ -33,14 +33,6 @@ module typealias LspLineNumber = int(0 to i64.max)
 // A 0-based offset in UTF-16 CODE UNITS from the start of a line. Not bytes, not codepoints.
 module typealias LspCharacter = int(0 to i64.max)
 
-// A byte offset into a source buffer. Matches `ByteOffset` in the lexer's domain; named here for the
-// LSP's, so a reader of a signature can tell which side of the conversion a value is on.
-module typealias LspByteOffset = int(0 to i64.max)
-
-// File-private: the two columns are this type's own storage and no caller outside it names the
-// alias. It becomes `export` when one does, landed with that caller.
-typealias LspByteOffsetArray = Array with LspByteOffset
-
 // One position, exactly as the protocol spells it: 0-based line, 0-based UTF-16 character.
 module type LspPosition
 	export let line as LspLineNumber
@@ -57,7 +49,7 @@ end 'LspPosition'
 // positions per keystroke, and a per-request scan of the whole buffer would make every feature
 // O(file) in a place the user can feel.
 module type LspLineIndex
-	var lineStarts as LspByteOffsetArray
+	var lineStarts as ByteOffsetArray
 
 	// ⭐ **WHERE EACH LINE'S CONTENT ENDS — recorded by the SAME scan that finds the starts, because
 	// the alternative was unreachable.** Clamping a character past the end of a line needs to know
@@ -68,7 +60,7 @@ module type LspLineIndex
 	//
 	// One entry per line, parallel to `lineStarts`. For a `\r\n` line it is the offset of the `\r`; for
 	// an `\n` line the offset of the `\n`; for the final line the buffer end.
-	var lineContentEnds as LspByteOffsetArray
+	var lineContentEnds as ByteOffsetArray
 
 	// ⚠ **A LINE STARTS AFTER A `\n`, AND `\r` BELONGS TO THE LINE IT ENDS.** CRLF is one line
 	// terminator, not two, and the `\r` is the last byte of the line BEFORE the break — which is what
@@ -77,8 +69,8 @@ module type LspLineIndex
 	// The first line always starts at 0, including in an empty buffer: a document with no bytes still
 	// has one line, and an editor can put a cursor in it.
 	export static function build(source String) returns LspLineIndex
-		var starts = LspByteOffsetArray.create()
-		var contentEnds = LspByteOffsetArray.create()
+		var starts = ByteOffsetArray.create()
+		var contentEnds = ByteOffsetArray.create()
 		starts.push(0)
 
 		var offset = 0
@@ -109,7 +101,7 @@ module type LspLineIndex
 	end 'lineCount'
 
 	// The byte offset where `line` begins, clamped to the last line for a line past the end.
-	function startOfLine(line LspLineNumber) returns LspByteOffset
+	function startOfLine(line LspLineNumber) returns ByteOffset
 		if line >= lineStarts.count() 'pastEnd'
 			return try lineStarts.get(lineStarts.count() - 1) otherwise panic("LspLineIndex.startOfLine: lineStarts is never empty — build pushes 0 before it scans")
 		end 'pastEnd'
@@ -121,7 +113,7 @@ module type LspLineIndex
 	// `build` is its only caller today; it is a named function rather than two lines inline so that
 	// "CRLF is ONE terminator" is stated where a second reader of the rule would find it, rather than
 	// being an unexplained `- 1` in the middle of a scan loop.
-	static function lineContentEndBefore(newlineOffset LspByteOffset, previousByte Byte) returns LspByteOffset
+	static function lineContentEndBefore(newlineOffset ByteOffset, previousByte Byte) returns ByteOffset
 		if newlineOffset > 0 and previousByte == LspCarriageReturnByte 'crlf'
 			return newlineOffset - 1
 		end 'crlf'
@@ -132,7 +124,7 @@ module type LspLineIndex
 	// Which line a byte offset falls on. Binary search rather than a scan: a server answers many
 	// positions per keystroke over a file with thousands of lines, and this is the step that would
 	// otherwise make every one of them O(lines).
-	function lineContaining(offset LspByteOffset) returns LspLineNumber
+	function lineContaining(offset ByteOffset) returns LspLineNumber
 		var low = 0
 		var high = lineStarts.count() - 1
 		while low < high 'narrow'
@@ -151,7 +143,7 @@ module type LspLineIndex
 	end 'lineContaining'
 
 	// The byte offset just past `line`'s content — before its `\r\n` or `\n`, or the buffer end.
-	function endOfLineContent(line LspLineNumber) returns LspByteOffset
+	function endOfLineContent(line LspLineNumber) returns ByteOffset
 		if line >= lineContentEnds.count() 'pastEnd'
 			return try lineContentEnds.get(lineContentEnds.count() - 1) otherwise panic("LspLineIndex.endOfLineContent: lineContentEnds is never empty — build pushes the final line's end unconditionally")
 		end 'pastEnd'
@@ -160,8 +152,8 @@ module type LspLineIndex
 	end 'endOfLineContent'
 
 	/// The LSP position of a byte offset. An offset past the buffer clamps to its end.
-	export function positionOf(source String, offset LspByteOffset) returns LspPosition
-		let length = source.byteLength()
+	export function positionOf(source String, offset ByteOffset) returns LspPosition
+		let length = source.byteLength() as ByteOffset
 		let target = length if offset > length else offset
 		let line = lineContaining(target)
 
@@ -169,7 +161,7 @@ module type LspLineIndex
 		var pos = startOfLine(line)
 		while pos < target 'walkTheLine'
 			character = character + utf16UnitsAt(source, pos: pos)
-			pos = pos + utf8ByteLengthAt(source, pos: pos)
+			pos = pos + (utf8ByteLengthAt(source, pos: pos as BytePos) as ByteOffset)
 		end 'walkTheLine'
 
 		return LspPosition.create(line, character: character)
@@ -178,7 +170,7 @@ module type LspLineIndex
 	/// The byte offset of an LSP position. A line past the buffer clamps to its end; a character past
 	/// the line's content clamps to the end of that content — both of which an editor legitimately
 	/// sends, because a cursor sits one past the last character.
-	export function offsetOf(source String, position LspPosition) returns LspByteOffset
+	export function offsetOf(source String, position LspPosition) returns ByteOffset
 		if position.line >= lineCount() 'linePastEnd'
 			return source.byteLength()
 		end 'linePastEnd'
@@ -192,7 +184,7 @@ module type LspLineIndex
 			end 'clampToLineEnd'
 
 			character = character + utf16UnitsAt(source, pos: pos)
-			pos = pos + utf8ByteLengthAt(source, pos: pos)
+			pos = pos + (utf8ByteLengthAt(source, pos: pos as BytePos) as ByteOffset)
 		end 'walkTheLine'
 
 		return pos
@@ -202,10 +194,10 @@ end 'LspLineIndex'
 // A half-open byte range `[startByte, endByte)` in a source buffer — the same convention
 // `SourceRange` uses, so the two cannot be read as different kinds of interval.
 module type LspSpan
-	export let startByte as LspByteOffset
-	export let endByte as LspByteOffset
+	export let startByte as ByteOffset
+	export let endByte as ByteOffset
 
-	export static function create(startByte LspByteOffset, endByte LspByteOffset) returns LspSpan
+	export static function create(startByte ByteOffset, endByte ByteOffset) returns LspSpan
 		return Self{startByte: startByte, endByte: endByte}
 	end 'create'
 
@@ -269,8 +261,8 @@ let LspCarriageReturnByte = 13 as Byte
 // ships first, and it is invisible until a file contains an emoji or any other codepoint above the
 // BMP. The decode itself is `stdlib`'s: `utf8DecodeAt` already handles every width, and a second
 // decoder here would be free to disagree with the one `String.utf16()` counts through.
-function utf16UnitsAt(source String, pos LspByteOffset) returns LspCharacter
-	return 2 if utf8DecodeAt(source, pos: pos) >= LspFirstSupplementaryCodepoint else 1
+function utf16UnitsAt(source String, pos ByteOffset) returns LspCharacter
+	return 2 if utf8DecodeAt(source, pos: pos as BytePos) >= LspFirstSupplementaryCodepoint else 1
 end 'utf16UnitsAt'
 
 // U+10000 — the first codepoint outside the Basic Multilingual Plane, and so the first that a UTF-16

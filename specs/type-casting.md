@@ -338,8 +338,9 @@ error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot c
 
 ### Unneeded Casts (Compile Error E3010)
 
-A cast that does not narrow the source range is rejected: the surrounding context
-already auto-widens, so the explicit cast contributes nothing.
+A cast whose target names the value's OWN alias is rejected: it converts nothing.
+A cast naming a DIFFERENT alias is real work whichever way the two ranges run — it
+re-declares the value's type and carries the target's range check — so it compiles.
 
 <!-- test: error.unneeded.same-type-int -->
 ```maxon
@@ -447,7 +448,7 @@ end 'main'
 error E3010: specs/fragments/type-casting/error.unneeded.same-alias-float.test:11:12: unneeded cast: 'Float' already fits in 'Float'
 ```
 
-<!-- test: error.unneeded.widening-byte-to-integer -->
+<!-- test: widening-byte-to-integer-is-a-real-cast -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -463,11 +464,11 @@ function main() returns ExitCode
 	return asInteger(i)
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.widening-byte-to-integer.test:12:12: unneeded cast: 'Byte' already fits in 'Integer'
+```exitcode
+42
 ```
 
-<!-- test: error.unneeded.widening-int-to-float -->
+<!-- test: widening-int-to-float-is-a-real-cast -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -483,8 +484,8 @@ function main() returns ExitCode
 	return trunc(f)
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.widening-int-to-float.test:12:12: unneeded cast: 'Integer' already fits in 'JsonFloat'
+```exitcode
+42
 ```
 
 <!-- test: error.unneeded.call-result-same-alias -->
@@ -583,23 +584,47 @@ end 'main'
 
 ## E3010 SEES A DECLARED ALIAS THROUGH A FIELD READ AND A `try … otherwise` RESULT (R-4)
 
-⭐⭐ **THE TWO COMPILERS NOW AGREE ON WHAT *STATES* A DECLARED ALIAS.** `TryGetSourceRangedType` used to know
-two sources — a direct variable reference, and a snapshot that carries chained casts and call returns — so a
-cast whose source was a struct FIELD or a `try … otherwise` RESULT was never examined. shv2 examined both, and
-that asymmetry is why shv2's own source once carried EIGHT casts that do nothing.
+⭐⭐ **BOTH COMPILERS ASK THE SAME QUESTION OF WHAT *STATES* A DECLARED ALIAS.** `TryGetSourceRangedType`
+reads three sources: a direct variable reference, the alias the EXPRESSION ITSELF states (a struct FIELD read,
+a `try … otherwise` RESULT), and a snapshot that carries chained casts and call returns. A door it cannot see
+through goes silent, and a cast to the value's own alias then passes for one that does work — which is why each
+door below is pinned twice: the same-alias cast E3010 refuses, and the cross-alias cast that compiles.
 
-⚠ **THE NAME RIDES THE EXPRESSION RESULT, NOT `_lastRangedTypeName`, AND THAT WAS MEASURED.** The obvious
+⚠ **THE NAME RIDES THE EXPRESSION RESULT, NOT `_lastRangedTypeName`, AND THAT IS MEASURED.** The obvious
 route is the existing channel — but it is NOT diagnostic-only: a shift reads it to choose arithmetic vs logical
-fill, and the optimal-type scan reads it to size a value. **Writing a field read's name there moved two
-`per-instance-typealias` goldens (`x64.mov r8, 2` became `x64.mov r8, 1`)** — emitted code changing for a rule
+fill, and the optimal-type scan reads it to size a value. **Writing a field read's name there moves two
+`per-instance-typealias` goldens (`x64.mov r8, 2` becomes `x64.mov r8, 1`)** — emitted code changing for a rule
 that only ever refuses. On `ExprResult.Direct` there is no staleness to manage either: the name belongs to that
 expression and dies with it.
 
 ⚠ **THE FIELD READ RESOLVES THROUGH THE OWNER'S PER-INSTANCE ALIASES**, exactly as a call return does. A field
-declared `Idx` inside `StrWrapper` denotes `StrWrapper__Idx` at the read, and handing back the declaration's own
-name fires E3010 on a cast doing real work — MEASURED: `unneeded cast: 'Idx' already fits in 'StrWrapper__Idx'`.
+declared `Idx` inside `StrWrapper` denotes `StrWrapper__Idx` at the read, so handing back the declaration's own
+name would put two different type names on the two sides of one cast.
 
 <!-- test: error.unneeded.through-a-field-read -->
+```maxon
+typealias Narrow = int(0 to 63)
+
+type Holder
+	export var n as Narrow
+
+	export static function make() returns Holder
+		return Self{n: 5}
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.make()
+	let w = h.n as Narrow
+	print("w={w}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-field-read.test:14:14: unneeded cast: 'Narrow' already fits in 'Narrow'
+```
+
+<!-- test: a-field-read-cast-to-another-alias-is-a-real-cast -->
 ```maxon
 typealias Narrow = int(0 to 63)
 typealias Mid = int(0 to 1000)
@@ -619,17 +644,42 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-field-read.test:15:14: unneeded cast: 'Narrow' already fits in 'Mid'
+```stdout
+w=5
 ```
 
 <!-- test: error.unneeded.through-a-try-otherwise-result -->
 ⚠ **THE PARENTHESES ARE LOAD-BEARING AND THEY RECORD A DIVERGENCE.** Written bare, `try pick(true) otherwise 0
-as Mid`, the two compilers PARSE it differently: this one reads `(try … otherwise 0) as Mid` — `as` binding
-looser than `otherwise` — while shv2 reads `try … otherwise (0 as Mid)`, the cast binding to its operand.
-MEASURED: bare, this compiler answers E3010 and shv2 accepts the program. Parenthesized, both answer the same
-diagnostic at the same position, which is what this case pins. **The bare form's precedence is a real
-disagreement and is filed, not fixed here** — shv2's tighter reading is the conventional one for a cast.
+as Narrow`, the two compilers PARSE it differently: this one reads `(try … otherwise 0) as Narrow` — `as` binding
+looser than `otherwise` — while shv2 reads `try … otherwise (0 as Narrow)`, the cast binding to its operand.
+Parenthesized, both answer the same diagnostic at the same position, which is what this case pins. **The bare
+form's precedence is a real disagreement and is filed, not fixed here** — shv2's tighter reading is the
+conventional one for a cast.
+```maxon
+typealias Narrow = int(0 to 63)
+
+enum PickError implements Error
+	nope
+end 'PickError'
+
+function pick(ok bool) returns Narrow throws PickError
+	if not ok 'bad'
+		throw PickError.nope
+	end 'bad'
+	return 5
+end 'pick'
+
+function main() returns ExitCode
+	let w = (try pick(true) otherwise 0) as Narrow
+	print("w={w}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:16:39: unneeded cast: 'Narrow' already fits in 'Narrow'
+```
+
+<!-- test: a-try-otherwise-result-cast-to-another-alias-is-a-real-cast -->
 ```maxon
 typealias Narrow = int(0 to 63)
 typealias Mid = int(0 to 1000)
@@ -651,28 +701,64 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:17:39: unneeded cast: 'Narrow' already fits in 'Mid'
+```stdout
+w=5
 ```
 
 ## E3010 SEES A DECLARED ALIAS THROUGH A UNION PAYLOAD BINDING TOO — THE THIRD DOOR OF THE SAME FAMILY
 
-⛔ **A `match` ARM'S PAYLOAD BINDING ARRIVED AS A BARE PRIMITIVE, AND THAT COST TWICE.** The binding recorded a
-declared type name only when the associated value was a struct or an enum, so a ranged alias was dropped: the
-door above went SILENT for it, and — because nothing had refused the cast — a cross-kind `int` → `float` cast
-reached the backend and died there as `E9001: Unable to cast object of type 'StdI64' to type 'StdF64'` with a
-four-frame .NET stack trace printed at the user.
+⛔ **A `match` ARM'S PAYLOAD BINDING MUST CARRY ITS DECLARED ALIAS, AND MISSING IT COSTS TWICE.** A binding
+that records a declared type name only for a struct or an enum drops a ranged alias: the door above goes SILENT
+for it, and — nothing having examined the cast — a cross-kind `int` → `float` cast reaches the backend
+unprepared and dies there as `E9001: Unable to cast object of type 'StdI64' to type 'StdF64'` with a four-frame
+.NET stack trace printed at the user.
 
-⭐ **THE SAME CAST ONE PLACE OVER WAS ALREADY REFUSED CLEANLY**, which is what identified this as a missing door
-rather than a policy question: a plain local and a struct FIELD both answered E3010 for the identical pair of
-aliases. The case below holds all three shapes in one program, in declaration order, so the assertion is that
-they answer IDENTICALLY.
-
-⛔ **A float → float SPELLING PROVES NOTHING HERE AND WAS ONCE OFFERED AS IF IT DID.** `v as Fraction` between
-two float ranges compiles in all three shapes, because E3010 is not supposed to fire there at all — probing it
-tests a door that was never open. The int → float spelling is the one that discriminates.
+⭐ **THE THREE SHAPES ARE HELD IN ONE PROGRAM, IN DECLARATION ORDER, SO THE ASSERTION IS THAT THEY ANSWER
+IDENTICALLY.** A plain local, a struct FIELD and a union PAYLOAD BINDING are three ways of stating the same
+alias, and a door open for two of them is what identifies the third as missing rather than as a policy choice.
+The cross-alias twin is the `int` → `float` cast itself, which is where the backend's half of this is pinned.
 
 <!-- test: error.unneeded.through-a-union-payload-binding -->
+```maxon
+typealias Count = int(0 to 255)
+
+union Tagged
+	blank
+	one(n Count)
+end 'Tagged'
+
+type Holder
+	export var n as Count
+
+	export static function make() returns Holder
+		return Self{n: 5}
+	end 'make'
+end 'Holder'
+
+function fromPayload(t Tagged) returns Count
+	return match t 'k'
+		blank gives 0
+		one(n) gives n as Count
+	end 'k'
+end 'fromPayload'
+
+function main() returns ExitCode
+	let local = 5 as Count
+	let a = local as Count
+	let h = Holder.make()
+	let b = h.n as Count
+	let c = fromPayload(Tagged.one(3))
+	print("{a} {b} {c}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:20:18: unneeded cast: 'Count' already fits in 'Count'
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:26:16: unneeded cast: 'Count' already fits in 'Count'
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:28:14: unneeded cast: 'Count' already fits in 'Count'
+```
+
+<!-- test: crossing-aliases-through-all-three-doors-is-a-real-cast -->
 ```maxon
 typealias Count = int(0 to 255)
 typealias Small = float(0.0 to 10.0)
@@ -707,8 +793,146 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```stdout
+5.0 5.0 3.0
+```
+
+## AN INT CONSTANT AT A FLOAT ALIAS IS JUDGED BEFORE THE CONVERSION, NOT AFTER
+
+⚠ **THE TWO HALVES OF A CROSS-KIND CAST WANT DIFFERENT VALUES, AND GIVING THEM ONE IS A WRONG ANSWER
+EITHER WAY.** The runtime guard compares against the target's bounds IN THE TARGET'S KIND, so an
+integer source has to be converted before it: handing lowering an i64 where the bounds are f64 is not
+a comparison it can make. The COMPILE-TIME refusal wants the opposite — the constant as the author
+wrote it — because the conversion mints a value no literal scan reaches, and a constant judged after
+it silently stops being judged at all.
+
+⭐ **AN INTEGER LITERAL AT A FLOAT DOOR IS THE SAME CONSTANT WRITTEN WITHOUT A POINT.** `300 as Small`
+is refused exactly as `300.0 as Small` is, and `3 as Small` is proved in range and carries no guard.
+
+<!-- test: error.int-literal-outside-a-narrow-float-alias -->
+```maxon
+typealias Small = float(0.0 to 10.0)
+
+function main() returns ExitCode
+	let f = 300 as Small
+	print("{f}")
+	return 0
+end 'main'
+```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:21:18: unneeded cast: 'Count' already fits in 'Small'
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:27:16: unneeded cast: 'Count' already fits in 'Small'
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-union-payload-binding.test:29:14: unneeded cast: 'Count' already fits in 'Small'
+error E3005: specs/fragments/type-casting/error.int-literal-outside-a-narrow-float-alias.test:5:14: Value 300 is outside the range of 'Small' (float(0 to 10))
+```
+
+<!-- test: an-int-literal-inside-a-narrow-float-alias -->
+```maxon
+typealias Small = float(0.0 to 10.0)
+
+function main() returns ExitCode
+	let f = 3 as Small
+	print("{f}")
+	return 0
+end 'main'
+```
+```stdout
+3.0
+```
+
+## A CAST TO A GENERIC-INSTANCE OR FUNCTION-TYPE ALIAS OF THE VALUE'S OWN TYPE IS A RE-BRAND
+
+A `typealias` over a generic instance (`Array with Integer`) or over a function type names a type a value may
+already have. `xs as Ints` states that type again: the two names denote ONE instance, so the cast converts
+nothing and no op survives it. It is the spelling shv2 requires to cross between two such aliases, which it
+holds nominally distinct — so shared source carries it and it has to parse here too.
+
+An alias naming a DIFFERENT instance, or a function type of a different shape, is not a type this cast can
+take, and the `as` target refuses it as it refuses any other name it cannot use.
+
+<!-- test: cast-to-another-alias-of-the-same-generic-instance -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Ints = Array with Integer
+typealias AlsoInts = Array with Integer
+
+function total(xs Ints) returns Integer
+	var sum = 0
+	for x in xs 'each'
+		sum = sum + x
+	end 'each'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	var xs = AlsoInts.create()
+	xs.push(20)
+	xs.push(22)
+	return total(xs as Ints)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cast-to-another-alias-of-the-same-function-type -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function apply(f UnaryOp, n Integer) returns Integer
+	return f(n)
+end 'apply'
+
+function main() returns ExitCode
+	let f = twice as UnaryOp
+	return apply(f, n: 21)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.cast-to-a-different-generic-instance -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Ratio = float(f64.min to f64.max)
+typealias Ints = Array with Integer
+typealias Ratios = Array with Ratio
+
+function total(rs Ratios) returns Integer
+	return rs.count()
+end 'total'
+
+function main() returns ExitCode
+	var xs = Ints.create()
+	xs.push(1)
+	return total(xs as Ratios)
+end 'main'
+```
+```maxoncstderr
+error E2003: specs/fragments/type-casting/error.cast-to-a-different-generic-instance.test:14:21: Expected type name after 'as'
+```
+
+<!-- test: error.cast-to-a-different-function-shape -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Predicate = function(Integer) returns bool
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function apply(p Predicate, n Integer) returns Integer
+	return 1 if p(n) else 0
+end 'apply'
+
+function main() returns ExitCode
+	let f = twice as Predicate
+	return apply(f, n: 3)
+end 'main'
+```
+```maxoncstderr
+error E2003: specs/fragments/type-casting/error.cast-to-a-different-function-shape.test:14:19: Expected type name after 'as'
 ```

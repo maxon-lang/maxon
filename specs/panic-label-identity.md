@@ -34,7 +34,7 @@ SPECIALIZATION of the generic `Array`. The panic that actually fires must print
 its own message, the one naming `Array.resize`'s guard, and none of theirs.
 
 The `-2` is laundered through a function so the compiler cannot fold it: an
-`ElementCount` stops at `i64.max`, so a literal `-2` would be refused at compile
+`ElementIndex` stops at `i64.max`, so a literal `-2` would be refused at compile
 time and this program would never run at all. What panics is `resize`'s
 callee-entry range guard, which is copied into the specialization exactly as a
 written panic is — the same hazard, one layer down.
@@ -70,7 +70,7 @@ end 'main'
 9493
 ```
 ```stderr
-panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
+panic at Array.maxon:436: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in __Array_i64.resize
   in main
@@ -115,7 +115,7 @@ end 'main'
 9493
 ```
 ```stderr
-panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
+panic at Array.maxon:436: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in __Array_i64.resize
   in main

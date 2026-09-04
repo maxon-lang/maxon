@@ -1,7 +1,7 @@
 // UTF-8 utility functions for string processing
 
-typealias RawByte = int(0 to u8.max)
-typealias ByteWidth = int(1 to 4)
+typealias Byte = int(0 to u8.max)
+public typealias ByteWidth = int(1 to 4)
 
 // BytePos exported by stdlib/String.maxon.
 
@@ -13,7 +13,7 @@ typealias ByteWidth = int(1 to 4)
 
 // ⭐ **THE PAYLOAD MASKS AND THE CONTINUATION SHIFT, NAMED — `utf8DecodeAt` USED TO SPELL THEM AS `mod`
 // AND MULTIPLY, AND THAT COST AN INTEGER DIVISION PER BYTE.** `(b mod 64)` and `(b and 63)` are the same
-// number for every `b` a `RawByte` can hold (both operands non-negative, the divisor a power of two), and
+// number for every `b` a `Byte` can hold (both operands non-negative, the divisor a power of two), and
 // `* 64` and `shl 6` likewise — but a compiler cannot fold `mod` to a mask without proving the dividend
 // non-negative, so the emitted code carried a `cqo`/`idiv` pair per continuation byte on a function every
 // grapheme scan calls once per codepoint. The mask/shift spelling is what `stdlib/Character.maxon:134-140`
@@ -29,7 +29,7 @@ let Utf8FourByteLeadMask = 7
 
 /// Get the number of bytes in a UTF-8 sequence from its lead byte
 /// Returns 1-4 for valid lead bytes
-public function utf8ByteLength(leadByte RawByte) returns ByteWidth
+public function utf8ByteLength(leadByte Byte) returns ByteWidth
 	// ASCII (0xxxxxxx)
 	if leadByte < 128 'ascii'
 		return 1
@@ -55,18 +55,18 @@ public function utf8ByteLength(leadByte RawByte) returns ByteWidth
 end 'utf8ByteLength'
 
 /// Check if a byte is a UTF-8 continuation byte (10xxxxxx)
-public function utf8IsContinuation(b RawByte) returns bool
+public function utf8IsContinuation(b Byte) returns bool
 	return b >= 128 and b < 192
 end 'utf8IsContinuation'
 
 /// Check if a byte is a valid UTF-8 lead byte
-public function utf8IsLead(b RawByte) returns bool
+public function utf8IsLead(b Byte) returns bool
 	// Lead byte is either ASCII (< 128) or starts with 11xxxxxx (>= 192)
 	return b < 128 or b >= 192
 end 'utf8IsLead'
 
 /// Check if a byte is ASCII (0-127)
-public function utf8IsAscii(b RawByte) returns bool
+public function utf8IsAscii(b Byte) returns bool
 	return b < 128
 end 'utf8IsAscii'
 
@@ -136,7 +136,7 @@ end 'utf8IsValidCodepoint'
 // `specs-shv2/string-views.md`'s `truncated-sequences-stop-at-the-buffer-end` is the pin, and it exists
 // because maxon-shv2's segmenter had this rule while this file did not.
 function utf8WidthFits(s String, pos BytePos, width ByteWidth) returns bool
-	return pos + width <= s.byteLength()
+	return pos + (width as BytePos) <= s.byteLength()
 end 'utf8WidthFits'
 
 /// Get the UTF-8 sequence length from the lead byte at `pos`

@@ -15,9 +15,9 @@
 
 typealias BreakProperty = int(0 to 13)
 
-// ByteCount, GraphemeCount, BytePos exported by stdlib/String.maxon.
+// BytePos and GraphemeIndex are exported by stdlib/String.maxon.
 // How many regional-indicator codepoints run consecutively — a count of codepoints inside one
-// string, so `String.ByteCount`'s bound holds: a signed machine word.
+// string, so `String.BytePos`'s bound holds: a signed machine word.
 typealias RegionalIndicatorCount = int(0 to i64.max)
 
 typealias Utf8Byte = int(0 to u8.max)
@@ -94,7 +94,7 @@ public function findGraphemeEnd(s String, startPos BytePos) returns BytePos
 	var pos = startPos
 	var prevCp = utf8DecodeAt(s, pos: pos)
 	let prevBytes = utf8ByteLengthAt(s, pos: pos)
-	pos = pos + prevBytes
+	pos = pos + (prevBytes as BytePos)
 
 	// Get grapheme break property for first codepoint
 	var prevGbp = graphemeBreakProperty(prevCp)
@@ -116,7 +116,7 @@ public function findGraphemeEnd(s String, startPos BytePos) returns BytePos
 		prevGbp = currGbp
 		prevCp = currCp
 		let currBytes = utf8ByteLengthAt(s, pos: pos)
-		pos = pos + currBytes
+		pos = pos + (currBytes as BytePos)
 	end 'scan'
 
 	return pos
@@ -366,8 +366,9 @@ end 'findGraphemeStart'
 ///
 /// The private `countGraphemesManagedRange` this used to forward to is gone with the window: its
 /// only caller was this function, passing the whole string.
-public function countGraphemes(s String) returns GraphemeCount
+public function countGraphemes(s String) returns GraphemeIndex
 	let len = s.byteLength()
+	// One byte per cluster, so the byte length IS the cluster count — the cast is the change of purpose.
 	if s.hasSingleByteGraphemes() 'oneByteEach'
 		return len
 	end 'oneByteEach'
@@ -383,17 +384,17 @@ end 'countGraphemes'
 
 /// Convert a byte index to a grapheme (character) index
 /// Returns the number of grapheme clusters before the byte position
-public function byteIndexToGraphemeIndex(s String, byteIdx BytePos) returns GraphemeCount
+public function byteIndexToGraphemeIndex(s String, byteIdx BytePos) returns GraphemeIndex
 	let len = s.byteLength()
 	// The byte offset IS the grapheme index. The walk below stops at the end of the string when
 	// `byteIdx` runs past it, so this must too. `byteIdx` needs no guard of the kind
 	// `graphemeOffsetToBytePos`'s `count` does: it is never caller-supplied, arriving only from
 	// `findIn`/`findLastIn`, which return a position inside the string they searched.
+	// One byte per cluster, so the byte offset IS the cluster index — clamped on the BYTE side, and the
+	// cast is the one change of purpose.
 	if s.hasSingleByteGraphemes() 'oneByteEach'
-		if byteIdx < len 'inRange'
-			return byteIdx
-		end 'inRange'
-		return len
+		let clamped = byteIdx if byteIdx < len else len
+		return clamped as GraphemeIndex
 	end 'oneByteEach'
 
 	var graphemeIdx = 0
@@ -407,23 +408,18 @@ end 'byteIndexToGraphemeIndex'
 
 /// Advance from a byte position by a number of grapheme clusters
 /// Returns the byte position after advancing by `count` graphemes
-public function graphemeOffsetToBytePos(s String, startBytePos BytePos, count GraphemeCount) returns BytePos
+public function graphemeOffsetToBytePos(s String, startBytePos BytePos, count GraphemeIndex) returns BytePos
 	let len = s.byteLength()
 	// Advancing `count` graphemes is advancing `count` bytes, so the walk collapses to arithmetic.
-	//
-	// ⚠ This used to carry a third conjunct, `count > 0`, whose only job was to decline counts past
-	// `i64.max` — back when `GraphemeCount` was the full `int(0 to u64.max)` and such a count ordered
-	// as negative, breaking the comparisons the shortcut needs. `GraphemeCount` is now
-	// `int(0 to i64.max)`, so the DOOR refuses those before the body sees them and the conjunct can
-	// no longer be false for any value that arrives. `count == 0` — the only input it still excluded —
-	// reaches `startBytePos + 0` here and reached `startBytePos` through the walk before, so dropping
-	// it is behaviour-identical.
+	// The comparisons need a non-negative `count`, and `GraphemeIndex`'s `int(0 to i64.max)` door
+	// supplies it before the body runs.
 	//
 	// Inside the guard the arithmetic is safe: `startBytePos < len` makes the subtraction positive,
 	// and the sum is only formed when it is already known to land below `len`.
 	if s.hasSingleByteGraphemes() and startBytePos < len 'oneByteEach'
-		if count < len - startBytePos 'inRange'
-			return startBytePos + count
+		let countBytes = count as BytePos
+		if countBytes < len - startBytePos 'inRange'
+			return startBytePos + countBytes
 		end 'inRange'
 		return len
 	end 'oneByteEach'

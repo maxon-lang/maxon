@@ -164,10 +164,10 @@ end 'scaleErrorText'
 export type PhaseMetric
 	export let allocs as AllocCount
 	export let frees as AllocCount
-	export let bytes as ByteCount
+	export let bytes as HeapByteCount
 	export let cpuTicks as CpuTicks
 
-	export static function create(allocs AllocCount, frees AllocCount, bytes ByteCount, cpuTicks CpuTicks) returns PhaseMetric
+	export static function create(allocs AllocCount, frees AllocCount, bytes HeapByteCount, cpuTicks CpuTicks) returns PhaseMetric
 		return Self{allocs: allocs, frees: frees, bytes: bytes, cpuTicks: cpuTicks}
 	end 'create'
 
@@ -860,7 +860,7 @@ function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleE
 	let frees = try parseCount(try fields.get(MetricsFreesField) otherwise panic("parseMetricFields: frees field OOB after count check"))
 	let bytes = try parseCount(try fields.get(MetricsBytesField) otherwise panic("parseMetricFields: bytes field OOB after count check"))
 	let cpuTicks = try parseCount(try fields.get(MetricsCpuTicksField) otherwise panic("parseMetricFields: cpuTicks field OOB after count check"))
-	return PhaseMetric.create(allocs, frees: frees, bytes: bytes, cpuTicks: cpuTicks)
+	return PhaseMetric.create(allocs as AllocCount, frees: frees as AllocCount, bytes: bytes as HeapByteCount, cpuTicks: cpuTicks as CpuTicks)
 end 'parseMetricFields'
 
 export typealias ParsedCount = int(0 to u64.max)
@@ -888,7 +888,7 @@ export function parseCount(raw String) returns ParsedCount throws ScaleError
 		if digit < AsciiDigitZero or digit > AsciiDigitNine 'notADigit'
 			throw ScaleError.reason("expected a number, got '{raw}'")
 		end 'notADigit'
-		value = value * 10 + (digit - AsciiDigitZero)
+		value = value * 10 + ((digit - AsciiDigitZero) as ParsedCount)
 	end 'eachDigit'
 	return value
 end 'parseCount'
@@ -934,10 +934,10 @@ function printRungLine(result RungResult, results RungResultArray)
 	line.append(padLeft("{result.sourceBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.codeBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.total.allocs}", width: CountColumnWidth))
-	line.append(padLeft(growthText(growthAgainstPrevious(result.total.allocs, results: results, measure: ScaleMeasure.allocations)), width: GrowthColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.allocs as MeasuredQuantity, results: results, measure: ScaleMeasure.allocations)), width: GrowthColumnWidth))
 	line.append(padLeft("{result.total.frees}", width: CountColumnWidth))
 	line.append(padLeft("{result.total.bytes}", width: CountColumnWidth))
-	line.append(padLeft(growthText(growthAgainstPrevious(result.total.bytes, results: results, measure: ScaleMeasure.bytes)), width: GrowthColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.bytes as MeasuredQuantity, results: results, measure: ScaleMeasure.bytes)), width: GrowthColumnWidth))
 	print("{line.build()}\n")
 end 'printRungLine'
 
@@ -974,9 +974,9 @@ end 'ScaleMeasure'
 
 export function measureOf(metric PhaseMetric, measure ScaleMeasure) returns MeasuredQuantity
 	return match measure 'm'
-		allocations gives metric.allocs
-		bytes gives metric.bytes
-		cpuTicks gives metric.cpuTicks
+		allocations gives metric.allocs as MeasuredQuantity
+		bytes gives metric.bytes as MeasuredQuantity
+		cpuTicks gives metric.cpuTicks as MeasuredQuantity
 	end 'm'
 end 'measureOf'
 
@@ -1116,9 +1116,9 @@ function printMemoryDelta(results RungResultArray, date String, note String, log
 
 		var line = StringBuilder.create()
 		line.append(padRight("  {result.rung}", width: TrendRungColumnWidth))
-		line.append(padLeft(groupDigits(result.total.allocs), width: TrendCountColumnWidth))
+		line.append(padLeft(groupDigits(result.total.allocs as Delta), width: TrendCountColumnWidth))
 		line.append(padLeft(countDeltaText(result.total.allocs, logged: loggedAllocs, rung: i), width: TrendDeltaColumnWidth))
-		line.append(padLeft(groupDigits(result.total.bytes), width: TrendCountColumnWidth))
+		line.append(padLeft(groupDigits(result.total.bytes as Delta), width: TrendCountColumnWidth))
 		line.append(padLeft(byteDeltaText(result.total.bytes, logged: loggedBytes, rung: i, bytes: bytes), width: TrendDeltaColumnWidth))
 		print("{line.build()}\n")
 	end 'eachRung'
@@ -1183,10 +1183,8 @@ end 'printMintedElsewhereReason'
 // at all. (`assertRecordable` refuses to LOG such a run, but a --rungs=3 run with no --note is a
 // perfectly reasonable thing to do while iterating, and it still prints.)
 function countDeltaText(current AllocCount, logged AllocCountArray, rung LadderIndex) returns String
-	let before = try logged.get(rung) otherwise 'notLogged'
-		return NoBaselineText
-	end 'notLogged'
-	return signedDeltaText(current, before: before)
+	let before = try logged.get(rung) otherwise return NoBaselineText
+	return signedDeltaText(current as Delta, before: before as Delta)
 end 'countDeltaText'
 
 // The byte column's delta cell, which is the ONE cell of this table that can be refused.
@@ -1194,11 +1192,13 @@ end 'countDeltaText'
 // `WithheldDeltaText` rather than `NoBaselineText`, and they must not look alike: "the logged run never
 // climbed this rung" and "these two rows were measured against different yardsticks" are different
 // facts, and a reader who cannot tell them apart learns neither.
-function byteDeltaText(current ByteCount, logged ByteCountArray, rung LadderIndex, bytes ByteDelta) returns String
-	return match bytes 'b'
-		withheld gives WithheldDeltaText
-		comparable gives countDeltaText(current, logged: logged, rung: rung)
+function byteDeltaText(current HeapByteCount, logged ByteCountArray, rung LadderIndex, bytes ByteDelta) returns String
+	match bytes 'b'
+		withheld then return WithheldDeltaText
+		comparable then break 'b'
 	end 'b'
+	let before = try logged.get(rung) otherwise return NoBaselineText
+	return signedDeltaText(current as Delta, before: before as Delta)
 end 'byteDeltaText'
 
 // Short enough that `padLeft` still puts space in front of it at `TrendDeltaColumnWidth` — a cell that

@@ -904,7 +904,6 @@ export function isManagedSocketRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ManagedSocketRuntimePrefix)
 end 'isManagedSocketRuntimeCallee'
 
-
 // ==========================================================================
 // THE BUILT-IN RESOLVER — the Std graph a lane with no `getaddrinfo` runs
 // ==========================================================================
@@ -985,6 +984,7 @@ let Ipv4OctetCount = 4
 let Ipv4LastOctetIndex = Ipv4OctetCount - 1
 let Ipv4OctetMax = 255
 let Ipv4DecimalBase = 10
+
 // `256` as a MULTIPLIER, so each octet lands one byte higher than the last. The address is accumulated in
 // NETWORK order — the first octet is the LOW byte — because that is the order `sin_addr` holds it in and
 // therefore what `emitSockaddrInWord` places without swapping.
@@ -998,6 +998,7 @@ let DnsQuestionTailBytes = 4
 let DnsTypeA = 1
 let DnsClassIn = 1
 let DnsRecursionDesiredFlags = 0x0100
+
 // The query id. A stub that opens a FRESH connection per query and reads one response cannot be answered by
 // anybody else's query, so the id carries no security here and is a constant; it is echoed back and this
 // file does not test it, exactly as it does not test the `QR` bit.
@@ -1005,13 +1006,16 @@ let DnsQueryId = 0x4D58
 let DnsQdCountOne = 1
 let DnsRcodeMask = 0x0F
 let DnsRcodeNoError = 0
+
 // A DNS name ends at a zero LENGTH byte or at a two-byte COMPRESSION POINTER, whose top two bits are set.
 let DnsLabelPointerMask = 0xC0
 let DnsPointerBytes = 2
 let DnsLabelTerminatorBytes = 1
+
 // The longest a single label and a whole name may be. A query is refused rather than truncated past either.
 let DnsMaxLabelBytes = 63
 let DnsMaxNameBytes = 255
+
 // The fixed fields of a resource record after its name: TYPE, CLASS, TTL and RDLENGTH.
 let DnsRecordFixedBytes = 10
 let DnsRecordRdLengthOffset = 8
@@ -1369,7 +1373,7 @@ function emitOwnedCString(module StdModule, block IrBlock, text ByteArray, ids V
 
 	for k in 0 upto text.count() 'eachByte'
 		let ch = try text.get(k) otherwise panic("emitOwnedCString: text.get out of range at {k} of {text.count()}")
-		emitStoreConstByte(module, block: block, base: buf, offset: k as ByteOffset, value: ch, ids: ids)
+		emitStoreConstByte(module, block: block, base: buf, offset: k as ByteOffset, value: ch as ParsedInt, ids: ids)
 	end 'eachByte'
 
 	return buf

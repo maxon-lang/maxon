@@ -216,7 +216,7 @@ function main() returns ExitCode
 		end 'length'
 		for i in 0 upto 48 'bytes'
 			let got = try b.get(i) otherwise return 2
-			if got != ((seed + i) mod 251) 'value'
+			if (got as ElementIndex) != ((seed + i) mod 251) 'value'
 				bad = bad + 1
 			end 'value'
 		end 'bytes'
@@ -305,7 +305,7 @@ function main() returns ExitCode
 		end 'length'
 		for i in 0 upto 80 'bytes'
 			let got = try b.get(i) otherwise return 2
-			if got != ((seed + i) mod 251) 'value'
+			if (got as ElementIndex) != ((seed + i) mod 251) 'value'
 				bad = bad + 1
 			end 'value'
 		end 'bytes'
@@ -531,7 +531,7 @@ type Sink
 	end 'create'
 
 	export function take(s String) returns Integer
-		self.seen = self.seen + s.count()
+		self.seen = self.seen + (s.count() as Integer)
 
 		return 1
 	end 'take'

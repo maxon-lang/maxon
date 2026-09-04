@@ -1,4 +1,4 @@
-// Test: error.unneeded.widening-byte-to-integer
+// Test: widening-byte-to-integer-is-a-real-cast
 
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
@@ -10,11 +10,17 @@ end 'asInteger'
 function main() returns ExitCode
 	let b = 42 as Byte
 	let i = b as Integer
-	return asInteger(i)
+	return asInteger(i) as ExitCode
 end 'main'
 ---
-MaxoncStderr: ```
-error E3010: specs/fragments/type-casting/error.unneeded.widening-byte-to-integer.test:12:12: unneeded cast: 'Byte' already fits in 'Integer'
-```
+ExitCode: 42
 ---
----
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __rc_ok:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

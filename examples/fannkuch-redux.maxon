@@ -23,11 +23,6 @@
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-// A factorial is at least 1, which is what makes the factorial-base digit a plain
-// `/` rather than a throwing one. There is no upper bound worth naming: `factorial`
-// is written for any Integer.
-typealias FactorialValue = int(1 to i64.max)
-
 // Every working array is sized for the largest permutation this program runs, so
 // each index below is in bounds by construction and a failing get/set is a bug in
 // the algorithm rather than a condition to recover from.
@@ -67,10 +62,10 @@ function getPermutation(p IntArray, count IntArray, fact IntArray, n Integer, id
 	var i = n - 1
 
 	while i > 0 'perm_loop'
-		let factorialOfI = (try fact.get(i) otherwise panic("getPermutation: i < n <= fact.length")) as FactorialValue
-		let d = remaining / factorialOfI
+		let factorialOfI = try fact.get(i) otherwise panic("getPermutation: i < n <= fact.length")
+		let d = try (remaining / factorialOfI) otherwise panic("getPermutation: a factorial is never 0")
 		try count.set(i, value: d) otherwise panic("getPermutation: i < n <= count.length")
-		remaining = remaining mod factorialOfI
+		remaining = try (remaining mod factorialOfI) otherwise panic("getPermutation: a factorial is never 0")
 
 		// Copy current permutation to temporary
 		copyArray(pp, src: p, n: n)

@@ -111,7 +111,7 @@ purely through the `Cloneable` witness that `type Array … implements … Clone
 The gate spoke first, so the gate got the credit.
 
 ⛔⛔ **W90 MEASURED THAT IT WAS NOT THE GATE — with `requireOpaqueArrayCopyable` probe-disabled, this program
-was STILL REFUSED, by E3128 at `stdlib/Array.maxon:143:18`.** A conforming generic type shared ONE witness
+was STILL REFUSED, by E3128 at `stdlib/Array.maxon:142:18`.** A conforming generic type shared ONE witness
 table across every instantiation, so a dispatch through that table had no instantiation to take a layout
 descriptor from, and an `Array` therefore could not serve `Cloneable` at ANY element.
 
@@ -143,16 +143,16 @@ that with the missing cloner instead of with the refusal, and
 `array-clone-managed-elements.clone-of-an-array-of-string-arrays-is-deep` is that exact program, running.
 ⇒ *"the library body's whole-program refusal is the only thing standing there"* is retired, and so is the
 over-refusal it excused: a program that COPIES NOTHING (`for … in` over a nested array, an `isEmpty()`, a
-`clear()`) used to be refused too, because the refusal fires where `stdlib/Array.maxon:145`'s
+`clear()`) used to be refused too, because the refusal fires where `stdlib/Array.maxon:144`'s
 `managed.slice(0, len)` IS and that body is compiled once for the whole program.
 
 ⚠ **A stdlib-body refusal is still BLAMED AT THE USER'S OWN CONSTRUCT, and the library line survives as a
-NOTE** — the arrangement the remaining opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:165:32`,
+NOTE** — the arrangement the remaining opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:164:32`,
 a line no user wrote, and REPORTED at the `typealias` whose instantiation made the element uncopyable. The
 library location reads REPO-RELATIVE because the runner rewrites the compiler's absolute `stdlib/` root the
 way it already rewrites a staged fragment's path (`SpecTestRunner.rewriteStdlibPaths`). Only the NOTE carries
-the library's line number, so an edit above `stdlib/Array.maxon:145` still moves those expectations — a real
-cost, and the same one the four `/specs` cases pinning `Array.maxon:413`'s panic already pay. The cases that
+the library's line number, so an edit above `stdlib/Array.maxon:144` still moves those expectations — a real
+cost, and the same one the four `/specs` cases pinning `Array.maxon:412`'s panic already pay. The cases that
 still print it are `array-clone-managed-elements.error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused`,
 `generic-instance-clone.error.a-container-of-opaque-element-containers-is-refused`,
 `generic-type-nested-array-typealias.opaque-copy-uncopyable-instantiation-rejected` and
@@ -233,7 +233,7 @@ behind ONE user struct restores both: `Array with Handle` is uncopyable, is mint
 
 ⚠ **WHAT THAT COSTS IS THE CORPUS PROVENANCE, AND IT IS WORTH SAYING RATHER THAN LOSING.** The old shape was
 `extension Array implements Sizer`, which is exactly how `Array`'s own `Hashable`/`Equatable` are declared
-(`stdlib/Array.maxon:668`) — so the arrangement under test was the corpus's own and not a contrivance.
+(`stdlib/Array.maxon:667`) — so the arrangement under test was the corpus's own and not a contrivance.
 `extension Handle implements Sizer` is the same MECHANISM (a conformance in `project.conformances` and not in
 `StructLayout.conformsTo`) on a type the corpus does not happen to declare. `Sizer` rather than `Hashable`
 for the original reason: `Hashable` is ALSO granted intrinsically to an array
@@ -291,7 +291,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:41:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
-note: stdlib/Array.maxon:165:32: raised inside the library, on behalf of the construct above
+note: stdlib/Array.maxon:164:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- test: error.a-map-key-array-is-refused-for-its-element -->

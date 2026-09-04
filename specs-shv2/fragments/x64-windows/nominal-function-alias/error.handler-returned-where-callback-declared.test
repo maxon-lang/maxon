@@ -1,0 +1,26 @@
+// Test: error.handler-returned-where-callback-declared
+typealias Integer = int(i64.min to i64.max)
+typealias Handler = function(n Integer) returns Integer
+typealias Callback = function(n Integer) returns Integer
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function pickHandler() returns Handler
+	return addOne
+end 'pickHandler'
+
+function pickCallback() returns Callback
+	let h = pickHandler()
+	return h
+end 'pickCallback'
+
+function main() returns ExitCode
+	let c = pickCallback()
+	print("{c(1)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:16:2: function type mismatch in return: expected 'Callback', got 'Handler'

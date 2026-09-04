@@ -13,11 +13,10 @@ end 'ArrayError'
 // The upper bound is not tighter than that because a caller's own `reserve(n)` sets the capacity, and
 // nothing in this type bounds `n` further. Stating the bound honestly is what makes these doors
 // GUARDED — a full `int(0 to u64.max)` is the one shape both compilers leave unchecked — and it is
-// what pins an ordering comparison on one of these to the signed reading.
-typealias ElementCount = int(0 to i64.max)
+// what pins an ordering comparison on it to the signed reading.
 typealias ElementIndex = int(0 to i64.max)
 
-// ⚠ **WHAT `__ManagedMemory.capacity()` REPORTS IS NOT AN `ElementCount`, AND IT NEVER WAS.** A buffer this
+// ⚠ **WHAT `__ManagedMemory.capacity()` REPORTS IS NOT AN `ElementIndex`, AND IT NEVER WAS.** A buffer this
 // record does not OWN — a literal's static image, or another record's buffer this one is a view of —
 // answers a NEGATIVE FLAG rather than a number of slots, and both compilers do it. `specs-shv2/arrays.md`'s
 // `slice-capacity-is-a-view-until-written` pins **-1** for a slice on BOTH, deliberately: it is the one
@@ -25,10 +24,10 @@ typealias ElementIndex = int(0 to i64.max)
 // the moment it was made. MEASURED 2026-08-29, shv2 answers **-2** for a byte-string literal's buffer.
 //
 // So this is the alias for "a capacity, or the flag saying there is not one", and it is FULL-RANGE SIGNED
-// ON PURPOSE — the shape both compilers leave unguarded. Declaring these doors `ElementCount` panicked
+// ON PURPOSE — the shape both compilers leave unguarded. Declaring these doors `ElementIndex` panicked
 // `grownCapacity` at its own entry the instant a program inserted into a literal-backed array (6 spec cases,
 // measured). The narrowest HONEST range for a value that carries a sentinel is the one that admits it, and
-// `ElementCount` stays honest by not being asked to.
+// `ElementIndex` stays honest by not being asked to.
 typealias ReportedCapacity = int(i64.min to i64.max)
 
 // THE GROWTH POLICY AN `Array` GROWS BY — Go's `nextslicecap`, not plain doubling.
@@ -73,16 +72,16 @@ typealias ReportedCapacity = int(i64.min to i64.max)
 // bend and not a superlinearity — but the ladder's six rungs sit inside the transition, so a reading of
 // ×2.1 on a linear phase is the expected cost of this policy and NOT a new quadratic to hunt. A reading
 // well past that still is.
-let GrowthThreshold = 256 as ElementCount
+let GrowthThreshold = 256 as ElementIndex
 
 // The floor a growing buffer starts from, so that a few-element accumulation does not bounce its way
 // up through 1 → 2 → 3.
-let MinimumCapacity = 4 as ElementCount
+let MinimumCapacity = 4 as ElementIndex
 
 // The capacity a buffer of `current` capacity must grow to in order to hold `required` elements. This
 // is the POLICY, not a should-I-grow test: callers ask only when `required > current`, and what comes
 // back is never less than either.
-function grownCapacity(current ReportedCapacity, required ElementCount) returns ElementCount
+function grownCapacity(current ReportedCapacity, required ElementIndex) returns ElementIndex
 	let doubled = current + current
 
 	// An ask that outruns doubling — `reserve(n)` on an empty array, `append` of a longer one — is
@@ -97,24 +96,24 @@ function grownCapacity(current ReportedCapacity, required ElementCount) returns 
 	// is already bigger than this — but `__ManagedMemory` records the capacity ASKED FOR rather than the
 	// one GRANTED, so that headroom is bought and then thrown away. Recovering it means having the
 	// allocator report its granted size; until then this branch is honest about being a little wasteful.
-	if required > doubled 'takeTheAskAsGiven'
+	if (required as ReportedCapacity) > doubled 'takeTheAskAsGiven'
 		return atLeastMinimum(required)
 	end 'takeTheAskAsGiven'
 
 	if current < GrowthThreshold 'stillSmall'
-		return atLeastMinimum(doubled)
+		return atLeastMinimum(doubled as ElementIndex)
 	end 'stillSmall'
 
 	// Ease from 2× toward 1.25×. One pass covers a `push` (which asks for a single element more than it
 	// has); the loop repeats only when `required` lands between one eased step and a full double.
 	var capacity = current
-	while capacity < required 'ease'
+	while capacity < (required as ReportedCapacity) 'ease'
 		capacity = capacity + (capacity + 3 * GrowthThreshold) / 4
 	end 'ease'
 	return capacity
 end 'grownCapacity'
 
-function atLeastMinimum(capacity ElementCount) returns ElementCount
+function atLeastMinimum(capacity ElementIndex) returns ElementIndex
 	if capacity < MinimumCapacity 'raise'
 		return MinimumCapacity
 	end 'raise'
@@ -169,13 +168,13 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	end 'clone'
 
 	/// Get the number of elements in the array
-	public function count() returns ElementCount
+	public function count() returns ElementIndex
 		return managed.length()
 	end 'count'
 
 	/// The number of element slots the buffer holds — or a NEGATIVE flag when the buffer is not this
 	/// record's to grow, which is a view's answer until its first write gives it a private one. See
-	/// `ReportedCapacity`, which is why this is not an `ElementCount`.
+	/// `ReportedCapacity`, which is why this is not an `ElementIndex`.
 	public function capacity() returns ReportedCapacity
 		return managed.capacity()
 	end 'capacity'
@@ -292,7 +291,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	// =========================================================================
 
 	/// Ensure capacity for at least requiredLen elements, growing if needed
-	function ensureCapacity(requiredLen ElementCount)
+	function ensureCapacity(requiredLen ElementIndex)
 		let cap = managed.capacity()
 		if requiredLen > cap 'grow'
 			try managed.grow(grownCapacity(cap, required: requiredLen)) otherwise 'growErr'
@@ -396,7 +395,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	// =========================================================================
 
 	/// Reserve space by ensuring array has at least minCapacity slots
-	public function reserve(minCapacity ElementCount)
+	public function reserve(minCapacity ElementIndex)
 		let cap = managed.capacity()
 		if minCapacity > cap 'grow'
 			try managed.grow(minCapacity) otherwise 'growErr'
@@ -434,7 +433,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// unwritten slot is a defined state, and it stays available for that.
 	///
 	/// Shrinking releases the elements that leave the live range.
-	public function resize(newLength ElementCount)
+	public function resize(newLength ElementIndex)
 		reserve(newLength)
 		try managed.setLength(newLength) otherwise 'lenErr'
 			panic("Array.resize: setLength refused a length reserve had just made room for — the two disagree about the capacity")
@@ -450,7 +449,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// That split is why this exists separately rather than as a `resize` a caller hopes is going
 	/// down: `resize` cannot know which direction it is being asked for until it runs, and this one
 	/// says so in its name.
-	public function truncate(newLength ElementCount)
+	public function truncate(newLength ElementIndex)
 		if newLength >= managed.length() 'nothingToDrop'
 			return
 		end 'nothingToDrop'
@@ -482,7 +481,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// `resize(4)` reads back 0 0 0 0, not the previous occupants). So a caller filling with ZERO is
 	/// paying for a fill it does not need; that is the only cost of using this uniformly, and it is
 	/// worth it to keep ONE extension operation rather than two.
-	public function growFilled(newLength ElementCount, value Element)
+	public function growFilled(newLength ElementIndex, value Element)
 		let existing = managed.length()
 		if newLength <= existing 'nothingAdded'
 			return
@@ -508,7 +507,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// array's element type, so the same idea had to be hand-written once per element type — and it
 	/// was, three times (`refillColumn` for an 8-byte int column, `refillBoolColumn` for a bool one,
 	/// `resetRow` for a bit-word one), three copies that nothing made agree.
-	public function refill(newLength ElementCount, value Element)
+	public function refill(newLength ElementIndex, value Element)
 		resize(newLength)
 
 		fillPublished(0, count: newLength, value: value)
@@ -523,7 +522,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// one, whose slot holds exactly one reference — taking and releasing that reference is emitted
 	/// by the compiler at each store, and a bulk runtime loop cannot respell it. The per-element
 	/// loop below is the arm it declined, and it is the whole of what these two used to do.
-	function fillPublished(start ElementIndex, count ElementCount, value Element)
+	function fillPublished(start ElementIndex, count ElementIndex, value Element)
 		let applied = try managed.fill(start, count: count, value: value) otherwise 'fillErr'
 			panic("Array.fillPublished: fill OOB — the window is inside the length the caller just published")
 		end 'fillErr'
@@ -598,7 +597,7 @@ public type ArrayIterator uses Element implements BidirectionalIterator with Ele
 		try raw.seek(index) otherwise throw IterationError.exhausted
 	end 'seek'
 
-	public function peek(ahead ElementCount) returns Element throws IterationError
+	public function peek(ahead ElementIndex) returns Element throws IterationError
 		return try raw.peek(ahead) otherwise throw IterationError.exhausted
 	end 'peek'
 end 'ArrayIterator'

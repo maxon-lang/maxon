@@ -11,7 +11,6 @@
 export typealias OpCount = int(0 to u64.max)
 export typealias BlockCount = int(0 to u64.max)
 typealias FuncCount = int(0 to u64.max)
-typealias BlockIndex = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 
 module typealias BlockRefIndex = int(0 to u64.max)
@@ -411,9 +410,9 @@ export type IrModule uses Op
 				continue
 			end 'orphan'
 			if newIdx != oldIdx 'needsSwap'
-				self.blocks.swap(newIdx, j: oldIdx)
+				self.blocks.swap(newIdx as IrBlockArray.SortIndex, j: oldIdx)
 				if compactSourceInfo 'swapInfo'
-					self.blockSourceInfo.swap(newIdx, j: oldIdx)
+					self.blockSourceInfo.swap(newIdx as BlockSourceInfoArray.SortIndex, j: oldIdx)
 				end 'swapInfo'
 			end 'needsSwap'
 		end 'move'
@@ -440,7 +439,7 @@ export type IrModule uses Op
 		return self.blocks.count()
 	end 'blockCount'
 
-	export function getBlock(index BlockIndex) returns IrBlock
+	export function getBlock(index BlockRef) returns IrBlock
 		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
 	end 'getBlock'
 
@@ -562,23 +561,6 @@ export type IrModule uses Op
 		throw BlockRefLookupError.notInFunction
 	end 'getBlockByIdIn'
 
-	// Locate the flat blocks[] index of `block` within `func`'s block set.
-	// Used by the parser's statement-line recorder. BlockId is only unique
-	// within a single function, so restricting the scan to func.blockRefs
-	// disambiguates even when multiple functions share the same id space.
-	// Throws when the block isn't registered in `func` — that happens only
-	// for detached sink blocks (the dead block produced by newDetachedBlock),
-	// which carry no source info and must not be recorded against.
-	export function findBlockRef(func IrFunction, block IrBlock) returns BlockRefIndex throws BlockRefLookupError
-		for blockRef in func.blockRefs 'each'
-			let candidate = try self.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in self.blocks")
-			if candidate.id == block.id 'match'
-				return blockRef
-			end 'match'
-		end 'each'
-		throw BlockRefLookupError.notInFunction
-	end 'findBlockRef'
-
 	// Enforce the invariant that every block in the module has committed to a
 	// terminator (real op, dead, or fallthrough). Parser ops emit ops into
 	// blocks starting with Terminator.unset — any block still in that state
@@ -660,7 +642,7 @@ function assignCompactionSlots(live BoolArray, count OpCount) returns OpCompacti
 		end 'assignDead'
 	end 'assign'
 
-	return OpCompactionPlan.create(forward, liveCount: nextSlot, deadMarker: deadMarker)
+	return OpCompactionPlan.create(forward, liveCount: nextSlot as OpCount, deadMarker: deadMarker as OpIndex)
 end 'assignCompactionSlots'
 
 // Compute the in-place compaction forwarding map for a module's ops array.
@@ -748,7 +730,7 @@ function computeBlockCompaction(functions IrFunctionArray, blockCount BlockCount
 		end 'markRef'
 	end 'markFunc'
 
-	return assignCompactionSlots(live, count: blockCount)
+	return assignCompactionSlots(live, count: blockCount as OpCount)
 end 'computeBlockCompaction'
 
 // Rewrite every function's `blockRefs` (flat `blocks[]` indices) through a block
@@ -778,21 +760,22 @@ end 'rewriteFuncBlockRefs'
 // in-place writer anywhere in the compiler (`rewriteEdgeArgsIn`, at the Target tier)
 // copies before it writes. See IrBlock's header for the ownership rules.
 function relocateIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
+	let shift = opOffset as OpIndex
 	var block = IrBlock.create(src.id, label: src.label)
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges
 	for opIdx in src.opRefs 'eachOp'
-		block.opRefs.push(opIdx + opOffset)
+		block.opRefs.push(opIdx + shift)
 	end 'eachOp'
 	block.terminator = match src.terminator 'relocate'
 		unset gives Terminator.unset
 		dead gives Terminator.dead
 		fallthrough gives Terminator.fallthrough
-		opIndex(index) gives Terminator.opIndex(index + opOffset)
+		opIndex(index) gives Terminator.opIndex(index + shift)
 	end 'relocate'
 	block.condBranch = match src.condBranch 'relocateCond'
 		none gives CondBranch.none
-		opIndex(index) gives CondBranch.opIndex(index + opOffset)
+		opIndex(index) gives CondBranch.opIndex(index + shift)
 	end 'relocateCond'
 	return block
 end 'relocateIrBlock'

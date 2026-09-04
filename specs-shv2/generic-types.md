@@ -931,7 +931,9 @@ end 'main'
 error E3005: <fragment>:25:15: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'WrongPair'
 ```
 
-<!-- test: two-aliases-one-instance-agree -->
+<!-- test: error.two-aliases-one-instance-are-two-brands -->
+Two aliases over one instance are two BRANDS, and a `LeafBoxAgain` does not reach a `LeafBox` parameter
+unasked (`nominal-generic-alias.md`); `create` returns `Self`, so its result carries the receiver's brand.
 ```maxon
 type Leaf
 	export var s as String
@@ -947,15 +949,48 @@ type Box uses T
 end 'Box'
 typealias LeafBox = Box with Leaf
 typealias LeafBoxAgain = Box with Leaf
-function takes(_ LeafBox) returns ExitCode
+function takes(b LeafBox) returns ExitCode
+	print("{b.value.s}")
 	return 0
 end 'takes'
 function main() returns ExitCode
 	return takes(LeafBoxAgain.create(Leaf.make("a")))
 end 'main'
 ```
+```maxoncstderr
+error E3005: <fragment>:21:9: argument type mismatch for 'b': expected 'LeafBox', got 'LeafBoxAgain'
+```
+
+<!-- test: two-aliases-one-instance-agree-through-as -->
+The legal twin: the two names denote ONE instance, so `as LeafBox` is a re-brand and nothing else.
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias LeafBoxAgain = Box with Leaf
+function takes(b LeafBox) returns ExitCode
+	print("{b.value.s}")
+	return 0
+end 'takes'
+function main() returns ExitCode
+	return takes(LeafBoxAgain.create(Leaf.make("a")) as LeafBox)
+end 'main'
+```
 ```exitcode
 0
+```
+```stdout
+a
 ```
 
 <!-- test: nested-instance-arg-matching-instance-agrees -->
@@ -1152,11 +1187,11 @@ function main() returns ExitCode
 	let b = ViaInline.create(N0.create(S0.make("b")))
 	print("{b.value.value.s}")
 	var swap = ViaAlias.create(N0.create(S0.make("c")))
-	swap = ViaInline.create(N0.create(S0.make("d")))
+	swap = ViaInline.create(N0.create(S0.make("d"))) as ViaAlias
 	print("{swap.value.value.s}")
 	let q = makeIt()
 	print("{q.value.value.s}")
-	return takes(ViaInline.create(N0.create(S0.make("e"))))
+	return takes(ViaInline.create(N0.create(S0.make("e"))) as ViaAlias)
 end 'main'
 ```
 ```exitcode
@@ -1196,7 +1231,7 @@ function main() returns ExitCode
 	print("{d.value.value.value.s}")
 	let e = DeepInline.create(N1.create(N0.create(S0.make("y"))))
 	print("{e.value.value.value.s}")
-	return takes(DeepInline.create(N1.create(N0.create(S0.make("z")))))
+	return takes(DeepInline.create(N1.create(N0.create(S0.make("z")))) as DeepAlias)
 end 'main'
 ```
 ```exitcode
@@ -1470,9 +1505,9 @@ end 'takesPlain'
 function main() returns ExitCode
 	let a = WA.create(1, tag: 5)
 	let t = a.getTag()
-	let b = IntBox.create(t)
+	let b = IntBox.create(t as Integer)
 	print("{b.value}")
-	return takesPlain(a.getTag())
+	return takesPlain(a.getTag() as Integer)
 end 'main'
 ```
 ```exitcode

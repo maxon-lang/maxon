@@ -34,7 +34,8 @@ function slabObjectsPerSpanIn(class SlabClassIndex, sizes SlabClassSizeArray, pa
 
 	// The guard above proves `size != 0`, but `SlabClassSize` includes 0 so the type cannot know it.
 	// `otherwise panic` is the project's form for a `try` that must not fail (E3057 demands one of the two).
-	return try ((np * SlabPageBytes) / size) otherwise panic("slabObjectsPerSpan: class {class} divided by zero past its own sentinel guard")
+	let spanBytes = (np as ParsedInt) * SlabPageBytes
+	return (try (spanBytes / (size as ParsedInt)) otherwise panic("slabObjectsPerSpan: class {class} divided by zero past its own sentinel guard")) as SlabObjectCount
 end 'slabObjectsPerSpanIn'
 
 // How many objects a span can hold. Go's ceiling is 1024 (a 1-page span of 8-byte slots).
@@ -53,7 +54,7 @@ export function slabWidestSpanChunks() returns ParsedInt
 	var idx = 0
 	for size in sizes 'eachClass'
 		let objects = slabObjectsPerSpanIn(idx as SlabClassIndex, sizes: sizes, pages: pages)
-		let chunks = (size * objects + SlabPageBytes - 1) / SlabPageBytes
+		let chunks = ((size as ParsedInt) * (objects as ParsedInt) + SlabPageBytes - 1) / SlabPageBytes
 		if chunks > widest 'newWidest'
 			widest = chunks
 		end 'newWidest'
@@ -188,7 +189,7 @@ end 'slabSizeToClass128Table'
 function slabReverseTable(entries ParsedInt, base ParsedInt, step ParsedInt) returns ByteArray
 	let sizes = slabClassSizes()
 	var out = ByteArray.create()
-	out.reserve(entries)
+	out.reserve(entries as ElementIndex)
 
 	for i in 0 upto entries 'eachEntry'
 		out.push(slabSmallestClassHolding(base + i * step, sizes: sizes))
@@ -207,7 +208,7 @@ end 'slabReverseTable'
 function slabSmallestClassHolding(want ParsedInt, sizes SlabClassSizeArray) returns SlabClassIndex
 	var idx = 0
 	for size in sizes 'eachClass'
-		if size >= want 'fits'
+		if size as ParsedInt >= want 'fits'
 			return idx as SlabClassIndex
 		end 'fits'
 		idx = idx + 1
@@ -227,7 +228,8 @@ export function slabClassGeometryTable() returns ByteArray
 
 	var idx = 0
 	for size in sizes 'eachClass'
-		writeQword(out, value: size + (slabObjectsPerSpanIn(idx as SlabClassIndex, sizes: sizes, pages: pages) shl SlabClassGeometryObjectShift))
+		let objects = slabObjectsPerSpanIn(idx as SlabClassIndex, sizes: sizes, pages: pages) as MachineWord
+		writeQword(out, value: (size as MachineWord) + (objects shl SlabClassGeometryObjectShift))
 		idx = idx + 1
 	end 'eachClass'
 
@@ -254,8 +256,9 @@ function checkSlabReverseTables()
 	// The endpoint is the one fact a per-entry rule cannot state: the large table must REACH the ladder's
 	// last class, or the biggest small request would be served by a class that cannot hold it.
 	let lastEntry = try large.get(large.count() - 1) otherwise panic("slab reverse table: SizeToSizeClass128 is empty")
-	if lastEntry != slabClassCount() - 1 'largeTableMissesTheLastClass'
-		panic("slab reverse table: SizeToSizeClass128's last entry is class {lastEntry}, not the ladder's last class {slabClassCount() - 1}")
+	let lastClass = (slabClassCount() as ParsedInt) - 1
+	if lastEntry as ParsedInt != lastClass 'largeTableMissesTheLastClass'
+		panic("slab reverse table: SizeToSizeClass128's last entry is class {lastEntry}, not the ladder's last class {lastClass}")
 	end 'largeTableMissesTheLastClass'
 end 'checkSlabReverseTables'
 
@@ -267,13 +270,13 @@ function requireReverseTable(table ByteArray, what String, base ParsedInt, step 
 		let want = base + i * step
 		let size = try sizes.get(entry) otherwise panic("slab reverse table: {what}[{i}] names class {entry}, which is outside the ladder")
 
-		if size < want 'doesNotFit'
+		if size as ParsedInt < want 'doesNotFit'
 			panic("slab reverse table: {what}[{i}] names class {entry} ({size} bytes) for a {want}-byte request, which it cannot hold")
 		end 'doesNotFit'
 
 		if entry > 0 'hasAPredecessor'
 			let below = try sizes.get(entry - 1) otherwise panic("slab reverse table: class {entry} has no predecessor")
-			if below >= want 'notTheSmallest'
+			if below as ParsedInt >= want 'notTheSmallest'
 				panic("slab reverse table: {what}[{i}] names class {entry} for a {want}-byte request, but class {entry - 1} ({below} bytes) already holds it")
 			end 'notTheSmallest'
 		end 'hasAPredecessor'

@@ -455,7 +455,7 @@ end 'promotionAtWrittenPosition'
 // would push it onto the block's tail, which is past the call it must precede.
 function appendPromotionRuntimeCall(module MaxonModule, project Project, funcIndex FuncIndex, result ValueId, callee ByteArray, arg ValueId, range SourceRange) returns OpIndex
 	let args = singletonArgs(arg)
-	let opIndex = module.opCount()
+	let opIndex = module.opCount() as OpIndex
 	module.ops.push(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted))
 	project.opRanges.record(opIndex, range: range)
 	project.valueOrigins.record(funcIndex, valueId: result, opIndex: opIndex)
@@ -499,6 +499,7 @@ type PromotedValueMinter
 		if not self.deAliased 'stillSharedWithTheArtifact'
 			self.func.valueTags = self.func.valueTags.clone()
 			self.func.valueNameIds = self.func.valueNameIds.clone()
+			self.func.valueBrandIds = self.func.valueBrandIds.clone()
 			self.func.valueClosureEnv = self.func.valueClosureEnv.clone()
 			self.func.valueIsCapturingClosure = self.func.valueIsCapturingClosure.clone()
 			self.deAliased = true
@@ -507,6 +508,7 @@ type PromotedValueMinter
 		let id = self.func.valueTags.count()
 		self.func.valueTags.push(tag)
 		self.func.valueNameIds.push(UnnamedTypeId)
+		self.func.valueBrandIds.push(UnnamedTypeId)
 		self.func.valueClosureEnv.push(0)
 		self.func.valueIsCapturingClosure.push(false)
 		return id

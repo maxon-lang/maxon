@@ -182,12 +182,12 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 		var block = try module.blocks.get(blockRef) otherwise panic("insertPrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
-			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot, frameBytes: frameBytes)
+			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot as SpillSlot, frameBytes: frameBytes)
 		end 'entry'
 		isFirstBlock = false
 
 		if blockEndsWithReturn(module, block: block) 'returnBlock'
-			appendEpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot, frameBytes: frameBytes)
+			appendEpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot as SpillSlot, frameBytes: frameBytes)
 		end 'returnBlock'
 	end 'eachBlock'
 end 'insertFrameForFunction'
@@ -228,9 +228,9 @@ end 'computeGuardFrameBytes'
 // under plain register pressure in a function that calls nothing, and that register still belongs to
 // this function's caller.
 function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount, xmmSaveCount RegCount) returns StackSize
-	let xmmSaveBytes = xmmSaveCount * XmmSaveSlotBytes
+	let xmmSaveBytes = (xmmSaveCount as StackSize) * XmmSaveSlotBytes
 	if not makesCall 'leaf'
-		return alignUp(func.stackSize + xmmSaveBytes, alignment: StackFrameAlignment)
+		return alignUpStack(func.stackSize + xmmSaveBytes, alignment: StackFrameAlignment)
 	end 'leaf'
 	let base = func.stackSize + xmmSaveBytes + func.outgoingArgSize + ShadowSpaceBytes
 	let targetMod = frameAlignTarget(pushCount + FramePointerPushCount)
@@ -270,10 +270,10 @@ end 'frameAlignTarget'
 // The smallest value >= `base` congruent to `targetMod` modulo `modulus` — `base` plus
 // the least non-negative delta that lands its residue on `targetMod`.
 function roundUpToMod(base StackSize, targetMod StackSize, modulus StackSize) returns StackSize
-	// `modulus` is a power-of-two stack alignment, always non-zero; cast so the two remainders are
-	// provably safe (integer `mod` throws for a possibly-zero divisor).
-	let m = modulus as NonZeroWord
-	let delta = ((targetMod - (base mod m)) + m) mod m
+	// `modulus` is a power-of-two stack alignment, never zero; `otherwise panic` is the project's form
+	// for a `try` that must not fail (integer `mod` throws for a possibly-zero divisor).
+	let residue = try (base mod modulus) otherwise panic("roundUpToMod: a stack alignment of 0 — it is a power of two")
+	let delta = try (((targetMod - residue) + modulus) mod modulus) otherwise panic("roundUpToMod: a stack alignment of 0 — it is a power of two")
 	return base + delta
 end 'roundUpToMod'
 

@@ -635,7 +635,7 @@ private buffer — over the allocation header. Measured that way: the process ex
 green, `capacity()` reads 3 and `count()` publishes -2.
 
 ⚠ **TWO REFUSALS NOW STAND IN FRONT OF THAT, AND THE OUTER ONE IS THE ONE THAT FIRES.** `Array.resize` takes
-an `ElementCount`, declared `int(0 to i64.max)`, so a negative is refused at the DOOR — a literal at compile
+an `ElementIndex`, declared `int(0 to i64.max)`, so a negative is refused at the DOOR — a literal at compile
 time, as below, and a laundered one at the callee-entry guard (exit **1**, not 73). The buffer-level abort
 is now unreachable from any spelling a program can write. It is kept deliberately, as defence in depth: it
 is the layer that would still be there if a future caller reached `__managed_memory` without passing through
@@ -648,7 +648,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:5: Value -2 is outside the range of 'ElementCount' (int(0 to 9223372036854775807))
+error E3005: <fragment>:4:5: Value -2 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
 <!-- test: byte-string-literal.laundered-negative-resize-panics-at-the-door -->
@@ -670,7 +670,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at byte-string-literal.laundered-negative-resize-panics-at-the-door.test:10: Range check failed: value outside typealias 'ElementCount'
+panic at byte-string-literal.laundered-negative-resize-panics-at-the-door.test:10: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in main
   in mrt_start

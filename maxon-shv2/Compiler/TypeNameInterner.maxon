@@ -37,8 +37,14 @@ export type TypeNameInterner
 	// name -> id, for O(1) interning of an already-seen name.
 	var ids as TypeNameIdMap
 
+	// ⭐ **ID 0 IS THE EMPTY NAME, IN EVERY INTERNER.** `UnnamedTypeId` is the filler a scalar's slot and an
+	// unbranded value's slot carry, and interning the empty name first is what makes that filler a NAME
+	// rather than a collision with whichever real name a file happened to intern first. `foldInto` then
+	// maps it to itself, so a remap needs no special case for it either.
 	export static function create() returns TypeNameInterner
-		return Self{names: ByteArrayArray.create(), ids: TypeNameIdMap.create()}
+		var interner = Self{names: ByteArrayArray.create(), ids: TypeNameIdMap.create()}
+		_ = interner.intern(EmptySourceText)
+		return interner
 	end 'create'
 
 	// Intern `name`, returning its stable id. Idempotent: a name already present
@@ -234,7 +240,7 @@ export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeNameRem
 	for casePayloads in layout.casePayloads 'eachCase'
 		var remappedFields = PayloadFieldArray.create()
 		for field in casePayloads 'eachField'
-			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface))
+			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand))
 		end 'eachField'
 		remappedCases.push(remappedFields)
 	end 'eachCase'
