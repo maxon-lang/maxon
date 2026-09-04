@@ -916,6 +916,7 @@ public type StreamingSubprocess
 	/// Write `line + "\n"` to the child's stdin. Throws on broken pipe.
 	/// Embeds the newline; pass payload WITHOUT a trailing newline.
 	public function writeStdinLine(line String) throws SubprocessError
+		try requireLive()
 		let withNewline = "{line}\n"
 		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.cstr())
 		if rc != 0 'writeFailed'
@@ -923,11 +924,9 @@ public type StreamingSubprocess
 		end 'writeFailed'
 	end 'writeStdinLine'
 
-	/// Read one line from the child's stdout. Returns the line content
-	/// WITHOUT the trailing newline (the runtime strips the terminating LF
-	/// and this method additionally strips a stray CR so callers don't see
-	/// Windows CRLF artifacts). Returns an empty string on EOF; the runtime
-	/// remembers the EOF state, so a second call after EOF also returns "".
+	/// Read one line from the child's stdout, WITHOUT the trailing newline (the runtime keeps the
+	/// terminating LF and this strips it, along with a stray CR so Windows CRLF never reaches a
+	/// caller). An empty string means end of stream and nothing else — a refusal throws.
 	///
 	/// Blocks until a line is available or EOF is reached. Lines longer than
 	/// `maxBytes` are truncated and the remainder is delivered on the next
@@ -937,14 +936,14 @@ public type StreamingSubprocess
 	end 'readStdoutLine'
 
 	public function readStdoutLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+		try requireLive()
 		let raw = __Builtins.subprocessReadStdoutLine(handle, maxBytes)
-		return readLineResultToString(raw)
+		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stdout)
 	end 'readStdoutLineCapped'
 
 	/// Read EXACTLY `count` bytes from the child's stdout, blocking until it has
 	/// them. Returns FEWER only at end of stream, and then only what remained; a
-	/// call after that returns "". A `count` of 0 returns "" without touching the
-	/// pipe.
+	/// refusal throws. A `count` of 0 returns "" without touching the pipe.
 	///
 	/// This is the reader a FRAMED protocol needs. `Content-Length: N\r\n\r\n` followed
 	/// by N body bytes puts NO newline after the body, so `readStdoutLine` blocks
@@ -956,35 +955,34 @@ public type StreamingSubprocess
 	/// No newline is stripped, unlike the line readers: a read that ends at a count
 	/// has no terminator to remove, so a CR or an LF inside the span is part of the
 	/// answer.
-	///
-	/// ⚠ A SHORT ANSWER IS THE ONLY FAILURE SIGNAL THERE IS. The runtime's own refusals
-	/// — an invalid handle, a negative count, an allocation it could not make — answer
-	/// exactly what a clean end of stream answers, and `__subp_last_error` cannot tell
-	/// them apart either: nothing clears it, so a message there may belong to an earlier
-	/// call, and shv2's byte reader never writes one at all. A caller that needs the
-	/// difference compares what it got against what it asked for.
-	public function readStdoutBytes(count ByteLimit) returns String
-		return String.init(__Builtins.subprocessReadStdoutBytes(handle, count))
+	public function readStdoutBytes(count ByteLimit) returns String throws SubprocessError
+		try requireLive()
+		let raw = __Builtins.subprocessReadStdoutBytes(handle, count)
+		return String.init(try finishRead(handle, raw: raw, wanted: count, stream: StdioStream.stdout))
 	end 'readStdoutBytes'
 
-	/// Read one line from the child's stderr. Same contract as
-	/// `readStdoutLine` (LF stripped by the runtime, trailing CR trimmed
-	/// here, empty string on EOF).
+	/// Read one line from the child's stderr. Same contract as `readStdoutLine`: the terminator is
+	/// trimmed here, an empty string means end of stream, and a refusal throws.
 	public function readStderrLine() returns String throws SubprocessError
 		return try Self.readStderrLineCapped(self, maxBytes: defaultReadLineCap)
 	end 'readStderrLine'
 
 	public function readStderrLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+		try requireLive()
 		let raw = __Builtins.subprocessReadStderrLine(handle, maxBytes)
-		return readLineResultToString(raw)
+		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stderr)
 	end 'readStderrLineCapped'
 
 	/// Close our write end of the child's stdin pipe. After this the child
 	/// will see EOF on its stdin and (for typical line-reading workers) exit
 	/// gracefully. Idempotent at the runtime layer; calling it on an
-	/// already-closed pipe is a no-op.
+	/// already-closed pipe is a no-op — and after `release()` it is one here
+	/// instead, because the postcondition already holds and the handle is a
+	/// pointer to a freed struct on some lanes.
 	public function closeStdin()
-		__Builtins.subprocessCloseStdin(handle)
+		if not released 'stillOpen'
+			__Builtins.subprocessCloseStdin(handle)
+		end 'stillOpen'
 	end 'closeStdin'
 
 	/// Block indefinitely until the child exits, then return its exit code.
@@ -999,6 +997,7 @@ public type StreamingSubprocess
 	/// the timeout fires (the runtime forcibly terminates the child in that
 	/// case) or `SubprocessError.ioFailed` on a wait error.
 	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
+		try requireLive()
 		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
 		if rc == -2 'timedOut'
 			throw SubprocessError.timeout(timeoutMs)
@@ -1009,10 +1008,20 @@ public type StreamingSubprocess
 		return rc as ExitInt
 	end 'waitWithTimeout'
 
+	/// Refuse every operation that would reach the runtime with a handle `release()` has given back.
+	/// The check belongs here rather than in a runtime guard because a handle is a raw pointer to a
+	/// freed struct on some lanes, so asking the runtime about it is already the bug.
+	function requireLive() throws SubprocessError
+		if released 'gone'
+			throw SubprocessError.ioFailed("used after release()")
+		end 'gone'
+	end 'requireLive'
+
 	/// Release the OS handle. Idempotent; safe to call at the end of a
-	/// using-block or from a guard path. Calling any other method after
-	/// `release` is a bug — the handle slot is invalid and future calls
-	/// would target whatever process happens to be reusing the slot.
+	/// using-block or from a guard path. Nothing reaches the runtime with a
+	/// released handle afterwards: the throwing methods refuse it through
+	/// `requireLive`, and `closeStdin` and `release` are idempotent no-ops
+	/// whose postcondition a released child already satisfies.
 	public function release()
 		if not released 'notYet'
 			__Builtins.subprocessReleaseHandle(handle)
@@ -1026,13 +1035,54 @@ end 'StreamingSubprocess'
 // runaway worker can't OOM the parent by emitting one enormous line.
 let defaultReadLineCap = 1024 * 1024 as ByteLimit
 
-/// Shared decode for the (stdout|stderr) line readers: the runtime returns a
-/// fresh __ManagedMemory holding the line bytes without the terminating LF,
-/// or a zero-length buffer on EOF. We additionally strip a trailing CR so
-/// Windows CRLF doesn't leak into caller-visible strings.
-function readLineResultToString(raw __ManagedMemory) returns String
-	return stripTrailingCR(String.init(raw))
+// Which of a streaming child's two output streams a read is being decided for.
+enum StdioStream
+	stdout
+	stderr
+end 'StdioStream'
+
+// The shortest answer a line read can give that is not end of stream. The runtime keeps the
+// terminating LF, so every real line — the empty one included — carries at least that byte.
+let lineReaderShortestAnswer = 1 as ByteLimit
+
+/// Shared decode for the (stdout|stderr) line readers: the runtime returns a fresh __ManagedMemory
+/// holding the line bytes including the terminating LF, or a zero-length buffer at end of stream.
+/// The trailing CR goes with it so Windows CRLF doesn't leak into caller-visible strings.
+function readLineResultToString(handle StreamingHandle, raw __ManagedMemory, stream StdioStream) returns String throws SubprocessError
+	return stripTrailingCR(String.init(try finishRead(handle, raw: raw, wanted: lineReaderShortestAnswer, stream: stream)))
 end 'readLineResultToString'
+
+/// The one place a reader's answer is judged, for all three of them.
+///
+/// A short answer is end of stream OR a refusal and both are the same bytes, so the stream's own
+/// end-state is what separates them. The reason is composed here rather than read out of
+/// `lastErrorMessage()`, which is process-global and may belong to an earlier call.
+function finishRead(handle StreamingHandle, raw __ManagedMemory, wanted ByteLimit, stream StdioStream) returns __ManagedMemory throws SubprocessError
+	if raw.length() >= wanted 'whole'
+		return raw
+	end 'whole'
+
+	match streamState(handle, stream: stream) 'decide'
+		atEof then return raw
+		open then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} was refused: it answered {raw.length()} of {wanted} bytes with the stream still open")
+		readFailed then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} failed")
+		noSuchChild then throw SubprocessError.ioFailed("the streaming handle names no live child")
+	end 'decide'
+end 'finishRead'
+
+function streamState(handle StreamingHandle, stream StdioStream) returns __SubprocessStreamState
+	match stream 'ask'
+		stdout then return __Builtins.subprocessStdoutState(handle)
+		stderr then return __Builtins.subprocessStderrState(handle)
+	end 'ask'
+end 'streamState'
+
+function streamName(stream StdioStream) returns String
+	match stream 'name'
+		stdout then return "stdout"
+		stderr then return "stderr"
+	end 'name'
+end 'streamName'
 
 /// Drop a trailing LF (and a CR before it, if present) from `s`. The runtime
 /// returns the raw line bytes including the terminator, so this is the

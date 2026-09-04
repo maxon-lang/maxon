@@ -820,7 +820,7 @@ function main() returns ExitCode
 	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
 	child.closeStdin()
 
-	let counted = child.readStdoutBytes(5)
+	let counted = try child.readStdoutBytes(5) otherwise return 4
 	let lined = try child.readStdoutLine() otherwise return 5
 	let errored = try child.readStderrLine() otherwise return 6
 	child.release()
@@ -838,4 +838,147 @@ end 'main'
 bytes len=5 [97 98 0 99 100]
 line len=4 [101 102 0 103]
 errline len=4 [119 0 120 121]
+```
+
+<!-- test: subprocess-streaming-read-after-release-throws -->
+`StreamingSubprocess`'s three readers answer `""` ONLY for end of stream: a short
+`readStdoutBytes` at EOF and an empty `readStdoutLine` at EOF both return, and
+nothing else does. A refusal throws `SubprocessError.ioFailed` — here the one
+every caller can reach, a handle used after `release()`, which the stdlib refuses
+itself before the runtime is asked: on this compiler the handle is a raw pointer
+to a freed struct, so the runtime could not refuse it safely. `writeStdinLine`
+and `wait` are held to the same rule. `closeStdin` and `release` are NOT: they
+are idempotent, and a released child already satisfies their postcondition, so
+they answer as no-ops rather than throwing — and neither reaches the freed handle. The same line-echo child as
+`subprocess-streaming-roundtrip`.
+```maxon
+typealias StringArray = Array with String
+
+function readBytesAfterRelease(child StreamingSubprocess) returns String
+	let text = try child.readStdoutBytes(4) otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+	return "answered {text.byteLength()} bytes"
+end 'readBytesAfterRelease'
+
+function readLineAfterRelease(child StreamingSubprocess) returns String
+	let text = try child.readStdoutLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+	return "answered {text.byteLength()} bytes"
+end 'readLineAfterRelease'
+
+function readErrLineAfterRelease(child StreamingSubprocess) returns String
+	let text = try child.readStderrLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+	return "answered {text.byteLength()} bytes"
+end 'readErrLineAfterRelease'
+
+function writeAfterRelease(child StreamingSubprocess) returns String
+	try child.writeStdinLine("late") otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+	return "wrote"
+end 'writeAfterRelease'
+
+function waitAfterRelease(child StreamingSubprocess) returns String
+	let code = try child.wait() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+	return "answered {code}"
+end 'waitAfterRelease'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	try child.writeStdinLine("abc") otherwise return 4
+	child.closeStdin()
+	let line = try child.readStdoutLine() otherwise return 5
+	let tail = try child.readStdoutBytes(100) otherwise return 6
+	let atEnd = try child.readStdoutLine() otherwise return 7
+	let code = try child.wait() otherwise return 8
+	child.release()
+	print("line={line} tailLen={tail.byteLength()} atEndLen={atEnd.byteLength()} code={code}\n")
+	print("bytes: {readBytesAfterRelease(child)}\n")
+	print("line: {readLineAfterRelease(child)}\n")
+	print("errLine: {readErrLineAfterRelease(child)}\n")
+	print("write: {writeAfterRelease(child)}\n")
+	print("wait: {waitAfterRelease(child)}\n")
+	child.closeStdin()
+	print("closeStdin: returned\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+line=abc tailLen=0 atEndLen=0 code=0
+bytes: I/O failed: used after release()
+line: I/O failed: used after release()
+errLine: I/O failed: used after release()
+write: I/O failed: used after release()
+wait: I/O failed: used after release()
+closeStdin: returned
+```
+
+<!-- test: subprocess-streaming-stream-state-follows-the-reader -->
+`__Builtins.subprocessStdoutState(handle)` / `subprocessStderrState(handle)` answer
+`__SubprocessStreamState`, the per-stream fact the stdlib's readers throw on: a
+reader's `""` is the same bytes for a clean EOF and for a refusal, and only the
+state says which. It is an ENUM — `.name` is what an `int` could not answer.
+The state follows the READER, not the child: `before` is `open` although the
+child has been handed EOF on its stdin, because nothing latches until a read sees
+the 0-byte answer; `after` is `atEof` because the 100-byte request ran into it.
+A handle of `0` names no child on either host and answers `noSuchChild` from the
+guard, never from a slot — it is the only dead handle safe to hand this runtime,
+whose handles are pointers.
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let before = __Builtins.subprocessStdoutState(child.handle)
+	let errBefore = __Builtins.subprocessStderrState(child.handle)
+	try child.writeStdinLine("abc") otherwise return 4
+	child.closeStdin()
+	let line = try child.readStdoutLine() otherwise return 5
+	let rest = try child.readStdoutBytes(100) otherwise return 6
+	let after = __Builtins.subprocessStdoutState(child.handle)
+	let errLine = try child.readStderrLine() otherwise return 7
+	let errAfter = __Builtins.subprocessStderrState(child.handle)
+	let code = try child.wait() otherwise return 8
+	child.release()
+	let none = __Builtins.subprocessStdoutState(0)
+	print("before={before.name} errBefore={errBefore.name} line={line} restLen={rest.byteLength()} after={after.name} errLen={errLine.byteLength()} errAfter={errAfter.name} code={code} none={none.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+before=open errBefore=open line=abc restLen=0 after=atEof errLen=0 errAfter=atEof code=0 none=noSuchChild
 ```

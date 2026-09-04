@@ -929,6 +929,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// of the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
 	let orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
 
+	// ⭐ **`__SubprocessStreamState`'s DECLARATION, FOR THE SAME REASON AND AT THE SAME POINT.** A streaming
+	// child's per-stream state word IS this enum's ordinal column, so reading the declaration keeps that wire
+	// value and the `match` arms the stdlib writes over it ONE fact — leaving no transcription for a drift
+	// check to hold.
+	let subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
+
 	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED (P1.7a-existentials slice
 	// 2).** Lowering is what decides which witness tables and layout descriptors a program gets, so the
 	// destructors those tables' `destroyFunc` words point at cannot be known before this line — and every
@@ -1062,7 +1068,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage), target: project.target)
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage), target: project.target, streamState: subprocessStreamStateEnum)
 	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is

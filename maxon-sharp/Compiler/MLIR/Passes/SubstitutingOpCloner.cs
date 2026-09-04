@@ -171,7 +171,7 @@ internal static class SubstitutingOpCloner {
 
       // --- Runtime calls and function params ---
 
-      case MaxonCallRuntimeOp cr: { var na = cr.Args.Select(sub.MapValue).ToList(); var c = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null); if (cr.Result != null && c.Result != null) sub.RegisterResult(cr.Result, c.Result); return c; }
+      case MaxonCallRuntimeOp cr: { var na = cr.Args.Select(sub.MapValue).ToList(); var c = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null, cr.ResultEnumTypeName); if (cr.Result != null && c.Result != null) sub.RegisterResult(cr.Result, c.Result); return c; }
       case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); sub.RegisterResult(fp.Result, c.Result); return c; }
 
       // --- Managed memory ---

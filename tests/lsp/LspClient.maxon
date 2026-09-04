@@ -843,9 +843,11 @@ public type LspClient
 			end 'headerField'
 		end 'headers'
 
-		// `readStdoutBytes` cannot throw: a runtime refusal answers "" exactly as a clean EOF does. The
-		// short-read check below is therefore the only thing separating a broken stream from a whole frame.
-		let body = self.server.readStdoutBytes(contentLength)
+		// A refusal throws; a SHORT answer is end of stream, which mid-frame is its own transport
+		// failure, so both are checked and neither is a whole frame.
+		let body = try self.server.readStdoutBytes(contentLength) otherwise (e) 'bodyReadFailed'
+			throw LspClientError.transportFailed("reading a {contentLength}-byte message body failed: {e.displayReason()}")
+		end 'bodyReadFailed'
 
 		if body.byteLength() != contentLength 'truncated'
 			throw LspClientError.transportFailed("the server's stdout ended after {body.byteLength()} of {contentLength} body bytes")

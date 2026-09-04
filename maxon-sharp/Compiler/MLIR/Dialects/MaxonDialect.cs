@@ -2110,12 +2110,20 @@ public sealed class MaxonPanicDynamicOp(MaxonStruct messageStruct) : MaxonOp {
 }
 
 /// Generic runtime function call op for intrinsics that delegate to a runtime function.
-public sealed class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult) : MaxonOp, IMaxonRuntimeCallOp {
+///
+/// `resultEnumTypeName` names the enum a runtime answer already IS, so callers consume it with an
+/// exhaustive match rather than decoding an ordinal by hand. A simple enum's Std-tier value is that
+/// ordinal, so the lowering is the integer one either way.
+public sealed class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult,
+    string? resultEnumTypeName = null) : MaxonOp, IMaxonRuntimeCallOp {
   public override MaxonOpKind Kind => MaxonOpKind.CallRuntime;
   public override string Mnemonic => $"maxon.call_runtime.{FunctionName}";
   public string FunctionName { get; } = functionName;
   public List<MaxonValue> Args { get; } = args;
-  public MaxonInteger? Result { get; } = hasResult ? new MaxonInteger(IrContext.Current.NextId()) : null;
+  public string? ResultEnumTypeName { get; } = resultEnumTypeName;
+  public MaxonValue? Result { get; } = !hasResult ? null
+    : resultEnumTypeName != null ? new MaxonEnum(IrContext.Current.NextId(), resultEnumTypeName)
+    : new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<MaxonValue> Results => Result != null ? [Result] : [];
   public override IReadOnlyList<MaxonValue> Operands => Args;
 }

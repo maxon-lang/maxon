@@ -50,6 +50,8 @@ User code should use the `Subprocess` stdlib type rather than calling these buil
 - `__Builtins.subprocessResultStderr(resultPtr)` returns __ManagedMemory - Captured stderr
 - `__Builtins.subprocessResultDurationMs(resultPtr)` returns int - Elapsed wall-clock time of the child
 - `__Builtins.subprocessResultRelease(resultPtr)` - Free the result struct and its captured buffers
+- `__Builtins.subprocessStdoutState(handle)` returns __SubprocessStreamState - What a streaming child's stdout reader will answer next: `open`, `atEof`, `readFailed`, or `noSuchChild` for a handle naming no live child
+- `__Builtins.subprocessStderrState(handle)` returns __SubprocessStreamState - The same for its stderr. A reader's short answer is the same bytes at end of stream and on a refusal; these two say which, and `stdlib/Subprocess.maxon` throws on the difference
 - `__Builtins.managedIsNull(managed)` returns int - 1 if a __ManagedMemory carries an empty (NUL-terminated) buffer, else 0
 
 **Primitive:**

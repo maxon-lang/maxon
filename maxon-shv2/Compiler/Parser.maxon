@@ -5174,7 +5174,7 @@ let BinaryNumericBuiltinArity = 2 as ParamCount
 // MECHANISM AND NOT A SPELLING.** `sleep` and `print` retired onto declarations — `stdlib/Sleep.maxon`,
 // `stdlib/Print.maxon` — whose bodies bottom out in an intrinsic. `stdlib/Subprocess.maxon` is listed too, but
 // it declares NO free `runProcess` and its `Subprocess.run` is a DIFFERENT mechanism: a poll-and-`__gt_sleep`
-// drain over the twenty-one `__Builtins.subprocess*` intrinsics below, not a park on the process handle. So there
+// drain over the twenty-two `__Builtins.subprocess*` intrinsics below, not a park on the process handle. So there
 // was no declaration to move this entry to; PLAN's `#93` records reconciling the two as the deferred
 // full-Subprocess-API rung, and until it lands the intrinsic spelling IS the surface — the shape
 // `__Builtins.gtIsComplete` already has.
@@ -5887,13 +5887,14 @@ function isDebugStreamCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: DebugStreamQualifierPrefix)
 end 'isDebugStreamCallee'
 
-// ⭐⭐ **THE TWENTY `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN — NINETEEN
+// ⭐⭐ **THE TWENTY-THREE `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN — TWENTY-TWO
 // `subprocess*` NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is the
 // whole child-process surface — `Subprocess.run(...)`, `Configuration.run()`, `runDetached()` and
 // `StreamingSubprocess` — and every one of its leaves is a static call on one of these names. The bootstrap
-// declares exactly these twenty-one with exactly these shapes (`2-Parser.cs:11936-12022`), so the SURFACE here
-// is the reference's; only the implementation differs. See `SubprocessRuntime.maxon` for the entry points
-// each lowers to, and for the one place shv2 diverges from that reference and why.
+// declares all twenty-three with exactly these shapes (`2-Parser.cs:11936-12022`) plus the two named below,
+// so the SURFACE here is the reference's minus a deliberate pair; only the implementation differs. See
+// `SubprocessRuntime.maxon` for the entry points each lowers to, and for the one place shv2 diverges from
+// that reference and why.
 //
 // ⚠ **`subprocessKill` AND `subprocessSendSignal` ARE DELIBERATELY ABSENT.** The bootstrap declares them
 // (`2-Parser.cs:11955-11962`) and NOTHING in the corpus calls either — `stdlib/Subprocess.maxon` has no
@@ -5902,7 +5903,7 @@ end 'isDebugStreamCallee'
 // reverted for declaring intrinsics whose runtime entries did not exist); they arrive with the stdlib
 // method that needs them, not before.
 //
-// THE THREE FAMILIES, which is why the emits below are a handful of shared functions rather than twenty-one:
+// THE THREE FAMILIES, which is why the emits below are a handful of shared functions rather than twenty-three:
 //   • the ATTACHED run — `subprocessSpawn` / `subprocessDetach` (the fourteen-argument contract),
 //     `subprocessGetPid`, `subprocessWaitCollect`, the five `subprocessResult*` readers of the struct it
 //     answers, `subprocessResultRelease` and `subprocessReleaseHandle`;
@@ -5934,6 +5935,13 @@ let BuiltinsSubprocessReadStderrLineName = b"__Builtins.subprocessReadStderrLine
 let BuiltinsSubprocessReadStdoutBytesName = b"__Builtins.subprocessReadStdoutBytes"
 let BuiltinsSubprocessCloseStdinName = b"__Builtins.subprocessCloseStdin"
 let BuiltinsSubprocessWaitExitName = b"__Builtins.subprocessWaitExit"
+
+// ⭐ **THE TWO PER-STREAM STATE QUERIES, AND THEY ARE THE ONLY MEMBERS OF THIS FAMILY THAT ANSWER AN ENUM.**
+// Every other subprocess intrinsic answers a machine word or an owned `__ManagedMemory`; these answer
+// `__SubprocessStreamState` itself, so `stdlib/Subprocess.maxon` discriminates them with an exhaustive
+// `match` and holds no ordinal of its own. That is what the arms below buy with `resultNameId`.
+let BuiltinsSubprocessStdoutStateName = b"__Builtins.subprocessStdoutState"
+let BuiltinsSubprocessStderrStateName = b"__Builtins.subprocessStderrState"
 let BuiltinsManagedIsNullName = b"__Builtins.managedIsNull"
 
 // ⭐ **THE ENVIRONMENT READER, WHICH IS IN THIS BAND BECAUSE ITS ONLY CALLER IS.** It is not a subprocess
@@ -6004,7 +6012,7 @@ let ExecutablePathArity = 0 as ParamCount
 // are already both `0`, which is the idiom this band follows: one constant per INTRINSIC, because the
 // number is a fact about that intrinsic's contract and not about the band. (The `SubprocessOneArgArity`
 // family's *"a sixth constant equal to an existing one would be a second name for one fact"* is the
-// opposite case and does not reach here: there, five SHAPES are shared across twenty-one names by contract, so
+// opposite case and does not reach here: there, five SHAPES are shared across twenty-three names by contract, so
 // the shape is the fact.)
 let CurrentProcessIdArity = 0 as ParamCount
 
@@ -6027,9 +6035,9 @@ let PromiseArrayRequirement = "promise array — an `Array` whose element type i
 // ordinary arity check to read, because no file declares it.
 let StreamWriteArity = 1 as ParamCount
 
-// ⭐ **THE FIVE ARGUMENT SHAPES THE TWENTY-ONE SUBPROCESS INTRINSICS FALL INTO.** Stated here for
+// ⭐ **THE FIVE ARGUMENT SHAPES THE TWENTY-THREE SUBPROCESS INTRINSICS FALL INTO.** Stated here for
 // `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's ordinary arity check
-// to read, because no file declares it — and stated as FIVE rather than twenty-one because a shape is what a
+// to read, because no file declares it — and stated as FIVE rather than twenty-three because a shape is what a
 // caller can get wrong: the handle ops take one, the timed ops two, the last-error read none, a spawn
 // fourteen and a streaming spawn four. A sixth constant equal to an existing one would be a second name
 // for one fact.
@@ -76128,7 +76136,7 @@ export type Parser
 				return try self.emitBitsToFloat(args, calleeTok: anchor)
 			end 'bitsToFloat'
 
-			// ⭐⭐ **THE TWENTY INTRINSICS OF `stdlib/Subprocess.maxon`'s FLOOR — nineteen `subprocess*` plus
+			// ⭐⭐ **THE TWENTY-THREE INTRINSICS OF `stdlib/Subprocess.maxon`'s FLOOR — twenty-two `subprocess*` plus
 			// `managedIsNull`, which the arm below says in so many words is not a subprocess entry.** Each row is a
 			// NAME, the runtime entry it becomes, its arity, which of its positions carry a `__ManagedMemory` and
 			// what it answers; every rule any of them applies is `requireIntrinsicArgs`', so a row cannot invent
@@ -76160,6 +76168,17 @@ export type Parser
 			if callee.equals(BuiltinsSubprocessWaitExitName) 'subprocessWaitExit'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWaitExitName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessWaitExit'
+
+			// `resultNameId` is the identical pair `parseEnumFromRawValue` hands its own result, and the runtime
+			// writes its ordinals out of the SAME declaration this interns — so the two halves of the wire value
+			// cannot come apart.
+			if callee.equals(BuiltinsSubprocessStdoutStateName) 'subprocessStdoutState'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpOutStateName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.named, resultUsed: resultUsed, calleeTok: anchor, resultNameId: self.artifact.typeNames.intern(SubprocessStreamStateTypeName))
+			end 'subprocessStdoutState'
+
+			if callee.equals(BuiltinsSubprocessStderrStateName) 'subprocessStderrState'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpErrStateName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.named, resultUsed: resultUsed, calleeTok: anchor, resultNameId: self.artifact.typeNames.intern(SubprocessStreamStateTypeName))
+			end 'subprocessStderrState'
 
 			if callee.equals(BuiltinsSubprocessWriteStdinAllName) 'subprocessWriteStdinAll'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWriteAllName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
@@ -76903,7 +76922,7 @@ export type Parser
 	// `subpSpawn` → `__gt_subp_spawn`) and every one of them asks the identical two questions of the
 	// identical argument shape: exactly one argument, and it is TEXT. They had three verbatim copies of the
 	// answer, which is three places for the rule to drift and the thing `requireIntrinsicArgs`'s own header
-	// says this file exists to stop ("twenty doors … growing twenty spellings of the same two questions").
+	// says this file exists to stop ("twenty-two doors … growing twenty-two spellings of the same two questions").
 	//
 	// ⚠ Checking it here at all is what an intrinsic needs BECAUSE no file declares it: there is no
 	// signature for SemanticCheck's ordinary arity and argument-type checks to read.
@@ -77007,10 +77026,10 @@ export type Parser
 	end 'emitSubpHandleOp'
 
 	// ⭐⭐ **THE ARGUMENT RULE EVERY `__Builtins.subprocess*` INTRINSIC IS CHECKED AGAINST, IN ONE PLACE.**
-	// Twenty intrinsics, three result shapes and five arities — but exactly ONE argument rule, because every
+	// Twenty-three intrinsics, four result shapes and five arities — but exactly ONE argument rule, because every
 	// position in the contract is either a `__ManagedMemory` or a machine word. Checking it at all is what an
 	// intrinsic needs BECAUSE no file declares it: there is no signature for SemanticCheck's ordinary arity
-	// and argument-type checks to read. Checking it HERE is what keeps twenty doors from growing twenty
+	// and argument-type checks to read. Checking it HERE is what keeps twenty-two doors from growing twenty-two
 	// spellings of the same two questions — the shape `requireHandleArg` already took for the streaming
 	// builtins, one family wider.
 	//
@@ -77147,21 +77166,24 @@ export type Parser
 		return typeIsPromiseStorage(self.signatures, t: self.resolvedSlotType(self.signatures.containerElementType(giid)))
 	end 'valueIsPromiseArray'
 
-	// ⭐ **A SUBPROCESS INTRINSIC WHOSE RESULT IS A MACHINE WORD OR NOTHING AT ALL** — fourteen of the twenty.
+	// ⭐ **A SUBPROCESS INTRINSIC WHOSE RESULT IS A MACHINE WORD, AN ENUM CASE, OR NOTHING AT ALL** — sixteen
+	// of the twenty-three. `resultNameId` defaults to `UnnamedTypeId`, which is what every scalar answer wants;
+	// the two state queries pass the interned `__SubprocessStreamState` and so hand back a value a `match`
+	// covers exhaustively.
 	// The arguments are BORROWED (the runtime entry reads the argv blob's `buffer`/`length` through the
 	// record and never takes ownership, exactly as `__print_string` borrows its String), so there is no owned
 	// temporary to enrol and a literal argument needs no decref.
 	//
 	// A void result used in value position is rejected exactly as a void user-call is — the three void
 	// members are `subprocessReleaseHandle`, `subprocessResultRelease` and `subprocessCloseStdin`.
-	function emitScalarIntrinsicCall(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, buffersAt IntrinsicBufferSlots, resultTag ValueTypeTag, resultUsed bool, calleeTok Token) returns ValueId throws ParseError
+	function emitScalarIntrinsicCall(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, buffersAt IntrinsicBufferSlots, resultTag ValueTypeTag, resultUsed bool, calleeTok Token, resultNameId TypeNameId = UnnamedTypeId) returns ValueId throws ParseError
 		let callArgs = try self.requireIntrinsicArgs(args, callee: callee, arity: arity, buffersAt: buffersAt, calleeTok: calleeTok)
 
 		if resultTag == ValueTypeTag.void and resultUsed 'noValueToUse'
 			throw ParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
-		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: resultNameId, range: SourceRange.ofToken(calleeTok))
 	end 'emitScalarIntrinsicCall'
 
 	// ⭐ **A SUBPROCESS INTRINSIC WHOSE RESULT IS A FRESH OWNED `__ManagedMemory`** — the other six

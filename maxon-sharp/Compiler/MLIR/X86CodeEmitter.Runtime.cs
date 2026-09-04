@@ -2,6 +2,8 @@ using MaxonSharp.Compiler.Ir.Dialects;
 using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 using static MaxonSharp.Compiler.Ir.Runtime.RuntimeEmitter;
 using static MaxonSharp.Compiler.Ir.Runtime.SubprocessStdin;
+using static MaxonSharp.Compiler.Ir.Runtime.SubprocessStreamState;
+using static MaxonSharp.Compiler.Ir.Runtime.SubprocessReadOutcome;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -18,6 +20,28 @@ public partial class X86CodeEmitter {
   private const int SubpReadLineInnerOutLenArgIndex = 5;
   private const int SubpReadBytesOutLenArgIndex = 2;
   private const int SubpResultStreamOutLenArgIndex = 1;
+
+  /// Where the inner line reader takes the offset of its stream's end-state word. Homed by hand for
+  /// the same reason the out-parameter above it is.
+  ///
+  /// ⚠ Index 6 is RAX, the universal scratch, so this argument survives only because
+  /// EmitRuntimeFunctionStart's prologue writes nothing to RAX before the callee's by-hand home.
+  /// A prologue that gains a RAX-clobbering step must move this argument to the stack.
+  private const int SubpReadLineInnerStateOffArgIndex = 6;
+
+  /// Win32 status codes this file classifies by name.
+  ///
+  /// ERROR_HANDLE_EOF and ERROR_BROKEN_PIPE are the END of a stream rather than a failure, and the
+  /// PIPE family folds both to a 0-byte read on both of its arrivals — the synchronous submit and
+  /// the IOCP drain — because they are one pipe closing seen at two moments, and a disagreement
+  /// would make one child read as EOF or as an error depending only on timing. The socket and file
+  /// families do not share that rule: their synchronous cancel arms answer 0 for every code, which
+  /// their own callers read through gt->io_error_code.
+  private const int ErrorHandleEof = 38;
+  private const int ErrorBrokenPipe = 109;
+  private const int ErrorNoData = 232;
+  private const int ErrorIoPending = 997;
+  private const int ErrorOperationAborted = 0x3EF;
 
   /// Load tag_index=0 into the given register (runtime allocations don't have tag indices).
   private void EmitTagZero(X86Register dest) {
@@ -2141,7 +2165,7 @@ public partial class X86CodeEmitter {
 
     // FALSE — check WSAGetLastError for IO_PENDING (997)
     EmitCallImportOnSystemStack("ws2_32.dll", "WSAGetLastError");
-    EmitMovRegImm(X86Register.Rcx, 997);                // WSA_IO_PENDING
+    EmitMovRegImm(X86Register.Rcx, ErrorIoPending);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("e", "rt_ntc_yield");
 
@@ -2281,7 +2305,7 @@ public partial class X86CodeEmitter {
     // Cancelled
     DefineLabel("rt_ntc_cancelled");
     EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegImm(X86Register.Rax, 0x3EF);              // ERROR_OPERATION_ABORTED
+    EmitMovRegImm(X86Register.Rax, ErrorOperationAborted);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitMovRegImm(X86Register.Rax, -2);
     EmitRuntimeFunctionEnd();
@@ -2421,7 +2445,7 @@ public partial class X86CodeEmitter {
 
     // SOCKET_ERROR: check WSAGetLastError for IO_PENDING (997)
     EmitCallImportOnSystemStack("ws2_32.dll", "WSAGetLastError");
-    EmitMovRegImm(X86Register.Rcx, 997); // WSA_IO_PENDING
+    EmitMovRegImm(X86Register.Rcx, ErrorIoPending);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("e", $"{labelPrefix}_yield"); // IO_PENDING: async path, yield
 
@@ -2513,7 +2537,7 @@ public partial class X86CodeEmitter {
 
     DefineLabel($"{labelPrefix}_cancelled");
     EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegImm(X86Register.Rax, 0x3EF); // ERROR_OPERATION_ABORTED
+    EmitMovRegImm(X86Register.Rax, ErrorOperationAborted);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
@@ -2558,7 +2582,8 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_pipe_overlapped_read(hPipe, buf, capacity) → bytesRead (0 = EOF, -1 = error).
+  /// maxon_pipe_overlapped_read(hPipe, buf, capacity) → bytesRead (0 = EOF, -1 = error,
+  /// SubpReadCancelled = the calling green thread was cancelled and the pipe was not touched).
   /// Uses overlapped ReadFile + IOCP for async completion. The pipe handle must be a
   /// named pipe opened with FILE_FLAG_OVERLAPPED and registered with __io_iocp +
   /// SetFileCompletionNotificationModes(FILE_SKIP_COMPLETION_PORT_ON_SUCCESS).
@@ -2614,7 +2639,7 @@ public partial class X86CodeEmitter {
     // Check ERROR_NO_DATA (232) for pipe-closed = clean EOF (return 0).
     EmitCallImportOnSystemStack("kernel32.dll", "GetLastError");
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // save error
-    EmitCmpRegImm(X86Register.Rax, 232);
+    EmitCmpRegImm(X86Register.Rax, ErrorNoData);
     EmitJcc("ne", "maxon_pipe_overlapped_write_real_err");
     EmitXorRegReg(X86Register.Rax, X86Register.Rax); // closed → 0
     EmitRuntimeFunctionEnd();
@@ -2627,7 +2652,7 @@ public partial class X86CodeEmitter {
 
     DefineLabel("maxon_pipe_overlapped_write_cancelled");
     EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegImm(X86Register.Rax, 0x3EF);
+    EmitMovRegImm(X86Register.Rax, ErrorOperationAborted);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitMovRegImm(X86Register.Rax, -1);
     EmitRuntimeFunctionEnd();
@@ -2648,7 +2673,7 @@ public partial class X86CodeEmitter {
     // ERROR_NO_DATA (232) signals "all pipe instances are busy" / "the pipe is being
     // closed" on the write side; ERROR_BROKEN_PIPE (109) signals reader/writer-end
     // closure on the read side. Both map to clean EOF for streaming callers.
-    var peerClosedErr = isWrite ? 232 : 109;
+    var peerClosedErr = isWrite ? ErrorNoData : ErrorBrokenPipe;
 
     // Check cancel flag
     EmitLoadCurrentGtInline(X86Register.R10);
@@ -2745,10 +2770,16 @@ public partial class X86CodeEmitter {
     // codes (ERROR_BROKEN_PIPE for read, ERROR_NO_DATA for write) are clean EOF.
     EmitCallImportOnSystemStack("kernel32.dll", "GetLastError");
     EmitMovMemReg(-0x48, X86Register.Rax, 8); // save error code
-    EmitCmpRegImm(X86Register.Rax, 997);      // ERROR_IO_PENDING
+    EmitCmpRegImm(X86Register.Rax, ErrorIoPending);
     EmitJcc("e", $"{labelPrefix}_yield");
     EmitCmpRegImm(X86Register.Rax, peerClosedErr);
     EmitJcc("e", $"{labelPrefix}_sync_eof");
+    if (!isWrite) {
+      // The read side's second end-of-stream code, folded here so this arm and the IOCP drain
+      // classify the same pipe the same way whichever of them sees it close.
+      EmitCmpRegImm(X86Register.Rax, ErrorHandleEof);
+      EmitJcc("e", $"{labelPrefix}_sync_eof");
+    }
 
     // Sync hard error: clear io_handle/status, store error, free ctx, return -1.
     EmitLoadCurrentGtInline(X86Register.R10);
@@ -2841,13 +2872,32 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rax); // clear io_handle
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffIoResultVal);
+
+    // A read cancelled WHILE PARKED arrives through the drain like any other failed completion --
+    // CancelIoEx completes it with ERROR_OPERATION_ABORTED -- but it transferred nothing and left
+    // the pipe untouched, so it is neither an end of stream nor a failure of one. The cancel flag is
+    // the exact question: io_error_code can still hold a previous operation's code on the
+    // sync-success path. Only an EMPTY answer becomes the marker; bytes that did arrive are the
+    // answer.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("g", $"{labelPrefix}_resume_done");
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R10, GtOffCancelFlag);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", $"{labelPrefix}_resume_done");
+    EmitMovRegImm(X86Register.Rax, SubpReadCancelled);
+
+    DefineLabel($"{labelPrefix}_resume_done");
     EmitRuntimeFunctionEnd();
 
     DefineLabel($"{labelPrefix}_cancelled");
+    // Cancelled before the read was submitted at all. The same marker as the parked case above: a
+    // dropped promise did not touch the pipe, so the readers latch nothing and the stream stays
+    // open. This helper has exactly one caller, maxon_pipe_overlapped_read, so the marker reaches
+    // nothing but the subprocess readers.
     EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegImm(X86Register.Rax, 0x3EF); // ERROR_OPERATION_ABORTED
+    EmitMovRegImm(X86Register.Rax, ErrorOperationAborted);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
-    EmitMovRegImm(X86Register.Rax, -1);
+    EmitMovRegImm(X86Register.Rax, SubpReadCancelled);
     EmitRuntimeFunctionEnd();
   }
 
@@ -6036,6 +6086,8 @@ public partial class X86CodeEmitter {
     //   [rbp-0x08] = bytes_transferred (DWORD-sized, read from OVERLAPPED)
     //   [rbp-0x10] = completion_key (ULONG_PTR, unused but passed by ref)
     //   [rbp-0x18] = overlapped ptr (LPOVERLAPPED → AsyncOpContext*)
+    //   [rbp-0x20] = ctx, [rbp-0x28] = waiter gt
+    //   [rbp-0x30] = the GQCS outcome, then the Win32 error published to the waiter
 
     DefineLabel("__io_comp_loop_top");
     // Zero bytes_transferred slot — GQCS writes a DWORD (32-bit), upper 32 bits must be clean
@@ -6050,6 +6102,10 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, 0xFFFFFFFF);
     EmitMovMemRspReg(0x20, X86Register.Rax);
     EmitCallImport("kernel32.dll", "GetQueuedCompletionStatus");
+    // The BOOL is the only thing that says whether this completion succeeded, and RAX is about to be
+    // reused for the overlapped pointer. It is a DWORD: the Win64 ABI leaves RAX's high half
+    // undefined for one, so every access to this slot is 4 bytes wide.
+    EmitMovMemReg(-0x30, X86Register.Rax, 4);
 
     // Check sentinel: if overlapped == NULL → shutdown signal, exit
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = overlapped
@@ -6063,26 +6119,59 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, AsyncCtxOffWaiter);
     EmitMovMemReg(-0x28, X86Register.Rdx, 8); // save gt
 
-    // Check if ctx has a custom result (used by ConnectEx to return socket handle
-    // instead of bytes_transferred). If ctx->custom_result != 0, use it.
+    // Classify the completion. Only MOVs have run since GetQueuedCompletionStatus, so the thread's
+    // last-error is still this completion's.
+    EmitMovRegMem(X86Register.Rax, -0x30, 4);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "__io_comp_ok");
+
+    // The I/O itself failed. A stream that merely ENDED is not a failure: the synchronous submit
+    // folds these same two codes to a 0-byte read, and a drain that disagreed would make one pipe
+    // closing read as EOF or as an error depending only on whether the read completed inline.
+    EmitCallImport("kernel32.dll", "GetLastError");
+    EmitMovMemReg(-0x30, X86Register.Rax, 4);
+    EmitMovRegMem(X86Register.Rax, -0x30, 4);                 // zero-extended: the code is a DWORD
+    EmitCmpRegImm(X86Register.Rax, ErrorBrokenPipe);
+    EmitJcc("e", "__io_comp_clean_eof");
+    EmitCmpRegImm(X86Register.Rax, ErrorHandleEof);
+    EmitJcc("e", "__io_comp_clean_eof");
+
+    // A real failure answers -1 with the code beside it, which is what the synchronous branch of
+    // every submit family already answers. The custom-result override below is deliberately NOT
+    // reached: it is set at submit time, so a failed ConnectEx would otherwise resume holding a
+    // socket handle it never connected.
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8);
+    EmitJmp("__io_comp_publish");
+
+    DefineLabel("__io_comp_clean_eof");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // 0 bytes
+    EmitMovMemReg(-0x30, X86Register.Rax, 4); // and no error: an end is not one
+    EmitJmp("__io_comp_publish");
+
+    DefineLabel("__io_comp_ok");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x30, X86Register.Rax, 4); // no error
+
+    // A custom result (ConnectEx's connected socket handle) stands in for bytes_transferred, and
+    // only on the path where the operation actually succeeded.
     EmitMovRegMem(X86Register.Rax, -0x20, 8); // reload ctx
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, AsyncCtxOffCustomResult);
     EmitBytes(0x48, 0x85, 0xD2); // TEST RDX, RDX
-    EmitJcc("z", "__io_comp_use_bytes");
-    // Custom result is non-zero — overwrite bytes_transferred with it
+    EmitJcc("z", "__io_comp_publish");
     EmitMovMemReg(-0x08, X86Register.Rdx, 8);
-    DefineLabel("__io_comp_use_bytes");
 
+    DefineLabel("__io_comp_publish");
     // Free ctx (allocated by the issuer of the overlapped op).
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
-    // __io_complete_gt(gt, result, result, 0)
-    // result is bytes_transferred (or custom_result if it was set)
+    // __io_complete_gt(gt, result, result, error)
     EmitMovRegMem(X86Register.Rcx, -0x28, 8); // gt
     EmitMovRegMem(X86Register.Rdx, -0x08, 8); // result
     EmitMovRegMem(X86Register.R8, -0x08, 8);  // len = result
-    EmitXorRegReg(X86Register.R9, X86Register.R9); // error = 0
+    EmitMovRegMem(X86Register.R9, -0x30, 4);  // error = the Win32 code, 0 on success or a clean end
     EmitCallRuntimeLabel("__io_complete_gt");
 
     EmitJmp("__io_comp_loop_top");
@@ -6981,7 +7070,7 @@ public partial class X86CodeEmitter {
     DefineLabel("__io_submit_sync_cancelled");
     // Store ERROR_OPERATION_ABORTED and return 0 without yielding
     EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegImm(X86Register.Rax, 0x3EF); // ERROR_OPERATION_ABORTED
+    EmitMovRegImm(X86Register.Rax, ErrorOperationAborted);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
@@ -7486,7 +7575,7 @@ public partial class X86CodeEmitter {
     EmitJcc("nz", $"{labelPrefix}_sync_done");
     // FALSE — check error code
     EmitCallImportOnSystemStack("kernel32.dll", "GetLastError");
-    EmitMovRegImm(X86Register.Rcx, 997); // ERROR_IO_PENDING
+    EmitMovRegImm(X86Register.Rcx, ErrorIoPending);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("e", $"{labelPrefix}_yield"); // IO_PENDING → async path, yield
 
@@ -7565,7 +7654,7 @@ public partial class X86CodeEmitter {
 
     DefineLabel($"{labelPrefix}_cancelled");
     EmitLoadCurrentGtInline(X86Register.R10);
-    EmitMovRegImm(X86Register.Rax, 0x3EF); // ERROR_OPERATION_ABORTED
+    EmitMovRegImm(X86Register.Rax, ErrorOperationAborted);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
@@ -8489,7 +8578,11 @@ public partial class X86CodeEmitter {
   private const int SubpOffHStdoutLineBufLen = 0xB8;
   private const int SubpOffHStderrLineBufPtr = 0xC0;
   private const int SubpOffHStderrLineBufLen = 0xC8;
-  private const int SubpHandleStructSize = 0xD0;
+  // Per-stream end-state, one SubprocessStreamState ordinal each. Zeroed with the rest of the struct
+  // at spawn, which is SubpStreamOpen, and latched by whichever reader first sees the pipe stop.
+  private const int SubpOffHStdoutState = 0xD0;
+  private const int SubpOffHStderrState = 0xD8;
+  private const int SubpHandleStructSize = 0xE0;
 
   // Bytes asked of a child pipe in one ReadFile. Every reader over a child stream uses it: the attached
   // collector's drain loop, the streaming line reader and the streaming exact reader. It is a request
@@ -8617,12 +8710,17 @@ public partial class X86CodeEmitter {
     EmitMaxonSubprocessSendSignal();
     EmitMaxonSubprocessReleaseHandle();
     EmitMaxonSubprocessReadLineAppend();
+    EmitMaxonSubprocessStreamLatch();
     EmitMaxonSubprocessReadLineInner();
     EmitMaxonSubprocessReadLineWrapper("maxon_subprocess_read_stdout_line",
-      SubpOffHStdoutRead, SubpOffHStdoutLineBufPtr, SubpOffHStdoutLineBufLen);
+      SubpOffHStdoutRead, SubpOffHStdoutLineBufPtr, SubpOffHStdoutLineBufLen, SubpOffHStdoutState);
     EmitMaxonSubprocessReadLineWrapper("maxon_subprocess_read_stderr_line",
-      SubpOffHStderrRead, SubpOffHStderrLineBufPtr, SubpOffHStderrLineBufLen);
+      SubpOffHStderrRead, SubpOffHStderrLineBufPtr, SubpOffHStderrLineBufLen, SubpOffHStderrState);
     EmitMaxonSubprocessReadStdoutBytes();
+    EmitMaxonSubprocessStreamState("maxon_subprocess_stdout_state",
+      SubpOffHStdoutRead, SubpOffHStdoutState);
+    EmitMaxonSubprocessStreamState("maxon_subprocess_stderr_state",
+      SubpOffHStderrRead, SubpOffHStderrState);
     EmitMaxonSubprocessWriteStdinAll();
     EmitMaxonSubprocessCloseStdin();
     EmitMaxonSubprocessWaitExit();
@@ -9459,12 +9557,13 @@ public partial class X86CodeEmitter {
 
   // --------------------------------------------------------------------------
   // __subp_read_line_inner(handle, hReadFieldOff, lineBufPtrFieldOff,
-  //                        lineBufLenFieldOff, maxBytes)
+  //                        lineBufLenFieldOff, maxBytes, outLen, stateFieldOff)
   //
-  // Returns an mm_raw_alloc'd null-terminated byte buffer (always non-null;
-  // empty = "\0" = EOF). 5-arg internal helper; both read_stdout_line and
-  // read_stderr_line are thin wrappers that fill the three field-offset
-  // arguments with the matching constants and forward maxBytes through.
+  // Returns an mm_raw_alloc'd null-terminated byte buffer (always non-null; empty
+  // = "\0" = the stream delivered nothing, and the state word is what tells a
+  // clean end from a refusal). Both read_stdout_line and read_stderr_line are
+  // thin wrappers that fill the four field-offset arguments with the matching
+  // constants and forward maxBytes through.
   //
   // The buffered-reader contract
   // ----------------------------
@@ -9496,6 +9595,7 @@ public partial class X86CodeEmitter {
   //   [rbp-0x70]  chunk capacity (SubpStreamChunkBytes)
   //   [rbp-0x78]  scratch for memcpy / scan loops
   //   [rbp-0x80]  outLen -- the caller's i64 slot for the byte count (arg 6, homed by hand)
+  //   [rbp-0x88]  stateFieldOff -- where this stream's end-state word sits (arg 7, homed by hand)
   //
   // Pipe reads use maxon_pipe_overlapped_read (FILE_FLAG_OVERLAPPED + IOCP on
   // the parent-side named-pipe handle, created in __subp_create_overlapped_pipe).
@@ -9504,11 +9604,12 @@ public partial class X86CodeEmitter {
   // would otherwise serialise N parallel persistent-worker dispatchers.
   // --------------------------------------------------------------------------
   private void EmitMaxonSubprocessReadLineInner() {
-    // Five args homed by the prologue; the sixth by hand. The prologue's own slot for arg 6 would
+    // Five args homed by the prologue; the last two by hand. The prologue's own slot for arg 6 would
     // be [rbp-0x30], which this function's result-buffer local already owns, so renumbering ten
-    // locals is the alternative to naming one free slot here.
+    // locals is the alternative to naming two free slots here.
     EmitRuntimeFunctionStart("__subp_read_line_inner", 5, 0xA0);
     EmitMovMemReg(-0x80, _abiArgRegs[SubpReadLineInnerOutLenArgIndex], 8);
+    EmitMovMemReg(-0x88, _abiArgRegs[SubpReadLineInnerStateOffArgIndex], 8);
 
     // The byte count is zero on every path that leaves before a byte is read -- the two early
     // refusals below jump past the allocation that would otherwise initialise this slot, and the
@@ -9658,12 +9759,17 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rdx, -0x68, 8);                     // chunk buf
     EmitMovRegMem(X86Register.R8, -0x70, 8);                      // chunk cap
     EmitCallRuntimeLabel("maxon_pipe_overlapped_read");
-    // RAX = bytesRead. Negative (-1) is a real OS error; surface it as EOF
-    // for the line reader (last_error remains set by the sync worker so the
-    // caller can inspect it via subprocessLastErrorMessage).
+    // RAX = bytesRead. A read that delivered nothing ends this call either way, but WHICH nothing it
+    // was is the fact no caller can recover from an empty answer -- so latch it before finishing.
     EmitMovMemReg(-0x60, X86Register.Rax, 8);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("le", "rt_subp_rli_finish");                          // 0 = EOF, <0 = error
+    EmitJcc("g", "rt_subp_rli_got_chunk");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);                     // handle
+    EmitMovRegMem(X86Register.Rdx, -0x88, 8);                     // state field offset
+    EmitMovRegMem(X86Register.R8, -0x60, 8);                      // bytesRead
+    EmitCallRuntimeLabel("__subp_latch_stream_state");
+    EmitJmp("rt_subp_rli_finish");
+    DefineLabel("rt_subp_rli_got_chunk");
 
     // Scan chunk[0..bytesRead) for '\n'. RCX = index, RDX = byte.
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
@@ -9826,6 +9932,72 @@ public partial class X86CodeEmitter {
   }
 
   // --------------------------------------------------------------------------
+  // __subp_latch_stream_state(handle, stateFieldOff, n) — classify a pipe read that delivered no
+  // bytes: 0 latches atEof, -1 latches readFailed, and a positive count or SubpReadCancelled latch
+  // nothing (a cancelled read never touched the pipe, so the stream is still open for the next
+  // reader). `noSuchChild` is never stored — the query answers it from its own handle guard.
+  //
+  // The field offset is an argument so both streams and both readers share ONE classifier.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessStreamLatch() {
+    EmitRuntimeFunctionStart("__subp_latch_stream_state", 3, 0x30);
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);                     // n
+    EmitCmpRegImm(X86Register.Rax, SubpReadCancelled);
+    EmitJcc("e", "rt_subp_lss_done");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("g", "rt_subp_lss_done");
+    EmitJcc("l", "rt_subp_lss_failed");
+    EmitMovRegImm(X86Register.Rdx, SubpStreamAtEof);
+    EmitJmp("rt_subp_lss_store");
+
+    DefineLabel("rt_subp_lss_failed");
+    EmitMovRegImm(X86Register.Rdx, SubpStreamReadFailed);
+
+    DefineLabel("rt_subp_lss_store");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);                     // handle
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);                     // state field offset
+    EmitBytes(0x48, 0x89, 0x14, 0x08);                            // MOV [RAX + RCX], RDX
+
+    DefineLabel("rt_subp_lss_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
+  // {stdout,stderr}_state(handle) — the SubprocessStreamState ordinal a reader of this stream would
+  // next act on. A reader's empty answer is the same bytes for a clean end of stream and for a
+  // refusal, so this is the only thing that separates them.
+  //
+  // A read handle of 0 answers atEof rather than the stored word, because that is what the readers
+  // themselves answer for it (rt_subp_rli_eof_initial, and the byte reader's post-pushback stop):
+  // a query disagreeing with the reader it describes would be worse than no query.
+  // --------------------------------------------------------------------------
+  private void EmitMaxonSubprocessStreamState(string name, int hReadOff, int stateOff) {
+    string atEof = $"{name}_at_eof";
+    string noChild = $"{name}_no_child";
+    string done = $"{name}_done";
+
+    EmitRuntimeFunctionStart(name, 1, 0x30);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);                     // handle
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", noChild);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, hReadOff);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", atEof);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, stateOff);
+    EmitJmp(done);
+
+    DefineLabel(atEof);
+    EmitMovRegImm(X86Register.Rax, SubpStreamAtEof);
+    EmitJmp(done);
+
+    DefineLabel(noChild);
+    EmitMovRegImm(X86Register.Rax, SubpStreamNoSuchChild);
+
+    DefineLabel(done);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --------------------------------------------------------------------------
   // __subp_rli_append(bytesToCopy_rcx, src_rdx) — append [src..src+rcx) to
   // the caller's result buffer at [rbp-0x30]/[rbp-0x38]/[rbp-0x40].
   // Grows the buffer (alloc + memcpy + free) if needed. Returns 1 on
@@ -9931,10 +10103,11 @@ public partial class X86CodeEmitter {
   // --------------------------------------------------------------------------
   // read_{stdout,stderr}_line(handle, maxBytes, outLen) — thin wrapper around
   // the inner helper. The field offsets passed in select which side of the
-  // handle struct (read handle + line-buffer fields) this stream reads, and
-  // they are the ONLY difference between the two entry points.
+  // handle struct (read handle + line-buffer fields + end-state word) this stream
+  // reads, and they are the ONLY difference between the two entry points.
   // --------------------------------------------------------------------------
-  private void EmitMaxonSubprocessReadLineWrapper(string name, long readOff, long bufPtrOff, long bufLenOff) {
+  private void EmitMaxonSubprocessReadLineWrapper(string name, long readOff, long bufPtrOff,
+      long bufLenOff, long stateOff) {
     EmitRuntimeFunctionStart(name, 3, 0x30);
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);                    // handle
     EmitMovRegImm(X86Register.Rdx, readOff);
@@ -9942,6 +10115,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.R9, bufLenOff);
     EmitMovRegMem(X86Register.Rsi, -0x10, 8);                    // maxBytes
     EmitMovRegMem(X86Register.Rdi, -0x18, 8);                    // outLen
+    EmitMovRegImm(_abiArgRegs[SubpReadLineInnerStateOffArgIndex], stateOff);
     EmitCallRuntimeLabel("__subp_read_line_inner");
     EmitRuntimeFunctionEnd();
   }
@@ -10092,9 +10266,17 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rdx, -0x40, 8);
     EmitMovRegImm(X86Register.R8, SubpStreamChunkBytes);
     EmitCallRuntimeLabel("maxon_pipe_overlapped_read");
+    // A read that delivered nothing ends the count either way; the latch is what lets the caller tell
+    // a stream that ENDED from one that FAILED, which a short answer alone cannot say.
     EmitMovMemReg(-0x48, X86Register.Rax, 8);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("le", "rt_subp_rxb_finish");                          // 0 = EOF, <0 = error
+    EmitJcc("g", "rt_subp_rxb_got_chunk");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);                     // handle
+    EmitMovRegImm(X86Register.Rdx, SubpOffHStdoutState);
+    EmitMovRegMem(X86Register.R8, -0x48, 8);                      // bytesRead
+    EmitCallRuntimeLabel("__subp_latch_stream_state");
+    EmitJmp("rt_subp_rxb_finish");
+    DefineLabel("rt_subp_rxb_got_chunk");
 
     // take = min(want - resultLen, bytesRead).
     EmitMovRegMem(X86Register.Rax, -0x10, 8);

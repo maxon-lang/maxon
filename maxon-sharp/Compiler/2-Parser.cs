@@ -2,6 +2,7 @@ using System.Globalization;
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
 using MaxonSharp.Compiler.Ir.Passes;
+using MaxonSharp.Compiler.Ir.Runtime;
 
 namespace MaxonSharp.Compiler;
 
@@ -1561,55 +1562,84 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       cursorType.DocString = "Compiler builtin cursor for array access. Increfs the source on creation, decrefs on destruction. Navigation methods throw CursorError; current() is unchecked. Fields are opaque.";
       _typeRegistry["__ManagedMemoryCursor"] = cursorType;
     }
-    // Pre-register error enums so RegisterBuiltinMethods can assign throwsType
-    // before SeedFromModule loads stdlib. Cases must match Builtins.maxon exactly.
+    // Pre-register these so RegisterBuiltinMethods can assign throwsType before SeedFromModule loads
+    // stdlib. Their cases come from CompilerOrdinalColumns, which ParseEnumDecl also holds
+    // Builtins.maxon's own declaration to.
     if (!_typeRegistry.ContainsKey("__ManagedSocketError")) {
-      _typeRegistry["__ManagedSocketError"] = new IrEnumType("__ManagedSocketError", [
-        new IrEnumCase("bufferOutOfBounds", 0, 0L),
-        new IrEnumCase("resolveFailed",     1, 1L),
-        new IrEnumCase("connectFailed",     2, 2L),
-        new IrEnumCase("sendFailed",        3, 3L),
-        new IrEnumCase("recvFailed",        4, 4L),
-        new IrEnumCase("connectionClosed",  5, 5L),
-        new IrEnumCase("closed",            6, 6L),
-      ], conformingInterfaces: [ErrorInterfaceName]);
+      _typeRegistry["__ManagedSocketError"] = new IrEnumType("__ManagedSocketError",
+        OrdinalColumnCases("__ManagedSocketError"), conformingInterfaces: [ErrorInterfaceName]);
     }
     if (!_typeRegistry.ContainsKey("__ManagedFileError")) {
-      _typeRegistry["__ManagedFileError"] = new IrEnumType("__ManagedFileError", [
-        new IrEnumCase("notFound",           0,  0L),
-        new IrEnumCase("accessDenied",       1,  1L),
-        new IrEnumCase("openFailed",         2,  2L),
-        new IrEnumCase("readFailed",         3,  3L),
-        new IrEnumCase("writeFailed",        4,  4L),
-        new IrEnumCase("sizeFailed",         5,  5L),
-        new IrEnumCase("deleteFailed",       6,  6L),
-        new IrEnumCase("statFailed",         7,  7L),
-        new IrEnumCase("invalidStatBuffer",  8,  8L),
-        new IrEnumCase("invalidStatIndex",   9,  9L),
-        new IrEnumCase("closed",            10, 10L),
-      ], conformingInterfaces: [ErrorInterfaceName]);
+      _typeRegistry["__ManagedFileError"] = new IrEnumType("__ManagedFileError",
+        OrdinalColumnCases("__ManagedFileError"), conformingInterfaces: [ErrorInterfaceName]);
     }
     if (!_typeRegistry.ContainsKey("__ManagedDirectoryError")) {
-      _typeRegistry["__ManagedDirectoryError"] = new IrEnumType("__ManagedDirectoryError", [
-        new IrEnumCase("notFound",           0, 0L),
-        new IrEnumCase("accessDenied",       1, 1L),
-        new IrEnumCase("openSearchFailed",   2, 2L),
-        new IrEnumCase("nextFailed",         3, 3L),
-        new IrEnumCase("iteratorInvalid",    4, 4L),
-        new IrEnumCase("createFailed",       5, 5L),
-        new IrEnumCase("currentPathFailed",  6, 6L),
-        new IrEnumCase("closed",             7, 7L),
-      ], conformingInterfaces: [ErrorInterfaceName]);
+      _typeRegistry["__ManagedDirectoryError"] = new IrEnumType("__ManagedDirectoryError",
+        OrdinalColumnCases("__ManagedDirectoryError"), conformingInterfaces: [ErrorInterfaceName]);
+    }
+    // The per-stream end-state of a streaming child's stdout/stderr, answered by
+    // subprocessStdoutState / subprocessStderrState. Not an Error: a stopped stream is a fact the
+    // stdlib's readers decide on, not a failure in itself.
+    if (!_typeRegistry.ContainsKey(SubprocessStreamStateName)) {
+      _typeRegistry[SubprocessStreamStateName] =
+        new IrEnumType(SubprocessStreamStateName, OrdinalColumnCases(SubprocessStreamStateName));
     }
     // The error thrown by an integer `/` / `mod` whose divisor was not proven non-zero. Like the
     // __Managed*Error enums above it is a compiler-synthesized runtime error TYPE (not a
     // docs/error-codes.txt diagnostic): the desugared __checked_div/__checked_mod builtins throw it,
     // and a `try ... otherwise (e)` handler matches its one case.
     if (!_typeRegistry.ContainsKey("__DivisionByZeroError")) {
-      _typeRegistry["__DivisionByZeroError"] = new IrEnumType("__DivisionByZeroError", [
-        new IrEnumCase("divisionByZero", 0, 0L),
-      ], conformingInterfaces: [ErrorInterfaceName]);
+      _typeRegistry["__DivisionByZeroError"] = new IrEnumType("__DivisionByZeroError",
+        OrdinalColumnCases("__DivisionByZeroError"), conformingInterfaces: [ErrorInterfaceName]);
     }
+  }
+
+  /// The corpus name of the stream-state enum, spelled once for the pre-registration, the check and
+  /// the builtin table.
+  internal const string SubprocessStreamStateName = "__SubprocessStreamState";
+
+  /// The enums whose ORDINAL COLUMN the compiler has already committed to, in declaration order.
+  ///
+  /// Their numbering reaches generated code — as an error-flag ordinal, or as the value a runtime
+  /// stores and a builtin hands back — so `stdlib/Builtins.maxon` is not free to reorder, rename or
+  /// insert a case in one of them. This table is the ONE copy of those names: the pre-registrations
+  /// below build their cases from it, and every parse of the declaration is checked against it.
+  private static readonly Dictionary<string, string[]> CompilerOrdinalColumns = new() {
+    ["__ManagedSocketError"] = ["bufferOutOfBounds", "resolveFailed", "connectFailed", "sendFailed",
+                                "recvFailed", "connectionClosed", "closed"],
+    ["__ManagedFileError"] = ["notFound", "accessDenied", "openFailed", "readFailed", "writeFailed",
+                              "sizeFailed", "deleteFailed", "statFailed", "invalidStatBuffer",
+                              "invalidStatIndex", "closed"],
+    ["__ManagedDirectoryError"] = ["notFound", "accessDenied", "openSearchFailed", "nextFailed",
+                                   "iteratorInvalid", "createFailed", "currentPathFailed", "closed"],
+    ["__DivisionByZeroError"] = ["divisionByZero"],
+    [SubprocessStreamStateName] = SubprocessStreamState.SubpStreamCaseNames,
+  };
+
+  /// The cases of a compiler-known enum, numbered by position.
+  private static List<IrEnumCase> OrdinalColumnCases(string enumName) =>
+    [.. CompilerOrdinalColumns[enumName].Select((caseName, ordinal) => new IrEnumCase(caseName, ordinal, (long)ordinal))];
+
+  /// Refuse a corpus declaration that has drifted from the column above.
+  ///
+  /// Unconditional rather than gated on the registry entry: a parser whose seed module already
+  /// carries the type never runs the pre-registration, so a check that asked the registry would be
+  /// silently inert on every pass but the first — which is how it would come to read green while
+  /// testing nothing. The corpus stays the source of truth for what the cases ARE; this only
+  /// refuses a divergence nothing else would report.
+  private void RequireCorpusEnumMatchesCompilerColumn(string enumName, List<IrEnumCase> cases) {
+    if (!CompilerOrdinalColumns.TryGetValue(enumName, out var expected)) return;
+
+    var matches = cases.Count == expected.Length
+      && cases.Select((c, i) => c.Name == expected[i] && c.Ordinal == i).All(ok => ok);
+    if (matches) return;
+
+    throw new InvalidOperationException(
+      $"{_sourceFilePath}: enum '{enumName}' declares "
+      + $"[{string.Join(", ", cases.Select(c => $"{c.Name}={c.Ordinal}"))}] but the compiler emits "
+      + $"[{string.Join(", ", expected.Select((n, i) => $"{n}={i}"))}] for it. Its ordinals reach "
+      + "generated code, so the declaration, CompilerOrdinalColumns in 2-Parser.cs and the constants "
+      + "in maxon-sharp/Compiler/MLIR/Runtime/ have to change together.");
   }
 
   private bool _builtinMethodsRegistered;
@@ -4826,6 +4856,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         if (prior?.RawValue is string priorFn) c.RawValue = priorFn;
       }
     }
+
+    RequireCorpusEnumMatchesCompilerColumn(enumName, cases);
 
     var mergedEnumTypeParams = MergeTypeParams(associatedTypeNames, conformanceTypeParams);
     var finalEnumType = new IrEnumType(enumName, cases, backingType, finalInterfaces,
@@ -12410,10 +12442,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       "Writes the entire contents of a cstring to a streaming subprocess's stdin, blocking until all bytes are flushed. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessWriteStdinAll(handle, data_cstr) returns int`",
       "maxon_subprocess_write_stdin_all", ["i64", "cstring"], true),
     ["subprocessReadStdoutLine"] = RuntimeCallToManagedBytes(
-      "Reads one line (LF-terminated) from a streaming subprocess's stdout, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStdoutLine(handle, maxBytes) returns __ManagedMemory`",
+      "Reads one line (LF-terminated) from a streaming subprocess's stdout, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory holding the line bytes INCLUDING the terminating LF, which stdlib/Subprocess.maxon strips. A zero-length result is end of stream OR a refusal -- the two answer alike, and subprocessStdoutState(handle) is what tells them apart. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStdoutLine(handle, maxBytes) returns __ManagedMemory`",
       "maxon_subprocess_read_stdout_line", ["i64", "i64"]),
     ["subprocessReadStderrLine"] = RuntimeCallToManagedBytes(
-      "Reads one line (LF-terminated) from a streaming subprocess's stderr, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStderrLine(handle, maxBytes) returns __ManagedMemory`",
+      "Reads one line (LF-terminated) from a streaming subprocess's stderr, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory holding the line bytes INCLUDING the terminating LF, which stdlib/Subprocess.maxon strips. A zero-length result is end of stream OR a refusal -- the two answer alike, and subprocessStderrState(handle) is what tells them apart. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStderrLine(handle, maxBytes) returns __ManagedMemory`",
       "maxon_subprocess_read_stderr_line", ["i64", "i64"]),
     // The EXACT-COUNT stdout reader. Its second argument is a LENGTH where the two line readers' is a
     // ceiling, and that is the whole difference: a framed body -- the LSP `Content-Length` payload, which
@@ -12423,7 +12455,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // BYTES, NOT TEXT, and that is why it is on RuntimeCallToManagedBytes: a framed payload may carry any
     // byte including NUL, and a length recovered with strlen would end the answer at the first one.
     ["subprocessReadStdoutBytes"] = RuntimeCallToManagedBytes(
-      "Reads exactly n bytes from a streaming subprocess's stdout, blocking until it has them. Returns a fresh __ManagedMemory holding those bytes; a SHORTER result means EOF was reached first, and a zero-length result means EOF with nothing left. n == 0 returns empty without touching the pipe. Shares the per-handle pushback buffer with subprocessReadStdoutLine, so the two readers may be interleaved on one stream.\n\n`__Builtins.subprocessReadStdoutBytes(handle, n) returns __ManagedMemory`",
+      "Reads exactly n bytes from a streaming subprocess's stdout, blocking until it has them. Returns a fresh __ManagedMemory holding those bytes. A SHORTER result is end of stream OR a refusal -- the two answer alike, and subprocessStdoutState(handle) is what tells them apart. n == 0 returns empty without touching the pipe. Shares the per-handle pushback buffer with subprocessReadStdoutLine, so the two readers may be interleaved on one stream.\n\n`__Builtins.subprocessReadStdoutBytes(handle, n) returns __ManagedMemory`",
       "maxon_subprocess_read_stdout_bytes", ["i64", "i64"]),
     ["subprocessCloseStdin"] = RuntimeCallIntrinsic(
       "Closes the stdin pipe of a streaming subprocess, signalling EOF to the child without terminating it.\n\n`__Builtins.subprocessCloseStdin(handle)`",
@@ -12431,6 +12463,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["subprocessWaitExit"] = RuntimeCallIntrinsic(
       "Waits for a streaming subprocess to exit (or until timeoutMs elapses) and returns its exit code. Returns -2 on timeout or -1 on error.\n\n`__Builtins.subprocessWaitExit(handle, timeoutMs) returns int`",
       "maxon_subprocess_wait_exit", ["i64", "i64"], true),
+    // The per-stream discriminator the three readers need. A reader's short answer is the same bytes
+    // for a clean end of stream and for a refusal; this says which, and it never blocks or parks.
+    ["subprocessStdoutState"] = RuntimeCallEnumIntrinsic(
+      "Returns the end-state of a streaming subprocess's stdout as a __SubprocessStreamState: open, atEof, readFailed, or noSuchChild for a handle naming no live child.\n\n`__Builtins.subprocessStdoutState(handle) returns __SubprocessStreamState`",
+      "maxon_subprocess_stdout_state", ["i64"], "__SubprocessStreamState"),
+    ["subprocessStderrState"] = RuntimeCallEnumIntrinsic(
+      "Returns the end-state of a streaming subprocess's stderr as a __SubprocessStreamState: open, atEof, readFailed, or noSuchChild for a handle naming no live child.\n\n`__Builtins.subprocessStderrState(handle) returns __SubprocessStreamState`",
+      "maxon_subprocess_stderr_state", ["i64"], "__SubprocessStreamState"),
     ["managedIsNull"] = RuntimeCallIntrinsic(
       "Returns 1 when the __ManagedMemory pointer is null, 0 otherwise. Used after MM-returning runtime calls (e.g. subprocessResolveOnPath) to test for the not-found sentinel.\n\n`__Builtins.managedIsNull(mm) returns int`",
       "maxon_managed_is_null", ["__ManagedMemory"], true),
@@ -12902,6 +12942,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var args = p.ParseTypedRuntimeArgs(runtimeName, paramTypeNames);
       p.Expect(TokenType.RightParen);
       var op = new MaxonCallRuntimeOp(runtimeName, args, hasResult);
+      p._currentBlock!.AddOp(op);
+      return op.Result;
+    });
+  }
+
+  /// Same, for a runtime answer that IS an enum declared in the corpus: the caller matches over it
+  /// exhaustively instead of comparing an ordinal, so a runtime that grows a state cannot slip past
+  /// a `!= 0` at the Maxon level. `enumTypeName` must name a registered enum whose cases mirror the
+  /// runtime's ordinals.
+  private static BuiltinInfo RuntimeCallEnumIntrinsic(string doc, string runtimeName,
+      List<string> paramTypeNames, string enumTypeName) {
+    return new(doc, p => {
+      var args = p.ParseTypedRuntimeArgs(runtimeName, paramTypeNames);
+      p.Expect(TokenType.RightParen);
+      var op = new MaxonCallRuntimeOp(runtimeName, args, true, enumTypeName);
       p._currentBlock!.AddOp(op);
       return op.Result;
     });

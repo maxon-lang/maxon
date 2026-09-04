@@ -6698,6 +6698,28 @@ module let ManagedDirectoryCurrentPathFailedCaseName = b"currentPathFailed"
 
 module let ManagedDirectoryClosedCaseName = b"closed"
 
+// ⭐ **THE PER-STREAM END-STATE `subprocessStdoutState`/`subprocessStderrState` ANSWER**, declared at
+// `stdlib/Builtins.maxon:221` and read from there. It is not an ERROR family: a stopped stream is a fact the
+// three `StreamingSubprocess` readers decide on, and `stdlib/Subprocess.maxon`'s `finishRead` is what turns
+// one of these four cases into a `SubprocessError` or into an answer.
+//
+// ⚠ **ITS CASE ORDER IS THE RUNTIME'S STATE WORD, AND `GtRuntime` DOES NOT TRANSCRIBE IT.** A streaming
+// slot holds the ordinal itself, so every emitter that stores or tests one reads the tag out of this
+// declaration through `Project.requireCorpusDeclaredEnum` — `Ordering`'s arrangement, and for `Ordering`'s
+// reason: a site that must EMIT a number has no degraded answer to give, so there is nothing for a
+// transcription-drift check to catch and nothing to drift.
+module let SubprocessStreamStateTypeName = b"__SubprocessStreamState"
+
+// The four case names, as `stdlib/Builtins.maxon` spells them. The NAMES are stated here (an emitter has to
+// ask for a case by some spelling); the ORDINALS behind them are not — see the type name above.
+module let SubprocessStreamOpenCaseName = b"open"
+
+module let SubprocessStreamAtEofCaseName = b"atEof"
+
+module let SubprocessStreamReadFailedCaseName = b"readFailed"
+
+module let SubprocessStreamNoSuchChildCaseName = b"noSuchChild"
+
 // ⭐ **THE COMPILER-OWNED `__ManagedSocket` TYPE** — an 8-byte box holding one raw OS socket handle, with
 // a runtime-owned destructor that closes it on drop. `specs/managed-socket.md`’s "Type Structure" states the
 // single `_handle` field and the RAII contract; it is the `__ManagedFile` handle mechanism one type over,

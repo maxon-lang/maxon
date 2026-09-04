@@ -1405,7 +1405,9 @@ end 'emitGtStackGuard'
 // `__io_completion_loop(rcx = lpParameter, ignored)` — the Win64 ThreadProc `__io_init` starts with CreateThread.
 // It loops: `GetQueuedCompletionStatus` blocks until an overlapped read completes; the completing packet's
 // lpOverlapped IS the reading GT's embedded OVERLAPPED, so `gt = lpOverlapped - GtOffOverlapped` (CONTAINING_RECORD).
-// It writes the byte count to `gt.io_result`, then — THE HANDSHAKE — SPIN-WAITS on `gt.ioParked == 1` (the reading GT
+// It writes to `gt.io_result` the byte count, or `SubpReadFailedCount` when the packet says the IO FAILED for some
+// reason other than the broken pipe that is a clean end of stream. Then — THE HANDSHAKE — it SPIN-WAITS on
+// `gt.ioParked == 1` (the reading GT
 // sets it only AFTER `status = waiting`, so this ordering guarantees the `status = ready` below lands AFTER the GT's
 // own waiting-write: no torn status, no lost wakeup). It sets `status = ready`; for a SPAWNED GT (`stackBase != 0`)
 // it re-enqueues under `__sched_lock` (the run queue's sole cross-thread mutation); a GT0 self-driver (`stackBase == 0`)
@@ -1444,6 +1446,8 @@ let IoLoopSignalLabel = 3 as BlockId
 let IoLoopExitLabel = 4 as BlockId
 let IoLoopAbandonedLabel = 5 as BlockId
 let IoLoopNoWakeLabel = 6 as BlockId
+let IoLoopCleanEofLabel = 7 as BlockId
+let IoLoopDequeuedLabel = 8 as BlockId
 
 // The completion loop's scratch: r11 shuttles a `.data` global's address, rax/rcx are general scratch. None is read
 // across the loop's own iterations (gt lives in the frame), so any caller-saved use is invisible.
@@ -1490,6 +1494,39 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	// argument, and this is the one place that writes it.
 	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: win64OutgoingArgDisp(0), srcReg: X64Register.rax)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetQueuedCompletionStatus))
+
+	// ⭐⭐ **A COMPLETION CAN CARRY A FAILURE, AND THE BYTE-COUNT SLOT IS WHERE IT TRAVELS.** A FALSE with a
+	// NON-NULL `lpOverlapped` is the PARKED twin of the synchronous `ReadFile` refusal `__gt_subp_yield_read`
+	// classifies — and parking is the normal path for every stdlib reader, so a `readFailed` the enum promises
+	// would otherwise be a state only the rare synchronous path could reach. The verdict rides the SAME `bytes`
+	// slot a count does, which is what leaves the `gt.io_result` store below with one path and the resumed
+	// reader with one word to read.
+	//
+	// ⚠ `GetLastError` is called with NOTHING between it and the failing call — that is the whole of its contract.
+	// ⚠ A FALSE with a NULL `lpOverlapped` means the WAIT failed rather than an IO; the exit test below takes that
+	// path and the slot written here is never read.
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.notEqual, targetBlockId: IoLoopDequeuedLabel)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetLastError))
+	// Widened through a 32-bit register move because the Win64 ABI leaves RAX's high half undefined for a DWORD
+	// return, and the 64-bit compare below reads the whole register.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: false)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: ErrorBrokenPipe as Imm32)
+	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopCleanEofLabel)
+	// `or reg, imm` rather than a `mov`: this immediate is SIGN-EXTENDED from the signed `Imm32` domain the
+	// constant lives in, where `encodeMovRegImm64` takes an unsigned `MachineWord` and could not carry it.
+	encodeGrp1RegImm32(code, ext: Grp1ExtOr, reg: X64Register.rax, imm: SubpReadFailedCount as Imm32)
+	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
+	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopDequeuedLabel)
+
+	// clean_eof: the child closed its stdout. The 0 is stored rather than left to what the API put in the
+	// out-parameter, so the answer does not rest on a field documented only as "may be zero".
+	loopLabels.place(IoLoopCleanEofLabel, value: code.count())
+	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
+
+	// dequeued: the bytes slot holds the count, 0 for a clean end of stream, or the failure marker.
+	loopLabels.place(IoLoopDequeuedLabel, value: code.count())
 	// overlapped == NULL → shutdown sentinel → exit (defensive; the slice never posts one).
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
@@ -1521,7 +1558,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	loopLabels.place(IoLoopSpunLabel, value: code.count())
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: IoParkedAbandoned as Imm32)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopAbandonedLabel)
-	// NORMAL: gt.io_result = bytes ; gt.status = ready.
+	// NORMAL: gt.io_result = the classified count ; gt.status = ready.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, wide: true)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoResult as Imm32, srcReg: X64Register.rcx)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: GtStatusReady)

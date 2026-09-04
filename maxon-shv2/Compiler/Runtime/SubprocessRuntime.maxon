@@ -1,10 +1,10 @@
 // Runtime/SubprocessRuntime.maxon — the ATTACHED child process, and the helpers around every child.
 //
 // ⭐ **WHAT IT SERVES.** `stdlib/Subprocess.maxon` — `Subprocess.run(...)`, `Configuration.run()`,
-// `runDetached()` and `StreamingSubprocess` — bottoms out in twenty `__Builtins.*` intrinsics and nothing
-// else — nineteen `subprocess*` names plus `managedIsNull`, which is a `__ManagedMemory` predicate rather
-// than a subprocess entry and lowers to `__mm_is_null`.
-// `Parser.BuiltinsSubprocessSpawnName` lists all twenty and says which entry each becomes; this file
+// `runDetached()` and `StreamingSubprocess` — bottoms out in twenty-three `__Builtins.*` intrinsics and
+// nothing else — twenty-two `subprocess*` names plus `managedIsNull`, which is a `__ManagedMemory` predicate
+// rather than a subprocess entry and lowers to `__mm_is_null`.
+// `Parser.BuiltinsSubprocessSpawnName` lists all twenty-three and says which entry each becomes; this file
 // builds the ones the STREAMING half (`GtRuntime.maxon`, P1.5 slice 1b) did not already have.
 //
 // ⭐⭐ **IT DOES NOT FORK A SECOND `CreateProcess` PATH, AND THAT IS THE WHOLE DESIGN.** `GtRuntime`'s
@@ -72,6 +72,11 @@ export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
 // reader in this file because the conversion is the same one: the difference between an exact read and a
 // line read lives entirely in `GtRuntime`'s two stopping rules, and nothing about the record shape.
 export let SubpReadExactOutBytesName = b"__gt_subp_read_exact_out_bytes"
+
+// The two per-stream state queries. Named into this family because they answer for a streaming child, and
+// so inherit its E3104 target gate; built in `GtRuntime` beside the readers whose state word they read.
+export let SubpOutStateName = b"__gt_subp_out_state"
+export let SubpErrStateName = b"__gt_subp_err_state"
 export let SubpResultKindName = b"__gt_subp_result_kind"
 export let SubpResultCodeName = b"__gt_subp_result_code"
 export let SubpResultStdoutName = b"__gt_subp_result_stdout"
@@ -1692,9 +1697,12 @@ function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter,
 	let got = ids.mint()
 	module.appendOp(doRead, op: StdOp.call(got, callee: SubpYieldReadName, args: fiveArgs(readEndD, second: dst, third: wantD, fourth: bytesOutSlot, fifth: ownsPipe)))
 	emitStoreField(module, block: doRead, record: state, offset: WcAvail, value: got)
+	// ⚠ `<= 0`, not `== 0`: `__gt_subp_yield_read` answers `SubpReadFailedCount` for a read that FAILED, and
+	// a negative down the `keep` arm would advance the collected length past the bytes there are. A COLLECT
+	// has nowhere to report the difference — its answer is the bytes it gathered — so both stop the drain.
 	let zeroG = emitConst(module, block: doRead, value: 0, ids: ids)
-	let readEof = emitCmp(module, block: doRead, a: got, b: zeroG, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(doRead, op: StdOp.condBranch(readEof, thenBlockId: markDone.id, elseBlockId: keep.id))
+	let readStopped = emitCmp(module, block: doRead, a: got, b: zeroG, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(doRead, op: StdOp.condBranch(readStopped, thenBlockId: markDone.id, elseBlockId: keep.id))
 
 	// keep: count the bytes, then advance the collected length by as much of them as the limit allows.
 	let gotK = emitLoadField(module, block: keep, record: state, offset: WcAvail, ids: ids)
