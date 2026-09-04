@@ -282,8 +282,10 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: bare-call-statement -->
-A call may stand alone as a statement, its result discarded. `noop(5)` runs for its effect — which it
-must have, or discarding the result is E3064 (`discarded-results.md`) — and the program returns 0.
+A call statement's result has to go somewhere. `noop` returns a VALUE and is impure (it writes `runs`), so
+the statement takes the `_ =` discard — bare it would be E3065, and were `noop` pure the discard itself would
+be E3064 (`discarded-results.md`). The BARE form belongs to a callee that returns nothing, which
+`discarded-results.md`'s `void-function-ok` pins. The program returns 0.
 ```maxon
 var runs = 0 as Integer
 
@@ -293,7 +295,7 @@ function noop(x Integer) returns Integer
 end 'noop'
 
 function main() returns ExitCode
-	noop(5)
+	_ = noop(5)
 	return runs - 1
 end 'main'
 typealias Integer = int(i64.min to i64.max)

@@ -293,7 +293,7 @@ function maybeFatal(b bool) returns Integer
 end 'maybeFatal'
 
 function main() returns ExitCode
-	maybeFatal(true)
+	_ = maybeFatal(true)
 	print("back in main\n")
 	return calls - 1
 end 'main'

@@ -1,0 +1,18 @@
+// Test: impure-static-member-statement-discarded
+typealias Integer = int(i64.min to i64.max)
+var ticks = 0 as Integer
+
+type Clock
+	static function tick() returns Integer
+		ticks = ticks + 1
+		return ticks
+	end 'tick'
+end 'Clock'
+
+function main() returns ExitCode
+	Clock.tick()
+	return ticks as ExitCode
+end 'main'
+---
+CompilerError:
+error E3065: <fragment>:13:8: result of 'Clock.tick' is not used (use '_ = expr' to discard)

@@ -453,8 +453,10 @@ error E2015: <fragment>:3:10: Unsupported: 'Self' outside a type declaration (`S
 
 <!-- test: error.Self-static-call-as-a-statement -->
 ### A static call through `Self` on a line of its own is refused
-Deliberate parity with the type-named spelling below: a discarded factory result is a box nothing frees.
-The reference bootstrap refuses this spelling too (`E2001 unexpected token: 'Self'`).
+The `Self` base is not a statement shape at all — the parser's static-call door reads a plain identifier
+base, so the chain falls to the member-expression refusal. That is parity with the ORACLE, which has no
+grammar for this statement either (`E2001 unexpected token: 'Self'`), and not with the type-named
+spelling below, which IS a statement and is refused for its unused RESULT instead.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -480,7 +482,11 @@ error E2015: <fragment>:12:3: Unsupported: Self statement
 ```
 
 <!-- test: error.static-call-as-a-statement -->
-### …and for the type-named spelling
+### …and the type-named spelling is a statement whose RESULT nobody took
+The same call written `Gate.make(1)` IS claimed by the statement door, so what refuses it is the discard
+rule: `make` computes and returns without an effect, so its dropped result is E3064 — the anchor on the
+member the author wrote, and the callee named. The two spellings therefore earn two different refusals
+because they are two different mistakes, which is what the oracle says as well.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -502,7 +508,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:3: Unsupported: identifier statement
+error E3064: <fragment>:12:8: result of pure function 'Gate.make' must be used
 ```
 
 <!-- test: keyword-named-enum-case-through-Self -->

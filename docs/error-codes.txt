@@ -937,7 +937,8 @@ E3064 SemanticDiscardedPureResult
 	shv2 semanticDiscardedPureResult
 	doc a pure-function call's result was discarded. Pure callees must
 	doc have their result used -- neither bare `foo()` nor `_ = foo()` is
-	doc permitted. Fires from `checkDiscardedResults`.
+	doc permitted. Fires from `checkDiscardedResults`, whose other arm is E3065:
+	doc one verdict, split on whether the callee had another reason to run.
 	doc shv2 raises it from FOUR statement doors -- a bare `foo()` line, `_ = foo()`,
 	doc a tuple assignment whose every target is `_` (`(_, _) = makePair(10, b: 32)`,
 	doc `specs/tuple-assign.md`), and a discarded MATH INTRINSIC (`round(10)` as a
@@ -959,10 +960,20 @@ E3064 SemanticDiscardedPureResult
 E3065 SemanticDiscardedImpureResult
 	csharp SemanticDiscardedImpureResult
 	selfhosted semanticDiscardedImpureResult
+	shv2 semanticDiscardedImpureResult
 	doc an impure-function call's result was discarded without the
 	doc explicit `_ =` opt-in. The impure-call result still has to flow into
 	doc either a binding (`let r = foo()`) or an explicit discard
 	doc (`_ = foo()`). Fires from `checkDiscardedResults`.
+	doc THE OTHER ARM OF E3064's VERDICT: one pass asks the effect summary once and
+	doc splits on the answer, so a callee is never both. What selects between them is the
+	doc site's `DiscardDoor` -- E3065 fires at a BARE STATEMENT only, because `_ = f()`
+	doc and `(_, _) = f()` ARE the opt-in the message asks for, and a `try ... otherwise`
+	doc statement is an accepted discard of its own.
+	doc shv2 reaches it only for a DECLARED callee. The summary answers "not provably
+	doc effect-free" for everything it cannot see, and that answer is SILENCE under E3064
+	doc but a REFUSAL under E3065 -- so a lowered runtime entry, whose read-only roster is
+	doc a whitelist rather than a proof of effect, earns neither.
 
 E3066 SemanticEnumNotComparable
 	csharp SemanticEnumNotComparable
@@ -986,18 +997,41 @@ E3067 SemanticSelfAssignment
 	doc of a "discarded result" warning, but a non-call RHS makes the discard
 	doc nonsensical. csharp and selfhosted raise it from `parseVarAssignment`,
 	doc `parseLocalFieldAssignment`, and `parseDiscardAssignment`.
-	doc shv2 raises both shapes from the one door `Parser.rejectDegenerateAssignment`,
-	doc and its rule is textual for BOTH halves: it refuses a place chain assigned
-	doc to itself token for token, and a discard whose RHS is a bare LITERAL.
-	doc That makes it LOOSER than csharp in two places and STRICTER in two others,
-	doc and the strict direction is the one that can refuse a program csharp accepts:
-	doc LOOSER -- shv2 admits `x = (x)` (parenthesized: different tokens) and
-	doc `_ = someBinding` (the discard-a-binding idiom the corpus uses to satisfy
-	doc E3012), both of which csharp's semantic rule refuses. "LITERAL" also
-	doc excludes `_ = true` / `_ = false`, which shv2 lexes as KEYWORDS rather than
-	doc literal kinds; no program in the tree writes either, and a second literal
-	doc list spelled out for two token kinds would duplicate the one list
-	doc (`tokenIsLiteralKind`) that `tokenCanBeAName` already shares.
+	doc shv2 raises the two shapes from two doors, because they are answerable at
+	doc different moments. The SELF-ASSIGNMENT half is
+	doc `Parser.rejectDegenerateAssignment`, purely textual: a place chain assigned
+	doc to itself token for token, asked from `parseStatement` before the dispatch,
+	doc when no op has been emitted. The DISCARD half is `Parser.parseAssignment`'s
+	doc `_` arm, which asks whether ANY op the statement emitted calls or suspends
+	doc (`Parser.statementCallsOrAwaits`). So `_ = 42`, `_ = c.name`, `_ = a + b`
+	doc and `_ = round(1.5)` are refused, matching csharp's message and column,
+	doc while `_ = f()`, `_ = (f())` and `_ = try stack.pop() otherwise 0` are not.
+	doc THREE SHAPES DIVERGE ON THE DISCARD HALF -- (1) and (2) LOOSER, (3) STRICTER,
+	doc and (3) is the one that can refuse a program csharp accepts.
+	doc (1) `_ = f() + 1` and `_ = f() if c else 0`: csharp asks whether the LAST
+	doc op is a call, shv2 whether any op is. A last-op rule cannot follow a value
+	doc a DIVERGING `try ... otherwise panic(...)` fork laundered, and would refuse
+	doc 54 statements of that shape (52 in `maxon-shv2/`, 2 in `stdlib/`) that
+	doc csharp compiles. `_ = async f()` and
+	doc `_ = await p` ride the same widening: a spawn owns a green thread and an
+	doc await consumes one, so both are effects, and `async-promise-drop.md` is
+	doc about exactly that spelling.
+	doc (2) `_ = someBinding`, a BARE name resolving to a live binding, which is
+	doc E3012's only spelling for acknowledging a binding without using it --
+	doc deleting it from a spawned-never-awaited promise reports "unused variable"
+	doc on BOTH compilers, so refusing it would make E3012 and E3067 jointly
+	doc unsatisfiable for one program. csharp refuses it and escapes the
+	doc contradiction only by having no program of that shape.
+	doc (3) A `void` right-hand side never reaches the door at all: MEASURED,
+	doc shv2 reports `E2004: Function 'push' does not return a value` from the
+	doc expression where csharp compiles `_ = arr.push(1)` clean. That refusal is
+	doc the EXPRESSION parser's and predates this door; no program in the tree
+	doc writes the shape, so it is recorded rather than reconciled.
+	doc On the self-assignment half shv2 is LOOSER than csharp in one place and
+	doc STRICTER in two, and the strict direction is the one that can refuse a
+	doc program csharp accepts:
+	doc LOOSER -- shv2 admits `x = (x)` (parenthesized: different tokens), which
+	doc csharp's semantic rule refuses.
 	doc STRICTER -- shv2 refuses `self.n = self.n` and `a.b.c = a.b.c`, which csharp
 	doc compiles clean (its `IsFieldSelfAssignment` matches one field name behind a
 	doc struct var-ref, so it sees neither a `self` receiver nor a multi-hop chain).

@@ -3476,14 +3476,6 @@ function checkTransformParamType(project Project, transform PendingTransformArit
 	reportPositioned(project, code: ErrorCode.typeMismatch, message: "`{method}` calls its transform with the container's own element, which is '{displayNameOfAggregate(transform.elementTag, aggregate: transform.elementIdentity)}' — but this transform declares its parameter as '{displayNameOfAggregate(paramTag, aggregate: paramIdentity)}'; a transform is `function(Element) returns Element`, so its parameter IS the element", line: transform.line, column: transform.column, filePath: transform.filePath)
 end 'checkTransformParamType'
 
-// ⭐⭐ **E3064 — A CALL WHOSE RESULT NOBODY TOOK, WHEN THE CALLEE HAD NO OTHER REASON TO RUN.** Drains the
-// sites the parser recorded (`PendingDiscardedResult`) against the effect summary built below. The message
-// and the code are `specs/tuple-assign.md`'s, and the anchor is the site's own — each door's statement start,
-// which is where the author decided to take nothing: the bare call's name, the `_`, or the tuple pattern's `(`.
-//
-// ⚠ **THE SUMMARY IS ASKED ONLY WHEN A SITE EXISTS.** It is a whole-program walk over every function's every
-// op, so a compile that takes every result it computes pays nothing at all — but a discarded call result is
-// ordinary, so most compiles do pay it, and it is the price of the diagnostic rather than a rare path.
 // ⭐ **E3073 — a spawn of a function that can never suspend.** `async` exists to overlap waiting with other
 // work; a callee that only computes runs straight through on the spawning thread, so the spawn buys nothing
 // and the author has almost certainly meant something else. Reported at every `asyncCall` whose callee the
@@ -3574,9 +3566,34 @@ end 'requireTargetHostsSpawn'
 // bound is the program's statement count.
 typealias DiscardSiteIndex = int(0 to u64.max)
 
-// "This site earns no diagnostic" — the empty answer `discardedResultSubject` and its helpers agree on.
-let NoDiscardSubject = ""
+// ⭐⭐ **WHAT ONE FILED SITE EARNED — THE TWO ARMS OF ONE VERDICT.** A pure callee's result may not be
+// dropped in any position (E3064); an impure one's may, but only through the `_ =` the message names, so a
+// BARE STATEMENT earns E3065. `none` is every site that earns neither, and it carries no subject because
+// there is nothing to name.
+union DiscardVerdict
+	none
+	pureResultUnused(subject String)
+	impureResultUnused(subject String)
+end 'DiscardVerdict'
 
+// ⭐⭐ **WHETHER ONE FILED SITE CAN CONSULT THE WHOLE-PROGRAM EFFECT SUMMARY AT ALL.** Only a DECLARED
+// callee can: an intrinsic, a lowered runtime read and a builder step are each settled from the site alone,
+// and the summary has no answer for any of them. Separating the two answers is what lets the summary be
+// built only for a program that reads it.
+union DiscardResolution
+	settled(verdict DiscardVerdict)
+	// The callee's slot in the effect-free column is the rest of this site's answer.
+	purityOf(calleeIndex FuncIndex)
+end 'DiscardResolution'
+
+// ⭐⭐ **E3064 — A CALL WHOSE RESULT NOBODY TOOK, WHEN THE CALLEE HAD NO OTHER REASON TO RUN.** Drains the
+// sites the parser recorded (`PendingDiscardedResult`) against the effect summary built below. The message
+// and the code are `specs/tuple-assign.md`'s, and the anchor is the site's own — each door's statement start,
+// which is where the author decided to take nothing: the bare call's name, the `_`, or the tuple pattern's `(`.
+//
+// ⭐⭐ **E3065 IS THE OTHER ARM OF THE SAME VERDICT** — the callee DID have another reason to run, so the
+// result may be dropped, but only through the `_ = expr` the message names. The site's `DiscardDoor` is what
+// separates them; see `declaredCalleeVerdict` for why the impure arm reaches fewer callees than the pure one.
 function checkDiscardedResults(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
 	if project.pendingDiscardedResults.count() == 0 'nothingDiscardedAWholeResult'
 		return
@@ -3591,65 +3608,134 @@ function checkDiscardedResults(project Project, module MaxonModule, signatures P
 		return
 	end 'alreadyRefused'
 
-	let effectFree = buildEffectFreeSummary(module, signatures: signatures, funcNames: funcNames)
+	let effectFree = effectFreeSummaryIfConsulted(project, module: module, signatures: signatures, funcNames: funcNames)
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
-		let subject = discardedResultSubject(project, siteIndex: siteIndex, funcNames: funcNames, effectFree: effectFree)
-		if subject.isEmpty() 'theCallHadAnotherReasonToRun'
-			continue
-		end 'theCallHadAnotherReasonToRun'
-
-		// Scalars off the borrow, a fresh inline read for the managed halves — see the loop header's note.
-		let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
-		let line = site.line
-		let column = site.column
-		reportPositioned(project, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{subject}' must be used", line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
+		match resolveDiscardSite(project, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
+			settled(verdict) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: verdict)
+			purityOf(calleeIndex) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: declaredCalleeVerdict(project, siteIndex: siteIndex, calleeIndex: calleeIndex, effectFree: effectFree))
+		end 'resolved'
 	end 'eachSite'
 end 'checkDiscardedResults'
 
-// ⭐⭐ **WHICH NAME ONE FILED SITE EARNS ITS DIAGNOSTIC UNDER, OR EMPTY WHEN IT EARNS NONE.** Three
-// provenances reach this, and they differ in WHO can answer whether the callee had another reason to run:
+// ⛔⛔ **THE SUMMARY IS A WHOLE-PROGRAM WALK, AND A FILED SITE IS NOT ENOUGH OF A REASON TO BUILD ONE.** It
+// visits every op of every function and enumerates a witness candidate set per constrained requirement, and
+// only a site whose callee is DECLARED can read a bit of it. A `print(…)` is the shape that makes the
+// distinction ordinary rather than exotic: `stdlib/Print.maxon`'s whole body is a `__Builtins.writeStdout(…)`
+// statement, so every program that prints files the lowered `__write_stdout` — in no module's function index
+// and off the effect-free roster, so its verdict is `none` whatever the summary would say.
+//
+// The scan stops at the first site that asks; the drain below re-resolves every site it visits, including
+// ones that never trigger a build. Re-resolving one site is cheap — a lookup or two, no whole-program walk
+// — next to the summary build it lets most compiles skip entirely.
+function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
+	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
+		match resolveDiscardSite(project, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
+			settled then break 'resolved'
+			purityOf then return buildEffectFreeSummary(module, signatures: signatures, funcNames: funcNames)
+		end 'resolved'
+	end 'eachSite'
+
+	// Nothing indexes this. The loop above resolved every site without one reaching the purity question, and
+	// a resolution reads only facts a diagnostic cannot change, so the drain resolves each site the same way.
+	return BoolArray.create()
+end 'effectFreeSummaryIfConsulted'
+
+// ⭐⭐ **WHICH DIAGNOSTIC ONE FILED SITE EARNS, AND UNDER WHICH NAME.** Three provenances reach this, and
+// they differ in WHO can answer whether the callee had another reason to run:
 //
 //   * a COMPILER INTRINSIC is not in `funcNames` and never will be — it emits no call — so the summary is
 //     not asked about it. Its site already carries the answer (see `PendingDiscardedResult`), and asking
 //     anyway would miss the lookup and silently drop the diagnostic.
 //   * a DECLARED callee is the whole-program effect summary's, and is reported under the name it is keyed
-//     by.
+//     by. It is the ONE provenance that consults the summary, which is why it answers with the callee's
+//     index rather than with a verdict; see `declaredCalleeVerdict` for the rest of its answer.
 //   * a RUNTIME ENTRY the parser lowered a source member to is neither. It has no body to walk, so the
 //     ROSTER answers for it (`effectFreeRuntimeCallee`) — and it is reported under the member the author
 //     wrote (`PendingDiscardedResult.subject`), which is the reference's spelling: `Array.first`, never
 //     `__managed_first`. A runtime entry no lowering arm named is left alone, which is the safe direction —
 //     a missed diagnostic, never a legal program refused under a symbol nobody wrote.
-function discardedResultSubject(project Project, siteIndex DiscardSiteIndex, funcNames FunctionNameIndex, effectFree BoolArray) returns String
-	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("discardedResultSubject: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+function resolveDiscardSite(project Project, siteIndex DiscardSiteIndex, funcNames FunctionNameIndex) returns DiscardResolution
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("resolveDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 	if site.calleeIsACompilerIntrinsic 'anIntrinsicWhosePurityIsSettled'
-		return String.from(site.callee)
+		return DiscardResolution.settled(DiscardVerdict.pureResultUnused(String.from(site.callee)))
 	end 'anIntrinsicWhosePurityIsSettled'
 
-	let calleeIndex = try funcNames.byName.get(site.callee) otherwise return runtimeReadSubject(project, siteIndex: siteIndex)
-	if not (try effectFree.get(calleeIndex) otherwise panic("discardedResultSubject: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")) 'theCallDidSomething'
-		return NoDiscardSubject
-	end 'theCallDidSomething'
+	// A `__`-prefixed callee is the compiler's own name whatever a declaration says — a stdlib overlay may
+	// wear it (D6/A1r), but a program that does so collides with the symbol the compiler emits, and E4015
+	// at the Std tier is the diagnostic that owns that collision. Consulting a declared body's purity here
+	// would pre-empt it, so this door answers from the runtime-read roster alone, never from `funcNames`.
+	if reservedCalleeReasonOf(site.callee) == ReservedCalleeReason.compilerInternalPrefix 'theCompilersOwnName'
+		return DiscardResolution.settled(runtimeReadVerdict(project, siteIndex: siteIndex))
+	end 'theCompilersOwnName'
 
+	let calleeIndex = try funcNames.byName.get(site.callee) otherwise return DiscardResolution.settled(runtimeReadVerdict(project, siteIndex: siteIndex))
+
+	// Asked ahead of the purity question, not after it: a builder step is droppable whatever its body does,
+	// which is the reference's order and the only order that keeps `c.increment()` — impure by its own field
+	// write — a legal statement. It is also what keeps a builder-only program from building the summary.
 	if calleeIsChainable(project, callee: site.callee) 'aBuilderStep'
-		return NoDiscardSubject
+		return DiscardResolution.settled(DiscardVerdict.none)
 	end 'aBuilderStep'
 
-	return String.from(site.callee)
-end 'discardedResultSubject'
+	return DiscardResolution.purityOf(calleeIndex)
+end 'resolveDiscardSite'
 
-// The member spelling a LOWERED RUNTIME READ earns, or none. Split out so the lookup miss above reads as a
-// question with its own answer rather than as a fallthrough.
-function runtimeReadSubject(project Project, siteIndex DiscardSiteIndex) returns String
-	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("runtimeReadSubject: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+// ⭐⭐ **WHAT A DECLARED CALLEE EARNS ONCE THE SUMMARY HAS ANSWERED FOR IT** — E3064 when it had no other
+// reason to run, and otherwise E3065 or silence, according to which position took nothing.
+//
+// ⛔⛔ **THE SAFE DIRECTION INVERTS BETWEEN THE TWO CODES, WHICH IS WHY ONLY A DECLARED CALLEE CAN EARN
+// E3065.** The summary answers "not provably effect-free" for everything it cannot see, and that answer is
+// SILENCE for E3064 (it declines to refuse) but a REFUSAL for E3065. So the impure arm is reachable only
+// where the callee is in `funcNames` and the summary actually walked its body — the reference's own gate
+// (`SemanticCheckPass.CheckDiscardedResults` skips a callee its function lookup misses). A lowered runtime
+// entry off the effect-free roster is therefore left alone in both directions: the roster is a whitelist of
+// READS, and absence from a whitelist is not proof of an effect.
+function declaredCalleeVerdict(project Project, siteIndex DiscardSiteIndex, calleeIndex FuncIndex, effectFree BoolArray) returns DiscardVerdict
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("declaredCalleeVerdict: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+	let calleeIsEffectFree = try effectFree.get(calleeIndex) otherwise panic("declaredCalleeVerdict: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into, and it is built whenever any site resolves to a purity question, which this one did")
+	if calleeIsEffectFree 'theCallHadNoOtherReasonToRun'
+		return DiscardVerdict.pureResultUnused(String.from(site.callee))
+	end 'theCallHadNoOtherReasonToRun'
+
+	return match site.door 'whereTheResultFellAway'
+		statement gives DiscardVerdict.impureResultUnused(String.from(site.callee))
+		explicitDiscard gives DiscardVerdict.none
+	end 'whereTheResultFellAway'
+end 'declaredCalleeVerdict'
+
+// The verdict a LOWERED RUNTIME READ earns. Split out so the lookup miss above reads as a question with its
+// own answer rather than as a fallthrough.
+function runtimeReadVerdict(project Project, siteIndex DiscardSiteIndex) returns DiscardVerdict
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("runtimeReadVerdict: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 	if site.subject.isEmpty() or not effectFreeRuntimeCallee(site.callee) 'notALoweredPureRead'
-		return NoDiscardSubject
+		return DiscardVerdict.none
 	end 'notALoweredPureRead'
 
-	return String.from(site.subject)
-end 'runtimeReadSubject'
+	return DiscardVerdict.pureResultUnused(String.from(site.subject))
+end 'runtimeReadVerdict'
+
+// What one site's verdict is SAID as — the two codes and their messages, and silence for the site that
+// earned neither.
+function reportDiscardVerdict(project Project, siteIndex DiscardSiteIndex, verdict DiscardVerdict)
+	match verdict 'earned'
+		none then break 'earned'
+		pureResultUnused(subject) then reportAtDiscardSite(project, siteIndex: siteIndex, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{subject}' must be used")
+		impureResultUnused(subject) then reportAtDiscardSite(project, siteIndex: siteIndex, code: ErrorCode.semanticDiscardedImpureResult, message: "result of '{subject}' is not used (use '_ = expr' to discard)")
+	end 'earned'
+end 'reportDiscardVerdict'
+
+// Where a discard diagnostic points, for either code — the site's own anchor, which is the position the two
+// arms share. Scalars off the borrow, a fresh inline read for the managed half: `reportPositioned` writes the
+// same storage the element borrows, so the borrow must not be live across it (see the loop's note).
+function reportAtDiscardSite(project Project, siteIndex DiscardSiteIndex, code ErrorCode, message String)
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportAtDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+	let line = site.line
+	let column = site.column
+	reportPositioned(project, code: code, message: message, line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportAtDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
+end 'reportAtDiscardSite'
 
 // ⭐⭐ **A CHAINABLE METHOD'S RESULT MAY BE DROPPED FREELY** — `specs/discarded-results.md`'s third rule
 // ("Methods that return their own type … are chainable"), and the reference's

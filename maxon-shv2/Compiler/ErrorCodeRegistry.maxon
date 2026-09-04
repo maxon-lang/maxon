@@ -506,7 +506,8 @@ export enum ErrorCode
 	semanticAmbiguousTypeAlias = "E3063"
 	// a pure-function call's result was discarded. Pure callees must
 	// have their result used -- neither bare `foo()` nor `_ = foo()` is
-	// permitted. Fires from `checkDiscardedResults`.
+	// permitted. Fires from `checkDiscardedResults`, whose other arm is E3065:
+	// one verdict, split on whether the callee had another reason to run.
 	// shv2 raises it from FOUR statement doors -- a bare `foo()` line, `_ = foo()`,
 	// a tuple assignment whose every target is `_` (`(_, _) = makePair(10, b: 32)`,
 	// `specs/tuple-assign.md`), and a discarded MATH INTRINSIC (`round(10)` as a
@@ -525,6 +526,20 @@ export enum ErrorCode
 	// constrained requirement (`key.hash()` inside `Map.get`) has candidates, and they are
 	// every declared member wearing the requirement's name whose body this program reached.
 	semanticDiscardedPureResult = "E3064"
+	// an impure-function call's result was discarded without the
+	// explicit `_ =` opt-in. The impure-call result still has to flow into
+	// either a binding (`let r = foo()`) or an explicit discard
+	// (`_ = foo()`). Fires from `checkDiscardedResults`.
+	// THE OTHER ARM OF E3064's VERDICT: one pass asks the effect summary once and
+	// splits on the answer, so a callee is never both. What selects between them is the
+	// site's `DiscardDoor` -- E3065 fires at a BARE STATEMENT only, because `_ = f()`
+	// and `(_, _) = f()` ARE the opt-in the message asks for, and a `try ... otherwise`
+	// statement is an accepted discard of its own.
+	// shv2 reaches it only for a DECLARED callee. The summary answers "not provably
+	// effect-free" for everything it cannot see, and that answer is SILENCE under E3064
+	// but a REFUSAL under E3065 -- so a lowered runtime entry, whose read-only roster is
+	// a whitelist rather than a proof of effect, earns neither.
+	semanticDiscardedImpureResult = "E3065"
 	// A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'.
 	// a `union` value was compared with `==` / `!=`. Unions carry no
 	// synthesized equality -- a new case can't be added without every match site
@@ -539,18 +554,41 @@ export enum ErrorCode
 	// of a "discarded result" warning, but a non-call RHS makes the discard
 	// nonsensical. csharp and selfhosted raise it from `parseVarAssignment`,
 	// `parseLocalFieldAssignment`, and `parseDiscardAssignment`.
-	// shv2 raises both shapes from the one door `Parser.rejectDegenerateAssignment`,
-	// and its rule is textual for BOTH halves: it refuses a place chain assigned
-	// to itself token for token, and a discard whose RHS is a bare LITERAL.
-	// That makes it LOOSER than csharp in two places and STRICTER in two others,
-	// and the strict direction is the one that can refuse a program csharp accepts:
-	// LOOSER -- shv2 admits `x = (x)` (parenthesized: different tokens) and
-	// `_ = someBinding` (the discard-a-binding idiom the corpus uses to satisfy
-	// E3012), both of which csharp's semantic rule refuses. "LITERAL" also
-	// excludes `_ = true` / `_ = false`, which shv2 lexes as KEYWORDS rather than
-	// literal kinds; no program in the tree writes either, and a second literal
-	// list spelled out for two token kinds would duplicate the one list
-	// (`tokenIsLiteralKind`) that `tokenCanBeAName` already shares.
+	// shv2 raises the two shapes from two doors, because they are answerable at
+	// different moments. The SELF-ASSIGNMENT half is
+	// `Parser.rejectDegenerateAssignment`, purely textual: a place chain assigned
+	// to itself token for token, asked from `parseStatement` before the dispatch,
+	// when no op has been emitted. The DISCARD half is `Parser.parseAssignment`'s
+	// `_` arm, which asks whether ANY op the statement emitted calls or suspends
+	// (`Parser.statementCallsOrAwaits`). So `_ = 42`, `_ = c.name`, `_ = a + b`
+	// and `_ = round(1.5)` are refused, matching csharp's message and column,
+	// while `_ = f()`, `_ = (f())` and `_ = try stack.pop() otherwise 0` are not.
+	// THREE SHAPES DIVERGE ON THE DISCARD HALF -- (1) and (2) LOOSER, (3) STRICTER,
+	// and (3) is the one that can refuse a program csharp accepts.
+	// (1) `_ = f() + 1` and `_ = f() if c else 0`: csharp asks whether the LAST
+	// op is a call, shv2 whether any op is. A last-op rule cannot follow a value
+	// a DIVERGING `try ... otherwise panic(...)` fork laundered, and would refuse
+	// 54 statements of that shape (52 in `maxon-shv2/`, 2 in `stdlib/`) that
+	// csharp compiles. `_ = async f()` and
+	// `_ = await p` ride the same widening: a spawn owns a green thread and an
+	// await consumes one, so both are effects, and `async-promise-drop.md` is
+	// about exactly that spelling.
+	// (2) `_ = someBinding`, a BARE name resolving to a live binding, which is
+	// E3012's only spelling for acknowledging a binding without using it --
+	// deleting it from a spawned-never-awaited promise reports "unused variable"
+	// on BOTH compilers, so refusing it would make E3012 and E3067 jointly
+	// unsatisfiable for one program. csharp refuses it and escapes the
+	// contradiction only by having no program of that shape.
+	// (3) A `void` right-hand side never reaches the door at all: MEASURED,
+	// shv2 reports `E2004: Function 'push' does not return a value` from the
+	// expression where csharp compiles `_ = arr.push(1)` clean. That refusal is
+	// the EXPRESSION parser's and predates this door; no program in the tree
+	// writes the shape, so it is recorded rather than reconciled.
+	// On the self-assignment half shv2 is LOOSER than csharp in one place and
+	// STRICTER in two, and the strict direction is the one that can refuse a
+	// program csharp accepts:
+	// LOOSER -- shv2 admits `x = (x)` (parenthesized: different tokens), which
+	// csharp's semantic rule refuses.
 	// STRICTER -- shv2 refuses `self.n = self.n` and `a.b.c = a.b.c`, which csharp
 	// compiles clean (its `IsFieldSelfAssignment` matches one field name behind a
 	// struct var-ref, so it sees neither a `self` receiver nor a multi-hop chain).

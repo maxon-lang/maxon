@@ -7182,22 +7182,33 @@ end 'PendingTransformArity'
 
 export typealias PendingTransformArityArray = Array with PendingTransformArity
 
+// ⭐⭐ **WHICH POSITION TOOK NOTHING, WHICH IS WHAT SEPARATES E3064 FROM E3065.** A pure callee's result may
+// not be dropped in either position; an IMPURE one's may, but only where the author said so — and `_ = f()`
+// and `(_, _) = f()` ARE that sentence, so only a bare statement earns E3065.
+export enum DiscardDoor
+	statement
+	explicitDiscard
+end 'DiscardDoor'
+
 // ⭐⭐ **A SITE THAT USES NONE OF A CALL'S RESULT, AWAITING THE WHOLE-PROGRAM VERDICT ON WHETHER THE CALLEE
 // HAD ANY OTHER REASON TO RUN (E3064, `specs/tuple-assign.md`).** Recorded rather than checked in place for
 // `PendingFunctionTypeDoor`'s reason and a sharper one of its own: whether a callee is PURE is a property of
 // the whole call graph — its body, its callees, and their callees — and shv2's parser is a pure function of
 // ONE FILE, so the callee's body may not even have been read yet when the site is found.
 //
-// ⚠ **FOUR DOORS RECORD ONE**, and they differ in WHO can answer the purity question rather than in what is
-// recorded. A bare `foo()` statement, `_ = foo()`, and the all-discard tuple assignment — `(_, _) =
-// makePair(…)`, which names every target `_` — each file a callee the whole-program effect summary must
-// judge. A discarded MATH INTRINSIC (`round(10)` as a statement) files one whose answer is already in hand:
-// the roster is machine instructions, so there is no body to walk and no entry in the module's function
-// index to walk it from.
+// ⚠ **FOUR DOORS RECORD ONE**, and they differ in WHO can answer the purity question and in WHICH POSITION
+// took nothing (`DiscardDoor`). A bare `foo()` statement, `_ = foo()`, and the all-discard tuple assignment
+// — `(_, _) = makePair(…)`, which names every target `_` — each file a callee the whole-program effect
+// summary must judge. A discarded MATH INTRINSIC (`round(10)` as a statement) files one whose answer is
+// already in hand: the roster is machine instructions, so there is no body to walk and no entry in the
+// module's function index to walk it from.
 export type PendingDiscardedResult
 	// The callee whose result nobody took, as the CALL OP spells it — the key the effect summary is indexed
 	// by, so it is the resolved name and not the source token.
 	export var callee as ByteArray
+	// Which statement position filed this site. Set once, at the filing door, because that is the only tier
+	// that knows it: by `SemanticCheck` the `_` is long gone.
+	export var door as DiscardDoor
 	// ⭐ Whether this callee is a COMPILER INTRINSIC rather than a declared function. An intrinsic has no
 	// entry in the module's function index — it emits no call at all — so the effect summary cannot be asked
 	// about it, and does not need to be: a machine instruction over its arguments has no observable effect.
@@ -7213,12 +7224,14 @@ export type PendingDiscardedResult
 	export var column as ColumnNumber
 	export var filePath as FilePath
 
-	export static function create(callee ByteArray, subject ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{callee: callee, calleeIsACompilerIntrinsic: false, subject: subject, line: line, column: column, filePath: filePath}
+	export static function create(callee ByteArray, door DiscardDoor, subject ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
+		return Self{callee: callee, door: door, calleeIsACompilerIntrinsic: false, subject: subject, line: line, column: column, filePath: filePath}
 	end 'create'
 
+	// An intrinsic is recognized in CALL position, and the only call position that takes nothing is a bare
+	// statement — so its door is settled here rather than passed in.
 	export static function createForIntrinsic(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{callee: callee, calleeIsACompilerIntrinsic: true, subject: EmptySourceText, line: line, column: column, filePath: filePath}
+		return Self{callee: callee, door: DiscardDoor.statement, calleeIsACompilerIntrinsic: true, subject: EmptySourceText, line: line, column: column, filePath: filePath}
 	end 'createForIntrinsic'
 end 'PendingDiscardedResult'
 

@@ -1,21 +1,22 @@
-// Test: bare-call-statement
-var runs = 0 as Integer
+// Test: call-feeding-an-operator-underscore-discard
+typealias Integer = int(i64.min to i64.max)
 
-function noop(x Integer) returns Integer
-	runs = runs + 1
-	return x
-end 'noop'
+var hits = 0 as Integer
+
+function bump() returns Integer
+	hits = hits + 1
+	return hits
+end 'bump'
 
 function main() returns ExitCode
-	_ = noop(5)
-	return runs - 1
+	_ = bump() + 1
+	return hits - 1
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
 data {
-  __data_runs@0 = i64 0
+  __data_hits@0 = i64 0
 }
 
 func @main {
@@ -24,13 +25,16 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
   __il_body:
-    x64.leaRegGlobal rax, __data_runs
+    x64.leaRegGlobal rax, __data_hits
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.leaRegGlobal rcx, __data_runs
+    x64.leaRegGlobal rcx, __data_hits
     x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_hits
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
   __il_cont:
-    x64.leaRegGlobal rax, __data_runs
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rax, __data_hits
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegRegImm32 r8, rax, -1
     x64.cmpRegImm32 r8, 0
@@ -39,7 +43,7 @@ func @main {
     x64.cmpRegImm32 r8, 255
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at bare-call-statement.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at call-feeding-an-operator-underscore-discard.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

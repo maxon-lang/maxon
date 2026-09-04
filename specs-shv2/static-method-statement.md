@@ -13,10 +13,11 @@ A `static function` that declares no return type returns nothing, so the only po
 written in is a **statement** — there is no value to bind and nothing to discard. `Helper.shout()` on
 a line of its own is that call.
 
-A static that DOES return a value stays refused in statement position. The reason is not symmetry: a
-constructor-shaped static hands back a box, and a bare statement would discard the only reference to
-it, so nothing would ever free it. That argument is about the returned value and does not reach a void
-static, which has none.
+A static that DOES return a value is refused too, but by the DISCARD rule and not by the statement
+door: its result fell away, so it is E3064 when the callee is pure and E3065 when it is impure, exactly
+as for every other call written on a line of its own. The refusal therefore names the callee and offers
+the `_ = expr` cure where one exists, instead of saying the shape is unsupported — which it is not.
+`discarded-results.md` carries all three verdicts.
 
 ⭐ These cases are shv2-authored rather than ported. `specs/static-methods.md` covers statics
 thoroughly — three cases, all green here — but **every one of them returns a value**, so the corpus
@@ -29,9 +30,9 @@ happened to have a recognizer; the oracle compiles and runs the user form.
 ## Tests
 
 <!-- test: static-method-statement.void-static-for-effect -->
-A user type's VOID static called as a bare statement. The predicate behind the statement door now asks
-the whole-program index for the callee's return type instead of consulting a table of compiler-owned
-names, so a declared `void` static is accepted wherever one is written. Prints `hi` and exits 0 —
+A user type's VOID static called as a bare statement. The predicate behind the statement door asks the
+whole-program index whether the BASE names a declared type, rather than consulting a table of
+compiler-owned names, so a static is a statement wherever one is written. Prints `hi` and exits 0 —
 byte-for-byte what the bootstrap oracle does with the same program.
 ```maxon
 type Helper
@@ -79,10 +80,10 @@ ticktick
 ```
 
 <!-- test: static-method-statement.error.value-returning-static-is-still-refused -->
-The NEGATIVE half, and the one that says the fix is a rule rather than a widening. A static that
-returns a value is still refused in statement position, because a bare statement would discard the box
-it hands back and nothing would then free it. Only `void` is accepted, so this case is what keeps the
-door from being opened to every static.
+The NEGATIVE half. A static whose result falls off the statement is still refused — but under the
+DISCARD code, which names the callee and points at the member the author wrote. Accepting the shape
+strands no box: a program carrying this diagnostic never reaches codegen. Measured identical on the
+oracle.
 ```maxon
 type Point
 	export var x as ExitCode
@@ -98,15 +99,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:2: Unsupported: identifier statement
+error E3064: <fragment>:11:8: result of pure function 'Point.create' must be used
 ```
 
 <!-- test: static-method-statement.error.unknown-static-names-the-callee -->
 A TYPO in a static's name, in statement position. Until this rung it was
 `E2015: Unsupported: identifier statement` — a message about the SHAPE, which became false the moment a
 void static became a legal statement: the construct is supported, the name is wrong, and E2015 says
-nothing about a name. The statement door now claims a qualified call whose base is a declared type even
-when the member resolves to nothing, so the refusal comes from `parseCallNamed` and names the callee.
+nothing about a name. The statement door claims a qualified call on the strength of its BASE alone, so a
+member that resolves to nothing is refused by `parseCallNamed`, which names the callee.
 ⭐ This is the same answer TWO other positions already gave for the identical typo — expression position
 (`let x = Helper.nope()`) and the compiler-owned half in THIS position (`__Builtins.nope()`), both
 measured — so the rung removes a third spelling rather than adding one.
@@ -195,7 +196,7 @@ perfectly.
 ⚠ **MEASURED AS AN ASYMMETRY INSIDE ONE BINARY, which is what makes it a defect rather than a missing
 feature.** With the identical alias moved to FILE scope this program already compiled and printed `shout`;
 declared inside the calling type it was `E2015: Unsupported: identifier statement` — one written spelling
-answered two ways, which is exactly what `voidStaticCallsAt`'s own header forbids and what W7's
+answered two ways, which is exactly what `qualifiedStaticCallsAt`'s own header forbids and what W7's
 `genericAliasKeyFor` exists to make impossible. The bootstrap oracle cannot arbitrate: it fails this
 program with an internal `E9001 … Function 'IntPair.shout' not found in module`, its own spelling of the
 same missing lookup.

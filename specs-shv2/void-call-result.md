@@ -22,8 +22,9 @@ let x = noop()      // error: Function 'noop' does not return a value
 
 The grammar has exactly two positions a call can appear in, and they differ by precisely this:
 
-- a **bare-call statement** — `noop()` on a line of its own. The call is evaluated for its effect
-  and its result discarded. A void callee is what this position is *for*.
+- a **bare-call statement** — `noop()` on a line of its own. The call is evaluated for its effect;
+  a result it returns must be discarded with `_ =` (`discarded-results.md`). A void callee is what
+  this position is *for*.
 - a call inside an **expression** — `let x = f()`, `f() + 1`, `if f()`, `g(f())`. The result *is*
   the expression. A void callee has nothing to give here, and the program is rejected.
 
@@ -165,12 +166,12 @@ end 'main'
 ```
 
 <!-- test: value-call-result-may-still-be-discarded -->
-A value-returning call in statement position keeps its existing behaviour: the result is discarded,
-and that is not this error.
+A value-returning call whose result nobody wants is discarded with `_ =`, and that is not this
+error: the void check is about a call that has NO result being used as if it had one.
 
 ⚠ `answer` writes a module counter, so it HAS an effect. That is deliberate and it is a different
-rule: a call whose result nobody uses is E3064 when the callee is pure (`discarded-results.md`), and
-this case is about the void check, so the callee must be one E3064 has nothing to say about.
+rule: a bare statement of it would be E3065 and a pure callee's E3064 (`discarded-results.md`); this
+case is about the void check, so the discard is spelled the way both rules accept.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -182,7 +183,7 @@ function answer() returns Integer
 end 'answer'
 
 function main() returns ExitCode
-	answer()
+	_ = answer()
 	return 41 + calls
 end 'main'
 ```

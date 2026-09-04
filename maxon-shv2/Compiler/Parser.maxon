@@ -1590,11 +1590,12 @@ export union ParseError implements Error
 	// message prints on BOTH sides of the `=` (the reference's exact wording). Raised by
 	// `Parser.rejectDegenerateAssignment`, which is where the rule and its false-reject surface are stated.
 	selfAssignmentHasNoEffect(place String, line LineNumber, column ColumnNumber)
-	// ⭐ **A DISCARD OF A BARE LITERAL** — `_ = 42`. Renders as **E3067** too: one code, a second message,
-	// exactly as `tryOnNonThrowingBuiltin` is a second message on E3055. The two shapes share the code
-	// because they are one mistake — a statement that computes nothing — and NOT a raiser, because a place
-	// chain compared against itself and a literal in RHS position have no shape in common to share.
-	discardOfALiteral(line LineNumber, column ColumnNumber)
+	// ⭐ **A DISCARD WHOSE RIGHT-HAND SIDE CALLED NOTHING** — `_ = 42`, `_ = c.name`, `_ = round(1.5)`.
+	// Renders as **E3067** too: one code, a second message, exactly as `tryOnNonThrowingBuiltin` is a second
+	// message on E3055. The two shapes share the code because they are one mistake — a statement that
+	// computes nothing — and NOT a raiser, because a place chain compared against itself and a call-free
+	// right-hand side have no shape in common to share. Raised by `Parser.parseAssignment`'s discard arm.
+	discardExpectsACall(line LineNumber, column ColumnNumber)
 	// ⭐⭐ **A `__Builtins.ucd*` LOAD WHOSE LABEL NAMES NO TABLE ITS INTRINSIC READS.** Renders as
 	// **E2070**, positioned at the label LITERAL. `table` is the one that intrinsic does read, so the
 	// message names the fix rather than only the fault. APPENDED AT THE END OF THE UNION.
@@ -5850,7 +5851,7 @@ let DebugStreamNameIdCallee = b"__DebugStream.nameId"
 // talking about itself.
 //
 // ⚠ **THE FOUR EMITTING MEMBERS RETURN NOTHING, WHICH IS WHY THE STATEMENT DOOR HAS TO CLAIM THEM**
-// (`voidStaticCallsAt`). A bare statement is the only position a void call can be written in, and
+// (`qualifiedStaticCallsAt`). A bare statement is the only position a void call can be written in, and
 // `Logger.logEvent` / `PhaseProbe.begin` — the compiler's own emitters — write exactly that.
 //
 // ⚠⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE FIVE, AND THAT IS `isBuiltinsIntrinsicCallee`'s
@@ -5882,7 +5883,7 @@ let DebugStreamTextArity = 4 as ParamCount
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__DebugStream` TYPE?** THE one test, with the same two askers
 // `isBuiltinsIntrinsicCallee` has and the same obligation not to disagree: the member table in
-// `parseCallNamed` and the STATEMENT door's `voidStaticCallsAt`.
+// `parseCallNamed` and the STATEMENT door's `qualifiedStaticCallsAt`.
 function isDebugStreamCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: DebugStreamQualifierPrefix)
 end 'isDebugStreamCallee'
@@ -6063,7 +6064,7 @@ let SubprocessSpawnEnvSlot = 3
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
-// STATEMENT door's `voidStaticCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
+// STATEMENT door's `qualifiedStaticCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
 // its own is a statement at all). Written once for the reason `isClockRuntimeCallee` is — a band's
 // membership question belongs with the band's names, not restated at each site.
 function isBuiltinsIntrinsicCallee(callee ByteArray) returns bool
@@ -29741,7 +29742,7 @@ export type Parser
 			let methodAnchor = self.dottedCallNameToken(self.pos)
 			let methodOpFloor = self.artifact.module.ops.count()
 			let methodResult = try self.parsePostfix(func, value: try self.parseMethodCall(func, resultUsed: false), resultUsed: false)
-			try self.recordDiscardedCallResult(methodResult, opFloor: methodOpFloor, anchor: methodAnchor)
+			try self.recordDiscardedCallResult(methodResult, opFloor: methodOpFloor, anchor: methodAnchor, door: DiscardDoor.statement)
 		end 'methodCallStmt' else if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
 			// `b.ops.push(1)` / `o.inner.op()` — a call reached through a ≥2-hop field chain, on an ARRAY FIELD's
 			// method or a FUNCTION-typed FIELD (#97). `methodCallsAt` covers only the one-hop `b.push(…)` / `h.op()`;
@@ -29750,7 +29751,7 @@ export type Parser
 			let chainAnchor = self.dottedCallNameToken(self.pos)
 			let chainOpFloor = self.artifact.module.ops.count()
 			let chainResult = try self.parseFieldChainCall(func, resultUsed: false)
-			try self.recordDiscardedCallResult(chainResult, opFloor: chainOpFloor, anchor: chainAnchor)
+			try self.recordDiscardedCallResult(chainResult, opFloor: chainOpFloor, anchor: chainAnchor, door: DiscardDoor.statement)
 		end 'fieldChainMethodStmt' else if self.staticMemberCallsAt(self.pos) 'staticMemberCallStmt'
 			// `Names.items.push(9)` — a method called for its EFFECT on a static member's record (W65). The
 			// expression door reaches the same reader through `parseDottedPrimary`'s static arm; a statement
@@ -29760,10 +29761,10 @@ export type Parser
 			let staticAnchor = self.dottedCallNameToken(self.pos)
 			let staticOpFloor = self.artifact.module.ops.count()
 			let staticResult = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
-			try self.recordDiscardedCallResult(staticResult, opFloor: staticOpFloor, anchor: staticAnchor)
-		end 'staticMemberCallStmt' else if self.voidStaticCallsAt(self.pos) 'voidStaticStmt'
-			// ⭐ `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A VOID COMPILER-OWNED STATIC
-			// CALLED FOR ITS EFFECT, and `statFree` is the case that makes the position load-bearing rather
+			try self.recordDiscardedCallResult(staticResult, opFloor: staticOpFloor, anchor: staticAnchor, door: DiscardDoor.statement)
+		end 'staticMemberCallStmt' else if self.qualifiedStaticCallsAt(self.pos) 'qualifiedStaticCallStmt'
+			// ⭐ `Clock.tick()` / `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A STATIC CALLED
+			// ON A LINE OF ITS OWN, and `statFree` is the case that makes the position load-bearing rather
 			// than a convenience: it is the ONLY thing that can release the raw block `stat` hands back, and
 			// it is void and non-throwing, so a statement is the only position it can be written in. Without
 			// this arm the canonical spelling (`stdlib/File.maxon:186`) died as
@@ -29771,25 +29772,24 @@ export type Parser
 			// 101, measured (found in review, R4.2). The void-and-THROWING pair (`delete`/`rename`) never
 			// needed it: a `try` statement is their own form.
 			//
-			// The reason a
-			// STATIC call is otherwise not a statement does not apply to either. `Point.create()` on a line of
-			// its own is refused because it discards a box nothing would then free (`methodCallsAt`); an
-			// intrinsic allocates nothing, so a value-returning one written here simply has its result
-			// discarded, exactly as every other bare-call statement's is.
-			//
 			// This is the position `stdlib/Sleep.maxon` needs — the module every source-level `sleep(ms)`
-			// now resolves to: its whole body is `__Builtins.sleep(milliseconds)` on a line of its own,
-			// so without this arm the module does not compile. Until it existed, the three
-			// recognized intrinsics all RETURNED a value, so every one of them arrived in expression
-			// position and the recognizer was never asked from here — a void intrinsic died as
-			// `E2015: Unsupported: identifier statement`, pointing at the `__Builtins` token.
+			// resolves to: its whole body is `__Builtins.sleep(milliseconds)` on a line of its own.
 			//
 			// A member the table does NOT recognize falls through `parseCallNamed` to `emitCall`, whose
 			// reserved-callee rejection reports the positioned E3004 (`requireCalleeIsNotReservedName`) —
-			// so widening the statement door widens no name, it only routes them to the same answer
-			// expression position already gives.
-			_ = try self.parseQualifiedCall(func, resultUsed: false)
-		end 'voidStaticStmt' else if self.namespaceQualifiedCallDotsAt(self.pos, minimumDots: MethodQualifierDots) > 0 'namespaceQualifiedCallStmt'
+			// so this door widens no name, it only routes them to the same answer expression position
+			// already gives.
+			//
+			// ⭐⭐ **E3064/E3065's STATIC-CALL door, and why the predicate needs no return-type test of its
+			// own**: `recordDiscardedCallResult` drops a void result on the floor and files everything else
+			// for `SemanticCheck.checkDiscardedResults` to judge. So a bare `Point.create()` is
+			// **E3064 `result of pure function 'Point.create' must be used`** and an impure `Clock.tick()` is
+			// **E3065** — the oracle's pair of answers for the same two programs.
+			let staticCallAnchor = self.dottedCallNameToken(self.pos)
+			let staticCallOpFloor = self.artifact.module.ops.count()
+			let staticCallResult = try self.parseQualifiedCall(func, resultUsed: false)
+			try self.recordDiscardedCallResult(staticCallResult, opFloor: staticCallOpFloor, anchor: staticCallAnchor, door: DiscardDoor.statement)
+		end 'qualifiedStaticCallStmt' else if self.namespaceQualifiedCallDotsAt(self.pos, minimumDots: MethodQualifierDots) > 0 'namespaceQualifiedCallStmt'
 			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN (N1b)** — a FREE call written with
 			// a directory qualifier, and a free call is exactly what `callStmt` below already admits: the
 			// result is discarded, `resultUsed: false` is what makes a VOID one legal here, and the
@@ -29800,10 +29800,9 @@ export type Parser
 			// mechanism; pinned by `namespaces/namespace-qualified-void-call-statement`.
 			//
 			// ⚠ **IT IS NOT `Point.create()`'s CASE, AND THE RECOGNIZER IS WHAT KEEPS THEM APART.** A static
-			// call as a statement stays refused (it would discard a box nothing then frees — see
-			// `methodCallsAt`), because `resolvesAsNamespaceQualifiedFunction` declines any chain a
-			// `Type.method` key already wears and this arm never sees it. This is also why ONE dot is admitted
-			// here and not in expression position: no arm at this door owns the shape.
+			// call is `qualifiedStaticCallStmt`'s one arm up, and `resolvesAsNamespaceQualifiedFunction`
+			// declines any chain a `Type.method` key already wears, so this arm never sees one. This is also
+			// why ONE dot is admitted here and not in expression position: no arm at this door owns the shape.
 			//
 			// Through `parsePostfix` for `directCallStmt`'s reason: a call whose RESULT is a function value can
 			// carry a trailing `(args)`, which the postfix loop applies as an indirect call. A plain direct
@@ -29811,7 +29810,7 @@ export type Parser
 			let qualifiedAnchor = self.dottedCallNameToken(self.pos)
 			let qualifiedOpFloor = self.artifact.module.ops.count()
 			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
-			try self.recordDiscardedCallResult(qualifiedResult, opFloor: qualifiedOpFloor, anchor: qualifiedAnchor)
+			try self.recordDiscardedCallResult(qualifiedResult, opFloor: qualifiedOpFloor, anchor: qualifiedAnchor, door: DiscardDoor.statement)
 		end 'namespaceQualifiedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
 			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
@@ -29848,15 +29847,16 @@ export type Parser
 				let callResult = try self.parsePostfix(func, value: try self.parseCall(func, resultUsed: false), resultUsed: false)
 				// ⭐ E3064's BARE-CALL door: the statement took none of what the call produced. Probed before the
 				// terminator below and before `drainPendingTemps`, so the call is still the last op emitted.
-				try self.recordDiscardedCallResult(callResult, opFloor: callOpFloor, anchor: calleeTok)
+				try self.recordDiscardedCallResult(callResult, opFloor: callOpFloor, anchor: calleeTok, door: DiscardDoor.statement)
 				self.terminateAfterDivergingCall(func, calleeTok: calleeTok, tempFloor: callTempFloor)
 			end 'directCallStmt'
 		end 'callStmt' else if self.peekKind() == TokenKind.dot 'memberExprStmt'
-			// `h.op` / `arr.managed` / `Point.create()` / `Self.make(1)` — a MEMBER ACCESS written on a line
-			// of its own. Every arm above has already declined it (no `=` to make it a store, no `(args)`
-			// shape any of the call dispatchers claims), and what is left is a WELL-FORMED EXPRESSION refused
-			// for a reason that belongs to statement position alone: a value-returning static discards a box
-			// nothing would then free, and a field read is a BORROW with no one here to borrow for.
+			// `h.op` / `arr.managed` / `Self.make(1)` — a MEMBER ACCESS written on a line of its own. Every
+			// arm above has already declined it (no `=` to make it a store, no `(args)` shape any of the call
+			// dispatchers claims), and what is left is a WELL-FORMED EXPRESSION refused for a reason that
+			// belongs to statement position alone: a field read is a BORROW with no one here to borrow for,
+			// and a `Self`-based call is a statement the ORACLE has no grammar for either (`E2001` there,
+			// measured).
 			//
 			// ⚠ The guard asks only what FOLLOWS, deliberately, where the `callStmt` arm above also pins the
 			// current token to an identifier. A member access's receiver is not always one — `"abc".foo()`
@@ -29870,9 +29870,9 @@ export type Parser
 			// but only this one is PROVISIONAL: it stands until the ownership rung decides what a discarded
 			// box or an unclaimed borrow costs, so "a shape the compiler does not lower HERE YET" is literally
 			// what E2015 means for it — where the arm below is refused permanently, which E2015 cannot say.
-			// Four ported specs pin this sentence
-			// (`first-class-functions`, `managed-memory-methods`, `self-type-member-expression`,
-			// `static-method-statement`) and its category-not-text wording is theirs, not this port's.
+			// Three specs pin this sentence
+			// (`first-class-functions`, `managed-memory-methods`, `self-type-member-expression`) and its
+			// category-not-text wording is theirs, not this port's.
 			let memberTok = self.current()
 			throw ParseError.unsupported("{memberTok.kind.rawValue} statement", line: memberTok.line, column: memberTok.column)
 		end 'memberExprStmt' else 'strayStatementToken'
@@ -30500,7 +30500,7 @@ export type Parser
 			throw ParseError.tupleAssignArityMismatch(layout.fieldCount(), targets: targetIndices.count(), line: openTok.line, column: openTok.column)
 		end 'arityMismatch'
 
-		self.recordDiscardOf(discardedCallee, anchor: openTok)
+		self.recordDiscardOf(discardedCallee, anchor: openTok, door: DiscardDoor.explicitDiscard)
 
 		// WHICH local the right-hand side reached into, read once for the whole statement — the temp's move
 		// source, and the root every DECLARING target reaches a field of (see `declareDestructuredElement`).
@@ -30528,6 +30528,59 @@ export type Parser
 			end 'kind'
 		end 'eachTarget'
 	end 'parseTupleAssignment'
+
+	// ⭐⭐ **DID THIS STATEMENT CALL, SPAWN OR AWAIT ANYTHING — E3067's QUESTION, AND DELIBERATELY NOT
+	// `directCallProducing`'s.** That probe names the ONE callee whose result went unused, and its misses are
+	// harmless to E3064: a producer it cannot identify is silence. The SAME miss is a REFUSAL here, and it is
+	// wrong — a DIVERGING fallback launders the value past that probe entirely: `otherwise panic(…)` never
+	// rejoins, so the value is no merge block ARGUMENT and `directCallProducing`'s gate declines before the
+	// backward walk that follows a merging `otherwise 0`. MEASURED both ways on a PURE callee — `otherwise 0`
+	// answers E3064, `otherwise panic(…)` compiles clean — and 54 statements are the second shape, 52 in
+	// `maxon-shv2/` and 2 in `stdlib/`. So the discard
+	// asks the weaker question whose misses are safe: did any op the statement emitted CALL
+	// (`OpCategory.callFree` / `callMethod` — `call`, `tryCall`, `indirectCall`, the witness dispatches) or
+	// suspend (`OpCategory.awaiting` — `asyncCall`, `await`, `tryAwait`, the service ops)?
+	//
+	// ⚠ **LOOSER THAN THE ORACLE IN TWO PLACES, AND BOTH ARE DELIBERATE.** `_ = f() + 1` and
+	// `_ = f() if c else 0` are E3067 there (its rule is "the LAST op is a call") and legal here — a call did
+	// happen, so the discard is about something. And `_ = async f()` / `_ = await p`, which the oracle also
+	// refuses, are the spellings `async-promise-drop.md` and the await corpus are ABOUT: a spawn owns a green
+	// thread and an await consumes one, so both are effects, and the oracle refuses them only because a
+	// green-thread op is not a `MaxonCallOp` in ITS ir. Refusing here would falsify committed specs to copy an
+	// implementation detail.
+	function statementCallsOrAwaits(opFloor OpIndex) returns bool
+		let opCount = self.artifact.module.ops.count()
+		for idx in opFloor upto opCount 'eachOpThisStatementEmitted'
+			let op = try self.artifact.module.ops.get(idx) otherwise panic("statementCallsOrAwaits: opRef {idx} below the count just read is not in module.ops")
+
+			if opCallsOrSuspends(op) 'thisOneDid'
+				return true
+			end 'thisOneDid'
+		end 'eachOpThisStatementEmitted'
+
+		return false
+	end 'statementCallsOrAwaits'
+
+	// ⭐⭐ **A BARE BINDING NAME IS THE ONE CALL-FREE DISCARD THAT SAYS SOMETHING, AND REFUSING IT WOULD MAKE
+	// TWO RULES JOINTLY UNSATISFIABLE.** E3012 requires every binding to be named by the body; `_ = p` is the
+	// only spelling that names one without using it. MEASURED on both compilers: delete the `_ = p` from a
+	// spawned-and-never-awaited promise and E3012 reports `unused variable: 'p'`, so a program that must hold
+	// the binding to scope exit has nowhere left to stand. ⚠ The oracle refuses `_ = p` anyway — it is the
+	// one shape where matching it is impossible, since it demands the statement and refuses it in the same
+	// program, and it escapes its own contradiction only by having no program of this shape.
+	//
+	// EXACTLY ONE NAME TOKEN, resolving to a live binding. A longer right-hand side has already named its
+	// root (`_ = c.count` names `c`) so it acknowledges nothing a bare `c` would not, and is refused with the
+	// rest; a top-level binding is under no E3012 and needs no acknowledgement either.
+	function rhsIsABareBinding(rhsStart TokenIndex) returns bool
+		if self.pos != rhsStart + 1 'theRightHandSideIsNotOneToken'
+			return false
+		end 'theRightHandSideIsNotOneToken'
+
+		let tok = self.tokenAt(rhsStart)
+
+		return tokenCanBeAName(tok) and self.scope.contains(tok.value)
+	end 'rhsIsABareBinding'
 
 	// ⭐⭐ **WHICH CALL PRODUCED THE RIGHT-HAND SIDE — the half of E3064's door the PARSER can answer.**
 	// `(_, _) = makePair(10, b: 32)` uses nothing the call produced, so the statement is a call written for an
@@ -30625,17 +30678,18 @@ export type Parser
 
 	// ⭐⭐ **THE DISCARD DOOR THE TWO STATEMENT POSITIONS SHARE — a bare `f()` line and `_ = f()`.** Both
 	// evaluate a call and take none of what it produced, so both file the site `SemanticCheck` judges; what
-	// differs is only the anchor token, which is each door's own statement start.
+	// differs is the anchor token, which is each door's own statement start, and the `DiscardDoor` that
+	// separates E3064's verdict from E3065's.
 	//
 	// ⚠ **A VOID RESULT IS NOT A DISCARD.** A `void` callee is seeded effectful anyway
 	// (`functionShowsAnEffect`), so filing one could never fire — but every bare void statement in every
 	// program would still pay for a record and for the whole-program summary those records switch on.
-	function recordDiscardedCallResult(value ValueId, opFloor OpIndex, anchor Token) throws ParseError
+	function recordDiscardedCallResult(value ValueId, opFloor OpIndex, anchor Token, door DiscardDoor) throws ParseError
 		if self.tagOf(value) == ValueTypeTag.void 'theCallPromisedNothing'
 			return
 		end 'theCallPromisedNothing'
 
-		self.recordDiscardOf(try self.directCallProducing(value, opFloor: opFloor), anchor: anchor)
+		self.recordDiscardOf(try self.directCallProducing(value, opFloor: opFloor), anchor: anchor, door: door)
 	end 'recordDiscardedCallResult'
 
 	// File a probed producer, if it was a call at all. The ANCHOR is the statement's own token — where the
@@ -30645,9 +30699,9 @@ export type Parser
 	// The SUBJECT is the source member behind a lowered runtime read (`lastRuntimeRead*`) and EMPTY for
 	// every other producer, which is the `EmptySourceText`-means-none convention: a declared callee is its
 	// own subject and `SemanticCheck.checkDiscardedResults` reports it under the name it is keyed by.
-	function recordDiscardOf(producer DiscardedCallee, anchor Token)
+	function recordDiscardOf(producer DiscardedCallee, anchor Token, door DiscardDoor)
 		match producer 'usedNothing'
-			named(callee, result) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(callee, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
+			named(callee, result) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(callee, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
 			notACall then break 'usedNothing'
 		end 'usedNothing'
 	end 'recordDiscardOf'
@@ -31078,11 +31132,25 @@ export type Parser
 		// any `_ = f(…)`.
 		if nameTok.value.equals(DiscardBindingName) 'discardResult'
 			let discardOpFloor = self.artifact.module.ops.count()
+			let rhsStart = self.pos
 			let discarded = try self.parseExpression(func, block: block)
+
+			// ⭐⭐ **E3067's `_ =` door — THE DISCARD IS AN OPT-OUT OF A VERDICT ON AN EFFECT, SO THERE MUST BE
+			// ONE.** `_ = 42`, `_ = c.name`, `_ = a + b` and `_ = round(1.5)` each compute a value nothing was
+			// ever going to complain about, so the statement claims an exemption from a rule it is not under
+			// and does nothing whatever. The oracle refuses all four and this matches it, message and column.
+			//
+			// ⚠ A `void` right-hand side cannot reach here — `_ = f()` on a void callee is E2004 from the
+			// expression itself — so the void guard `recordDiscardedCallResult` carries for the bare-statement
+			// door would be dead weight.
+			if not self.statementCallsOrAwaits(discardOpFloor) and not self.rhsIsABareBinding(rhsStart) 'nothingWasCalled'
+				throw ParseError.discardExpectsACall(nameTok.line, column: nameTok.column)
+			end 'nothingWasCalled'
+
 			// ⭐ E3064's `_ =` door. `_` does not license a discard of a result nobody reads — it only says the
 			// author meant it — so a pure callee is refused here exactly as it is one statement over, anchored on
 			// the `_` the author wrote.
-			try self.recordDiscardedCallResult(discarded, opFloor: discardOpFloor, anchor: nameTok)
+			try self.recordDiscardedCallResult(discarded, opFloor: discardOpFloor, anchor: nameTok, door: DiscardDoor.explicitDiscard)
 			return
 		end 'discardResult'
 
@@ -58474,7 +58542,7 @@ export type Parser
 	//   • a DECLARED callee under the mangled static name — every plain struct's `Widget.byteLength`, and
 	//     a user generic alias's `IntBox.create` through its base. The name is built by the SAME
 	//     expression `parseQualifiedCall` builds it with, `denotedGenericBaseName` included, rather than
-	//     re-spelled here: two derivations of one callee name is the drift `voidStaticCallsAt`
+	//     re-spelled here: two derivations of one callee name is the drift `qualifiedStaticCallsAt`
 	//     documents at length, and its failure is a call accepted at one door and refused at the other.
 	function staticCallClaimsBase(index TokenIndex) returns bool
 		let written = self.tokenAt(index).value
@@ -60282,7 +60350,7 @@ export type Parser
 			return self.emitRuntimeCall(ManagedFileStatFieldName, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'statField'
 		// ⚠ VOID and NON-throwing, so a bare STATEMENT is the only position it has — see the
-		// `voidStaticStmt` arm, which exists for it.
+		// `qualifiedStaticCallStmt` arm, which exists for it.
 		if methodTok.value.equals(ManagedFileStatFreeMethod) 'statFree'
 			let buffer = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedFileBufferParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ManagedFileStatFreeName, args: singletonArgs(buffer), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -69003,7 +69071,7 @@ export type Parser
 	// `fieldChainEndAfter`'s own header is about.
 	//
 	// ⭐⭐ **AND IT IS ALSO THE ONE SPELLING OF THE THREE-TOKEN TAIL `. <member> (` THAT EVERY `<base> . <member> (`
-	// DISPATCH PREDICATE ASKS (A1s-prim review).** `isSelfMethodCallAt`, `methodCallsAt`, `voidStaticCallsAt`
+	// DISPATCH PREDICATE ASKS (A1s-prim review).** `isSelfMethodCallAt`, `methodCallsAt`, `qualifiedStaticCallsAt`
 	// and `primitiveStaticCallAt` each claim a four-token shape whose last three tokens are exactly this
 	// question; all four used to write `kindAt(i+1) == dot and namesMemberAt(i+2) and kindAt(i+3) == leftParen`
 	// out by hand, so the tail was FIVE copies of one syntactic fact with nothing making them agree. That is
@@ -81009,18 +81077,19 @@ export type Parser
 		return ForwardCall.throughAReceiver(name)
 	end 'forwardCallOpeningAt'
 
-	// ⭐⭐ **E3067 — THE TWO DEGENERATE ASSIGNMENT STATEMENTS, REFUSED AT ONE DOOR, PURELY TEXTUALLY.**
+	// ⭐⭐ **E3067's SELF-ASSIGNMENT HALF — REFUSED PURELY TEXTUALLY, BEFORE ANY NAME IS RESOLVED.**
 	//
 	// THE RULE, STATED SO THAT ITS FALSE-REJECT SURFACE IS OBVIOUS. The statement beginning at `index` is
-	// refused when it is EITHER of:
+	// refused when it is `<chain> = <chain> <statement end>` and the two chains are THE SAME TOKENS — equal
+	// kind AND equal spelling, position by position. A chain is `fieldChainEndAfter`'s: a base (an
+	// identifier, or a keyword the same walk admits as a name — `self` among them) followed by zero or more
+	// `.member` hops. So `x = x`, `p.x = p.x`, `self.n = self.n`, `a.b.c = a.b.c` and `_ = _` are refused.
 	//
-	//   1. `<chain> = <chain> <statement end>` where the two chains are THE SAME TOKENS — equal kind AND
-	//      equal spelling, position by position. A chain is `fieldChainEndAfter`'s: a base (an identifier,
-	//      or a keyword the same walk admits as a name — `self` among them) followed by zero or more
-	//      `.member` hops. So `x = x`, `p.x = p.x`, `self.n = self.n` and `a.b.c = a.b.c` are refused.
-	//   2. `_ = <literal> <statement end>` — a discard whose right-hand side is a single literal token.
-	//      The discard form exists to say "this call's result is deliberately unused"; a literal was never
-	//      a call, so the statement computes nothing and discards nothing.
+	// ⚠ **E3067's OTHER HALF — a discard whose right-hand side called nothing — IS NOT HERE.** It is
+	// `parseAssignment`'s discard arm, which asks what op the statement EMITTED rather than what tokens it
+	// wrote, so it sees `_ = round(1.5)` and `_ = c.name`, which no token test can tell from a call. One
+	// code, two messages, two doors: this half needs no ops and must run before the dispatch, that half
+	// needs the ops and so cannot.
 	//
 	// ⚠ **TEXTUAL IS THE WHOLE OF IT** — the registry's own doc for E3067 says "a *textual* self-assignment",
 	// and nothing here asks what a name MEANS. Everything below is therefore LEGAL and measured to stay so:
@@ -81049,16 +81118,8 @@ export type Parser
 	//     TOKENS, at a point where no op has been emitted and nothing has to be unwound.
 	//   • `arr[i] = arr[i]`, `m.get(k) = …` — an index or a call is not a chain hop, so the walk stops at
 	//     the `[` / `(`, the LHS never reaches an `=`, and this rule never looks at the statement at all.
-	//   • `_ = f()`, `_ = try stack.pop() otherwise 0` — the discard's whole purpose.
-	//   • `_ = someBinding` — the DISCARD-A-BINDING idiom, which satisfies E3012 for a value a build
-	//     configuration leaves unused. It is LIVE in the corpus (`stdlib/Internals.maxon`'s
-	//     `__leak_count_dec`, plus four committed `specs-shv2` cases), so only a bare LITERAL is refused
-	//     here, never "anything that is not a call". ⚠ The oracle refuses `_ = someBinding`; shv2 does not,
-	//     and that gap is deliberate — closing it would falsify five programs this tree already compiles.
-	//   • `_ = true` — `true`/`false` lex as KEYWORDS, not as literal kinds, so `tokenIsLiteralKind` (THE
-	//     one literal list, shared with `tokenCanBeAName`) does not admit them and this does not fire. A
-	//     second literal list written out here to catch two token kinds no corpus program writes would be
-	//     the duplication that list exists to prevent.
+	//   • every `_ = <rhs>` but `_ = _` — the discard arm owns that shape, and reaching a verdict on it
+	//     here would be the same rule written down twice.
 	//
 	// ⚠ **THE STATEMENT-END TEST IS LOAD-BEARING, NOT DEFENSIVE.** Drop it and `x = x + 1` — the spec's own
 	// control — fires: its RHS chain IS `x` and matches the LHS token for token. What makes it a different
@@ -81085,18 +81146,6 @@ export type Parser
 
 		let anchor = self.tokenAt(index)
 		let rhsStart = lhsEnd + 1
-
-		// Rule 2 first, because it is the one rule keyed on WHICH name the target is. The discard is the
-		// BARE `_` and only that — `lhsEnd == index + 1` is the zero-hop chain — so `_.field = 42` (which
-		// binds nothing and is not a legal program by any route) is not told "expected a function call",
-		// a sentence about a rule it is not breaking.
-		//
-		// ⚠ It does NOT `return` when the RHS is not a literal, so `_ = _` still falls through to rule 1
-		// and is refused as the self-assignment it textually is. An early return here would have made the
-		// header's "rule 1 has no exceptions" false for exactly one spelling.
-		if anchor.value.equals(DiscardBindingName) and lhsEnd == index + 1 and tokenIsLiteralKind(self.kindAt(rhsStart)) and self.statementEndsAt(rhsStart + 1) 'discardOfALiteral'
-			throw ParseError.discardOfALiteral(anchor.line, column: anchor.column)
-		end 'discardOfALiteral'
 
 		// The RHS must be the SAME LENGTH as the LHS and nothing more, which is one question rather than
 		// two: read the same span of tokens after the `=`, and require the statement to stop right there.
@@ -81316,9 +81365,8 @@ export type Parser
 	// to disagree about what a method call looks like — which they would, since a method call is
 	// legal in both and only one of them may discard the result.
 	//
-	// ⚠ A STATIC call in statement position stays unsupported, and that is deliberate rather than an
-	// oversight of this predicate: `Point.create()` on a line of its own discards a value, and for a
-	// factory that value is a box nothing would then free.
+	// ⚠ A STATIC call in statement position is `qualifiedStaticCallsAt`'s, not this predicate's: the two
+	// shapes differ only in what the base NAMES, so declining one here is what lets the other claim it.
 	// ⭐⭐ **`<arrayBinding> . managed` — THE FIELD DOOR (R4.4), AND WHY IT NEEDS A PREDICATE OF ITS OWN.**
 	//
 	// `.managed` is a FIELD: the corpus writes no parentheses (`arr.managed.setLength(2)`,
@@ -82208,11 +82256,12 @@ export type Parser
 		end 'managed'
 	end 'methodCallsAt'
 
-	// **The token shape of A VOID STATIC CALLED FOR ITS EFFECT** — `<type> . <member> (`, the qualified call
-	// shapes that ARE statements (see the `voidStaticStmt` arm for why the others are not). Four families
-	// reach it: `__Builtins.sleep(ms)`, `__ManagedFile.statFree(buffer)`, ANY declared void static (D10, the
-	// index arm below), and a member of a declared struct that resolves to nothing — claimed so it is refused
-	// by NAME rather than by shape.
+	// **The token shape of A STATIC CALLED ON A LINE OF ITS OWN** — `<type> . <member> (`, the qualified call
+	// shape that IS a statement. Four families reach it: `__ManagedFile.statFree(buffer)`, the `__Builtins`
+	// intrinsics, the `__DebugStream` members, and any member written on a base a `type` declaration names —
+	// whether that member returns a value, returns nothing, or resolves to nothing at all. The last two are
+	// downstream questions: a result nobody took is E3064/E3065 at the dispatch site, an unresolved member is
+	// `parseCallNamed`'s E3004.
 	//
 	// It asks the intrinsic table's OWN question, `isBuiltinsIntrinsicCallee`, of the name `parseQualifiedCall`
 	// is about to mangle out of these same two tokens — rather than comparing the base token against a second
@@ -82231,8 +82280,7 @@ export type Parser
 	//
 	// The mangling allocates, and it is on a COLD path by construction: the shape is asked only after every
 	// cheaper statement form has declined, and `methodCallsAt` has already claimed every qualified shape whose
-	// base is a value in scope — so what reaches here is a static-call-shaped statement, which is either an
-	// intrinsic or a program that is about to be refused.
+	// base is a value in scope — so what reaches here is a static-call-shaped statement and nothing else.
 	//
 	// ⚠⚠ **`__ManagedFile.statFree(buffer)` IS THE SECOND FAMILY, AND WITHOUT IT `stat` COULD NOT BE USED AT
 	// ALL (found in review, R4.2).** It is the only `__ManagedFile` static that is BOTH void and NON-throwing,
@@ -82257,11 +82305,11 @@ export type Parser
 	// The BASE half stays a plain identifier because a keyword cannot NAME a *declared* type: `type to` is
 	// refused at its declaration (`E2010: Expected identifier but got 'to'`). `parseQualifiedCall` reads
 	// its base through `typeBaseTokenAt`, which resolves two keywords — `Self` and, since A1s-prim, the
-	// primitive-type names — so widening this half would claim a shape the routine CAN parse but no
-	// STATEMENT wants: `Self.m()` and `int.fromString(s)` are refused as statements exactly as
-	// `Point.create()` is, a static call discarding its result. Every primitive static returns a value, so
-	// none of them needs this door; widen it when one that does not appears.
-	function voidStaticCallsAt(index TokenIndex) returns bool
+	// primitive-type names — so widening this half would claim a shape the routine CAN parse but the ORACLE
+	// refuses outright: `Self.m()` and `int.fromString(s)` on a line of their own are `E2001 unexpected
+	// token` there (measured, both), so keeping them off this door is what keeps the two compilers agreeing
+	// about which statements exist.
+	function qualifiedStaticCallsAt(index TokenIndex) returns bool
 		if self.kindAt(index) != TokenKind.identifier or not self.memberCallFollows(index + 1) 'notAQualifiedCall'
 			return false
 		end 'notAQualifiedCall'
@@ -82308,56 +82356,32 @@ export type Parser
 			return true
 		end 'debugStreamMember'
 
-		// ⭐ **A USER TYPE'S VOID STATIC — the same position, asked of the whole-program index instead of a
-		// table (D10).** `Helper.shout()` on a line of its own was `E2015: Unsupported: identifier statement`
-		// while `__Builtins.sleep(ms)` two arms up was accepted, and the asymmetry was not a rule — it was
-		// which callees happened to have a recognizer. The oracle compiles and runs the user form (measured:
-		// prints, exit 0), so shv2 was refusing a correct program.
+		// ⭐⭐ **A USER TYPE'S STATIC — THE BASE NAMING A DECLARED TYPE IS THE WHOLE CONDITION, and what the
+		// member returns is the DISCARD door's question rather than this one's.** A value-returning static
+		// written here is E3064 (pure) or E3065 (impure) at the dispatch site, so the program is refused and
+		// no returned box is ever stranded; narrowing this to `void` would only trade those verdicts for
+		// E2015, which says the compiler does not lower the shape — and it does. MEASURED against the
+		// oracle, which answers the same two codes at the same two columns.
 		//
-		// ⚠ **VOID IS THE WHOLE CONDITION, and the reason is the one this arm's own dispatch site states**:
-		// a value-returning static is refused here because it discards a box nothing would then free, which
-		// is a LEAK argument. It does not reach a void static — there is no value to discard, and the call is
-		// the entire point of writing it. So this asks the index for the callee's return type and accepts
-		// only `void`; a value-returning `Point.create()` still falls through to the same refusal it always
-		// had, unchanged.
+		// ⚠ **AN UNKNOWN MEMBER ON A DECLARED TYPE IS CLAIMED BY THE SAME TEST, so it is refused by NAME
+		// rather than by shape**: `Helper.nope()` reaches `parseCallNamed` and earns the positioned
+		// **E3004 `call to undefined function 'Helper.nope'`** — the identical answer EXPRESSION position
+		// gives for the same typo. That is why the test is the BASE and never a roster of members, which is
+		// `isDebugStreamCallee`'s rule one type over.
 		//
-		// ASKED LAST, after both cheap compiler-owned arms, because `returnTypeOf` ADOPTS the return type
-		// into this file's interner and so allocates — on a path already documented as cold by construction
-		// (every cheaper statement form has declined, and `methodCallsAt` has taken every qualified shape
-		// whose base is a value in scope).
+		// ⚠ **AN `enum`/`union` BASE NEEDS NO ARM OF ITS OWN**: shv2 refuses `static function` on either at
+		// its DECLARATION, so no declared static can have one for a base.
 		//
-		// ⚠ **BOTH ARMS BELOW READ A COMPLETE INDEX, AND THE REASON IS NOT `constructorInstanceOf`'S.** That
-		// one is written for a reader the TOLERANT SWEEP reaches, and answers "the sweep's artifact is
-		// discarded". This predicate is not such a reader: the sweep entry point is
-		// `foldDeclaredSignaturesInto`, which reads DECLARATIONS only and never a body — "a sweep types no
-		// call", as `Queries.queryProgramSignatures` puts it — and the constant evaluator's parser walks an
-		// INITIALIZER. `parseStatement` is reached from `parseModule` alone, and `queryProgramSignatures`
-		// sets `allFilesFolded` before the first file is parsed. So an `undeclared` here MEANS no file
-		// declares the callee; it never means "not swept yet", and neither arm can answer differently
-		// depending on how far a sweep had got.
-		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declaredStatic'
-			declared(returnType) then return maxonReturnTypeIsVoid(returnType)
-			undeclared then break 'declaredStatic'
-		end 'declaredStatic'
-
-		// ⭐⭐ **AN UNKNOWN MEMBER ON A DECLARED TYPE IS CLAIMED TOO — SO IT CAN BE REFUSED BY NAME RATHER
-		// THAN BY SHAPE.** `Helper.nope()` is not a void static, so the arm above declined it; left to fall
-		// through, it died as `E2015: Unsupported: identifier statement` — and THAT MESSAGE BECAME FALSE THE
-		// MOMENT THIS RUNG LANDED. The construct IS supported now; it is the NAME that is wrong, and E2015
-		// says nothing about a name. Claiming the shape here routes it to `parseCallNamed`, which reports the
-		// positioned **E3004 `call to undefined function 'Helper.nope'`** — the identical answer EXPRESSION
-		// position already gives for the same typo, and the identical answer `__Builtins.nope()` already gets
-		// in THIS position (measured both ways). The compiler-owned half was never refused by shape; this is
-		// the user half catching up, which is the same asymmetry the void arm above closes.
-		//
-		// ⚠ **A VALUE-RETURNING static is NOT claimed, and that is deliberate rather than an oversight.** It
-		// is `declared` with a non-void return, so the arm above returns false and it keeps the refusal it has
-		// always had. Whether a bare `Point.create()` should instead be a discard (`_ =`) is a different
-		// question with a leak argument behind it — see the dispatch site — and this rung does not answer it.
-		// ⇒ what moves here is exactly one case: a member NO file declares, from a refusal about SHAPE to a
-		// refusal about the NAME. Pinned by `static-method-statement.error.unknown-static-names-the-callee`.
+		// **IT READS A COMPLETE INDEX, AND THE REASON IS NOT `constructorInstanceOf`'S.** That one is written
+		// for a reader the TOLERANT SWEEP reaches, and answers "the sweep's artifact is discarded". This
+		// predicate is not such a reader: the sweep entry point is `foldDeclaredSignaturesInto`, which reads
+		// DECLARATIONS only and never a body — "a sweep types no call", as `Queries.queryProgramSignatures`
+		// puts it — and the constant evaluator's parser walks an INITIALIZER. `parseStatement` is reached
+		// from `parseModule` alone, and `queryProgramSignatures` sets `allFilesFolded` before the first file
+		// is parsed. So a `false` here MEANS no file declares a type of that name; it never means "not swept
+		// yet".
 		return self.signatures.containsStructFor(baseName, readerFilePath: self.filePath)
-	end 'voidStaticCallsAt'
+	end 'qualifiedStaticCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)

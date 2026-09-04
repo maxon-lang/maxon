@@ -1,0 +1,53 @@
+// Test: void-static-member-statement-ok
+typealias Integer = int(i64.min to i64.max)
+var ticks = 0 as Integer
+
+type Clock
+	static function bump()
+		ticks = ticks + 3
+	end 'bump'
+end 'Clock'
+
+function main() returns ExitCode
+	Clock.bump()
+	return ticks as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __data_ticks@0 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.leaRegGlobal rax, __data_ticks
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.leaRegGlobal rcx, __data_ticks
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+  __il_cont:
+    x64.leaRegGlobal rax, __data_ticks
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at void-static-member-statement-ok.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -2340,10 +2340,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// E3067's two messages — both verbatim the reference compilers' (`self-assignment.md` compares this
 		// stderr exactly). ONE code, TWO sentences, for `tryOnNonThrowingBuiltin`'s reason: the mistake is
 		// one — a statement that computes nothing — while what the author has to change differs, so a
-		// single sentence could only ever describe one of them. See `Parser.rejectDegenerateAssignment`,
-		// which is the one place both are decided.
+		// single sentence could only ever describe one of them. One door each, and each states its own rule:
+		// `Parser.rejectDegenerateAssignment` and `Parser.parseAssignment`'s `_` arm.
 		selfAssignmentHasNoEffect(place, line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{place} = {place}'", line: line, column: column, filePath: path)
-		discardOfALiteral(line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "expected a function call", line: line, column: column, filePath: path)
+		discardExpectsACall(line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "expected a function call", line: line, column: column, filePath: path)
 		// The `__Builtins.ucd*` table roster (W64) — a SECURITY guard, since the label is a file name in both
 		// reference compilers. The message names the table the intrinsic DOES read, because the pairing is
 		// the fact the author got wrong. See `Parser.parseUcdTableLoad`.

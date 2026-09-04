@@ -643,6 +643,19 @@ enum OpCategory
 	plain  // everything else (the op stands alone; matched by variant)
 end 'OpCategory'
 
+// ⭐ **DOES THIS OP REACH ANOTHER BODY — by calling it, spawning it or suspending on it?** Three bands
+// answer yes and every other band answers no, which is one question about the union's own SHAPE and so is
+// asked here, beside the metadata, rather than at the door that needs it (`Parser.statementCallsOrAwaits`,
+// E3067's `_ = <rhs>` test — `MaxonOpMeta` is this file's, and reaching through `rawValue` from another
+// file cannot see it). A band appended later decides its own answer here rather than inheriting `false`
+// from a range arm that never heard of it.
+export function opCallsOrSuspends(op MaxonOp) returns bool
+	return match op.rawValue.category 'reachesAnotherBody'
+		callFree or callMethod or awaiting gives true
+		panicking or varAccess or closureProducer or ownership or plain gives false
+	end 'reachesAnotherBody'
+end 'opCallsOrSuspends'
+
 // Per-variant static metadata backing for MaxonOp (read via `op.rawValue`).
 type MaxonOpMeta
 	export let category as OpCategory
