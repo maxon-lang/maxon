@@ -4093,3 +4093,59 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:20:10: argument type mismatch for 'm': expected 'Message', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known
 ```
+
+<!-- test: error.concrete-value-passed-to-a-type-parameter-parameter -->
+The mirror of `error.opaque-field-write-in-the-shared-body-refuses-a-concrete-value`, one door along: a
+concrete `Label` handed to a parameter the shared body declares as `T`. Both are the same rule about
+the same thing — a `T` place is opaque inside the shared body — and both are decided by the one
+identity comparison (`ProgramSignatures.aggregatesConflict`) over an EMPTY expected name meeting
+`Label`. **MEASURED:** unguarded, this program compiled with no diagnostic at all and passed the
+`Label` box's ADDRESS into a slot the instantiation had fixed as an integer, so `b.clobber() as
+ExitCode` range-checked a pointer and died `panic: Range check failed: value outside typealias
+'ExitCode'` — a wrong answer that reaches runtime, which is why this case exists.
+
+The door decides only the case where the binding question answers itself: the receiver is a value of
+the declaring type ITSELF (a `structRef`, so no `with` has reached it) and the formal is that
+declaration's OWN parameter, so no concrete aggregate can be that `T`. It must NOT refuse by the
+value's runtime identity — `stdlib/Interfaces.maxon` hands a concrete iterator to a parameter declared
+`Source` and is correct, because the instance two levels up binds `Source` to exactly that iterator,
+and that call reaches the SUBSTITUTED check instead. A receiverless call is out for a different
+reason: its subject is the call's own result, which is the unbound-`T` construct
+`error.bare-generic-constructor-unbound-t` already pins where the value meets a typed place.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Label
+	export let n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Label'
+
+type Box uses T
+	export var value as T
+
+	static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function put(v T) returns T
+		return v
+	end 'put'
+
+	export function clobber() returns T
+		return put(Label.create(77))
+	end 'clobber'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+function main() returns ExitCode
+	var b = NumBox.create(1)
+	return b.clobber() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:24:10: argument type mismatch for 'v': expected 'type parameter', got 'Label': one body serves every instantiation, so a concrete type named here is claimed of every 'with' in the program — true of at most one of them. Pass a value of the parameter's own type, or make the call from a concrete instantiation, where the type argument is known
+```

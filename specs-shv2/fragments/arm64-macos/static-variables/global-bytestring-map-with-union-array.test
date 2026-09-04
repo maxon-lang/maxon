@@ -1,0 +1,276 @@
+// Test: global-bytestring-map-with-union-array
+typealias Kind = int(0 to 100)
+typealias Val = int(i64.min to i64.max)
+
+type KeywordInfo
+	export var kind as Kind
+	export var helpText as String
+
+	export static function create(kind Kind, helpText String) returns KeywordInfo
+		return Self{kind: kind, helpText: helpText}
+	end 'create'
+end 'KeywordInfo'
+
+union Op
+	add(value Val)
+	nop
+end 'Op'
+
+typealias OpArray = Array with Op
+
+var keywordMap = [
+	b"if": KeywordInfo.create(1, helpText: "Conditional statement."),
+	b"else": KeywordInfo.create(2, helpText: "Alternative branch.")
+]
+
+function main() returns ExitCode
+	var ops = OpArray.create()
+	ops.push(Op.add(1))
+	ops.push(Op.nop)
+
+	let info = try keywordMap.get(b"if") otherwise KeywordInfo.create(0, helpText: "")
+	if info.kind != 1 'badLookup'
+		return 1
+	end 'badLookup'
+
+	return 0 if ops.count() == 2 and keywordMap.count() == 2 else 2
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_keywordMap@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @KeywordInfo.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_30  ; "panic at global-bytestring-map-with-union-array.test:9: Range check failed: value outside typealias 'Kind'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaGlobal x0, __data_keywordMap
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x2, __layout_Map_Array_Byte_KeywordInfo
+    arm64.leaRdata x3, __witness_Array_Byte.Hashable
+    arm64.leaRdata x4, __witness_Array_Byte.Equatable
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl Map.get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x20, 0
+    arm64.leaRdata x0, __str_rec_5  ; ""
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x26, x24
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x25
+    arm64.bl KeywordInfo.create
+    arm64.movRegReg x20, x0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x20, x0
+  trycont:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Map_Array_Byte_KeywordInfo
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 1
+    arm64.b.eq ifcont
+  badLookup:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_KeywordInfo
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 2
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
+  andrhs:
+    arm64.leaGlobal x0, __data_keywordMap
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x1, __witness_Array_Byte.Hashable
+    arm64.leaRdata x2, __witness_Array_Byte.Equatable
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
+    arm64.cmp x0, 0
+    arm64.b.lt __il_slow
+  __rc_chk#17:
+    arm64.movImm x3, 4611686018427387904
+    arm64.cmp x0, x3
+    arm64.b.le __il_cont
+  __il_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl Map.count
+  __il_cont:
+    arm64.cmp x0, 2
+    arm64.cset x21, eq
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Map_Array_Byte_KeywordInfo
+    arm64.movRegReg x0, x21
+  scmerge:
+    arm64.cbz x0, ternaryfalse
+  ternarytrue:
+    arm64.movImm x21, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x21, 2
+  matchcont:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_KeywordInfo
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic
+  __rc_chk#13:
+    arm64.cmp x21, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at global-bytestring-map-with-union-array.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+}

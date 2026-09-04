@@ -410,6 +410,28 @@ function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCal
 	return record
 end 'builtMapLiteralRecord'
 
+// ⭐⭐ **`var globalOps = [Op.add(7), Op.nop]` — AN ARRAY LITERAL WHOSE ELEMENTS ARE RECORDS**, emitted as the
+// two calls a body's literal emits: the instance's `create` then one single-column add per element. It is
+// `builtMapLiteralRecord` one column narrower and differs from `builtContainerRecord` in its element
+// PRODUCER alone: a folded element is a constant this file materializes, an arena element may be a further
+// NODE, and only `materializedValue` can produce one.
+//
+// ⚠ **NO DROP AFTER AN ADD** — `builtStructBox`'s argument, not `emitMapEntryUpsert`'s. Every producer
+// `materializedValue` reaches hands back a record this frame owns, the add makes the container its sole
+// owner, and the container's own element destructor releases it, so a drop here would be the second half of
+// a double free.
+function builtArrayLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, elements GlobalInitValueAndTypeArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
+	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
+	if elements.count() > 0 'hasElements'
+		let add = elementAddCallee(create, count: elements.count())
+		for element in elements 'eachElement'
+			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: materializedValue(fn, value: element.value, valueType: element.valueType, calls: calls, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'eachElement'
+	end 'hasElements'
+
+	return record
+end 'builtArrayLiteralRecord'
+
 // ⭐ **ONE PAIR INTO THE MAP.** The key is materialized before the value — a body's left-to-right order — and
 // each half is released after the call only if the CALL kept nothing, through the very `dropBorrowedArguments`
 // a factory's arguments go through. ⚠ For `Map.upsert` it keeps BOTH — the table pushes them into its own
@@ -476,7 +498,7 @@ end 'containerStampValue'
 
 // ⭐⭐ **THE THREE WAYS AN ARENA NODE PRODUCES ITS RECORD — the program's own code RETURNS one, the compiler
 // BUILDS the box itself, or a CONTAINER is created and then filled** (spec-port `map-struct-bytearray`; W116;
-// the top-level map literal).
+// the top-level map and record-array literals, which are the filled case one column apart).
 //
 // ⭐⭐ **AN ARGUMENT OR A FIELD MAY BE ANOTHER NODE, AND THEN THIS IS THE RECURSION** (spec-port
 // `module-level-struct-var`) — `var state = Outer.create(Inner.create(0))`, `static var base = Outer{inner:
@@ -493,6 +515,7 @@ function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray
 		call(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, calls: calls, valueType: valueType, range: range)
 		construct(sizeBytes, fields) gives builtStructBox(fn, sizeBytes: sizeBytes, fields: fields, calls: calls, valueType: valueType, range: range)
 		mapLiteral(create, entries) gives builtMapLiteralRecord(fn, create: create, entries: entries, calls: calls, valueType: valueType, range: range)
+		arrayLiteral(create, elements) gives builtArrayLiteralRecord(fn, create: create, elements: elements, calls: calls, valueType: valueType, range: range)
 	end 'node'
 end 'initializerNodeRecord'
 
@@ -525,10 +548,12 @@ function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args Glob
 	return record
 end 'calledFactoryRecord'
 
-// ⭐⭐ **`Pair{a: 1, b: 2}` AT MODULE SCOPE — THE BOX, THEN ONE STORE PER SLOT (W116)** — the same shape
-// `Parser.emitStructLiteral` emits inside a function, for the same construct written in a `static` field's
-// initializer. Every layout fact it needs was resolved where the layout lives
-// (`ProgramSignatures.globalStructConstruct`), so nothing here reads a registry.
+// ⭐⭐ **`Pair{a: 1, b: 2}` OR `Op.add(7)` AT MODULE SCOPE — THE BOX, THEN ONE STORE PER SLOT (W116)** — the
+// same shape `Parser.emitStructLiteral` and `Parser.emitEnumBox` emit inside a function, for the same
+// constructs written in a top-level initializer. Every layout fact it needs was resolved where the layout
+// lives (`ProgramSignatures.globalStructConstruct`, `globalUnionCaseConstruct`), so nothing here reads a
+// registry — including the union tag and the ZERO-FILL of a narrow case's unused slots, which arrive as
+// ordinary slots because they are ordinary stores.
 //
 // ⚠⚠ **A MANAGED FIELD IS CONSUMED BY THE BOX, AND THERE IS NO DROP AFTER THE STORES — WHICH IS THE
 // OPPOSITE OF THE CALL ARM ABOVE.** Every producer `materializedValue` reaches hands back a value this frame

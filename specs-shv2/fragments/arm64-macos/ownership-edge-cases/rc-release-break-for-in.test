@@ -1,0 +1,91 @@
+// Test: rc-release-break-for-in
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Item'
+
+function main() returns ExitCode
+	let items = [10, 20, 30, 40, 50]
+	var result = 0
+
+	for item in items 'search'
+		let wrapped = Item.create(item)
+		if wrapped.val == 30 'found'
+			result = wrapped.val
+			break
+		end 'found'
+	end 'search'
+
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.leaRdata x1, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 5
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 8
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.movImm x19, 0
+    arm64.movImm x1, 0
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.ge forexit
+  search:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
+  __im_cont:
+    arm64.leaRegSlot x3, slot0
+    arm64.storeBaseDispReg.word64 [x3 + 0], x2
+    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
+    arm64.cmp x2, 30
+    arm64.b.ne forstep
+  found:
+    arm64.loadRegBaseDisp.word64 x19, [x3 + 0]
+    arm64.b forexit
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.bl __managed_decref
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at rc-release-break-for-in.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

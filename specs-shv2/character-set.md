@@ -577,7 +577,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:13: Unsupported: `CharacterSet.inverted` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, a payload-free enum or union case, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E2015: <fragment>:2:13: Unsupported: `CharacterSet.inverted` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
 ```
 
 <!-- test: error.characterset-from-at-a-top-level-initializer -->
@@ -597,5 +597,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:14: Unsupported: `CharacterSet.from` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, a payload-free enum or union case, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E2015: <fragment>:2:14: Unsupported: `CharacterSet.from` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
 ```

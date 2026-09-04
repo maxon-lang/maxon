@@ -1726,3 +1726,171 @@ end 'main'
 ```stdout
 2
 ```
+
+### A Qualified Spawn Names a `static` a Function Declares, and Nothing Else
+
+`async Type.staticMethod(…)` is the one qualified shape a spawn accepts, because a spawn hands the
+scheduler the ADDRESS of a linked function and a static call is an ordinary call with a mangled name.
+Every other reading of `<base>.<member>(…)` reaches the same door and is refused there in words: a
+target that is not a linked function is a link failure or a wrong answer at run time rather than a
+diagnostic.
+
+<!-- test: async-await.error.qualified-spawn-compiler-owned-static -->
+A static on a compiler-owned surface is served by a runtime entry the compiler emits, so there is no
+declared function whose address the scheduler could be handed. The roster (`__ManagedFile`,
+`__ManagedDirectory`, `__ManagedSocket`, `__ManagedMemory`, a container alias) shares this one refusal
+because it shares one reason.
+```maxon
+function main() returns ExitCode
+	let p = async __ManagedFile.readAll("x")
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-compiler-owned-static.test:3:16: Unsupported: `async __ManagedFile.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
+```
+
+<!-- test: async-await.error.qualified-spawn-container-alias-static -->
+A container alias reaches the same refusal through the same roster: `TallyArray.create()` lowers to an
+`Array` create op, not to a call to a function the program declares.
+```maxon
+typealias Tally = int(0 to 1000)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	let p = async TallyArray.create()
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-container-alias-static.test:6:16: Unsupported: `async TallyArray.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
+```
+
+<!-- test: async-await.error.qualified-spawn-primitive-static -->
+A primitive's static resolves to a compiler-MINTED callee, and an `asyncCall` carries no mint field —
+every reader downstream would judge `__int_fromString` as a name the author wrote. The refusal keeps
+"a spawn's callee is the one the author wrote" true by construction.
+```maxon
+function main() returns ExitCode
+	let s = "41"
+	let p = async int.fromString(s)
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-primitive-static.test:4:20: Unsupported: `async int.fromString(…)` — a primitive's static resolves to the compiler-minted callee `__int_fromString`, and a spawn records no callee but the one the author wrote. Call it directly
+```
+
+<!-- test: async-await.error.qualified-spawn-instance-receiver -->
+A base bound to a VALUE claims the whole expression before any type reading, and an instance spawn has
+nowhere to put the receiver: the arguments ride the green thread's inline argument region, which the
+trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its
+ownership.
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Counter
+	export var n as Tally
+
+	export static function create() returns Counter
+		return Counter{n: 0}
+	end 'create'
+
+	export function bump() returns Tally
+		self.n = self.n + 1
+		return self.n
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	let p = async c.bump()
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-instance-receiver.test:19:16: Unsupported: `async c.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument
+```
+
+<!-- test: async-await.error.qualified-spawn-union-case -->
+`Move.walk(3)` CONSTRUCTS a union case and calls nothing, so there is no address to spawn. A payload
+construct and a static call are the same shape to the token, which is why the enum reading is asked
+before the static one.
+```maxon
+typealias Tally = int(0 to 1000)
+
+union Move
+	walk(steps Tally)
+	stop
+end 'Move'
+
+function main() returns ExitCode
+	let p = async Move.walk(3)
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-union-case.test:10:16: Unsupported: `async Move.…` — `Move` is an enum or union, so `Move.<case>(…)` builds a case rather than calling a function. There is nothing there for a green thread to run
+```
+
+<!-- test: async-await.error.qualified-spawn-generic-instance-constructor -->
+An ordinary call retypes a generic-instance constructor's result to the instance the alias fixes; a
+spawn's result is the PROMISE, whose argument comes from the callee's DECLARED return — the generic
+BASE. There is no promise-side substitution to make, so the await would hand back a value at the wrong
+type.
+```maxon
+type Box uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	let p = async StrBox.create("x")
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-generic-instance-constructor.test:13:23: Unsupported: `async StrBox.create(…)` — `StrBox` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly
+```
+
+<!-- test: async-await.error.spawn-longer-chain-is-not-the-qualified-shape -->
+The qualified reading is recognized on the whole `. <member> (` tail, so a LONGER chain is not that
+shape at all: it falls to the free-call reader, which reports the mismatch at the `.` it cannot
+consume. Pinning it keeps the boundary between the two readers explicit.
+```maxon
+function main() returns ExitCode
+	let p = async lib.inner.deep()
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/async-await/async-await.error.spawn-longer-chain-is-not-the-qualified-shape.test:3:19: Expected '(' but got '.'
+```
+
+<!-- test: async-await.qualified-spawn-namespace-free-call -->
+The ACCEPT case, and the one that proves the refusals above are a boundary rather than a blanket. A
+namespace qualifier is a NAME LOOKUP resolving to a free function the program declares, so the spawn
+has exactly what it needs: a linked address and no receiver.
+```maxon
+// --- file: lib/api.maxon
+typealias Tally = int(0 to 125)
+
+export function bump(v Tally) returns Tally
+	_ = File.exists(FilePath from "noyield.txt")
+	return v + 1
+end 'bump'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let p = async lib.bump(41)
+	return await p
+end 'main'
+```
+```exitcode
+42
+```

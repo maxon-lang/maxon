@@ -2535,3 +2535,475 @@ end 'main'
 0123456789abcdefghijABCDEFGHIJ+0123456789abcdefghijABCDEFGHIJ+
 62
 ```
+
+<!-- test: rc-alias-survives-inner-scope -->
+An outer `var` rebound to an inner block's allocation must keep that allocation alive past the
+block's exit: the inner scope releases the binding, not the object the outer one now owns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var result = Box.create(0)
+	if true 'blk'
+		let inner = Box.create(42)
+		result = inner
+	end 'blk'
+	return result.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-clone-independent-refcount -->
+A clone carries its own record, so reassigning the source cannot reach the clone's fields.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	var x = Pair.create(3, b: 4)
+	let y = x.clone()
+	x = Pair.create(0, b: 0)
+	return y.a + y.b
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: rc-struct-field-store -->
+Storing a parameter into a field is a durable store, so the field must take a reference the
+callee's scope exit cannot take back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var child as Inner
+
+	export function setChild(c Inner)
+		child = c
+	end 'setChild'
+
+	static function create(child Inner) returns Self
+		return Self{child: child}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var o = Outer.create(Inner.create(0))
+	let i = Inner.create(55)
+	o.setChild(i)
+	return o.child.val
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- test: rc-error-propagation-cleans-refs -->
+A value returned through a `try` that propagates must arrive owned: the throwing frame's cleanup
+runs on the error path only, never on the value the success path hands back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
+	let result = try arr.get(0)
+	return result
+end 'getFirst'
+
+function main() returns ExitCode
+	var arr = WrapperArray.create()
+	arr.push(Wrapper.create(99))
+	let w = try getFirst(arr) otherwise Wrapper.create(0)
+	return w.n
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-decref-reclaims-inner-scope -->
+The inner alias holds the outer variable's original object alive across the outer variable being
+reassigned, so the read through the alias must see the old value, not freed memory.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Cell'
+
+function main() returns ExitCode
+	var a = Cell.create(10)
+	var result = 0
+	if true 'inner'
+		let b = a
+		a = Cell.create(20)
+		result = b.value
+	end 'inner'
+	return result + a.value
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-try-otherwise-struct -->
+Both arms of `try ... otherwise` yield a struct, and only the arm actually taken may own one —
+the untaken arm's allocation must never be constructed or must be released.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Fallback
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Fallback'
+
+typealias FallbackArray = Array with Fallback
+
+function main() returns ExitCode
+	var arr = FallbackArray.create()
+	arr.push(Fallback.create(10))
+	let a = try arr.get(0) otherwise Fallback.create(99)
+	let b = try arr.get(5) otherwise Fallback.create(42)
+	return a.n + b.n
+end 'main'
+```
+```exitcode
+52
+```
+
+<!-- test: rc-nested-call-return -->
+A returned temporary passed straight into another call has no binding to hold it, so ownership
+must transfer through the argument position rather than resting on a scope entry.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Num
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Num'
+
+function makeNum(n Integer) returns Num
+	return Num.create(n)
+end 'makeNum'
+
+function addOne(x Num) returns Num
+	return Num.create(x.v + 1)
+end 'addOne'
+
+function main() returns ExitCode
+	let result = addOne(makeNum(10))
+	return result.v
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: rc-function-param-incref -->
+A parameter is borrowed, not consumed: the caller's binding must still be readable after the
+callee returns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export var level as Integer
+
+	static function create(level Integer) returns Self
+		return Self{level: level}
+	end 'create'
+end 'Config'
+
+function readLevel(c Config) returns Integer
+	return c.level
+end 'readLevel'
+
+function main() returns ExitCode
+	let cfg = Config.create(77)
+	let l = readLevel(cfg)
+	return l + cfg.level - 77
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: rc-return-move-nested-scopes -->
+A `return` from inside two nested blocks must move the returned value out through every scope it
+crosses; releasing it at any one of them frees a value the caller then reads.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var name as String
+	export var id as Integer
+
+	static function create(name String, id Integer) returns Self
+		return Self{name: name, id: id}
+	end 'create'
+end 'Item'
+
+function findItem(a Integer, b Integer, target Integer) returns Item
+	if a == target 'check_a'
+		let result = Item.create("first", id: a)
+		return result
+	end 'check_a'
+
+	if b == target 'check_b'
+		if true 'inner'
+			let result = Item.create("second", id: b)
+			return result
+		end 'inner'
+	end 'check_b'
+
+	return Item.create("default", id: 0)
+end 'findItem'
+
+function main() returns ExitCode
+	let item = findItem(10, b: 20, target: 20)
+	print("{item.name}\n")
+	return item.id
+end 'main'
+```
+```exitcode
+20
+```
+```stdout
+second
+```
+
+<!-- test: rc-release-labeled-break-nested -->
+A labeled break leaves two loop body scopes at once, so both must be released — the inner one it
+is standing in and the outer one it is jumping out of.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	var result = 0
+	var i = 0
+	while i < 3 'outer'
+		let p = Pair.create(i, b: i * 10)
+		var j = 0
+		while j < 3 'inner'
+			let q = Pair.create(j, b: j * 10)
+			if p.a == 1 'check'
+				if q.a == 2 'found'
+					result = p.b + q.b
+					break 'outer'
+				end 'found'
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return result
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-release-break-for-in -->
+A for-in body is a scope like any loop body's, so a break out of it must release the iteration's
+allocation rather than relying on the normal end-of-body edge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Item'
+
+function main() returns ExitCode
+	let items = [10, 20, 30, 40, 50]
+	var result = 0
+
+	for item in items 'search'
+		let wrapped = Item.create(item)
+		if wrapped.val == 30 'found'
+			result = wrapped.val
+			break
+		end 'found'
+	end 'search'
+
+	return result
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-release-on-error-propagation -->
+Propagating an error out of a frame exits that frame's scope, so allocations made before the
+throwing call are freed on the way out.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Resource
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Resource'
+
+enum ResourceError
+	case notFound
+end 'ResourceError'
+
+function loadResource() returns Resource throws ResourceError
+	throw ResourceError.notFound
+end 'loadResource'
+
+function process() returns Integer throws ResourceError
+	@heap let marker = Resource.create(42)
+	let res = try loadResource()
+	return res.id + marker.id
+end 'process'
+
+function main() returns ExitCode
+	let result = try process() otherwise 'err'
+		return 99
+	end 'err'
+	return result
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-release-on-error-propagation-in-block -->
+The throwing call sits inside a nested block, so the error edge must unwind every intermediate
+scope as well as the function's own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Wrapper'
+
+enum LookupError
+	case missing
+end 'LookupError'
+
+function failingLookup() returns Integer throws LookupError
+	throw LookupError.missing
+end 'failingLookup'
+
+function compute(flag Integer) returns Integer throws LookupError
+	let w = Wrapper.create(flag)
+
+	if w.val > 0 'positive'
+		let inner = Wrapper.create(w.val * 2)
+		let result = try failingLookup()
+		return result + inner.val
+	end 'positive'
+
+	return 0
+end 'compute'
+
+function main() returns ExitCode
+	let result = try compute(5) otherwise 'err'
+		return 77
+	end 'err'
+	return result
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: rc-generic-function-with-scope-ops -->
+Scope-enter, scope-exit and move ops live in the body a monomorphization clones, so the cloner
+must carry them across; a clone that drops them leaves the instantiation with no cleanup at all.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+function firstOrDefault(arr WrapperArray) returns Wrapper
+	let fallback = Wrapper.create(0)
+	let result = try arr.get(0) otherwise fallback
+	return result
+end 'firstOrDefault'
+
+function main() returns ExitCode
+	var arr = WrapperArray.create()
+	let w = Wrapper.create(42)
+	arr.push(w)
+	let got = firstOrDefault(arr)
+	return got.value
+end 'main'
+```
+```exitcode
+42
+```

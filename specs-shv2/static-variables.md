@@ -739,8 +739,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: top-level-var-enum-initializer -->
-<!-- ⛔ RE-MEASURED 2026-08-22. The reason given here until now — "the CONSTANT EVALUATOR's missing enum-member arm" — is STALE: that arm LANDED, and a payload-free enum case is a top-level constant today (see `a-payload-free-enum-case-is-a-top-level-constant`). The blocker is now one step further on and is a different mechanism: a global whose folded value is an enum case is typed `named(<Enum>)`, and `ProgramSignatures.constantValueTypeOf` interns that name into the WHOLE-PROGRAM table while the reader of the answer is a FILE's parse. So the id is meaningless where it is read, and the slot-width door panics on it: `slotStorageType: a slot's named type has an id that is not in the interner it was asked against`. Its own header calls itself "the twin of `Parser.constantValueTypeOf` on the other interner" — `resolvedGlobalOf` hands its result to a file and calls the whole-program twin. This is the same ADOPTION trap that arm's neighbours already warn about, and it is a defect of the enum-case-constant slice rather than of anything here; it needs its own rung and its own control. (Before that panic existed the same programs died one pass later in `maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering` — so this case has never passed, and nothing regressed it.) -->
+<!-- test: top-level-var-enum-initializer -->
 ```maxon
 enum Color
 		Red
@@ -774,8 +773,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: top-level-var-enum-initializer-cross-file -->
-<!-- ⛔ RE-MEASURED 2026-08-22. The reason given here until now — "the CONSTANT EVALUATOR's missing enum-member arm" — is STALE: that arm LANDED, and a payload-free enum case is a top-level constant today (see `a-payload-free-enum-case-is-a-top-level-constant`). The blocker is now one step further on and is a different mechanism: a global whose folded value is an enum case is typed `named(<Enum>)`, and `ProgramSignatures.constantValueTypeOf` interns that name into the WHOLE-PROGRAM table while the reader of the answer is a FILE's parse. So the id is meaningless where it is read, and the slot-width door panics on it: `slotStorageType: a slot's named type has an id that is not in the interner it was asked against`. Its own header calls itself "the twin of `Parser.constantValueTypeOf` on the other interner" — `resolvedGlobalOf` hands its result to a file and calls the whole-program twin. This is the same ADOPTION trap that arm's neighbours already warn about, and it is a defect of the enum-case-constant slice rather than of anything here; it needs its own rung and its own control. (Before that panic existed the same programs died one pass later in `maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering` — so this case has never passed, and nothing regressed it.) -->
+<!-- test: top-level-var-enum-initializer-cross-file -->
 Cross-file: enum defined in one file, top-level var initialized with it in another.
 ```maxon
 // --- file: api/defs.maxon
@@ -2835,9 +2833,9 @@ end 'main'
 ```
 
 <!-- test: error.a-case-the-union-does-not-declare-is-still-refused -->
-⛔ **THE BOUNDARY THAT SURVIVED, and it is one BOTH compilers keep.** Admitting a boxed union's
-payload-free case does not admit any member name at all: `noSuchCase` is not a case of `Boxed`, so the arm
-declines it and the constant evaluator reports it where the author wrote it. The oracle refuses the same
+⛔ **THE BOUNDARY THAT SURVIVED, and it is one BOTH compilers keep.** Admitting a boxed union's cases does
+not admit any member name at all: `noSuchCase` is not a case of `Boxed`, so both arms decline it and the
+constant evaluator reports it where the author wrote it. The oracle refuses the same
 program too (E3034, *unknown enum case*) — unlike the case above, this refusal is a RULE and not a slice
 boundary, which is the whole reason it is the one kept as the control.
 ```maxon
@@ -2858,7 +2856,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:20: Unsupported: `Boxed.noSuchCase` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, a payload-free enum or union case, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+error E2015: <fragment>:9:20: Unsupported: `Boxed.noSuchCase` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
 ```
 
 ### AN ARRAY LITERAL OF ENUM CASES
@@ -2998,4 +2996,358 @@ end 'main'
 ```
 ```maxoncstderr
 error E2073: <fragment>:9:13: type 'Box' has no static member named 'min'
+```
+
+<!-- test: global-union-array-literal -->
+A union case's payload operand is read only by the enum-construct op, so a dead-op scan that
+cannot see that read deletes the literal the case was built from.
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+union Op
+	add(value Val)
+	nop
+end 'Op'
+
+var globalOps = [Op.add(7), Op.nop]
+
+function main() returns ExitCode
+	let first = try globalOps.get(0) otherwise Op.nop
+	return match first 'check'
+		add(v) gives v
+		nop gives 99
+	end 'check'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: global-bytestring-map-with-union-array -->
+Neither ingredient alone exposes the hole: the map supplies a live global whose producer chain
+runs through module init, and the union supplies the unscanned payload read.
+```maxon
+typealias Kind = int(0 to 100)
+typealias Val = int(i64.min to i64.max)
+
+type KeywordInfo
+	export var kind as Kind
+	export var helpText as String
+
+	export static function create(kind Kind, helpText String) returns KeywordInfo
+		return Self{kind: kind, helpText: helpText}
+	end 'create'
+end 'KeywordInfo'
+
+union Op
+	add(value Val)
+	nop
+end 'Op'
+
+typealias OpArray = Array with Op
+
+var keywordMap = [
+	b"if": KeywordInfo.create(1, helpText: "Conditional statement."),
+	b"else": KeywordInfo.create(2, helpText: "Alternative branch.")
+]
+
+function main() returns ExitCode
+	var ops = OpArray.create()
+	ops.push(Op.add(1))
+	ops.push(Op.nop)
+
+	let info = try keywordMap.get(b"if") otherwise KeywordInfo.create(0, helpText: "")
+	if info.kind != 1 'badLookup'
+		return 1
+	end 'badLookup'
+
+	return 0 if ops.count() == 2 and keywordMap.count() == 2 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: global-map-with-union-values -->
+The enum-construct sits directly inside the map literal's value buffer, so the payload read and
+the map's element-assign chain are pruned by one and the same pass.
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+union Op
+	add(value Val)
+	nop
+end 'Op'
+
+var opMap = [
+	b"add": Op.add(5),
+	b"nop": Op.nop
+]
+
+function main() returns ExitCode
+	let op = try opMap.get(b"add") otherwise Op.nop
+	return match op 'check'
+		add(v) gives v
+		nop gives 99
+	end 'check'
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: live-global-survives-dead-global-pruning -->
+A dead global is what makes the pruning pass run at all, and the pass then walks the whole module
+init block — so the live global's byte-string keys and interpolated strings, all pure producers,
+are exposed to the same scan.
+```maxon
+typealias Kind = int(0 to 100)
+
+type KeywordInfo
+	export var kind as Kind
+	export var helpText as String
+
+	export static function create(kind Kind, helpText String) returns KeywordInfo
+		return Self{kind: kind, helpText: helpText}
+	end 'create'
+end 'KeywordInfo'
+
+function describe(n Kind) returns String
+	return "kind {n}"
+end 'describe'
+
+var keywordMap = [
+	b"if": KeywordInfo.create(1, helpText: describe(1)),
+	b"else": KeywordInfo.create(2, helpText: describe(2))
+]
+
+var unusedNames = StringArray.create()
+
+function main() returns ExitCode
+	let info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")
+	if info.helpText != "kind 2" 'badHelp'
+		return 1
+	end 'badHelp'
+
+	return 0 if keywordMap.count() == 2 and info.kind == 2 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: module-union-store-then-match -->
+A store of a payload-carrying case into a module-level union var. The wrong answer is silent: the
+match reads the slot's ordinal rather than the box's tag and gives 0.
+```maxon
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.unowned
+
+function seed()
+	hold = Hold.owned(5)
+end 'seed'
+
+function main() returns ExitCode
+	seed()
+	return match hold 'm'
+		unowned gives 0
+		owned(v) gives v
+	end 'm'
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: module-union-two-storing-functions -->
+Two functions each store a different case, so a stale value id carried between them has no
+definition in its own function and surfaces out of the register allocator rather than as an answer.
+```maxon
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.unowned
+
+function seed()
+	hold = Hold.owned(5)
+end 'seed'
+
+function clear()
+	hold = Hold.unowned
+end 'clear'
+
+function main() returns ExitCode
+	clear()
+	seed()
+	return match hold 'm'
+		unowned gives 0
+		owned(v) gives v
+	end 'm'
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: module-union-read-initializer -->
+The declared initializer reaches `main` neither read nor written on the way, so the tag read must
+find the case the declaration named.
+```maxon
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.owned(9)
+
+function main() returns ExitCode
+	return match hold 'm'
+		unowned gives 0
+		owned(v) gives v
+	end 'm'
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: module-union-reassign-releases-old -->
+Each store to the global releases the previous occupant; a loop of them leaks otherwise, and the
+suite fails the run on a leaked allocation.
+```maxon
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.unowned
+
+function main() returns ExitCode
+	var i = 0
+	while i < 10 'fill'
+		hold = Hold.owned(i as Small)
+		i = i + 1
+	end 'fill'
+
+	return match hold 'm'
+		unowned gives 0
+		owned(v) gives v
+	end 'm'
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: module-union-payload-free-union-stays-scalar -->
+A union whose cases all lack payloads is a bare discriminant rather than a box, so its global
+keeps the compile-time-constant ordinal — the control for the boxed cases above.
+```maxon
+union Mode
+	off
+	on
+end 'Mode'
+
+var mode = Mode.off
+
+function seed()
+	mode = Mode.on
+end 'seed'
+
+function main() returns ExitCode
+	seed()
+	return match mode 'm'
+		off gives 0
+		on gives 6
+	end 'm'
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: module-enum-stays-scalar -->
+A plain enum global folds to its ordinal, which is the second control: nothing about the union
+boxing may reach a type that never had a payload to box.
+```maxon
+enum Color
+	red
+	green
+end 'Color'
+
+var c = Color.red
+
+function seed()
+	c = Color.green
+end 'seed'
+
+function main() returns ExitCode
+	seed()
+	return match c 'm'
+		red gives 0
+		green gives 7
+	end 'm'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: module-union-in-monomorphized-method -->
+Monomorphization rebuilds every op in the body, so the slot's type name must travel with the
+rebuilt load and store; without it the specialization alone lowers the global as a bare integer
+and the tag read dereferences it.
+```maxon
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.unowned
+
+type Cell uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function stash(v Small)
+		hold = Hold.owned(v)
+	end 'stash'
+
+	export function readBack() returns Small
+		return match hold 'r'
+			unowned gives 0
+			owned(v) gives v
+		end 'r'
+	end 'readBack'
+end 'Cell'
+
+typealias SmallCell = Cell with Small
+
+function main() returns ExitCode
+	let c = SmallCell.create(1)
+	c.stash(5)
+	return c.readBack()
+end 'main'
+```
+```exitcode
+5
 ```

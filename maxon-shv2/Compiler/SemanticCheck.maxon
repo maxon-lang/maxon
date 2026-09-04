@@ -2590,8 +2590,9 @@ end 'checkCalls'
 // pre-resolution types and must type the promise safely); this is the one check the parser cannot make — a
 // callee declared in another file, whose param types only the whole-program `funcSignatures` registry has.
 function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
-	// `notMinted`: `parseAsyncCall` consumes a bare `identifier` callee, so an `async` spawn's name is always
-	// the author's own bytes (`async int.fromString(s)` does not parse at all).
+	// `notMinted`: `Parser.asyncSpawnCallee` admits only a name the author wrote — a free call's identifier or
+	// a `<Type>.<static>` mangle of two written tokens — and refuses a MINTED callee in words, because
+	// `MaxonOp.asyncCall` carries no `mint` field to tell the two apart.
 	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: CalleeMint.notMinted, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 	requireAsyncScalarParams(project, func: func, signatures: signatures, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
@@ -4896,12 +4897,69 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 	// wild free this rung exists to refuse; a green suite could never show it, because the check that
 	// vanished is the one that reports.
 	let tag = try func.valueTags.get(subject) otherwise panic("checkTypeParameterArgs: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
-	if tag != ValueTypeTag.genericInstance 'notAnInstance'
+	let subjectNameId = try func.valueNameIds.get(subject) otherwise panic("checkTypeParameterArgs: value v{subject} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	if tag == ValueTypeTag.genericInstance 'aConcreteInstance'
+		checkTypeParameterArgsAt(project, func: func, gid: subjectNameId as GenericInstanceId, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 		return
-	end 'notAnInstance'
+	end 'aConcreteInstance'
 
-	checkTypeParameterArgsAt(project, func: func, gid: (try func.valueNameIds.get(subject) otherwise panic("checkTypeParameterArgs: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep") as GenericInstanceId), sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+	// ⚠ **A `structRef` RECEIVER, AND ONLY A RECEIVER.** It is a value of the base itself — no `with` has
+	// reached it — so an opaque formal of THAT declaration is unbound at this call and its argument can be
+	// judged on identity alone. A RECEIVERLESS call's subject is instead the call's own RESULT, which for
+	// `Box.create(…)` is the unbound-`T` construct `error.bare-generic-constructor-unbound-t` pins: that one
+	// is refused where the unbound value MEETS a typed place, and reporting it a second time here would
+	// replace a recorded diagnostic with one about the construct's inside.
+	if tag == ValueTypeTag.structRef and sig.takesReceiver() 'aReceiverOfTheBaseItself'
+		checkUnboundTypeParameterArgs(project, func: func, base: aggregateNameFor(project, tag: tag, nameId: subjectNameId, readerFilePath: filePath), sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+	end 'aReceiverOfTheBaseItself'
 end 'checkTypeParameterArgs'
+
+// ⭐⭐ **THE ARGUMENT TWIN OF THE OPAQUE FIELD-WRITE DOOR (E3005).** `Parser.requireSlotAggregateIdentity`
+// refuses `self.value = Label.create(77)` inside `Box uses T` on the ordinary identity comparison: an
+// unsubstituted `T` slot carries an EMPTY aggregate name, and empty meeting `Label` is a conflict. A
+// PARAMETER is that same opaque place one door along, and nothing asked it — `put(Label.create(77))`
+// compiled clean and passed the `Label` box's ADDRESS into a slot the instantiation had fixed as an integer
+// (MEASURED: `panic: Range check failed: value outside typealias 'ExitCode'`).
+//
+// ⚠ **IT DECIDES ONLY WHERE THE BINDING QUESTION ANSWERS ITSELF**, which is both halves of its guard: the
+// receiver is the declaration's own base, and the formal is THAT declaration's parameter. A concrete value
+// meeting a type parameter bound somewhere ABOVE is a different program and a legal one —
+// `stdlib/Interfaces.maxon` hands a concrete iterator to a `Source` formal, correct because the instance two
+// levels up binds `Source` to exactly that iterator — and such a call arrives at
+// `checkTypeParameterArgsAt`, where the substitution decides it. So the refusal never rests on the value's
+// runtime identity, only on a place nothing can have bound.
+//
+// The verdict is `aggregatesConflict`, over the two names its own producers spell — the same authority and
+// the same two halves the field door asks — so the two cannot come to disagree about what an opaque place
+// accepts. At most one argument is reported per call, the bound every argument walk here keeps.
+function checkUnboundTypeParameterArgs(project Project, func IrFunction, base ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
+	// ⚠ `var` for `checkTypeParameterArgsAt`'s reason — the index memoizes as it is asked.
+	var signatures = programSignaturesIn(project, asker: "checkUnboundTypeParameterArgs")
+	for i in 0 upto argIds.count() 'eachArg'
+		let paramType = try sig.paramTypes.get(i) otherwise panic("checkUnboundTypeParameterArgs: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature")
+		if maxonTypeTag(paramType) != ValueTypeTag.typeParameter 'concreteParam'
+			continue
+		end 'concreteParam'
+
+		if not signatures.opaqueTypeParamDeclaredBy(paramType, typeName: base) 'anotherDeclarationsParameter'
+			continue
+		end 'anotherDeclarationsParameter'
+
+		let argId = try argIds.get(i) otherwise panic("checkUnboundTypeParameterArgs: argIds.get OOB at {i}")
+		let argTag = try func.valueTags.get(argId) otherwise panic("checkUnboundTypeParameterArgs: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkUnboundTypeParameterArgs: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+		// The EXPECTED side is asked of the shared producer rather than written as the empty name it must be:
+		// "an opaque place carries no nominal identity" is `typeArgAggregateName`'s sentence, and a second
+		// spelling of it here is a second place for it to change.
+		if not signatures.aggregatesConflict(signatures.typeArgAggregateName(paramType, readerFilePath: filePath), expectedTag: ValueTypeTag.typeParameter, expectedNameId: typeNameIdOf(paramType), expectedBrand: paramBrandOf(sig, position: i, paramTag: ValueTypeTag.typeParameter), got: aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath), gotTag: argTag, gotNameId: argNameId, gotBrand: valueBrandOf(project, func: func, value: argId)) 'claimsNoConcreteIdentity'
+			continue
+		end 'claimsNoConcreteIdentity'
+
+		let paramName = try sig.paramNames.get(i) otherwise panic("checkUnboundTypeParameterArgs: paramNames.get OOB at {i}")
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "{argTypeMismatchMessage(paramName, position: i, expected: typeTagName(ValueTypeTag.typeParameter), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath))}: {ConcreteValueAtOpaquePlaceSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
+		return
+	end 'eachArg'
+end 'checkUnboundTypeParameterArgs'
 
 // The body of the type-parameter argument check once the call's concrete instance is known. Only the
 // positions whose DECLARED type is a bare type parameter are substituted; every other position was already
@@ -5003,9 +5061,10 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		//
 		// ⚠ **IT CANNOT REACH A GENERIC BODY'S OWN `T`.** `checkTypeParameterArgs` only arrives here when the
 		// call's subject is tagged `genericInstance` — a concrete instance — so a call made inside a generic
-		// body on a `self` receiver (tagged with the base `structRef`) never substitutes and keeps the P1.6-A
-		// deferral it must have: inside the body `T` is genuinely opaque and `tagIsIntegral(typeParameter)`
-		// stays `false`.
+		// body on a `self` receiver (tagged with the base `structRef`) never substitutes, and the SCALAR
+		// deferral P1.6-A requires stands: inside the body `T` is genuinely opaque and
+		// `tagIsIntegral(typeParameter)` stays `false`. Its NOMINAL half is judged by
+		// `checkUnboundTypeParameterArgs`, which needs no substitution because there is nothing to substitute.
 
 		// Two IDENTITIES that agreed have settled the argument; an unnamed value that DECAYED into an alias
 		// slot has not, because the decay is by name and the tag rule below still has to refuse a `String`

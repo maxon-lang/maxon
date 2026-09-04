@@ -1,0 +1,100 @@
+// Test: rc-release-labeled-break-nested
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	var result = 0
+	var i = 0
+	while i < 3 'outer'
+		let p = Pair.create(i, b: i * 10)
+		var j = 0
+		while j < 3 'inner'
+			let q = Pair.create(j, b: j * 10)
+			if p.a == 1 'check'
+				if q.a == 2 'found'
+					result = p.b + q.b
+					break 'outer'
+				end 'found'
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+  whilehdr#1:
+    arm64.cmp x1, 3
+    arm64.b.ge whileexit#3
+  outer:
+    arm64.movImm x16, 10
+    arm64.mul x2, x1, x16
+    arm64.leaRegSlot x3, slot0
+    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.storeBaseDispReg.word64 [x3 + 8], x2
+    arm64.movImm x2, 0
+  whilehdr#4:
+    arm64.cmp x2, 3
+    arm64.b.ge whileexit#6
+  inner:
+    arm64.movImm x16, 10
+    arm64.mul x4, x2, x16
+    arm64.leaRegSlot x5, slot2
+    arm64.storeBaseDispReg.word64 [x5 + 0], x2
+    arm64.storeBaseDispReg.word64 [x5 + 8], x4
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.cmp x4, 1
+    arm64.b.ne ifcont
+  check:
+    arm64.loadRegBaseDisp.word64 x4, [x5 + 0]
+    arm64.cmp x4, 2
+    arm64.b.ne ifcont
+  found:
+    arm64.loadRegBaseDisp.word64 x0, [x3 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x5 + 8]
+    arm64.add x0, x0, x1
+    arm64.b whileexit#3
+  ifcont:
+    arm64.add x2, x2, 1
+    arm64.b whilehdr#4
+  whileexit#6:
+    arm64.add x1, x1, 1
+    arm64.b whilehdr#1
+  whileexit#3:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-release-labeled-break-nested.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 48
+    arm64.ret
+}

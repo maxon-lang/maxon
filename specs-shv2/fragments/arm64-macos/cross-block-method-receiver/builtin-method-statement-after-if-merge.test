@@ -1,0 +1,82 @@
+// Test: builtin-method-statement-after-if-merge
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	if 2 > 1 'grow'
+		mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 2
+	end 'grow'
+	mm.resize(3)
+	return mm.count()
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 4
+    arm64.movImm x1, 8
+    arm64.bl __managed_mem_create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq grow
+  tryerr#2:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  grow:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 8
+    arm64.bl __managed_mem_create
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#5:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  ifcont:
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_resize
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at builtin-method-statement-after-if-merge.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

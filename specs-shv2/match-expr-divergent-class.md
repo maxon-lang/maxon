@@ -233,3 +233,20 @@ end 'main'
 ```exitcode
 10
 ```
+
+<!-- test: error.match-gives-string-and-int-cast -->
+The ill-typed result feeds an `as` cast, which is where an unguarded compiler reaches the cast with no
+type to cast from. The give-type check rejects it at the `match`, before the cast is ever asked.
+```maxon
+function main() returns ExitCode
+	let c = 1
+	let out = match c 'pick'
+		0 gives "hello"
+		default gives 5
+	end 'pick'
+	return out as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-string-and-int-cast.test:4:12: match arms give incompatible types: 'int' vs 'String'
+```

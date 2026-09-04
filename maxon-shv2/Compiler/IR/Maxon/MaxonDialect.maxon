@@ -1360,6 +1360,11 @@ export union MaxonOp
 	// promise handle (the spawned GT's pointer). The parser rejects a managed/float async arg or result
 	// (E2015) before this op is emitted, so every `args` value and the callee's return are GPR scalars.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
+	//
+	// ⚠ **NO `mint` FIELD, UNLIKE `call` — and `Parser.asyncSpawnCallee` is what keeps that honest.** A
+	// spawn's `callee` is always bytes the author wrote (a free identifier, or a `<Type>.<static>` mangle of
+	// two written tokens); a MINTED callee (`int.fromString` → `__int_fromString`) is REFUSED at the parse
+	// door rather than carried here, so every reader downstream may read this name as the author's own.
 	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.

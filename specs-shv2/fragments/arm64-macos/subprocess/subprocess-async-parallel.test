@@ -1,0 +1,263 @@
+// Test: subprocess-async-parallel
+typealias SubP = Promise with (CollectedOutput, SubprocessError)
+typealias SubPArray = Array with SubP
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sleep") otherwise return 7)
+	#endif
+	let count = 4
+	var promises = SubPArray.create()
+
+	let start = Clock.nowMs()
+	var i = 0
+	while i < count 'spawn'
+		var argv = StringArray.create()
+		#if os(Windows)
+		argv.push("/c")
+		argv.push("ping")
+		argv.push("127.0.0.1")
+		argv.push("-n")
+		argv.push("2")
+		#else
+		argv.push("1")
+		#endif
+		promises.push(async Subprocess.run(exe, arguments: argv))
+		i = i + 1
+	end 'spawn'
+	for p in promises 'drain'
+		let r = try await p otherwise return 2
+		if not r.succeeded() 'check-success'
+			return 3
+		end 'check-success'
+	end 'drain'
+	let elapsed = Clock.elapsedMs(start)
+
+	// Sequential: ~4200ms. Parallel: ~2000-2200ms. 3500ms catches a
+	// regression to sequential dispatch (e.g. if subprocess_wait_internal
+	// stops yielding to the scheduler or work-stealing breaks).
+	if elapsed >= 3500 'check-parallel'
+		return 4
+	end 'check-parallel'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __io_iocp@248 = i64 0
+  __io_done_event@256 = i64 0
+  __io_init_done@264 = i64 0
+  __io_pending@272 = i64 0
+  __io_pipe_seq@280 = i64 0
+  __subp_table@288 = i64 0
+  __subp_last_error@296 = i64 0
+  __slab_arena_list@304 = i64 0
+  __slab_arena_map_l1@312 = i64 0
+  __slab_state@320 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_25  ; "/bin/sleep"
+    arm64.bl FilePath.from
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 7
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __gt_promise_drop
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.bl Clock.nowMs
+    arm64.movRegReg x21, x0
+    arm64.movImm x22, 0
+  whilehdr:
+    arm64.cmp x22, 4
+    arm64.b.ge whileexit
+  spawn:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_26  ; "1"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_incref
+    arm64.leaFuncAddr x0, Subprocess.run
+    arm64.bl __gt_spawn
+    arm64.movRegReg x24, x0
+    arm64.storeBaseDispReg.word64 [x24 + 200], x20
+    arm64.storeBaseDispReg.word64 [x24 + 208], x23
+    arm64.leaFuncAddr x0, __gt_release_Subprocess.run
+    arm64.storeBaseDispReg.word64 [x24 + 176], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_push
+    arm64.add x22, x22, 1
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x22, 0
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x22, x0
+    arm64.b.ge forexit
+  drain:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x23, [x0 + x22*8 + 0]
+  __im_cont:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_vacate
+    arm64.movRegReg x0, x23
+    arm64.bl __gt_try_await
+    arm64.movRegReg x23, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#10
+  tryerr#11:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#10:
+    arm64.movRegReg x0, x23
+    arm64.bl CollectedOutput.succeeded
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#13
+  check-success:
+    arm64.movImm x21, 3
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_CollectedOutput
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#13:
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_CollectedOutput
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x21
+    arm64.bl Clock.elapsedMs
+    arm64.cmp x0, 3500
+    arm64.b.lt ifcont#15
+  check-parallel:
+    arm64.movImm x21, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#15:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

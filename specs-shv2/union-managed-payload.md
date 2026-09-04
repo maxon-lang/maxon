@@ -29,17 +29,27 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   > premise behind it was retracted: two sinks for one value each need a
   > reference of their own. `construct-co-owns-string-source` and
   > `construct-co-owns-struct-source` below are the two cases that were flipped.
-  > **The MOVE-OUT rules below are a different question and are unchanged** — a
-  > `match` binding still moves a payload OUT of a solely-owned box, because it
-  > nulls the slot rather than adding an owner.
-- **A match binding on a SOLELY-OWNED union is a MOVE-OUT.** `match u { case(x) then … }`
-  loads the managed field into `x` (which becomes an owned binding, dropped at its
-  own scope exit) and clears the box slot. After the match `u` is moved-from (a
-  later read is `E3102`). A discard `_`, an unbound tag-only arm, and a
-  payload-free / scalar arm bind nothing and leave the box owned — `u` is dropped
-  at scope exit. **Sole ownership is the requirement, not ownership**: a
-  freshly-constructed `let u = U.case(s)` qualifies; a box this frame merely holds
-  *a* reference to does not — see the co-owned bullet below.
+  > **The MOVE-OUT rules below are a different question** — a `match` binding on an
+  > IMMUTABLE solely-owned box still moves a payload OUT of it, because it nulls
+  > the slot rather than adding an owner.
+- **A match binding on a SOLELY-OWNED IMMUTABLE union is a MOVE-OUT.**
+  `let u = U.case(s)` then `match u { case(x) then … }` loads the managed field
+  into `x` (which becomes an owned binding, dropped at its own scope exit) and
+  clears the box slot. After the match `u` is moved-from (a later read is
+  `E3102`). A discard `_`, an unbound tag-only arm, and a payload-free / scalar
+  arm bind nothing and leave the box owned — `u` is dropped at scope exit.
+  **Sole ownership is the requirement, not ownership**: a freshly-constructed
+  `let u = U.case(s)` qualifies; a box this frame merely holds *a* reference to
+  does not — see the co-owned bullet below.
+- **A match binding on a `var` union is a RETAIN, and the union survives it.** Its
+  payload slot is a place the arms may still write (`specs-shv2/mutable-enums.md`),
+  so the binding is a window onto that slot rather than its new owner: the bind
+  increfs, the slot is left intact, the binding drops its own reference at the
+  arm's exit, and a later `match u` is legal. An arm that MUTATES its payload in
+  place (`text.append(" tail")`) never assigns the binding at all, so a move-out
+  would hand the record to a binding that frees it at the arm's exit and leave the
+  box holding a null the author never emptied. Assigning the binding still writes
+  back into the slot, releasing the payload it displaces.
 - **A match binding on a BORROWED union is a RETAIN.** Where the scrutinee is a
   parameter or a method receiver, the box's owner is the caller's local and
   survives the call, so ownership cannot be moved out of it. The bind emits
@@ -1432,9 +1442,9 @@ the taken arm b string, long enough to be a real heap allocation
 ```
 
 <!-- test: var-reassign-after-partial-move -->
-A `var` union consumed by a binding-match is `partiallyMoved` (a re-read is E3102), but a REASSIGNMENT
-revives it: the fresh value has no moved-out slots, so a later match is legal again. The old box (with
-its nulled payload slot) is dropped at the reassignment; the new one at scope exit — both leak-free.
+A `var` union survives a binding-match — the bind retains rather than moving out — and a REASSIGNMENT
+between the two matches is the shape this case pins: the old box is dropped at the reassignment, payload
+and all, and the new one at scope exit, both leak-free.
 ```maxon
 
 union Message

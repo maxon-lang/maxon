@@ -21,10 +21,14 @@ compiling:
 
 - `Self{...}` inside any of the type's own methods.
 - `Type{...}` written inside `Type`'s own body.
-- Construction through a typealias visible at the site — an inner alias of the
-  type/extension body being parsed (e.g. `Map`'s `typealias KeyArray = Array
-  with Key`, constructed as `KeyArray{}` in `Map`'s methods), or a top-level
-  alias.
+- An inner alias of the body being parsed that names a container this compiler
+  owns (e.g. `Map`'s `typealias KeyArray = Array with Key`, constructed as
+  `KeyArray{}` in `Map`'s methods). The exemption stops there: an inner alias
+  naming a USER generic keeps E3076, because a type's construction-time
+  invariants would otherwise be void against any type willing to declare an
+  alias to it, and a TOP-LEVEL alias keeps E3076 for the same reason. Both take
+  `<Alias>.create(...)` instead. `specs-shv2/inner-alias-construction.md` pins
+  every one of these directions.
 
 Compiler builtin managed types (`__ManagedMemory`, `__ManagedFile`, ...) are
 never constructible with a struct literal and report E3072 instead.

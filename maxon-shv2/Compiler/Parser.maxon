@@ -3110,6 +3110,53 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
+// ⭐⭐ **THE COMPILER-OWNED SURFACE A `<Type>.` BASE DENOTES, OR `none`** — the five statics that lower to a
+// runtime entry of the compiler's own rather than to a function the program declares. Decided from the base
+// alone, so it is asked BEFORE the `.` is consumed and each arm's sub-reader still receives the cursor it
+// expects.
+//
+// ⭐⭐ **IT IS A VALUE BECAUSE TWO DOORS ASK IT.** `Parser.parseQualifiedCall` ROUTES on it; the `async`
+// spawn reader REFUSES on it, because a spawn hands `__gt_spawn` the ADDRESS of a function the program
+// links and none of these five is one. A second roster in the async reader would silently admit whichever
+// surface is added next — an `asyncCall` naming a callee no file declares, which is a link failure rather
+// than a diagnostic.
+//
+// `none` is LAST so the five refusable arms are one contiguous range in a match.
+union CompilerOwnedStaticSurface
+	managedFile
+	managedDirectory
+	managedSocket
+	managedMemory
+	containerAlias(giid GenericInstanceId)
+	none
+end 'CompilerOwnedStaticSurface'
+
+// ⭐⭐ **THE CALLEE A `<Type>.<member>(…)` NAMES once the compiler-owned surfaces have declined** — the half
+// of the qualified-call resolution that needs the member token. The three arms are three answers to *"whose
+// name is this?"*, which is precisely what the `async` door has to know: a MINTED name is one
+// `MaxonOp.asyncCall` cannot carry (it has no `mint` field), while the other two are ordinary declared
+// functions a spawn can take the address of.
+union QualifiedStaticCallee
+	// `int.fromString` → `__int_fromString` (`CalleeMint.primitiveStatic`).
+	minted(callee ByteArray)
+	// `utils.helper()` — a free function reached through its directory qualifier (N1b).
+	namespaceQualifiedFree(callee ByteArray)
+	// `File.readText` at its registration key — the ordinary static.
+	declared(callee ByteArray)
+end 'QualifiedStaticCallee'
+
+// The callee an `async` spawn names, with the token its diagnostics anchor on — the MEMBER for a qualified
+// spawn, which is `parseQualifiedCall`'s anchor too, so `async File.frobnicate(…)` reports at the member the
+// author got wrong rather than at the type that is fine.
+type AsyncSpawnCallee
+	export let name as ByteArray
+	export let anchor as Token
+
+	export static function create(name ByteArray, anchor Token) returns AsyncSpawnCallee
+		return AsyncSpawnCallee{name: name, anchor: anchor}
+	end 'create'
+end 'AsyncSpawnCallee'
+
 // ⭐ **THE THREE SHAPES A NESTED (inner) TYPEALIAS TAKES (P1.6-C / P1.7 slice 3b-i).** A `typealias Idx =
 // int(0 to N)` is a RANGED per-instance alias; a `typealias ElementArray = Array with T` is a
 // GENERIC-INSTANCE alias whose instance (`Array with typeParameter(token)`) is partially opaque; a
@@ -4457,7 +4504,7 @@ let MixedArrayLiteralElementsMessage = "an array literal with mixed element type
 // The map-literal twin of the sentence above, for the TOP-LEVEL literal. It is composed the way
 // `parseHashTableColumnArg`'s is — the COLUMN's subject, then what arrived — so a mixed literal is refused in
 // the same shape wherever it was written; what it cannot share is the type SPELLINGS, which only the index's
-// own interner can render (`ProgramSignatures.constMapColumnCheck`, whose header carries why).
+// own interner can render (`ProgramSignatures.constContainerColumnCheck`, whose header carries why).
 function constMapColumnMessage(columnNoun String, expected String, got String) returns String
 	return "this `{String.from(MapBuiltinBaseName)}`'s {columnNoun} is '{expected}' — got a '{got}' value. A top-level map literal's FIRST pair fixes both columns, and every later pair must match them"
 end 'constMapColumnMessage'
@@ -4470,6 +4517,19 @@ union ConstMapColumns
 	open
 	fixed(key MaxonType, value MaxonType)
 end 'ConstMapColumns'
+
+// ⭐⭐ **THE THREE THINGS A `[` CAN OPEN IN A CONSTANT INITIALIZER.** Two of them BUILD a record through the
+// arena — a map literal and an array whose elements are records — and the third FOLDS to one `.rdata` image.
+// A value rather than a pair of predicates because the fork is asked by the test that CLAIMS the initializer
+// and again by the walk that CONSUMES it, and two spellings of "which literal is this?" are how the two would
+// come to answer differently about one set of brackets.
+//
+// `constantImage` is LAST so the two node arms are one contiguous range in a match.
+union ConstBracketedLiteral
+	mapLiteral
+	recordArray
+	constantImage
+end 'ConstBracketedLiteral'
 
 // ⭐ **THE NOUNS A BRACKETED LITERAL'S REFUSALS ARE COMPOSED FROM.** `[…]` spells TWO containers — an array,
 // whose one column is its ELEMENT, and a map, whose two are its KEY and its VALUE — and `literalColumnTypeFor`
@@ -4979,9 +5039,9 @@ end 'shortCircuitOperator'
 // a payload-free enum case folds to its tag and its TYPE is the enum — and is ignored by every other, which
 // names no type. It takes an ID rather than the bytes the constant carries because interning is the
 // CALLER's: there is one table per Parser and one on `ProgramSignatures`, and which one a type belongs to
-// is a fact only the caller has. The two wrappers (`Parser.constantValueTypeOf`,
-// `ProgramSignatures.constantValueTypeOf`) are that one line each, and they intern ONLY for `named`.
-export function constantValueType(tag ValueTypeTag, typeNameId TypeNameId) returns MaxonType
+// is a fact only the caller has. `constantValueTypeIn` below is the one door that does that interning, and
+// it names the table in its signature so no caller can mint into a table its reader cannot read.
+function constantValueType(tag ValueTypeTag, typeNameId TypeNameId) returns MaxonType
 	if tag == ValueTypeTag.named 'anEnumCase'
 		return MaxonType.named(typeNameId)
 	end 'anEnumCase'
@@ -5000,6 +5060,20 @@ export function constantValueType(tag ValueTypeTag, typeNameId TypeNameId) retur
 
 	panic("constantValueType: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 end 'constantValueType'
+
+// ⭐ **THE `MaxonType` A FOLDED CONSTANT DENOTES, MINTED IN THE TABLE `into` NAMES.** A folded enum or
+// union case carries its type's BYTES rather than an id precisely so that the party holding the reader can
+// choose the table — a `named` id minted in `ProgramSignatures`' table is meaningless in a file's parse and
+// panics the first door that resolves it (`slotStorageType`, `foreignNameOf`). Only a `named` tag has a name
+// to intern, so every other constant read pays nothing, which matters because this is on the path of every
+// top-level constant reference in the program.
+export function constantValueTypeIn(tag ValueTypeTag, typeName ByteArray, into TypeNameInterner) returns MaxonType
+	if tag != ValueTypeTag.named 'namesNoType'
+		return constantValueType(tag, typeNameId: 0)
+	end 'namesNoType'
+
+	return constantValueType(tag, typeNameId: into.intern(typeName))
+end 'constantValueTypeIn'
 
 // The interned-NAME id of a function's declared return type, for a function KNOWN to return a value —
 // the id half of `maxonReturnTypeTag` (MaxonDialect), read where the aggregate-identity check needs a
@@ -21199,7 +21273,7 @@ export type Parser
 			let inferred = try self.readFieldDefaultLiteral()
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
-			layout.addField(nameTok.value, declaredType: self.constantValueTypeOf(inferred.tag, typeName: inferred.typeName), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag, writtenNegative: inferred.writtenNegative), declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
+			layout.addField(nameTok.value, declaredType: constantValueTypeIn(inferred.tag, typeName: inferred.typeName, into: self.artifact.typeNames), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag, writtenNegative: inferred.writtenNegative), declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
 			return
 		end 'typeFromLiteral'
 
@@ -29937,6 +30011,17 @@ export type Parser
 			// (`first-class-functions`, `managed-memory-methods`, `self-type-member-expression`) and its
 			// category-not-text wording is theirs, not this port's.
 			let memberTok = self.current()
+
+			// ⭐ **A BASE THAT NAMES NOTHING IS A DEFECT IN THE NAME, NOT IN THE STATEMENT.** `arr.reserve(8)`
+			// after the arm holding `var arr` has closed spells a name with no binding anywhere, and E2015's
+			// sentence — a shape this compiler does not lower yet — is false of it: no relaxation makes an
+			// undefined name legal. It takes `undefinedVariable`, the SAME refusal an expression-position read
+			// of that name takes, from the same producer. `baseNamesNothingAt` decides it, and every base that
+			// names something real still reaches the refusal below.
+			if self.baseNamesNothingAt(self.pos) 'undefinedBase'
+				throw ParseError.undefinedVariable(String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
+			end 'undefinedBase'
+
 			throw ParseError.unsupported("{memberTok.kind.rawValue} statement", line: memberTok.line, column: memberTok.column)
 		end 'memberExprStmt' else 'strayStatementToken'
 			// A bare `foo` on a line of its own, a `retur x` typo, a `test` that meant `test()`. Every arm
@@ -31431,19 +31516,23 @@ export type Parser
 		// with that backstop — the specific voice first, the generic one only for stores no parser door owns.
 		try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in payload binding '{String.from(binding.name)}': {CapturingClosureEscapeSuffix}", tok: nameTok)
 
-		// ⛔ **THE PREMISE, STATED LOUDLY: A MANAGED PAYLOAD REACHING A WRITE-BACK WAS MOVED OUT.** The store
-		// below overwrites the slot without releasing what it held, which is sound ONLY because a move-out
-		// nulled it. `declarePayloadBindings` guarantees that by making a RETAINED managed payload read-only
-		// — and it did not, until a measured exit-101 leak said so (see the `borrowedRetain` arm). A third
-		// acquisition path, or a mutability rule that drifts from the acquisition again, lands here; it must
-		// stop here rather than emit a store that strands the box's reference.
-		if managed and not binding.payloadSlotVacated 'retainedManagedWrite'
-			panic("writeBackPayload: managed payload binding '{String.from(binding.name)}' is writable but its slot was never vacated — a retained payload's box still owns the slot, so this store would strand that reference; `declarePayloadBindings` must not mint such a binding mutable")
-		end 'retainedManagedWrite'
-
 		if managed 'boxBecomesASecondOwner'
 			self.emitIncref(value, range: range)
 		end 'boxBecomesASecondOwner'
+
+		// ⛔⛔ **A SLOT THAT WAS NEVER VACATED STILL HOLDS THE BOX'S OWN REFERENCE, AND THE STORE BELOW
+		// OVERWRITES IT — so the box releases the displaced payload here or nothing ever does.** A move-out
+		// nulled the slot and there is nothing to release; a RETAINED payload (`declarePayloadBindings`'s
+		// `retainedCoOwn` arm, taken by every solely-owned `var` union) left the box's reference in place. The
+		// slot is LOADED rather than the binding's previous value being remembered, for `emitOpaqueSlotReleases`'
+		// reason: the load is what the box holds at this moment, which is the only thing a release may act on.
+		//
+		// ⚠ **THE INCREF ABOVE COMES FIRST.** The incoming value may be a second name for the very record the
+		// slot holds, and releasing that first would drive it to zero before the store re-published it.
+		if managed and not binding.payloadSlotVacated 'releaseTheDisplacedPayload'
+			let displaced = self.emitIndirectLoad(binding.varType, box: binding.payloadScrutBox, offset: binding.payloadSlotOffset, storageType: binding.payloadStorage, range: range)
+			self.emitDecref(displaced, range: range)
+		end 'releaseTheDisplacedPayload'
 
 		self.emitIndirectStore(binding.payloadScrutBox, offset: binding.payloadSlotOffset, value: value, storageType: binding.payloadStorage, range: range)
 
@@ -31997,11 +32086,10 @@ export type Parser
 		func.writesModuleStorage = true
 
 		let range = SourceRange.ofToken(nameTok)
-		// `from:` names the interner `valueType`'s ids would live in — this file's own. A global's type comes
-		// from its INITIALIZER (`constantValueType` / `managedConstValueType` / `constArrayValueType`), none of
-		// which mint a `named`, so nothing is resolved through it today; it is stated because the alternative
-		// is a query whose answer depends on which table the caller happened to hold, which is precisely the
-		// cross-file misclassification T1 fixed one door along.
+		// `from:` names the interner `valueType`'s ids live in — this file's own, which is the table
+		// `globalDeclFor` was handed and therefore the one it minted into. A folded enum or union case arrives
+		// as a `named` and IS resolved through this query, so naming the whole-program table here would panic
+		// `foreignNameOf` on every scalar-enum global's write.
 		if not self.signatures.typeIsManagedFor(valueType, from: self.artifact.typeNames, readerFilePath: self.filePath) 'scalarGlobal'
 			self.emitGlobalStore(label, valueType: valueType, value: stored, range: range)
 			return
@@ -44364,9 +44452,10 @@ export type Parser
 		end 'enumDispatchSubject'
 
 		// ⭐ **MATCH-CONSUME BOOKKEEPING (P1.3 slice 2).** A managed payload BINDING takes its field out of
-		// the box, and `scrutSolelyOwned` decides HOW: a box this frame is the ONLY owner of is MOVED out of;
-		// anything else — a BORROWED scrutinee (a param/receiver/field read, whose owner is the caller's local)
-		// and equally a CO-OWNED one (a box this frame holds a SECOND reference to) — is RETAINED from instead
+		// the box, and `scrutSolelyOwned` plus `scrutMutable` decide HOW: an IMMUTABLE box this frame is the ONLY
+		// owner of is MOVED out of; anything else — a `var` scrutinee, whose slot the arms may still write; a
+		// BORROWED scrutinee (a param/receiver/field read, whose owner is the caller's local); and equally a
+		// CO-OWNED one (a box this frame holds a SECOND reference to) — is RETAINED from instead
 		// (D1b — `moveOutManagedPayload` vs `retainBorrowedPayload`). If ANY arm MOVES a managed payload out, the
 		// whole scrutinee is consumed: its binding is marked `partiallyMoved` — a re-read is E3102, but the
 		// box is still dropped, its cascade null-guarding the moved slots. A match that retains, or binds
@@ -47087,12 +47176,16 @@ export type Parser
 	//
 	// ⭐ **A SCALAR binding is a COPY** (not a borrow into the box), so dropping the box does not
 	// invalidate it. A MANAGED binding (String/struct/boxed union) OWNS its payload either way — it drops at its
-	// own scope exit — but HOW it acquires that ownership depends on HOW MANY OWNERS THE BOX HAS, which is a
-	// THREE-state question and not the two-state one this header asserted for three rungs:
-	//   • a scrutinee this frame is the SOLE owner of ⇒ a MOVE-OUT, and the box slot is nulled so the box's
-	//     cascade skips it (`moveOutManagedPayload`);
-	//   • a BORROWED scrutinee (a parameter, a receiver, a bare field read) ⇒ a RETAIN, and the slot is left
-	//     INTACT because the box's real owner is the caller's local (`retainBorrowedPayload`, D1b);
+	// own scope exit — but HOW it acquires that ownership depends on WHO ELSE CAN READ THE BOX'S SLOTS, and on
+	// whether this frame can still WRITE them:
+	//   • a scrutinee this frame is the SOLE owner of AND cannot write again — an immutable binding, or a
+	//     temporary ⇒ a MOVE-OUT, and the box slot is nulled so the box's cascade skips it
+	//     (`moveOutManagedPayload`);
+	//   • a scrutinee this frame is the SOLE owner of and CAN write again — a `var` binding ⇒ a RETAIN, because
+	//     its slot is a place `specs-shv2/mutable-enums.md` lets the arm write through and an arm that mutates
+	//     its payload in place never assigns the binding at all (see the arm below);
+	//   • a BORROWED scrutinee (a parameter, a receiver, a bare field read) ⇒ the same RETAIN, and the slot is
+	//     left INTACT because the box's real owner is the caller's local (`retainBorrowedPayload`, D1b);
 	//   • a CO-OWNED scrutinee — one this frame owns a reference to WHILE SOMETHING ELSE HOLDS THE SAME BOX ⇒
 	//     the SAME RETAIN, for the same reason read one step out. `let borrowed = h.ty` (a read out of a mutable
 	//     field, promoted by `__mm_retain`), a payload retained out of a borrowed union and then matched again, a
@@ -47154,39 +47247,37 @@ export type Parser
 				self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
 				movedManaged = true
 			end 'aGreenThreadPayload' else if payloadClassIsManaged(class) 'managedPayload'
-				if scrutSolelyOwned 'ownedMoveOut'
+				// ⭐⭐ **A `var` UNION'S PAYLOAD SLOT IS A PLACE THIS FRAME MAY STILL WRITE, SO THE BIND BORROWS
+				// IT RATHER THAN EMPTYING IT.** The move-out is destructive — it nulls the slot and consumes the
+				// scrutinee — and that is only honest where nothing can ever put a payload back. A `let` union is
+				// exactly that: it is never assigned again, so an arm may take its payload for good. A `var` one
+				// is the opposite: `specs-shv2/mutable-enums.md`'s whole premise is that its slot is a writable
+				// place and the arm's binding a window onto it, and an arm that MUTATES its payload in place
+				// (`text.append(" tail")`) writes through that window without ever assigning the binding — so a
+				// move-out hands the record to a binding that frees it at the arm's exit, leaving the box holding
+				// a null the author never emptied. The retain keeps the box's own reference where it is.
+				if scrutSolelyOwned and not scrutMutable 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
 					movedManaged = true
-				end 'ownedMoveOut' else 'borrowedRetain'
+				end 'ownedMoveOut' else 'retainedCoOwn'
 					self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
 
-					// ⭐⭐ **A RETAINED MANAGED PAYLOAD IS READ-ONLY, WHATEVER THE SCRUTINEE'S MUTABILITY SAYS —
-					// AND THE STATE THIS CLOSES IS A MEASURED LEAK.** Writability is decided from
-					// `scrutMutable`, which is MEMBERSHIP in `ownedBindings`; the acquisition above is decided
-					// from `scrutSolelyOwned`, which is VALUE PROVENANCE — and the tree already records that those
-					// two disagree (`reassignBindingValue`'s header: a loop-carried `var`'s current value is a header
-					// phi, and a phi carries no provenance bit, so the value column reads `false` for a binding
-					// the loop genuinely owns). A `var` union matched INSIDE the loop that reassigns it lands
-					// exactly there: mutable by membership, borrowed by provenance. It took this retain path —
-					// slot still occupied, box still holding a reference — while the binding was minted writable,
-					// so the write-back stored straight over an occupied slot and nothing released what the box
-					// held. MEASURED as exit 101 before this line existed.
-					//
-					// ⭐ **AND THE CO-OWNED SCRUTINEE ARRIVES HERE BY THE SAME DOOR, WHICH IS WHY THE DEMOTION IS
-					// STATED ABOUT THE ACQUISITION AND NOT ABOUT THE PHI.** A `var borrowed = <a field/element
-					// read>` is mutable by membership and CO-OWNED by provenance, so it also takes this retain and
-					// also has no vacancy to write into — an unrelated shape reaching one rule, which is what says
-					// the rule is about the retain rather than about loop-carried phis.
-					//
-					// It is stated HERE, at the branch that chose the acquisition, rather than folded into the
-					// `mutable:` argument above — that would re-derive the move-vs-retain decision at a second
-					// site, which is the very split that produced the leak. The write-back protocol shv2 has is
-					// "store into a VACATED slot"; a retained payload has no vacancy, so the honest answer is
-					// that this binding does not accept a write (E2013) rather than a guessed release of a
-					// reference whose owner this frame cannot name. `writeBackPayload` panics if the combination
-					// ever reaches it again.
-					bindingInfo.mutable = false
-				end 'borrowedRetain'
+					// ⛔ **A PAYLOAD RETAINED OUT OF A BOX THIS FRAME IS NOT THE SOLE OWNER OF IS READ-ONLY,
+					// WHATEVER THE SCRUTINEE'S MUTABILITY SAYS.** Writability is decided from `scrutMutable`,
+					// which is MEMBERSHIP in `ownedBindings`; the acquisition above is decided from
+					// `scrutSolelyOwned`, which is VALUE PROVENANCE — and the two disagree on a loop-carried
+					// `var` (`reassignBindingValue`'s header: its current value is a header phi, and a phi
+					// carries no provenance bit, so the value column reads `false` for a binding the loop
+					// genuinely owns). A `var borrowed = <a field/element read>` is the same disagreement from
+					// the co-owned side. A write through such a binding would store into a box whose OTHER owner
+					// this frame cannot name, publishing a payload swap to a holder that never asked for one —
+					// so the honest answer is E2013 rather than a guessed release. Where the frame IS the sole
+					// owner there is no such holder, and the binding keeps the mutability `specs-shv2/mutable-enums.md`
+					// gives it; `writeBackPayload` releases the slot's displaced payload for it.
+					if not scrutSolelyOwned 'anotherOwnerReadsThisBox'
+						bindingInfo.mutable = false
+					end 'anotherOwnerReadsThisBox'
+				end 'retainedCoOwn'
 			end 'managedPayload'
 		end 'each'
 		return movedManaged
@@ -47198,12 +47289,14 @@ export type Parser
 	// `__destruct_<U>` cascade — which null-guards every field — does not decref it a second time.
 	//
 	// ⚠⚠ **REACHED ONLY WHERE THIS FRAME IS THE BOX'S SOLE OWNER (`valueIsSoleHeapOwner`), WHICH IS STRICTLY
-	// NARROWER THAN "OWNED" AND USED TO SAY "OWNED".** The null store below is destructive and this function
-	// never re-reads the slot, so every OTHER owner of the box is a reader it cannot account for: a BORROWED
-	// union's owner is the caller's local, and a CO-OWNED one's is a struct field, an array slot, a caller's
-	// payload slot or a caller's own local that the retain gave this frame a second reference to. Both take
-	// `retainBorrowedPayload` instead, which leaves the slot alone; `declarePayloadBindings` is the one place
-	// that picks between them, and `OwnedHeapExclusivity` records the six programs the wider gate segfaulted.
+	// NARROWER THAN "OWNED", AND ONLY WHERE IT CANNOT WRITE THE SLOT AGAIN.** The null store below is
+	// destructive and this function never re-reads the slot, so every OTHER owner of the box is a reader it
+	// cannot account for: a BORROWED union's owner is the caller's local, and a CO-OWNED one's is a struct
+	// field, an array slot, a caller's payload slot or a caller's own local that the retain gave this frame a
+	// second reference to. A `var` scrutinee is a reader too — its own later `match` — which is why it takes
+	// the retain as well. All three take `retainBorrowedPayload` instead, which leaves the slot alone;
+	// `declarePayloadBindings` is the one place that picks between them, and `OwnedHeapExclusivity` records the
+	// six programs the wider gate segfaulted.
 	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, scrutBox ValueId, offset ByteOffset, storage MaxonType, range SourceRange)
 		// ⛔⛔ **CO-OWNED, AND THE ARGUMENT FOR `sole` HERE WAS THIS RUNG'S OWN BUG ONE LEVEL DOWN.** It read
 		// *"the box was this frame's alone and the store below empties the slot, so the binding now holds the
@@ -47236,10 +47329,11 @@ export type Parser
 		bindingInfo.payloadSlotVacated = true
 	end 'moveOutManagedPayload'
 
-	// ⭐ **RETAIN A MANAGED PAYLOAD BOUND OUT OF A BORROWED UNION (D1b).** The load borrowed the payload —
-	// the box's owner is the CALLER's local (a parameter, or a method's receiver), and it survives this
-	// frame — so ownership cannot be MOVED: the caller may re-read the field, or match the union again, and
-	// its own cascade will release every slot it still holds. So instead of a move this RETAINS:
+	// ⭐ **RETAIN A MANAGED PAYLOAD BOUND OUT OF A UNION THIS BIND MUST LEAVE WHOLE (D1b).** The load borrowed
+	// the payload — the box's owner is the CALLER's local (a parameter, or a method's receiver), or it is this
+	// frame's own `var`, and either way it outlives the arm — so ownership cannot be MOVED: that owner may
+	// re-read the field, or match the union again, and its own cascade will release every slot it still holds.
+	// So instead of a move this RETAINS:
 	// `__mm_incref` raises the payload's refcount, the binding owns that SECOND reference and drops it at
 	// the arm's own exit (`dropArmScopedOwned`), and the slot is left INTACT for the owner. The refcount
 	// balances at exactly one free. Nothing left the box, so the match does NOT consume the scrutinee.
@@ -49769,8 +49863,9 @@ export type Parser
 		end 'not'
 
 		// `async <call>` SPAWNS a green thread and yields a Promise (P1.5-B1a); `await <expr>` blocks on one.
-		// Both are prefix operators, alongside `-`/`not`. `async` must be followed by a free call; `await`
-		// takes a unary operand (so `await async f()` — spawn then immediately await — parses).
+		// Both are prefix operators, alongside `-`/`not`. `async` must be followed by a call — a free one or a
+		// `<Type>.<static>` — while `await` takes a unary operand (so `await async f()` — spawn then immediately
+		// await — parses).
 		if self.at(TokenKind.async) 'async'
 			try self.consume(TokenKind.async)
 			return try self.parseAsyncCall(func)
@@ -57542,15 +57637,17 @@ export type Parser
 	// (The COUNTS that E3036 carries when the arities genuinely differ ARE inflated by the receiver,
 	// which is not this routine's doing and is not restated here — see the receiver prepend in
 	// `parseCallNamed`, the one place that causes it, for both callers.)
-	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
-		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
-		// the callee mangling, the alias interceptions and the E3062 use hook below all see one spelling (D9).
-		let typeTok = try self.consumeTypeBaseToken()
-		// A `Type.method()` base NAMES a type, so it is a USE for the E3062 check — and it is the only
-		// place many generic-instance aliases are ever named (`IntArray.create()`). It never reaches
-		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
-		self.recordTypeNameUse(typeTok.value)
-
+	// ⭐⭐ **WHICH COMPILER-OWNED SURFACE `typeName` DENOTES — the whole roster, in one reader.** See
+	// `CompilerOwnedStaticSurface` for why it is a value: `parseQualifiedCall` routes on it and the `async`
+	// spawn reader refuses on it, and a second roster would admit whichever surface is added next.
+	//
+	// ⚠ **THE ARM ORDER IS LOAD-BEARING** — each arm's own note says against what — so this reader keeps it
+	// and no caller may re-ask the questions in another order.
+	//
+	// `aliasName` is the caller's resolved generic-alias key rather than one derived here: the caller needs
+	// the same key for the ordinary path, and deriving it twice is the two-readings-of-one-alias trap W7
+	// records at `parseQualifiedCall`'s own resolve.
+	function compilerOwnedStaticSurface(typeName ByteArray, aliasName ByteArray) returns CompilerOwnedStaticSurface
 		// ⭐ **`CharacterSet.letters()` WAS INTERCEPTED HERE UNTIL W115, AND IS NOW AN ORDINARY MANGLED
 		// STATIC.** The interception's stated premise — *"`CharacterSet` has no base struct: its statics BUILD
 		// a box out of the set runtime, they do not name a user method"* — was true only while no file
@@ -57559,20 +57656,20 @@ export type Parser
 		// `__ManagedFile.openRead(path)` — the compiler-owned handle type's statics (R4.1). Intercepted here
 		// because the type has a registered LAYOUT but no `type` declaration and no user methods, so the
 		// mangled `__ManagedFile.openRead` below would name a callee no file declares.
-		if typeTok.value.equals(ManagedFileTypeName) 'managedFileStatic'
-			return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
+		if typeName.equals(ManagedFileTypeName) 'managedFileStatic'
+			return CompilerOwnedStaticSurface.managedFile
 		end 'managedFileStatic'
 
 		// `__ManagedDirectory.openSearch(path)` — the search type's statics (R4.3), intercepted here for the
 		// identical reason.
-		if typeTok.value.equals(ManagedDirectoryTypeName) 'managedDirectoryStatic'
-			return try self.parseManagedDirectoryStaticCall(func, typeTok: typeTok)
+		if typeName.equals(ManagedDirectoryTypeName) 'managedDirectoryStatic'
+			return CompilerOwnedStaticSurface.managedDirectory
 		end 'managedDirectoryStatic'
 
 		// `__ManagedSocket.tcpConnect(host, port: p)` — the socket type's one static, intercepted here for the
 		// identical reason.
-		if typeTok.value.equals(ManagedSocketTypeName) 'managedSocketStatic'
-			return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
+		if typeName.equals(ManagedSocketTypeName) 'managedSocketStatic'
+			return CompilerOwnedStaticSurface.managedSocket
 		end 'managedSocketStatic'
 
 		// `__ManagedMemory.create(count, elementSize)` (R4.2) — intercepted BEFORE the generic-alias arm
@@ -57587,31 +57684,22 @@ export type Parser
 		// `aliasDenotesBufferSurface` is the existing answer to "does this spelling denote the buffer?" and is
 		// already what `declaredSurfaceOfSpelling` asks in the other position, so this is that one question
 		// asked here rather than a second test of it.
-		if self.spellingDenotesBufferSurface(typeTok.value) 'managedMemoryStatic'
-			return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
+		if self.spellingDenotesBufferSurface(typeName) 'managedMemoryStatic'
+			return CompilerOwnedStaticSurface.managedMemory
 		end 'managedMemoryStatic'
 
 		// ⚠ **`String` HAS NO ARM HERE, AND USED TO (W55).** `String.from(bytes)` / `String.init(managed)` were
 		// intercepted for `CharacterSet`'s reason — *"`String` is a BUILTIN with no `type` declaration behind
 		// it, so the mangled `String.from` below would name a callee no file declares"*. W17 listed
-		// `stdlib/String.maxon`, which declares both, so the mangling below now names exactly the corpus
+		// `stdlib/String.maxon`, which declares both, so the mangling `qualifiedStaticCallee` builds names exactly the corpus
 		// functions that serve them and the interception had become a longer spelling of the fall-through.
 		// `CharacterSet`, `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket` and `__ManagedMemory` keep
 		// theirs because that premise is still true of all of them: none has a `type` declaration anywhere.
 
-		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
-		// (`Plain.IntPair`) — and all FOUR of this routine's alias-driven decisions read THIS name rather than
-		// the written token (W7):** the builtin-container interception below, the base a static mangles onto
-		// (`denotedGenericBaseName`), the instance a constructor builds (`constructorInstanceOf`), and the type
-		// its result adopts (`retypeGenericAliasConstructorResult`). Which registration a written name denotes
-		// is `genericAliasKeyFor`'s alone — the inner spelling used to be recognized here and then dropped for
-		// the other three, which is exactly how one call site came to hold two readings of one alias.
-		let aliasName = self.genericAliasKeyFor(typeTok.value)
-
 		// `IntArray.create()` / `IntSet.create()` / `StrMap.create()` / `PointList.create()`, and
 		// `ElementArray.create()` for the inner spelling of the same thing (P1.7 slice 1, P1.7b slice A, `Map`,
 		// `List`, slice 3b-i) — a static call on a BUILTIN-CONTAINER instance alias. Every one is intercepted
-		// before the generic-alias → base rewrite below, which would mangle them to `Array.create` /
+		// before the generic-alias → base rewrite `qualifiedStaticCallee` makes, which would mangle them to `Array.create` /
 		// `Set.create` / `Map.create` / `List.create` — callees no file declares, because no builtin container
 		// has a base struct. Their statics lower to their own runtime, not to a user method.
 		//
@@ -57643,12 +57731,18 @@ export type Parser
 			// that predicate also decides what `Vector with 3 Int` MEANS, so it leaves through the
 			// derivation instead.
 			if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(aliasGiid)) and not self.signatures.instanceCreateIsDeclared(aliasGiid) 'containerStatic'
-				return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: aliasGiid)
+				return CompilerOwnedStaticSurface.containerAlias(aliasGiid)
 			end 'containerStatic'
 		end 'containerAliasStatic'
 
-		try self.consume(TokenKind.dot)
+		return CompilerOwnedStaticSurface.none
+	end 'compilerOwnedStaticSurface'
 
+	// ⭐⭐ **WHOSE NAME A `<Type>.<member>(…)` CALLS, once the compiler-owned surfaces have declined** — the
+	// half of the resolution that needs the member token, shared by `parseQualifiedCall` and the `async`
+	// spawn reader. It MOVES NO CURSOR: the ordinary caller has the member peeked and hands it to
+	// `parseCallNamed`, which consumes it.
+	function qualifiedStaticCallee(typeTok Token, memberTok Token, aliasName ByteArray) returns QualifiedStaticCallee throws ParseError
 		// ⭐⭐ **`int.fromString(s)` / `byte.fromString(s)` — A PRIMITIVE'S STATIC, WHICH IS A FREE FUNCTION IN
 		// THE RESERVED SPACE (A1s-prim).** THE join site, and the only one: door 1 (`int`/`float`/`bool`, a
 		// keyword resolved by `typeBaseTokenAt`) and door 2 (`byte`, a plain identifier that has always flowed
@@ -57692,12 +57786,11 @@ export type Parser
 		// allocates nothing (the discipline the math-intrinsic table measured), while each `declaresCallee`
 		// needs a joined name. Every qualified call in the program pays the first; only a primitive-based one
 		// pays the rest.
-		let memberTok = self.current()
 		let declaredCallee = qualifiedMethodName(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: self.filePath), methodName: memberTok.value)
 		if namesAPrimitiveType(typeTok.value) and not self.signatures.declaresCallee(declaredCallee) 'primitiveStatic'
 			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
 			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
-				return try self.parseCallNamed(func, callee: minted, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
+				return QualifiedStaticCallee.minted(minted)
 			end 'declaredPrimitiveStatic'
 
 			try requirePrimitiveStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee)
@@ -57715,7 +57808,7 @@ export type Parser
 		// which leaves the emitted code untouched and the visibility decision where it already was; the
 		// written chain when the bare name is contested and no longer names one function.
 		if self.signatures.resolvesAsNamespaceQualifiedFunction(declaredCallee) 'namespaceQualifiedFreeCall'
-			return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+			return QualifiedStaticCallee.namespaceQualifiedFree(self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value))
 		end 'namespaceQualifiedFreeCall'
 
 		// ⭐ `String.create(…)` — an unknown static on a type name the COMPILER owns (W55). LAST of the doors,
@@ -57746,16 +57839,62 @@ export type Parser
 		//
 		// `takesReceiver: false` is the reason and not a convention: a `Type.m(…)` call passes no receiver, so
 		// it is asking for the receiverless member of that name.
-		let staticCallee = self.signatures.memberRegistrationKey(declaredCallee, takesReceiver: false)
+		return QualifiedStaticCallee.declared(self.signatures.memberRegistrationKey(declaredCallee, takesReceiver: false))
+	end 'qualifiedStaticCallee'
 
+	// The ORDINARY static call — `File.readText(p)`, `StrBox.create(s)`. Split out so `parseQualifiedCall`'s
+	// callee match keeps one statement per arm; the constructor half is what makes it more than a call, and
+	// `ConstructorInstance` carries why.
+	function parseDeclaredStaticCall(func IrFunction, callee ByteArray, aliasName ByteArray, typeTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
 		let constructed = self.constructorInstanceOf(aliasName)
 		try self.requireConstructedVectorElementType(constructed, aliasTok: typeTok)
-		let result = try self.parseCallNamed(func, callee: staticCallee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
+		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
 		match constructed 'constructed'
 			none then break 'constructed'
 			instance(gid) then self.retypeGenericAliasConstructorResult(result, gid: gid, aliasName: aliasName)
 		end 'constructed'
 		return result
+	end 'parseDeclaredStaticCall'
+
+	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
+		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
+		// the callee mangling, the alias interceptions and the E3062 use hook below all see one spelling (D9).
+		let typeTok = try self.consumeTypeBaseToken()
+		// A `Type.method()` base NAMES a type, so it is a USE for the E3062 check — and it is the only
+		// place many generic-instance aliases are ever named (`IntArray.create()`). It never reaches
+		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
+		self.recordTypeNameUse(typeTok.value)
+
+		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
+		// (`Plain.IntPair`) — and all FOUR of this routine's alias-driven decisions read THIS name rather than
+		// the written token (W7):** the builtin-container interception below, the base a static mangles onto
+		// (`denotedGenericBaseName`), the instance a constructor builds (`constructorInstanceOf`), and the type
+		// its result adopts (`retypeGenericAliasConstructorResult`). Which registration a written name denotes
+		// is `genericAliasKeyFor`'s alone — the inner spelling used to be recognized here and then dropped for
+		// the other three, which is exactly how one call site came to hold two readings of one alias.
+		let aliasName = self.genericAliasKeyFor(typeTok.value)
+
+		match self.compilerOwnedStaticSurface(typeTok.value, aliasName: aliasName) 'surface'
+			none then break 'surface'
+			managedFile then return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
+			managedDirectory then return try self.parseManagedDirectoryStaticCall(func, typeTok: typeTok)
+			managedSocket then return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
+			managedMemory then return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
+			containerAlias(giid) then return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: giid)
+		end 'surface'
+
+		try self.consume(TokenKind.dot)
+
+		// PEEKED, not consumed: `parseCallNamed` consumes its own callee token (`dispatchMethodOnBase` says
+		// so where it hands the cursor over), and consuming it here would leave the arguments to a second
+		// reader.
+		let memberTok = self.current()
+
+		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
+			minted(minted) then return try self.parseCallNamed(func, callee: minted, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
+			namespaceQualifiedFree(free) then return try self.parseCallNamed(func, callee: free, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed)
+		end 'callee'
 	end 'parseQualifiedCall'
 
 	// The concrete instance a `Type.method(…)` call constructs (P1.6-B2) — an `instance(gid)` when `Type` is
@@ -58654,6 +58793,28 @@ export type Parser
 		// nothing to honour: the declared method is the ordinary D1 call below, and
 		// `enumConformanceImplName` answers with that same key, so the witness slot follows the door rather
 		// than contradicting it.
+
+		// ⭐⭐ **`u.clone()` ON A BOXED UNION — the struct door's twin, past the same `declaresCallee` test so a
+		// user-written `<U>.clone` still wins.** `MmRuntime.synthesizeUnionCloner` already emits the body (a
+		// fresh box, a whole-box blit, then a deep clone of the LIVE case's managed payloads), and
+		// `installUnionCascades` builds exactly the ones `__clone_` callees root — so this is a call site, not
+		// a synthesis pass, exactly as `emitSynthesizedStructClone` is.
+		//
+		// ⚠ **THE RESULT'S TYPE IS THE WHOLE POINT.** Without this arm the member resolved to a `<U>.clone` no
+		// file declares, so `parseCallNamed` minted an `unknown`-tagged result and the union's identity was
+		// gone: a `match` on it took the SCALAR path (`enumMatchFor` reads `named`), reporting a missing
+		// enum-case-pattern feature, and a member read on it reported "a member access on a 'unknown' value" —
+		// two diagnostics about the value's TYPE, on top of the E3004 the call itself owed.
+		//
+		// ⭐ **A PAYLOAD-FREE ENUM IS DELIBERATELY NOT SERVED HERE.** Its value is a bare i64 tag with no box
+		// to allocate, `synthesizeUnionCloner` would `__mm_alloc` one anyway, and the oracle refuses the
+		// spelling outright (E4006 `has no property or method named 'clone'`); it keeps the undefined-function
+		// refusal it already had.
+		match self.boxedUnionCloneReceiver(enumName, callee: callee, memberTok: memberTok) 'synthesizedClone'
+			declared(layout) then return try self.emitSynthesizedUnionClone(recv, layout: layout, memberTok: memberTok)
+			undeclared then break 'synthesizedClone'
+		end 'synthesizedClone'
+
 		match self.enumGrantedConformanceMethod(enumName, memberName: memberTok.value) 'granted'
 			supplied(method) then return try self.dispatchEnumConformanceMethod(func, recv: recv, enumName: enumName, method: method, memberTok: memberTok)
 			notSupplied then return try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
@@ -59027,7 +59188,7 @@ export type Parser
 		try self.requireWitnessSourceForForwarding(base, callee: callee, memberTok: memberTok)
 		try self.requireMethodNotWithheldByConstraint(base.layout.name, callee: callee, receiver: base.box, memberTok: memberTok)
 
-		if self.structCloneIsSynthesized(callee, memberTok: memberTok) 'synthesizedClone'
+		if self.cloneIsSynthesized(callee, memberTok: memberTok) 'synthesizedClone'
 			return try self.emitSynthesizedStructClone(base, memberTok: memberTok, baseTok: baseTok)
 		end 'synthesizedClone'
 
@@ -59082,7 +59243,7 @@ export type Parser
 	// ⭐ **THE VARIANT TEST COMES FIRST, AND THAT IS WHAT GIVES A DECLARED `clone`/`shutdown` PRECEDENCE.** A
 	// service declaring `export function shutdown()` has a VARIANT of that name, so the author's method wins
 	// and the compiler's pill becomes unspellable for it — which leaves dropping the last handle as the other
-	// road to the same drain. It is `structCloneIsSynthesized`'s rule, reached by asking the roster rather
+	// road to the same drain. It is `cloneIsSynthesized`'s rule, reached by asking the roster rather
 	// than by asking `declaresCallee` a second time.
 	//
 	// ⚠ **VARIANT 0 IS THE COMPILER'S `__shutdown` AND IS NOT A MESSAGE.** It is `__`-prefixed, so no source
@@ -59359,9 +59520,9 @@ export type Parser
 	// its own? The gate in front of the emit below. `declaresCallee` is the WHOLE-PROGRAM index, not this file:
 	// a user's `Point.clone` may be written in any file, which is the same reason `structEqualityOperands` asks
 	// its `equals` question the same way.
-	function structCloneIsSynthesized(callee ByteArray, memberTok Token) returns bool
+	function cloneIsSynthesized(callee ByteArray, memberTok Token) returns bool
 		return memberTok.value.equals(CloneMethodName) and not self.signatures.declaresCallee(callee)
-	end 'structCloneIsSynthesized'
+	end 'cloneIsSynthesized'
 
 	// `p.clone()` as the direct `__clone_<T>(box)` call it is. The result is a FRESH, SOLELY-owned box — the
 	// cloner's first act is an `__mm_alloc` — so it is enrolled as an owned temporary exactly as a struct
@@ -59380,6 +59541,83 @@ export type Parser
 
 		return self.emitOwnedRuntimeResult(clonerSymbol(base.layout.name), args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: SourceRange.between(baseTok, last: memberTok))
 	end 'emitSynthesizedStructClone'
+
+	// ⭐ **WHICH DECLARED UNION `<receiver>.clone()` CLONES, or `undeclared` for every other member and every
+	// other receiver.** The decision the enum dispatch's clone arm branches on, spelled once so the arm holds
+	// one test rather than three.
+	//
+	// ⚠ **THE `cloneIsSynthesized` PROBE COMES FIRST AND IS WHAT KEEPS THIS OFF THE HOT PATH.**
+	// `ProgramSignatures.enumFor` returns a `DeclaredEnum` — a union VALUE, so a heap box for its `undeclared`
+	// case as much as any other — and EVERY enum method call in every program arrives here; asking the registry
+	// before the name would allocate one per call. See `valueIsUnion`, which guards the same registry probe the
+	// same way and carries the measurement.
+	function boxedUnionCloneReceiver(enumName ByteArray, callee ByteArray, memberTok Token) returns DeclaredEnum
+		if not self.cloneIsSynthesized(callee, memberTok: memberTok) 'notTheSynthesizedClone'
+			return DeclaredEnum.undeclared
+		end 'notTheSynthesizedClone'
+
+		let declared = self.signatures.enumFor(enumName, readerFilePath: self.filePath)
+		if not enumMatchIsDeclared(declared) 'notADeclaredEnum'
+			return DeclaredEnum.undeclared
+		end 'notADeclaredEnum'
+
+		// A payload-free enum IS its i64 tag: there is no box to allocate and no slot to deep-copy, so the
+		// cloner `installUnionCascades` would build for it copies nothing. It keeps the undefined-function
+		// refusal the spelling already earns, which is the oracle's answer too (E4006).
+		if not requireEnumLayout(declared).isBoxed() 'payloadFreeEnum'
+			return DeclaredEnum.undeclared
+		end 'payloadFreeEnum'
+
+		return declared
+	end 'boxedUnionCloneReceiver'
+
+	// `u.clone()` as the direct `__clone_<U>(box)` call it is — `emitSynthesizedStructClone`'s union twin, and
+	// it mints the pair `emitEnumBox` mints: `named` + the union's own layout name, so the clone of an `Op` IS
+	// an `Op` and a `match` on it dispatches over the same case set. The result is a FRESH box the cloner
+	// `__mm_alloc`s, so it is enrolled as a sole owned temporary and a binding adopts it.
+	//
+	// ⚠ The refusals come BEFORE the tokens are consumed and before anything is emitted, for
+	// `emitSynthesizedStructClone`'s reason: a rejected program must leave no ops behind.
+	function emitSynthesizedUnionClone(recv MethodReceiver, layout EnumLayout, memberTok Token) returns ValueId throws ParseError
+		try self.requireUnionCloneSupported(layout, memberTok: memberTok)
+		self.advance()
+		try self.consumeEmptyArgList()
+
+		return self.emitOwnedRuntimeResult(clonerSymbol(layout.name), args: singletonArgs(recv.value), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: SourceRange.between(recv.anchor, last: memberTok))
+	end 'emitSynthesizedUnionClone'
+
+	// `requireStructCloneSupported`'s union twin, with the same two clauses in the same order and for the same
+	// reasons — a payload nothing can deep-clone would meet an `unsupported` strategy inside
+	// `MmRuntime.emitUnionManagedCaseChain` and PANIC, and a promise payload is invisible to the walk that
+	// answers the first clause.
+	function requireUnionCloneSupported(layout EnumLayout, memberTok Token) throws ParseError
+		try self.requireUnionHoldsNoGreenThread(layout, memberTok: memberTok)
+
+		if self.signatures.aggregateSupportsDeepClone(layout.name) 'cloneable'
+			return
+		end 'cloneable'
+
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which carries a payload this compiler cannot deep-clone: a `Vector` or any other generic instance with no base struct to cascade over, an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a value held at an interface type. String, struct, boxed-union, enum, `Array` and `List` payloads ARE supported.", line: memberTok.line, column: memberTok.column)
+	end 'requireUnionCloneSupported'
+
+	// ⛔ **A UNION CARRYING A PROMISE IS NOT CLONEABLE, AND `aggregateSupportsDeepClone` CANNOT SEE IT** — that
+	// walk skips every payload `payloadClassIsManaged` calls false, and a green thread is one: it is not a box.
+	// A copy would hand two owners one thread, which is the double reclaim `await`'s linearity exists to make
+	// unrepresentable. `requireStructHoldsNoGreenThread` states the identical rule one aggregate over, and this
+	// is asked at the concrete receiver for its reason: the shared walk also gates cloner SYNTHESIS
+	// program-wide, so widening it would refuse unrelated types that merely reach the same classifier.
+	function requireUnionHoldsNoGreenThread(layout EnumLayout, memberTok Token) throws ParseError
+		for caseIndex in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(caseIndex)
+			for i in 0 upto payloads.count() 'eachPayload'
+				let field = try payloads.get(i) otherwise panic("requireUnionHoldsNoGreenThread: payloadsAt returned fewer fields than its own count at {i}")
+				let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
+				if payloadClassIsAGreenThread(try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: memberTok)) 'aGreenThreadPayload'
+					throw ParseError.promiseCannotBeBorrowed(String.from(b"clone"), cure: "`{String.from(layout.name)}` carries a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and clone a value holding its RESULT", line: memberTok.line, column: memberTok.column)
+				end 'aGreenThreadPayload'
+			end 'eachPayload'
+		end 'eachCase'
+	end 'requireUnionHoldsNoGreenThread'
 
 	// ⛔ **THE TWO REASONS A SYNTHESIZED CLONE CANNOT BE EMITTED, AND IN BOTH THE ALTERNATIVE IS A WRONG
 	// ANSWER RATHER THAN A MISSING ONE.** One question — *may this receiver be cloned here?* — with two
@@ -59406,10 +59644,10 @@ export type Parser
 	//
 	// ⛔ **CLAUSE 2: A FIELD NOTHING CAN DEEP-CLONE.** `synthesizeStructCascade` walks the same fields and
 	// calls `emitCloneCall`, which PANICS on an `unsupported` strategy — so the gate and the strategy must
-	// admit the same set, which is exactly what `ProgramSignatures.structSupportsDeepClone` is (it and
+	// admit the same set, which is exactly what `ProgramSignatures.aggregateSupportsDeepClone` is (it and
 	// `managedFieldCascadeStrategy` are read off one walk). `requireArrayElementCopyable` is this clause's twin
 	// one container out, down to the E2015 it reports.
-	// See the call site for why this is asked at the receiver rather than folded into `structSupportsDeepClone`.
+	// See the call site for why this is asked at the receiver rather than folded into `aggregateSupportsDeepClone`.
 	function requireStructHoldsNoGreenThread(layout StructLayout, memberTok Token) throws ParseError
 		for i in 0 upto layout.fieldCount() 'eachField'
 			if self.signatures.structFieldOwesDrop(layout.name, index: i) and not self.signatures.structFieldIsManaged(layout.name, index: i) 'aGreenThreadField'
@@ -59423,18 +59661,18 @@ export type Parser
 			throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which is a GENERIC type — a clone must be minted per INSTANCE (a `{String.from(layout.name)} with String` and a `{String.from(layout.name)} with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `{String.from(layout.name)}` that rebuilds it.", line: memberTok.line, column: memberTok.column)
 		end 'genericBase'
 
-		// ⛔⛔ **A STRUCT HOLDING A PROMISE IS NOT CLONEABLE, AND `structSupportsDeepClone` CANNOT SEE IT.** That
+		// ⛔⛔ **A STRUCT HOLDING A PROMISE IS NOT CLONEABLE, AND `aggregateSupportsDeepClone` CANNOT SEE IT.** That
 		// walk asks `structFieldIsManaged`, the narrow "is this an `__mm` box" — correctly `false` for a
 		// promise — so a promise field reads as a TRIVIAL word and the synthesized cloner blits it. MEASURED:
 		// `h.clone()` on a `Holder{p as IntPromise}` compiled and produced two Holders naming ONE green
 		// thread, which is the double reclaim `await`'s linearity exists to make unrepresentable, and it
 		// silently contradicted the rule `promise-typing.error.clone-a-promise` had just pinned for a bare
-		// promise. Asked HERE, at the concrete receiver, rather than by widening `structSupportsDeepClone`:
+		// promise. Asked HERE, at the concrete receiver, rather than by widening `aggregateSupportsDeepClone`:
 		// that walk's answer also gates cloner SYNTHESIS program-wide, and widening it would refuse the clone
 		// of every unrelated type that merely reaches the same classifier.
 		try self.requireStructHoldsNoGreenThread(layout, memberTok: memberTok)
 
-		if self.signatures.structSupportsDeepClone(layout.name) 'cloneable'
+		if self.signatures.aggregateSupportsDeepClone(layout.name) 'cloneable'
 			return
 		end 'cloneable'
 
@@ -61550,12 +61788,12 @@ export type Parser
 		//
 		// ⭐ **THE SYNTHESIZED SURFACE IS NOT RETIRED BY THIS, AND MUST NOT BE:** a program that declares
 		// nothing still reaches every arm below unchanged, which is what keeps `5.hash()`, `"{x}"` and
-		// `x.clone()` working with no `stdlib/PrimitiveExtensions.maxon` listed. This is the `structCloneIsSynthesized`
+		// `x.clone()` working with no `stdlib/PrimitiveExtensions.maxon` listed. This is the `cloneIsSynthesized`
 		// rule — *"wired PAST the `declaresCallee` test, so a user-written `clone` still wins"* — asked of a
 		// primitive instead of a struct, and it is both references' rule too (v1 skips any struct that already
 		// has a `"{structName}.clone"`, `Parser.maxon:19652`).
 		//
-		// ⚠ **`declaresCallee` IS THE WHOLE-PROGRAM SWEEP, NOT THIS FILE**, for `structCloneIsSynthesized`'s
+		// ⚠ **`declaresCallee` IS THE WHOLE-PROGRAM SWEEP, NOT THIS FILE**, for `cloneIsSynthesized`'s
 		// reason: the `extension int` may be written in any file, and an answer that depended on which file the
 		// call is in would dispatch one `n.hash()` to the declaration and another to the synthesized impl.
 		let methodTok = self.current()
@@ -69312,6 +69550,31 @@ export type Parser
 		return self.baseNamesAValueInScope(self.tokenAt(index)) or self.managedTopLevelBaseAt(index)
 	end 'chainBaseNamesAValue'
 
+	// ⭐⭐ **DOES THE IDENTIFIER AT `index` NAME ANYTHING AT ALL — the question that separates a
+	// MISSPELLED statement from an ill-formed one.** A dotted statement whose base names nothing is a defect
+	// in the NAME (`arr.reserve(8)` where `arr`'s declaration lives inside a branch the merge left behind),
+	// and the author is owed the same `Undefined variable` an expression-position read of that name gets. A
+	// base that DOES name something is refused for what the statement does with it, not for what it spells.
+	//
+	// ⚠ It resolves nothing of its own: every disjunct is a probe some door already owns, so what is
+	// written here is only the LIST of namespaces a base may live in — a value or capture
+	// (`baseNamesAValueInScope`), a top-level constant or slot (`namesTopLevelBinding`), a type declaration of
+	// any form (`Point.create()`, `Box.seen`), a function used as a base (`inc.field`), and the ten sized
+	// spellings the bound grammar owns (`u64.max`), which no file declares. A namespace a door adds later
+	// belongs in this list, and leaving it out costs a wrong noun rather than a wrong program.
+	function baseNamesNothingAt(index TokenIndex) returns bool
+		let tok = self.tokenAt(index)
+		if tok.kind != TokenKind.identifier 'notAPlainName'
+			return false
+		end 'notAPlainName'
+
+		if self.chainBaseNamesAValue(index) or self.namesTopLevelBinding(tok.value) 'namesAValue'
+			return false
+		end 'namesAValue'
+
+		return not (self.signatures.nameIsDeclared(tok.value) or self.signatures.declaresCallee(tok.value) or isSizedTypeName(tok.value))
+	end 'baseNamesNothingAt'
+
 	// `p.x` — read field `x` out of the box `p` points at.
 	//
 	// ⭐ **IT RIDES `loadIndirect`, THE OP A GLOBAL'S READ ALREADY USES** (`emitGlobalLoad`), with a
@@ -72054,17 +72317,6 @@ export type Parser
 		return self.emitEnumTagLiteral(typeName, tag: payload, range: range)
 	end 'emitFoldedConstant'
 
-	// The `MaxonType` a folded constant denotes, interned into THIS parser's table. Only a `named` tag has a
-	// name to intern, so every other constant read pays nothing — which matters because this is on the path
-	// of every top-level constant reference in the program.
-	function constantValueTypeOf(tag ValueTypeTag, typeName ByteArray) returns MaxonType
-		if tag != ValueTypeTag.named 'namesNoType'
-			return constantValueType(tag, typeNameId: 0)
-		end 'namesNoType'
-
-		return constantValueType(tag, typeNameId: self.artifact.typeNames.intern(typeName))
-	end 'constantValueTypeOf'
-
 	function recordImmutableConstantRead(tok Token, value ValueId) returns ValueId
 		self.publishBareBindingName(tok, immutable: true)
 		return value
@@ -73738,19 +73990,19 @@ export type Parser
 		self.pos = decl.initStart
 		self.seatInDeclaringTypeBody(decl)
 
-		// ⭐⭐ **A NODE — A USER STATIC FACTORY CALL, OR A STRUCT LITERAL — IS THE ONE INITIALIZER THAT IS NOT A
-		// FOLD** (spec-port `map-struct-bytearray`; W116) — `var db = Database.create(EntryMap.create(),
-		// sourcePaths: …)`, `static var origin = Pair{a: 1, b: 2}`. Nothing about either is evaluated here: what
-		// the walk produces is WHAT to build and WHAT to put in it, and the record is built before `main` by
-		// `__module_init` (or on first access by `__lazy_init#<label>`), exactly as a top-level array literal's
-		// already is.
+		// ⭐⭐ **A NODE IS THE INITIALIZER THAT IS NOT A FOLD** (spec-port `map-struct-bytearray`; W116) —
+		// `var db = Database.create(EntryMap.create(), sourcePaths: …)`, `static var origin = Pair{a: 1, b: 2}`,
+		// `var hold = Hold.owned(9)`. Nothing about any of them is evaluated here: what the walk produces is
+		// WHAT to build and WHAT to put in it, and the record is built before `main` by `__module_init` (or on
+		// first access by `__lazy_init#<label>`), exactly as a constant array literal's already is. The roster
+		// is `atConstNodeInitializer`'s, which is where the same list is asked of a nested position.
 		//
-		// Both are claimed on a LOOKAHEAD, and for one reason: the scalar walk reads `<identifier> .` as a
+		// They are claimed on a LOOKAHEAD, and for one reason: the scalar walk reads `<identifier> .` as a
 		// RANGED-TYPE BOUND and a bare `<identifier>` as a reference to another top-level `let`, and has no
 		// other reading of either — so a call surfaced as *"Expected 'min' or 'max'"* and a struct literal as
 		// **E2004 `Undefined constant 'Pair'`**, a message about a `let` the author never wrote. That is the
 		// identical misattribution the `CharSet from […]` and `ItemArray.create()` arms below were added for.
-		if self.atConstInitializerCall() or self.atConstStructConstruction() or self.atConstStringLiteralInit() or self.atConstMapLiteral() 'deferredNodeInitializer'
+		if self.atConstNodeInitializer() or self.atConstStringLiteralInit() 'deferredNodeInitializer'
 			var calls = ConstFactoryCallArray.create()
 			let root = try self.evalConstInitializerNodeInto(calls, stack: stack, nested: false)
 			try self.requireInitializerConsumed(decl, deferred: true)
@@ -73817,6 +74069,9 @@ export type Parser
 		// to the scalar walk, whose `evalConstPrimary` has no `[` and would report `Expected expression but
 		// got '['` (which is what it did before this slice, in every position). The walk stops at the closing
 		// `]`, so a trailing `var xs = [1, 2] junk` is caught by the caller's consumed check.
+		//
+		// ⚠ **ONLY A CONSTANT LITERAL REACHES IT.** A literal holding RECORDS has no `.rdata` image to fold to
+		// and is claimed at the arena tier (`constBracketedLiteral`) before either caller asks this.
 		if self.at(TokenKind.leftBracket) 'arrayLiteralInitializer'
 			return try self.evalConstArrayLiteral(stack)
 		end 'arrayLiteralInitializer'
@@ -73977,31 +74232,62 @@ export type Parser
 		end 'declared'
 	end 'atConstStringLiteralInit'
 
-	// ⭐⭐ **IS THE CURSOR ON `[` … `:` — A MAP LITERAL?** The FOURTH initializer that builds a record without
-	// folding one, and the only one of the four whose shape cannot be settled from a fixed number of tokens: a
-	// map literal and an array literal open identically, and what separates them is a `:` an arbitrary
-	// expression away. Both reference compilers say why no bounded lookahead finds it — `[f(a, b): 1]` has a
-	// `,` at depth 1 before the colon, `[m.get(k): 1]` has a whole call in front of it.
+	// ⭐⭐ **WHICH OF THE THREE A `[` OPENS.** ONE classification, so the predicate that claims a bracketed
+	// initializer (`atConstNodeInitializer`) and the walk that consumes it (`evalConstInitializerNodeInto`)
+	// cannot part company about which literal was written. The caller has established the `[`; nothing else
+	// is decided here.
+	//
+	// ⭐⭐ **THE MAP IS THE ONE WHOSE SHAPE CANNOT BE SETTLED FROM A FIXED NUMBER OF TOKENS:** a map literal
+	// and an array literal open identically, and what separates them is a `:` an arbitrary expression away.
+	// Both reference compilers say why no bounded lookahead finds it — `[f(a, b): 1]` has a `,` at depth 1
+	// before the colon, `[m.get(k): 1]` has a whole call in front of it.
 	//
 	// ⚠ **A BODY DECIDES THIS BY PARSING THE FIRST ELEMENT AND LOOKING AT WHAT FOLLOWS, AND THIS WALK CANNOT.**
 	// `parseArrayLiteral` can, because both of its forks emit into the same block and the element it parsed is
-	// usable either way. Here the forks produce DIFFERENT THINGS — an array literal folds to a
-	// `ConstFoldedValue`, a map literal is an arena NODE — so the fold would have to be run and thrown away,
-	// and its element rule refuses a key outright before it could be: a `"a"` standing before a `:` is not
-	// `arrayElementIsSingleToken`, so `var m = ["a": 1]` reported **E2004 `Expected expression but got 'string
-	// literal'`**, blaming the one part of the line that IS a constant (MEASURED, and the identical
-	// misattribution the three arms above were each added to cure).
+	// usable either way. Here the forks produce DIFFERENT THINGS — a constant image folds to a
+	// `ConstFoldedValue`, a map or record literal is an arena NODE — so the fold would have to be run and
+	// thrown away, and its element rule refuses a key outright before it could be: a `"a"` standing before a
+	// `:` is not `arrayElementIsSingleToken`, so `var m = ["a": 1]` reported **E2004 `Expected expression but
+	// got 'string literal'`**, blaming the one part of the line that IS a constant (MEASURED, and the
+	// identical misattribution every arm of this fork was added to cure).
 	//
-	// ⭐ **SO THE SHAPE IS READ OFF THE TOKENS, AND THAT IS SOUND HERE FOR THE REASON IT IS NOT IN A BODY: a
-	// constant initializer's brackets are BALANCED AND BOUNDED.** The scan stops at the `]` closing the `[` it
-	// started on, and inside those brackets a `:` at depth 1 has no other reading — a labelled argument's colon
-	// is inside `(`…`)` and a struct literal's field colon inside `{`…`}`, both of which this counts. It is
-	// linear in the literal and asked once per bracketed initializer.
-	function atConstMapLiteral() returns bool
+	// ⭐ **THE ARRAY FORK IS DECIDED FROM ELEMENT 0, WHICH IS ALREADY THE LITERAL'S OWN TYPING RULE.** The
+	// first element fixes the element type and every later one is held to it, so asking the first is asking
+	// all of them — and a mixed `[1, Op.nop]` is refused by whichever walk claimed it, in that walk's own
+	// words. An all-constant literal FOLDS to one `.rdata` image (`evalConstArrayLiteral`), the representation
+	// `specs/codegen-internals.md` pins and which nothing here may take away; a literal holding boxes has no
+	// image at all and must be BUILT element by element, which only an arena node can describe.
+	//
+	// The cursor is MOVED and restored rather than a second set of index-taking predicates being written: the
+	// element tests read `self.pos`, and a parallel `…At(index)` copy of each is exactly the second reading of
+	// "what is here" this fork exists to avoid.
+	function constBracketedLiteral() returns ConstBracketedLiteral
 		if not self.at(TokenKind.leftBracket) 'notABracketedLiteral'
-			return false
+			panic("constBracketedLiteral: the cursor is on '{tokenDisplayText(self.current())}' — this answers about a `[` and has no arm for anything else, so every caller tests the token first")
 		end 'notABracketedLiteral'
 
+		if self.mapColonPrecedesTheClose() 'aMapLiteral'
+			return ConstBracketedLiteral.mapLiteral
+		end 'aMapLiteral'
+
+		let mark = self.pos
+		self.pos = self.indexPastNewlines(self.pos + 1)
+		let holdsRecords = self.atConstRecordElement()
+		self.pos = mark
+
+		if holdsRecords 'recordsRatherThanAnImage'
+			return ConstBracketedLiteral.recordArray
+		end 'recordsRatherThanAnImage'
+
+		return ConstBracketedLiteral.constantImage
+	end 'constBracketedLiteral'
+
+	// ⭐ **THE MAP HALF OF THE FORK ABOVE, READ OFF THE TOKENS — SOUND HERE FOR THE REASON IT IS NOT IN A BODY:
+	// a constant initializer's brackets are BALANCED AND BOUNDED.** The scan stops at the `]` closing the `[`
+	// the cursor is on, and inside those brackets a `:` at depth 1 has no other reading — a labelled argument's
+	// colon is inside `(`…`)` and a struct literal's field colon inside `{`…`}`, both of which this counts. It
+	// is linear in the literal.
+	function mapColonPrecedesTheClose() returns bool
 		var depth = 0 as ParsedInt
 		var i = self.pos
 		while i < self.tokens.count() 'eachToken'
@@ -74028,11 +74314,19 @@ export type Parser
 		// that reads the tokens rather than to a lookahead that only counted them: the array-literal fold
 		// reports the missing `]` at the token it stopped on.
 		return false
-	end 'atConstMapLiteral'
+	end 'mapColonPrecedesTheClose'
 
-	// ⭐ **WALK WHICHEVER NODE IS HERE INTO THE ARENA** — the ONE fork between the two ways a top-level
-	// initializer produces a record without folding one (W116), so a whole initializer and a nested
-	// argument/field admit exactly the same pair rather than two lists that could drift.
+	// Does the cursor sit on a value whose materialization is a RECORD — a node, or the one folded value that
+	// has no constant image either? It is `evalConstNodeValue`'s own node test, ASKED rather than re-listed,
+	// plus the payload-free boxed-union case: a second list of the node forms is how an element position and
+	// an argument position would come to admit different constants.
+	function atConstRecordElement() returns bool
+		return self.atConstBoxedUnionCase() or self.atConstNodeInitializer()
+	end 'atConstRecordElement'
+
+	// ⭐ **WALK WHICHEVER NODE IS HERE INTO THE ARENA** — the ONE fork between the ways a top-level initializer
+	// produces a record without folding one (W116), so a whole initializer and a nested argument/field/element
+	// admit exactly the same set rather than several lists that could drift.
 	//
 	// ⚠ **`nested` REACHES ONLY THE CALL ARM, AND THAT IS BECAUSE ONLY IT HAS A VERDICT TO WORD DIFFERENTLY**
 	// (`requireFactoryReturnsARecord`'s return-refusal table). A construction's admissibility is decided by
@@ -74040,6 +74334,12 @@ export type Parser
 	// nothing for the flag to reach, and threading it into the construct arm would invite a rule that differs
 	// by position, which is exactly what that table's header warns against.
 	function evalConstInitializerNodeInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, nested bool) returns InitializerCallId throws ConstEvalError
+		// A CASE before a CALL, for `atConstUnionCaseConstruction`'s reason: a union whose case and whose
+		// static share a spelling is a case where the author wrote one, and only the layout can say so.
+		if self.atConstUnionCaseConstruction() 'unionCase'
+			return try self.evalConstUnionCaseInto(calls, stack: stack)
+		end 'unionCase'
+
 		if self.atConstStructConstruction() 'structLiteral'
 			return try self.evalConstStructConstructionInto(calls, stack: stack)
 		end 'structLiteral'
@@ -74048,12 +74348,41 @@ export type Parser
 			return try self.evalConstStringLiteralInitInto(calls)
 		end 'stringLiteralInit'
 
-		if self.atConstMapLiteral() 'mapLiteral'
-			return try self.evalConstMapLiteralInto(calls, stack: stack)
-		end 'mapLiteral'
+		if self.at(TokenKind.leftBracket) 'bracketedLiteral'
+			match self.constBracketedLiteral() 'literal'
+				mapLiteral then return try self.evalConstMapLiteralInto(calls, stack: stack)
+				recordArray then return try self.evalConstRecordArrayLiteralInto(calls, stack: stack)
+				// Both callers gate on `atConstNodeInitializer`, which claims a `[` only where this same
+				// classifier answered one of the two above; an image is the FOLD's and has no arena node.
+				constantImage then panic("evalConstInitializerNodeInto: a constant array literal reached the arena walk — `atConstNodeInitializer` is the gate, and it declines an image")
+			end 'literal'
+		end 'bracketedLiteral'
 
 		return try self.evalConstFactoryCallInto(calls, stack: stack, nested: nested)
 	end 'evalConstInitializerNodeInto'
+
+	// ⭐ **EVERY FORM THAT PRODUCES A RECORD THROUGH THE ARENA — the ONE list, so a whole initializer, a
+	// factory argument, a struct field, a map column and an array element admit the same set.** A form claimed
+	// at one of those positions and not the others is what `evalConstNodeValue`'s header measures the cost of:
+	// the walk that does not claim it reads the tokens as a grammar the author was not writing in.
+	//
+	// ⚠ `atConstStringLiteralInit` is NOT here and is asked beside it at the INITIALIZER only, which is where
+	// that asymmetry already stood: `FilePath from ""` is admitted as a whole initializer and has never been
+	// admitted as an argument.
+	//
+	// ⚠ A `[` is decided by `constBracketedLiteral`, the same classifier the walk asks, rather than by two
+	// bracket predicates in this chain: the map probe is a scan of the literal, and asking it once per fork
+	// is what keeps the answer and its cost single.
+	function atConstNodeInitializer() returns bool
+		if self.at(TokenKind.leftBracket) 'bracketedLiteral'
+			return match self.constBracketedLiteral() 'literal'
+				mapLiteral to recordArray gives true
+				constantImage gives false
+			end 'literal'
+		end 'bracketedLiteral'
+
+		return self.atConstUnionCaseConstruction() or self.atConstInitializerCall() or self.atConstStructConstruction()
+	end 'atConstNodeInitializer'
 
 	// ⭐⭐ **`FilePath from ""` AS AN INITIALIZER — recorded as the CALL it already is.** The body form is a
 	// call to the type's own `init` static (`parseStringLiteralInitConstruction`, whose callee is
@@ -74260,7 +74589,7 @@ export type Parser
 		// which reads the `[` as an ARRAY literal and reports `Expected ']' but got ':'` — a message about a
 		// grammar the author was not writing in, which is the exact misattribution every arm of this fork was
 		// added to cure.
-		if self.atConstInitializerCall() or self.atConstStructConstruction() or self.atConstMapLiteral() 'nestedNode'
+		if self.atConstNodeInitializer() 'nestedNode'
 			return ConstFactoryArgumentValue.call(try self.evalConstInitializerNodeInto(calls, stack: stack, nested: true))
 		end 'nestedNode'
 
@@ -74392,10 +74721,10 @@ export type Parser
 	end 'requireConstMapScalarColumnIsNameable'
 
 	// One half against its column. The VERDICT and both spellings are the index's — see
-	// `ProgramSignatures.constMapColumnCheck` for why neither can be produced on this side — so all this door
-	// owns is where the refusal is BLAMED, which is the half only a token walk can see.
+	// `ProgramSignatures.constContainerColumnCheck` for why neither can be produced on this side — so all this
+	// door owns is where the refusal is BLAMED, which is the half only a token walk can see.
 	function requireConstMapColumn(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, column MaxonType, columnNoun String, tok Token) throws ConstEvalError
-		match self.signatures.constMapColumnCheck(column, value: value, calls: calls, declName: MapBuiltinBaseName, elementFilePath: self.filePath) 'verdict'
+		match self.signatures.constContainerColumnCheck(column, value: value, calls: calls, declName: MapBuiltinBaseName, elementFilePath: self.filePath) 'verdict'
 			agrees then return
 			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.unsupported(constMapColumnMessage(columnNoun, expected: expected, got: got), line: tok.line, column: tok.column))
 		end 'verdict'
@@ -74462,6 +74791,177 @@ export type Parser
 
 		return id
 	end 'evalConstStructConstructionInto'
+
+	// ⭐⭐ **`Op.add(7)` AS A TOP-LEVEL INITIALIZER, OR AS A FIELD/ARGUMENT/ELEMENT OF ONE** — the SAME
+	// construction `parsePayloadArgs` reads inside a function, walked into the arena instead of emitted. Its
+	// box is built before `main` by `__module_init`, exactly as a `create()`-style factory's record is.
+	//
+	// ⚠ **NOTHING HERE RESTATES A SLOTTING OR AN ARITY RULE** — `evalConstStructConstructionInto`'s discipline,
+	// applied to a case. Which slot an argument fills (`payloadSlotFor`), whether a label is legal at this
+	// position (`consumeArgLabel`) and whether every slot was given a value (`requireAllPayloadsProvided`) are
+	// the body path's own three deciders, called here, so a case this door admits is a case a body admits.
+	//
+	// ⚠ **A UNION PAYLOAD HAS NO DECLARED DEFAULT**, which is why there is no `applyConstFieldDefaults` step
+	// beside the fill check: an omitted slot is always the refusal.
+	function evalConstUnionCaseInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns InitializerCallId throws ConstEvalError
+		let typeTok = try self.consumeConst(TokenKind.identifier)
+		try self.consumeConstToken(TokenKind.dot)
+		let caseTok = try self.consumeConst(TokenKind.identifier)
+
+		let layout = requireEnumLayout(self.signatures.enumFor(typeTok.value, readerFilePath: self.filePath))
+		let declared = layout.payloadsAt(layout.indexOfCase(caseTok.value))
+
+		// Parallel to the CASE's declared slots, not to the source — `evalConstStructConstructionInto`'s columns,
+		// for its reason. The seeded value is a placeholder for a slot nothing has written yet, and `filled` is
+		// what keeps it from ever being read.
+		var payloads = ConstFactoryArgumentValueArray.create()
+		var filled = BoolArray.create()
+		for _ in 0 upto declared.count() 'initSlots'
+			payloads.push(ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(0, tag: ValueTypeTag.integer))))
+			filled.push(false)
+		end 'initSlots'
+
+		try self.evalConstPayloadArgs(calls, stack: stack, layout: layout, declared: declared, payloads: payloads, filled: filled)
+		try self.requireAllPayloadsProvided(layout, payloads: declared, filled: filled, caseTok: caseTok) otherwise (err) 'unfilledSlot'
+			throw ConstEvalError.defective(err)
+		end 'unfilledSlot'
+
+		// The slot this construction is about to occupy. Read BEFORE the push and AFTER the payloads, which is
+		// what makes it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason.
+		let id = calls.count()
+		calls.push(ConstFactoryCall.unionCase(typeTok.value, caseName: caseTok.value, payloads: payloads))
+
+		return id
+	end 'evalConstUnionCaseInto'
+
+	// The `(…)` list, into the slot-parallel columns — `parsePayloadArgs` without the ops. The caller is on the
+	// `(`; this consumes it through the `)`.
+	//
+	// ⚠ **THE STRICT LABEL READER (`consumeArgLabel`), NOT THE FACTORY WALK'S LENIENT ONE.** A factory's labels
+	// are slotted against a declared signature and checked there, so the evaluator records them untouched; a
+	// payload has no callee to be checked against, and the position rule — first positional, every later one
+	// named — is the body's own and is enforced here by the body's own door.
+	function evalConstPayloadArgs(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, layout EnumLayout, declared PayloadFieldArray, payloads ConstFactoryArgumentValueArray, filled BoolArray) throws ConstEvalError
+		try self.consumeConstToken(TokenKind.leftParen)
+
+		var argIndex = 0 as ParamCount
+		while true 'argLoop'
+			let labelTok = self.current()
+			let label = try self.consumeArgLabel(argIndex, rule: ArgLabelRule.ordinary) otherwise (err) 'misplacedLabel'
+				throw ConstEvalError.defective(err)
+			end 'misplacedLabel'
+			let slot = try self.payloadSlotFor(layout, payloads: declared, argIndex: argIndex, label: label, labelTok: labelTok) otherwise (err) 'noSuchPayload'
+				throw ConstEvalError.defective(err)
+			end 'noSuchPayload'
+
+			let alreadyFilled = try filled.get(slot) otherwise panic("evalConstPayloadArgs: filled.get OOB at slot {slot} — the columns are sized to the case's arity and payloadSlotFor returns an in-range slot")
+			if alreadyFilled 'duplicate'
+				throw ConstEvalError.defective(ParseError.duplicateFieldInitializer(String.from(layout.name), fieldName: String.from(label), line: labelTok.line, column: labelTok.column))
+			end 'duplicate'
+
+			let valueTok = self.current()
+			try payloads.set(slot, value: try self.requireConstPayloadValueFits(calls, layout: layout, declared: declared, slot: slot, value: try self.evalConstNodeValue(calls, stack: stack), valueTok: valueTok)) otherwise panic("evalConstPayloadArgs: payloads.set OOB at slot {slot} — the columns are sized to the case's arity")
+			try filled.set(slot, value: true) otherwise panic("evalConstPayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
+
+			argIndex = argIndex + 1
+
+			if not self.at(TokenKind.comma) 'endArgs'
+				break
+			end 'endArgs'
+			try self.consumeConstToken(TokenKind.comma)
+		end 'argLoop'
+
+		try self.consumeConstToken(TokenKind.rightParen)
+	end 'evalConstPayloadArgs'
+
+	// ⭐⭐ **MAY THIS CONSTANT FILL THIS PAYLOAD SLOT?** — `requireConstFieldValueFits` for a case, and the same
+	// division of labour: the VERDICT is the index's, because both halves of the comparison resolve against its
+	// interner and registries, and what is decided here is where the refusal is BLAMED.
+	//
+	// ⛔ **WITHOUT IT `Op.add("hi")` STORED A STRING POINTER IN AN `int` SLOT** — the hazard
+	// `constStructFieldCheck`'s header measures for a struct field, one construct over, and a union payload is
+	// the same store through the same door.
+	function requireConstPayloadValueFits(calls ConstFactoryCallArray, layout EnumLayout, declared PayloadFieldArray, slot CaseIndex, value ConstFactoryArgumentValue, valueTok Token) returns ConstFactoryArgumentValue throws ConstEvalError
+		let field = try declared.get(slot) otherwise panic("requireConstPayloadValueFits: declared.get OOB at slot {slot} — payloadSlotFor returns an in-range slot")
+
+		// ⛔ **THE LOWERABILITY VERDICT IS THE BODY'S OWN, AND IT HAS TO BE ASKED HERE TOO.** A float payload
+		// has no store width at all (`payloadStorageOf` panics on it), so a case the body refuses positionally
+		// would otherwise reach the synthesis and crash the compiler. The CLASS it answers with is the index's
+		// to re-derive where the store is built (`globalUnionCaseConstruct`); what this position needs is the
+		// refusal.
+		_ = try self.requirePayloadLowerable(field, declared: self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames), layout: layout, posTok: valueTok) otherwise (err) 'unlowerablePayload'
+			throw ConstEvalError.defective(err)
+		end 'unlowerablePayload'
+
+		match self.signatures.constUnionPayloadCheck(layout, field: field, value: value, calls: calls, elementFilePath: self.filePath) 'verdict'
+			agrees then return value
+			// The PAYLOAD voice quotes no place name — there is none to quote — which is the sentence
+			// `slotMismatchError` raises for the same mistake written inside a function.
+			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.typeMismatchExpectedGot(expected, got: got, line: valueTok.line, column: valueTok.column))
+			// A float payload has no store width and is refused above, so no slot this reaches is float-typed
+			// and there is nothing an integer constant could widen into.
+			widensToFloat then panic("requireConstPayloadValueFits: payload '{String.from(field.name)}' of `{String.from(layout.name)}` was told to widen to float — `requirePayloadLowerable` refuses a float payload one call above")
+		end 'verdict'
+	end 'requireConstPayloadValueFits'
+
+	// ⭐⭐ **`[Op.add(7), Op.nop]` AS A TOP-LEVEL INITIALIZER — an array literal whose elements are RECORDS.**
+	// It is `evalConstMapLiteralInto` one column narrower: the instance the FIRST element's type fixes, then the
+	// elements, each walked through the very `evalConstNodeValue` a factory argument and a struct field go
+	// through — so an element is admitted by the same door everything else in an initializer is.
+	//
+	// ⚠ **AN ALL-CONSTANT LITERAL DOES NOT COME HERE — it FOLDS to a `.rdata` blob** (`evalConstArrayLiteral`),
+	// which is the split `constBracketedLiteral` makes and the one `containerRecordOf` makes one tier down.
+	// What parts them is whether the elements are values an IMAGE can hold; a box is not.
+	//
+	// ⚠ **NO OWNERSHIP BOOKKEEPING**, for `evalConstArrayLiteral`'s reason: the elements are constants, so there
+	// is no binding to poison and no temp to de-list, and who owns each one after the add is settled at the
+	// synthesis (`ModuleInit.builtArrayLiteralRecord`).
+	function evalConstRecordArrayLiteralInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns InitializerCallId throws ConstEvalError
+		try self.consumeConstToken(TokenKind.leftBracket)
+		self.skipNewlines()
+
+		var elements = ConstFactoryArgumentValueArray.create()
+		let firstTok = self.current()
+		let first = try self.evalConstNodeValue(calls, stack: stack)
+		elements.push(first)
+		let element = self.signatures.constNodeValueType(first, calls: calls, declName: self.signatures.arrayRecordBaseName(), elementFilePath: self.filePath)
+
+		// A newline at each element boundary, exactly as the folding walk and the body walk allow one: a
+		// multi-line literal is the same literal.
+		self.skipNewlines()
+		while self.at(TokenKind.comma) 'moreElements'
+			try self.consumeConstToken(TokenKind.comma)
+			self.skipNewlines()
+			let elemTok = self.current()
+			let elem = try self.evalConstNodeValue(calls, stack: stack)
+			try self.requireConstArrayElementAgrees(elem, calls: calls, element: element, tok: elemTok)
+			elements.push(elem)
+			self.skipNewlines()
+		end 'moreElements'
+		try self.consumeConstToken(TokenKind.rightBracket)
+
+		let giid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: element)
+		// The literal records its own instantiation, `evalConstMapLiteralInto`'s rule for its reason: this is a
+		// door a container is born through with no `with T` to anchor a constraint refusal on.
+		self.signatures.recordConstInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: firstTok.line, nameColumn: firstTok.column, filePath: self.filePath))
+
+		// The slot this node is about to occupy. Read BEFORE the push and AFTER the elements, which is what makes
+		// it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason.
+		let id = calls.count()
+		calls.push(ConstFactoryCall.arrayLiteral(giid, elements: elements))
+
+		return id
+	end 'evalConstRecordArrayLiteralInto'
+
+	// Every element must belong to the array the first one typed — the folding walk's homogeneity rule, over
+	// TYPES rather than element kinds because that is what this tier has. The SENTENCE is the folding walk's
+	// own (`MixedArrayLiteralElementsMessage`), so one mistake reads one way whichever walk claimed the literal.
+	function requireConstArrayElementAgrees(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, element MaxonType, tok Token) throws ConstEvalError
+		match self.signatures.constContainerColumnCheck(element, value: value, calls: calls, declName: self.signatures.arrayRecordBaseName(), elementFilePath: self.filePath) 'verdict'
+			agrees then return
+			mismatch then throw ConstEvalError.defective(ParseError.unsupported(MixedArrayLiteralElementsMessage, line: tok.line, column: tok.column))
+		end 'verdict'
+	end 'requireConstArrayElementAgrees'
 
 	// The `name: value` pairs inside the braces, into the layout-parallel columns — `parseStructLiteralFields`
 	// without the ops, and with its newline rule unchanged: a literal's shape must not depend on where its
@@ -75627,8 +76127,10 @@ export type Parser
 			// ⛔⛔ **A BOXED UNION'S CASE IS NOT THIS ARM'S BUSINESS, AND THAT IS A TIER BOUNDARY RATHER THAN A
 			// REFUSAL.** `isBoxed` means SOME case carries a payload, and then EVERY case — payload-free ones
 			// included — is a heap box rather than a bare tag (`EnumLayout`'s own header), so its value is a
-			// RECORD and this walk, which answers with a `ConstValue`, has no way to spell it. It is claimed one
-			// tier up instead, by `evalConstFoldedValue`'s `atConstBoxedUnionCase` arm.
+			// RECORD and this walk, which answers with a `ConstValue`, has no way to spell it. A payload-free
+			// case is claimed one tier up, by `evalConstFoldedValue`'s `atConstBoxedUnionCase` arm; a
+			// payload-carrying one is a CONSTRUCTION whose slots take values, and is claimed at the arena tier
+			// by `atConstUnionCaseConstruction`, the only tier that can hold them.
 			//
 			// ⚠ **THIS COMMENT USED TO SAY THE EXCLUSION WAS "THE RULE RATHER THAN A LIMIT OF THIS ARM" — that
 			// a heap object cannot be a constant at all — and it was MEASURED FALSE.** The runnable oracle
@@ -75650,7 +76152,7 @@ export type Parser
 			// refusing a boxed union's case for being a heap object, which the oracle had compiled all along.
 			// What a constant actually is, is SETTLED BEFORE `main`: folded to a number, or materialized by the
 			// module initializer. The boundary this now describes is the real one.
-			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(tok.value)}.{tokenDisplayText(memberTok)}` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, a payload-free enum or union case, a `{String.from(CreateMethod)}()`-style factory at the TOP of an initializer, or a sized type's `.{String.from(MinBoundField)}`/`.{String.from(MaxBoundField)}`, and nothing else", line: tok.line, column: tok.column))
+			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(tok.value)}.{tokenDisplayText(memberTok)}` in a constant initializer — a constant is settled before `main`, either folded to a number or materialized by the module initializer, so it can name another top-level `let`, a literal, an empty container, an enum or union case (a case that declares a payload must be written with its arguments), a `{String.from(CreateMethod)}()`-style factory at the TOP of an initializer, or a sized type's `.{String.from(MinBoundField)}`/`.{String.from(MaxBoundField)}`, and nothing else", line: tok.line, column: tok.column))
 		end 'dottedNonBound'
 
 		self.advance()
@@ -75664,10 +76166,10 @@ export type Parser
 	//
 	// ⭐⭐ **THE TWO READERS DIFFER IN EXACTLY THIS BIT, WHICH IS WHY IT IS A PARAMETER AND NOT A SECOND COPY.**
 	// The scalar walk (`evalConstNamed`) asks `boxed: false` — an unboxed case's TAG *is* its value, so it
-	// folds to a number. The record arm (`evalConstFoldedValue`) asks `boxed: true` — every case of a
-	// payload-bearing union is a heap BOX, so its value is built by `__module_init` instead. Everything else
-	// about the question is identical, and two near-copies of this lookup are precisely how the two would come
-	// to admit different member sets.
+	// folds to a number. The record readers ask `boxed: true` through `atConstQualifiedEnumCase` — every case
+	// of a payload-bearing union is a heap BOX, so its value is built by `__module_init` instead. Everything
+	// else about the question is identical, and two near-copies of this lookup are precisely how the two would
+	// come to admit different member sets.
 	//
 	// It asks the SWEEP's registry (`signatures.enumOf`), which is the only store that exists this early and
 	// is the same one every other constant-time enum question in this evaluator would ask.
@@ -75685,15 +76187,48 @@ export type Parser
 		return layout.hasCase(memberTok.value)
 	end 'constEnumCaseOfLayout'
 
-	// Does the cursor sit on `<BoxedUnion>.<case>`? The token shape AND the layout question, asked together so
-	// the arm that claims the form and the walk that consumes it cannot part company about what was claimed.
-	function atConstBoxedUnionCase() returns bool
+	// Does the cursor sit on `<BoxedUnion>.<case>` at all? The token shape AND the layout question, asked
+	// together so the arm that claims a form and the walk that consumes it cannot part company about what was
+	// claimed. WHICH of the two boxed-union arms claims it is the ARITY, below.
+	function atConstQualifiedEnumCase(boxed bool) returns bool
 		if not self.at(TokenKind.identifier) or self.peekKind() != TokenKind.dot or self.kindAt(self.pos + 2) != TokenKind.identifier 'notAQualifiedName'
 			return false
 		end 'notAQualifiedName'
 
-		return self.constEnumCaseOfLayout(self.current(), memberTok: self.tokenAt(self.pos + 2), boxed: true)
+		return self.constEnumCaseOfLayout(self.current(), memberTok: self.tokenAt(self.pos + 2), boxed: boxed)
+	end 'atConstQualifiedEnumCase'
+
+	// ⭐⭐ **THE TWO BOXED-UNION ARMS PARTITION ON THE CASE'S ARITY, NOT ON THE PARENTHESES.** A case with no
+	// payload IS its box — a tag word beside zeroed slots, which the fold below can spell — while a case WITH
+	// one is a CONSTRUCTION whose slots take values, and only the arena tier can hold those.
+	//
+	// ⛔ **READING THE PARENS INSTEAD ADMITS `Hold.owned` AND BUILDS `owned(0)` IN SILENCE**: the payload-free
+	// fold zero-fills EVERY slot, so a case written without its arguments produced a box holding a payload the
+	// author never wrote. A body refuses the same spelling outright (`parsePayloadArgs`), and asking the arity
+	// is what makes the two positions agree — a payload-carrying case with no `(` is claimed by neither arm and
+	// reaches the refusal that names it.
+	function atConstBoxedUnionCase() returns bool
+		return self.atConstQualifiedEnumCase(true) and self.constEnumCasePayloadArity(self.current(), memberTok: self.tokenAt(self.pos + 2)) == 0
 	end 'atConstBoxedUnionCase'
+
+	// ⭐⭐ **`Op.add(7)` — A PAYLOAD-CARRYING CASE AS A CONSTANT INITIALIZER.** Its box is built before `main`
+	// exactly as a `create()`-style factory's record is, so it is claimed at the NODE tier: `evalConstNodeValue`
+	// and `evalConstInitializer` ask this, and the fold below never sees the form.
+	//
+	// ⚠ **ASKED AHEAD OF `atConstInitializerCall`, WHICH IS THE ONLY ORDER THAT CAN BE RIGHT.** That predicate
+	// claims `<Type>.<method>(` for any name some file declares a callee under, and a union whose case and
+	// whose static share a spelling would otherwise be read as a call to a function that cannot return this
+	// case. A CASE is what the author wrote, and the layout is the only reader that can say so.
+	function atConstUnionCaseConstruction() returns bool
+		return self.atConstQualifiedEnumCase(true) and self.kindAt(self.pos + 3) == TokenKind.leftParen and self.constEnumCasePayloadArity(self.current(), memberTok: self.tokenAt(self.pos + 2)) > 0
+	end 'atConstUnionCaseConstruction'
+
+	// How many payload slots `<tok>.<memberTok>` declares. Asked only once `atConstQualifiedEnumCase` has
+	// established that the enum is declared and holds the case, which is what makes both lookups total.
+	function constEnumCasePayloadArity(tok Token, memberTok Token) returns CaseIndex
+		let layout = requireEnumLayout(self.signatures.enumFor(tok.value, readerFilePath: self.filePath))
+		return layout.payloadArityAt(layout.indexOfCase(memberTok.value))
+	end 'constEnumCasePayloadArity'
 
 	// Walk `<BoxedUnion>.<case>`, already claimed by the test above — which is why the three tokens are simply
 	// stepped over rather than re-checked, and why this cannot fail.
@@ -79159,24 +79694,121 @@ export type Parser
 		end 'eachArg'
 	end 'recordSubstitutedArgRangeChecks'
 
-	// ⭐ **`async f(args…)` — SPAWN A GREEN THREAD** (P1.5-B1a). The cursor sits just past `async`, on the
-	// callee name. B1a supports a FREE call only (`async f(…)`), so the callee name is followed directly by
-	// `(` — a qualified `async Type.method(…)` fails at the `(` consume and is refused, which is the intended
-	// B1a boundary. The argument grammar and `name:` label rules are `parseCallArgs`, shared with an ordinary
-	// call, so a labelled async argument slots exactly as a plain one does.
-	function parseAsyncCall(func IrFunction) returns ValueId throws ParseError
+	// ⭐⭐ **THE CALLEE AN `async` SPAWN NAMES — a FREE call's identifier, or a QUALIFIED `<Type>.<static>`.**
+	// The cursor sits on the callee's first token and is left on the `(`, so the one argument reader in
+	// `parseAsyncCall` serves both shapes.
+	//
+	// ⚠ The qualified shape is recognized on the whole `. <member> (` tail through `memberCallFollows`, the
+	// predicate every other `<base> . <member> (` dispatcher reads. A LONGER chain — `async lib.inner.deep()`,
+	// `async Calc.request.unionCases.bump()` — is not that shape and falls to the free reader, which reports
+	// the mismatch at the `.` it cannot consume.
+	function asyncSpawnCallee() returns AsyncSpawnCallee throws ParseError
+		if self.memberCallFollows(self.pos + 1) 'qualifiedTarget'
+			return try self.qualifiedAsyncSpawnCallee()
+		end 'qualifiedTarget'
+
 		if not self.at(TokenKind.identifier) 'notCall'
 			let tok = self.current()
-			throw ParseError.unsupported("`async` must be applied to a call — `async f(…)` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("`async` must be applied to a call — `async f(…)` or `async Type.staticMethod(…)` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
 		end 'notCall'
+
+		let calleeTok = try self.consume(TokenKind.identifier)
+		return AsyncSpawnCallee.create(calleeTok.value, anchor: calleeTok)
+	end 'asyncSpawnCallee'
+
+	// ⭐⭐ **`async <Type>.<static>(…)` — resolved through the doors `parseQualifiedCall` resolves an ordinary
+	// qualified call through, and refused at every one of them that is not a plain call to a function the
+	// program declares.** The cursor sits on the base and is left on the `(`.
+	//
+	// ⛔ **EVERY DOOR HERE ANSWERS IN WORDS; NONE MAY FALL THROUGH.** A spawn lowers to
+	// `__gt_spawn(funcAddr(<callee>), …)`, so a target that is not a linked function is a link failure or a
+	// wrong answer at run time rather than a diagnostic.
+	function qualifiedAsyncSpawnCallee() returns AsyncSpawnCallee throws ParseError
+		// ⛔ **AN INSTANCE SPAWN IS REFUSED, and the two claimants `parseDottedPrimary` asks first are asked
+		// first here for its reason: a base bound to a VALUE claims the whole expression before any type
+		// reading.** `async obj.work()` needs a receiver slot the trampoline's inline argument region has no
+		// room for, receiver ownership across the green-thread boundary, and a classification for the
+		// receivers that are not plain calls at all — a String/array/builtin receiver lowers to a runtime
+		// call and an interface receiver to a `witnessDispatch`, and neither can be an `asyncCall`.
+		let baseTok = self.current()
+		if self.methodCallsAt(self.pos) or self.baseNamesAValueInScope(baseTok) 'instanceSpawn'
+			throw ParseError.unsupported("`async {String.from(baseTok.value)}.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument", line: baseTok.line, column: baseTok.column)
+		end 'instanceSpawn'
+
+		let typeTok = try self.consumeTypeBaseToken()
+		// The E3062 use hook `parseQualifiedCall` states: a `Type.method()` base NAMES a type.
+		self.recordTypeNameUse(typeTok.value)
+
+		// ⛔ `async Move.walk(Direction.east)` CONSTRUCTS a union case and calls nothing. Asked exactly as
+		// `parseDottedPrimary` asks it, and BEFORE the static reading for that door's reason: a payload
+		// construct and a static call are the same shape to the token.
+		if self.signatures.containsEnumFor(typeTok.value, readerFilePath: self.filePath) and self.typeNameVisibleHere(typeTok.value) 'unionConstruct'
+			throw ParseError.unsupported("`async {String.from(typeTok.value)}.…` — `{String.from(typeTok.value)}` is an enum or union, so `{String.from(typeTok.value)}.<case>(…)` builds a case rather than calling a function. There is nothing there for a green thread to run", line: typeTok.line, column: typeTok.column)
+		end 'unionConstruct'
+
+		let aliasName = self.genericAliasKeyFor(typeTok.value)
+		try self.requireAsyncSpawnTargetIsLinkable(typeTok, aliasName: aliasName)
+
+		try self.consume(TokenKind.dot)
+		// Read and consumed here rather than left to `parseCallNamed`: this reader hands the argument list to
+		// `parseAsyncCall`, which emits an `asyncCall` and never reaches that door.
+		let memberTok = self.current()
+		self.advance()
+
+		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
+			// ⛔ **A MINTED CALLEE IS ONE `MaxonOp.asyncCall` CANNOT DESCRIBE** — it carries no `mint` field,
+			// so every reader downstream (`requireCalleeIsNotReservedName`, `SemanticCheck.validateAsyncCall`'s
+			// visibility rule) would judge `__int_fromString` as a name the author wrote. Refused here so that
+			// `CalleeMint.notMinted` is TRUE of every spawn by construction rather than by assumption.
+			minted(mintedCallee) then throw ParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — a primitive's static resolves to the compiler-minted callee `{String.from(mintedCallee)}`, and a spawn records no callee but the one the author wrote. Call it directly", line: memberTok.line, column: memberTok.column)
+			namespaceQualifiedFree(free) then return AsyncSpawnCallee.create(free, anchor: memberTok)
+			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok)
+		end 'callee'
+	end 'qualifiedAsyncSpawnCallee'
+
+	// ⛔ **A COMPILER-OWNED STATIC IS NOT A SPAWN TARGET, and the five surfaces share ONE refusal because
+	// they share one reason:** each lowers to a runtime entry the compiler emits (`__mf_read_all`,
+	// `__managed_create`, an `Array` create op) rather than to a function the program declares, while a spawn
+	// hands the scheduler the ADDRESS of a linked function. The roster is `compilerOwnedStaticSurface`'s, so
+	// a surface added there is refused here without this reader learning it exists.
+	function requireAsyncSpawnTargetIsLinkable(typeTok Token, aliasName ByteArray) throws ParseError
+		match self.compilerOwnedStaticSurface(typeTok.value, aliasName: aliasName) 'surface'
+			none then return
+			managedFile to containerAlias then throw ParseError.unsupported("`async {String.from(typeTok.value)}.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it", line: typeTok.line, column: typeTok.column)
+		end 'surface'
+	end 'requireAsyncSpawnTargetIsLinkable'
+
+	// ⛔ **A GENERIC-INSTANCE CONSTRUCTOR (`StrBox.create(s)`) IS REFUSED.** An ordinary call retypes its
+	// result to the instance the alias fixes (`retypeGenericAliasConstructorResult`); a spawn's result is the
+	// PROMISE, whose argument comes from the callee's DECLARED return
+	// (`internPromiseInstanceForCallee`) — the generic BASE. There is no promise-side substitution to make,
+	// so the await would hand back a value at the base type.
+	function declaredStaticAsyncSpawnCallee(callee ByteArray, aliasName ByteArray, typeTok Token, memberTok Token) returns AsyncSpawnCallee throws ParseError
+		match self.constructorInstanceOf(aliasName) 'constructed'
+			none then return AsyncSpawnCallee.create(callee, anchor: memberTok)
+			instance then throw ParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — `{String.from(typeTok.value)}` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly", line: memberTok.line, column: memberTok.column)
+		end 'constructed'
+	end 'declaredStaticAsyncSpawnCallee'
+
+	// ⭐ **`async f(args…)` / `async Type.staticMethod(args…)` — SPAWN A GREEN THREAD** (P1.5-B1a). The cursor
+	// sits just past `async`, on the callee's first token. The argument grammar and `name:` label rules are
+	// `parseCallArgs`, shared with an ordinary call, so a labelled async argument slots exactly as a plain one
+	// does.
+	//
+	// ⭐⭐ **A QUALIFIED TARGET IS A `static`, AND ONLY A `static`** — `async File.readText(p)`,
+	// `async Subprocess.run(exe, arguments: argv)`. `parseQualifiedCall`'s own header says why that is cheap:
+	// a static call *"is an ORDINARY call with a mangled name … A static method has no receiver, so there is
+	// nothing else to pass"*, so everything downstream of the name — the promise mint, the yield check, the
+	// releaser, the lowering — is name-keyed and needs nothing new. An INSTANCE spawn is refused in words by
+	// `asyncSpawnCallee`; see there for what it would take.
+	function parseAsyncCall(func IrFunction) returns ValueId throws ParseError
 		// ⭐ The first token of the spawn — the `async` KEYWORD, which the sole caller consumed immediately
 		// before dispatching here (`parsePrefix`'s `async` arm). E3073 quotes the whole spawn, keyword included
 		// (`'async heavyCompute(5)'`), and this is the only point at which its text still exists — see
 		// `Project.asyncSpawnTexts` for why nothing downstream can reconstruct it.
 		let spawnStart = self.pos - 1
 
-		let calleeTok = self.current()
-		try self.consume(TokenKind.identifier)
+		let target = try self.asyncSpawnCallee()
 		try self.consume(TokenKind.leftParen)
 
 		var args = ValueIdArray.create()
@@ -79190,7 +79822,7 @@ export type Parser
 		// function, so its callee always has parameter names — no bare builtin is reachable through
 		// this door, and the positional-argument regime would be answering for a callee that cannot
 		// arrive here.
-		try self.parseCallArgs(func, callee: calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.ordinary)
+		try self.parseCallArgs(func, callee: target.name, anchor: target.anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.ordinary)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		// `self.pos` now sits one PAST the `)`, which is exactly `tokenTextFrom`'s exclusive end. The POSITION is
@@ -79198,7 +79830,7 @@ export type Parser
 		let asyncTok = self.tokenAt(spawnStart)
 		let spawnSite = AsyncSpawnSite.create(self.tokenTextFrom(spawnStart, endIndex: self.pos).toByteArray(), line: asyncTok.line, column: asyncTok.column)
 
-		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, spawnSite: spawnSite)
+		return try self.emitAsyncCall(target.name, anchor: target.anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, spawnSite: spawnSite)
 	end 'parseAsyncCall'
 
 	// Mint the Promise handle an `async` spawn defines and emit the `asyncCall` op. B1a is SCALAR ONLY: the
@@ -79228,9 +79860,10 @@ export type Parser
 	// positions to keep in step with the language — which is the property a roster can never have.
 	// `await`/`try await` still recover the awaited result type from the callee, unchanged.
 	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, spawnSite AsyncSpawnSite) returns ValueId throws ParseError
-		// `written` is not a default here, it is the shape of the door: `parseAsyncCall` is the sole caller and
-		// it consumes a bare `identifier` callee, so an `async` spawn's name is always the author's own bytes.
-		// `async int.fromString(s)` does not parse at all — the `async` target grammar admits a free call only.
+		// ⭐ `notMinted` is not a default here, it is the shape of the door: `asyncSpawnCallee` admits a free
+		// call's identifier and a `<Type>.<static>` mangle of two tokens the author wrote, and REFUSES a
+		// minted callee outright (`async int.fromString(s)`), because `MaxonOp.asyncCall` carries no `mint`
+		// field to tell one from the other. So an `async` spawn's name is always the author's own bytes.
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, mint: CalleeMint.notMinted, signatures: self.signatures)
 		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED AT THIS DOOR TOO** (BATCH2 slice 4) — the SECOND of the two
 		// source call doors, so `async f()` against `function f(n Integer = 1)` is the same legal call
