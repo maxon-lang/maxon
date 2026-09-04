@@ -1,0 +1,280 @@
+// Test: a-handler-binder-takes-a-parameters-name
+enum Fail implements Error
+	nope
+end 'Fail'
+
+function boom() throws Fail
+	throw Fail.nope
+end 'boom'
+
+type Wrap
+	export var v as String
+	export var why as Fail
+
+	export static function make(p String) returns Wrap
+		try boom() otherwise (p) 'caught'
+			return Wrap{v: "handled", why: p}
+		end 'caught'
+
+		return Wrap{v: "unreached", why: Fail.nope}
+	end 'make'
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.make("the argument")
+	return w.v.count() as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @boom() {
+  entry:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @Wrap.make(p: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.str x0, [x29, #-56]
+    arm64.bl boom
+    arm64.str x1, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne Wrap.make.otherwise_error_0
+    arm64.b Wrap.make.otherwise_continue_0
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.sub x2, x0, x1
+    arm64.str x2, [x29, #-16]
+    arm64.adrp_add_rdata x3, __str_46
+    arm64.mov x4, x3
+    arm64.mov x5, #7
+    arm64.adrp_add_func x6, __destruct_String
+    arm64.mov x7, x6
+    arm64.str x4, [x29, #-56]
+    arm64.mov x1, x7
+    arm64.mov x0, #48
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x8, #-2
+    arm64.mov x9, #1
+    arm64.mov x10, #0
+    arm64.ldr x11, [x29, #-24]
+    arm64.ldr x12, [x29, #-56]
+    arm64.str x12, [x11, #0]
+    arm64.ldr x14, [x29, #-24]
+    arm64.mov x15, #7
+    arm64.str x15, [x14, #8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x8, [x0, #16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x9, [x0, #24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x10, [x0, #32]
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.adrp_add_func x1, __destruct_Wrap
+    arm64.mov x2, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #16
+    arm64.mov x2, #51
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.str x0, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq Wrap.make.__skip_guarded_51
+    arm64.bl mm_decref
+    arm64.label Wrap.make.__skip_guarded_51
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=128
+    arm64.ret
+  otherwise_continue_0:
+    arm64.adrp_add_rdata x0, __str_47
+    arm64.mov x1, x0
+    arm64.mov x2, #9
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-56]
+    arm64.mov x1, x4
+    arm64.mov x0, #48
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.mov x5, #-2
+    arm64.mov x6, #1
+    arm64.mov x7, #0
+    arm64.ldr x8, [x29, #-40]
+    arm64.ldr x9, [x29, #-56]
+    arm64.str x9, [x8, #0]
+    arm64.ldr x10, [x29, #-40]
+    arm64.mov x11, #9
+    arm64.str x11, [x10, #8]
+    arm64.ldr x12, [x29, #-40]
+    arm64.str x5, [x12, #16]
+    arm64.ldr x14, [x29, #-40]
+    arm64.str x6, [x14, #24]
+    arm64.ldr x15, [x29, #-40]
+    arm64.str x7, [x15, #32]
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-40]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.adrp_add_func x1, __destruct_Wrap
+    arm64.mov x2, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #16
+    arm64.mov x2, #51
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-48]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq Wrap.make.__skip_guarded_97
+    arm64.bl mm_decref
+    arm64.label Wrap.make.__skip_guarded_97
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=128
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.adrp_add_rdata x0, __str_48
+    arm64.mov x1, x0
+    arm64.mov x2, #12
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-32]
+    arm64.mov x1, x4
+    arm64.mov x0, #48
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x5, #-2
+    arm64.mov x6, #1
+    arm64.mov x7, #0
+    arm64.ldr x8, [x29, #-8]
+    arm64.ldr x9, [x29, #-32]
+    arm64.str x9, [x8, #0]
+    arm64.ldr x10, [x29, #-8]
+    arm64.mov x11, #12
+    arm64.str x11, [x10, #8]
+    arm64.ldr x12, [x29, #-8]
+    arm64.str x5, [x12, #16]
+    arm64.ldr x14, [x29, #-8]
+    arm64.str x6, [x14, #24]
+    arm64.ldr x15, [x29, #-8]
+    arm64.str x7, [x15, #32]
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Wrap.make
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl stdlib.String.count
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_54
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_54
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_56
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_56
+    arm64.ldr x0, [x29, #-40]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @__destruct_Wrap(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Wrap.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Wrap.__skip_guarded_4
+    arm64.b __destruct_Wrap.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

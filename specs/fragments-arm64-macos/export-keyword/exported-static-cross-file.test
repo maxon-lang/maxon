@@ -1,0 +1,133 @@
+// Test: exported-static-cross-file
+// --- file: holder.maxon
+typealias Count = int(0 to u64.max)
+
+export type Holder
+	export static var cached = Holder.build()
+	export var value as Count
+
+	static function build() returns Holder
+		return Holder{value: 7}
+	end 'build'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = Holder.cached
+	return a.value
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Holder.build() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #7
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #7
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Holder.cached.__lazy_init() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.global_store [Holder.cached.__initialized], x0
+    arm64.bl Holder.build
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.global_load x2, [Holder.cached]
+    arm64.str x2, [x29, #-16]
+    arm64.cmp x2, #0
+    arm64.b.eq Holder.cached.__lazy_init.__skip_guarded_6
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label Holder.cached.__lazy_init.__skip_guarded_6
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.global_store [Holder.cached], x3
+    arm64.ldr x4, [x29, #-8]
+    arm64.cmp x4, #0
+    arm64.b.eq Holder.cached.__lazy_init.__skip_guarded_10
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label Holder.cached.__lazy_init.__skip_guarded_10
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.global_load x0, [Holder.cached.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne main.__lazy_merge_0
+    arm64.b main.__lazy_init_0
+  __lazy_merge_0:
+    arm64.global_load x0, [Holder.cached]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #255
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  __lazy_init_0:
+    arm64.bl Holder.cached.__lazy_init
+    arm64.b main.__lazy_merge_0
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.global_load x0, [Holder.cached.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Holder_cached
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Holder_cached
+  __cleanup_Holder_cached:
+    arm64.global_load x0, [Holder.cached]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_3
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_3
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Holder_cached
+  __cleanup_skip_Holder_cached:
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.ret
+  }
+}
+---

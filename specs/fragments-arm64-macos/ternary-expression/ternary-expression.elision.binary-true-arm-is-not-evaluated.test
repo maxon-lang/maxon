@@ -1,0 +1,86 @@
+// Test: ternary-expression.elision.binary-true-arm-is-not-evaluated
+typealias Integer = int(i64.min to i64.max)
+
+var sideEffectCount = 0
+
+function track(result Integer) returns Integer
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'track'
+
+function main() returns ExitCode
+	let x = track(1) + track(2) if false else 7
+	if x != 7 'wrongValue'
+		return 99
+	end 'wrongValue'
+	return sideEffectCount
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @track(result: i64) -> i64 {
+  entry:
+    arm64.global_load x1, [sideEffectCount]
+    arm64.mov x2, #1
+    arm64.add x3, x1, x2
+    arm64.global_store [sideEffectCount], x3
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.cmp x0, #0
+    arm64.b.ne main.ternary_0.true
+    arm64.b main.ternary_0.false
+  ternary_0.true:
+    arm64.mov x0, #1
+    arm64.bl track
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #2
+    arm64.bl track
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.b main.ternary_0.merge
+  ternary_0.false:
+    arm64.mov x0, #7
+    arm64.str x0, [x29, #-8]
+    arm64.b main.ternary_0.merge
+  ternary_0.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #7
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.wrongValue_0
+    arm64.b main.wrongValue_0.after
+  wrongValue_0:
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=48
+    arm64.ret
+  wrongValue_0.after:
+    arm64.global_load x0, [sideEffectCount]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_34
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

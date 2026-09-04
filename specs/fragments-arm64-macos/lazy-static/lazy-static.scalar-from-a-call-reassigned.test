@@ -1,0 +1,72 @@
+// Test: lazy-static.scalar-from-a-call-reassigned
+typealias Tally = int(0 to 100)
+
+function compute() returns Tally
+	return 7
+end 'compute'
+
+type Box
+	static var t = compute()
+end 'Box'
+
+function main() returns ExitCode
+	Box.t = 9
+	return Box.t
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @compute() -> u8 {
+  entry:
+    arm64.mov x0, #7
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #9
+    arm64.global_store [Box.t], x0
+    arm64.mov x1, #1
+    arm64.global_store [Box.t.__initialized], x1
+    arm64.global_load x2, [Box.t.__initialized]
+    arm64.cmp x2, #0
+    arm64.b.ne main.__lazy_merge_0
+    arm64.b main.__lazy_init_0
+  __lazy_merge_0:
+    arm64.global_load x0, [Box.t]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  __lazy_init_0:
+    arm64.bl Box.t.__lazy_init
+    arm64.b main.__lazy_merge_0
+  }
+  func @Box.t.__lazy_init() {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #1
+    arm64.global_store [Box.t.__initialized], x0
+    arm64.bl compute
+    arm64.global_store [Box.t], x0
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

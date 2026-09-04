@@ -1,0 +1,101 @@
+// Test: local-shadowing-a-type-name-keeps-a-qualified-call-local
+typealias Num = int(0 to 1000)
+
+type Holder
+	export var n as Num
+
+	export static function make() returns Holder
+		return Holder{n: 1}
+	end 'make'
+
+	export function bump() returns Num
+		return 7
+	end 'bump'
+end 'Holder'
+
+type Config
+	export static function bump() returns Num
+		return 5
+	end 'bump'
+end 'Config'
+
+function main() returns ExitCode
+	let Config = Holder.make()
+	return Config.bump()
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Holder.make() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #6
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #1
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Holder.bump(__self_ptr: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #7
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl Holder.make
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Holder.bump
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_19
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_14
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_14
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.ret
+  }
+}
+---

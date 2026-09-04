@@ -1,0 +1,89 @@
+// Test: local-shadowing-a-type-name-keeps-a-qualified-store-local
+typealias Num = int(0 to 1000)
+
+type Holder
+	export var MAX_SIZE as Num
+
+	export static function make() returns Holder
+		return Holder{MAX_SIZE: 1}
+	end 'make'
+end 'Holder'
+
+type Config
+	static let MAX_SIZE = 5
+end 'Config'
+
+function main() returns ExitCode
+	var Config = Holder.make()
+	Config.MAX_SIZE = 7
+	return Config.MAX_SIZE
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Holder.make() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #1
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl Holder.make
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #7
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #0]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #255
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_17
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x3, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_17
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_17
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.ret
+  }
+}
+---

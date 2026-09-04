@@ -1,0 +1,20 @@
+// Test: directives.compiler-does-not-name-the-other-compiler
+function main() returns ExitCode
+	#if compiler(shv2)
+		return 1
+	#else
+		return 34
+	#endif
+end 'main'
+---
+ExitCode: 34
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #34
+    arm64.ret
+  }
+}
+---
