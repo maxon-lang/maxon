@@ -1,0 +1,507 @@
+// sidecar-dump.test.maxon — the `.mxdbg` sidecar says something TRUE about the binary beside it.
+//
+// `maxon debug --dump-info <exe>` prints the sidecar and `--symbolize <exe> <codeOffset>` maps a `.text`
+// offset back to `file:line:col`. A sidecar that is merely PRESENT proves nothing: an empty function
+// table, a zero build-id and a line table nobody can look anything up in all pass a file-exists check,
+// and `byte-identical-debug-info.test.maxon` — which asks only whether the file was written — is green
+// over every one of them.
+//
+// ⭐⭐ **WHAT IS PINNED IS RELATIONSHIPS, NEVER NUMBERS.** Code offsets, the number of line rows and the
+// shape of a prologue all move with codegen, and a case that pinned them would go red for every unrelated
+// change and teach a reader to re-bless it. So:
+//   • the dump names the target this host builds for, and a build-id that is not all zeros;
+//   • it lists the fixture's OWN source file;
+//   • it lists every function the fixture DECLARES — read out of the staged source, not written down
+//     here — each with a code range whose end exceeds its start;
+//   • and `--symbolize`, handed an offset the dump itself published inside one of those functions,
+//     answers that fixture's source file and a line inside that function's own body.
+// The last one is the JOIN: a function table and a line table can each be internally consistent and still
+// disagree, and only asking one about the other can see it.
+//
+// ⚠ **THE PROBE OFFSET COMES FROM THE DUMP'S LINE TABLE, NOT FROM A FUNCTION'S FIRST BYTE.** That byte is
+// the prologue and carries no line row — the reference driver answers `<no line>` there, which is correct
+// and not a defect. So the offset asked about is a row the dump itself published inside the chosen
+// function's range, handed back in the very spelling the dump printed it in.
+//
+// ⛔ **THE DUMP'S SHAPE IS THE REFERENCE DRIVER'S**, because one sidecar printed two ways by two drivers
+// is the drift `tests/README.md` rule 6 exists to prevent: `target:` and `build-id:` as keyed lines, then
+// `files (N):`, `functions (N):` and `line table (N):` sections, a function row carrying its range as
+// `[START, END)` and a line row opening with its offset. No width, column or order is pinned.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION** — a
+// missing compiler, a spawn that never happened, a BUILD that produced no program. The subject here is
+// `debug`, so a build that fails leaves nothing to ask and is not the dump answering wrongly.
+//
+// ⛔ **ONE SPAWNING `test`, ONE FILE, ONE COMPILE.** The dump and the symbolize lookup are two further
+// spawns and no further compiles, which is what keeps this inside the 5,000 ms per-file deadline. Staging
+// goes to a directory named for THIS case, because `maxon test` runs files concurrently.
+
+// The label this case stages under, and the build it dumps.
+let DumpCaseLabel = "sidecar-dump"
+let DumpBuildLabel = "dumped"
+
+// The read-only sidecar surfaces, spelled as the reference driver spells them.
+let DebugSubcommand = "debug"
+let DumpInfoOption = "--dump-info"
+let SymbolizeOption = "--symbolize"
+
+// The two keyed lines of the dump's head. A value is whatever follows the key on that line, trimmed — the
+// spacing between them is layout and is not pinned.
+let DumpTargetKey = "target:"
+let DumpBuildIdKey = "build-id:"
+
+// The three sections this case reads, and the one it does not. `DumpTypesHeading` is in the roster because
+// a section ends where the NEXT one begins: without it, the rows of `types (…)` would be read as belonging
+// to `functions (…)`.
+let DumpFilesHeading = "files ("
+let DumpFunctionsHeading = "functions ("
+let DumpTypesHeading = "types ("
+let DumpLineTableHeading = "line table ("
+
+// A function row's code range, `[START, END)`. The bracket is also what tells a function row apart from
+// the local-variable rows nested under it (`total  [rbp-0x10]  : i64`), which carry no `)`.
+let RangeOpen = "["
+let RangeClose = ")"
+let RangeSeparator = ","
+
+// How a declaration is recognized in the staged fixture source: the line that opens it and the line that
+// closes it.
+let FunctionDeclarationPrefix = "function "
+let FunctionEndPrefix = "end '"
+let FunctionEndSuffix = "'"
+let DeclarationNameEnd = "("
+
+// Folds applied to a captured stream before it is read: CR, so a Windows console's line endings do not
+// decide what a row says or where one ends.
+let DumpCarriageReturn = "\r"
+let DumpLineFeed = "\n"
+let DumpSpace = " "
+let DumpTab = "\t"
+
+// How the dump writes a code offset, and the ASCII runs its digits come from. Spelled as numbers rather
+// than as character literals: a character-literal RECEIVER makes the bootstrap's resolver lose the
+// declarations that follow it, and this corpus is compiled by BOTH compilers.
+let HexPrefix = "0x"
+let HexBase = 16
+let DecimalBase = 10
+let HexLetterValue = 10
+let AsciiDigitZero = 48
+let AsciiDigitNine = 57
+let AsciiLowerA = 97
+let AsciiLowerF = 102
+let AsciiUpperA = 65
+let AsciiUpperF = 70
+
+// A `.text` offset, as the dump writes one.
+typealias CodeOffset = int(0 to u64.max)
+
+// A 1-based line of the staged fixture source.
+typealias FixtureLineNumber = int(0 to u64.max)
+
+// One hex digit's value.
+typealias HexDigitValue = int(0 to 15)
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'the sidecar names this build, this source and every function the fixture declares'
+	let staged = stagedSidecarProgram(DumpCaseLabel)
+	let noArguments = StringArray.create()
+
+	let build = spawnSidecarBuild(staged, label: DumpBuildLabel, extraArguments: noArguments)
+	if build.exitCode() != 0 'didNotBuild'
+		panic("sidecar-dump.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	let executable = builtSidecarExecutable(staged, label: DumpBuildLabel)
+	if not File.exists(executable) 'wroteNothing'
+		panic("sidecar-dump.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
+	end 'wroteNothing'
+
+	var dumpArguments = StringArray.create()
+	dumpArguments.push(DebugSubcommand)
+	dumpArguments.push(DumpInfoOption)
+	dumpArguments.push(executable.toString())
+	let dumpRun = spawnSidecarCompiler(dumpArguments, staged: staged, what: "the sidecar dump")
+	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommand} {DumpInfoOption} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
+
+	let dump = withoutCarriageReturns(dumpRun.stdout)
+
+	// WHICH BUILD this sidecar describes: the target it was built for, and an identity that can be checked
+	// against the binary. An all-zero build-id is what an unfilled field reads as, and it matches every
+	// build of every binary.
+	let reportedTarget = keyedDumpValue(dump, key: DumpTargetKey)
+	let hostTarget = hostTargetTriple()
+	try Expect.equal(reportedTarget, expected: hostTarget, message: "the dump does not name the target this host builds for on a `{DumpTargetKey}` line. A sidecar that does not say which target it describes cannot be refused when it is handed to the wrong one. The dump was: {dump}")
+
+	let buildId = keyedDumpValue(dump, key: DumpBuildIdKey)
+	try Expect.isTrue(hasNonZeroHexDigit(buildId), message: "the dump's `{DumpBuildIdKey}` is '{buildId}', which carries no non-zero digit. The build-id is what lets a driver refuse a sidecar describing a DIFFERENT build of the same binary; an all-zero one refuses nothing.")
+
+	// The fixture's own source file, listed as a file this sidecar knows about.
+	let listedSources = dumpSectionRows(dump, heading: DumpFilesHeading)
+	try Expect.isTrue(anyRowNames(listedSources, name: SidecarProgramFileName), message: "the dump's `{DumpFilesHeading}…)` section does not list `{SidecarProgramFileName}`, the only source this program was built from. Line rows that point at no file resolve to nothing. The section held: {renderedRows(listedSources)}")
+
+	// Every function the FIXTURE declares — read out of the staged source, so a fixture that grows a
+	// function grows this roster with it — listed with a code range that is not empty.
+	let functionRows = dumpSectionRows(dump, heading: DumpFunctionsHeading)
+	let declared = declaredFunctionNames(staged)
+	try Expect.notEqual(declared.count() as AssertedInt, expected: 0, message: "sidecar-dump.test: no `{FunctionDeclarationPrefix}` line was found in the staged fixture, so this case would assert nothing at all about the function table.")
+
+	var missing = StringArray.create()
+	var degenerate = StringArray.create()
+	for name in declared 'eachDeclaredFunction'
+		let row = functionRowNamed(functionRows, name: name)
+		if row.isEmpty() 'notListed'
+			missing.push(name)
+			continue
+		end 'notListed'
+
+		if codeRangeBound(row, upper: true) <= codeRangeBound(row, upper: false) 'emptyRange'
+			degenerate.push("{name}: {row}")
+		end 'emptyRange'
+	end 'eachDeclaredFunction'
+
+	try Expect.isEmpty(renderedRows(missing), message: "the dump's `{DumpFunctionsHeading}…)` section lists no row for these functions, which the staged fixture DECLARES. A debugger cannot stop inside a function the sidecar does not know exists. The section held: {renderedRows(functionRows)}")
+	try Expect.isEmpty(renderedRows(degenerate), message: "these functions are listed with a code range whose end does not exceed its start, so the sidecar says they occupy no code and no offset can ever fall inside one.")
+
+	// ⭐ THE JOIN — an offset the dump published INSIDE one named function, asked of the other table.
+	let probeName = try declared.get(0) otherwise panic("sidecar-dump.test: a roster asserted non-empty has a first element")
+	let probeRow = functionRowNamed(functionRows, name: probeName)
+	let probeOffset = firstLineRowTokenWithin(dump, atLeast: codeRangeBound(probeRow, upper: false), below: codeRangeBound(probeRow, upper: true))
+	try Expect.notEqual(probeOffset, expected: "", message: "the dump's `{DumpLineTableHeading}…)` section holds no row inside `{probeName}`'s code range — its row reads `{probeRow}`. A function with a code range and no line rows is one a debugger can name and never stop in.")
+
+	var symbolizeArguments = StringArray.create()
+	symbolizeArguments.push(DebugSubcommand)
+	symbolizeArguments.push(SymbolizeOption)
+	symbolizeArguments.push(executable.toString())
+	symbolizeArguments.push(probeOffset)
+	let symbolizeRun = spawnSidecarCompiler(symbolizeArguments, staged: staged, what: "the symbolize lookup")
+	try Expect.equal(symbolizeRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommand} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
+
+	let symbolized = withoutCarriageReturns(symbolizeRun.stdout)
+	try Expect.contains(symbolized, needle: SidecarProgramFileName, message: "`{SymbolizeOption}` resolved {probeOffset} — a row of this binary's own line table, inside `{probeName}` — without naming `{SidecarProgramFileName}`. The offset came out of the sidecar being asked, so an answer naming another file, or none, is the two tables disagreeing.")
+
+	let resolvedLine = lineNumberAfter(symbolized, marker: SidecarProgramFileName)
+	let bodyStart = sourceLineStartingWith(staged, prefix: "{FunctionDeclarationPrefix}{probeName}{DeclarationNameEnd}", what: "the declaration of `{probeName}`")
+	let bodyEnd = sourceLineStartingWith(staged, prefix: "{FunctionEndPrefix}{probeName}{FunctionEndSuffix}", what: "the `{FunctionEndPrefix}{probeName}{FunctionEndSuffix}` closing `{probeName}`")
+	try Expect.atLeast(resolvedLine as AssertedInt, than: bodyStart as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {SidecarProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
+	try Expect.atMost(resolvedLine as AssertedInt, than: bodyEnd as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {SidecarProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
+end 'the sidecar names this build, this source and every function the fixture declares'
+
+// ============================================================================================
+// THE HOST'S TARGET
+// ============================================================================================
+
+// What `--target` defaults to on this host, spelled `<arch>-<os>`.
+function hostTargetTriple() returns String
+	#if arch(x64)
+		let archName = "x64"
+	#else
+		let archName = "arm64"
+	#endif
+
+	#if os(Windows)
+		let osName = "windows"
+	#endif
+	#if os(Linux)
+		let osName = "linux"
+	#endif
+	#if os(Macos)
+		let osName = "macos"
+	#endif
+
+	return "{archName}-{osName}"
+end 'hostTargetTriple'
+
+// ============================================================================================
+// READING THE DUMP
+// ============================================================================================
+
+// One captured stream with CR folded away, so a Windows console's line endings do not decide what a row
+// says or where one ends.
+function withoutCarriageReturns(raw String) returns String
+	return raw.replace(DumpCarriageReturn, with: "")
+end 'withoutCarriageReturns'
+
+// The value of the first `<key> …` line, trimmed. EMPTY when no line carries the key, which the caller
+// compares against what it expected and reports — a helper does not get to decide what an absent key means.
+function keyedDumpValue(dump String, key String) returns String
+	for rawLine in dump.split(DumpLineFeed) 'eachLine'
+		let line = rawLine.trim()
+		if not line.startsWith(key) 'notThisLine'
+			continue
+		end 'notThisLine'
+
+		var cursor = line.startIndex()
+		for _ in 0 upto key.count() 'eachKeyGrapheme'
+			cursor = try line.indexAfter(cursor) otherwise return ""
+		end 'eachKeyGrapheme'
+
+		return line.slice(cursor, endIndex: line.endIndex()).trim()
+	end 'eachLine'
+
+	return ""
+end 'keyedDumpValue'
+
+// The rows under one section heading: every line after it, up to the line that opens the NEXT section. A
+// heading nothing opens yields no rows, which the caller reports as the section being absent.
+function dumpSectionRows(dump String, heading String) returns StringArray
+	var rows = StringArray.create()
+	var inSection = false
+
+	for rawLine in dump.split(DumpLineFeed) 'eachLine'
+		let line = rawLine.trim()
+		if line.startsWith(heading) 'opensThisSection'
+			inSection = true
+			continue
+		end 'opensThisSection'
+
+		if not inSection 'beforeTheSection'
+			continue
+		end 'beforeTheSection'
+
+		if opensASection(line) 'nextSection'
+			break
+		end 'nextSection'
+
+		if not line.isEmpty() 'aRow'
+			rows.push(line)
+		end 'aRow'
+	end 'eachLine'
+
+	return rows
+end 'dumpSectionRows'
+
+// Whether a line opens one of the dump's sections. The roster is complete because a section ends where the
+// next one begins: a heading missing from it would have its rows read as the previous section's.
+function opensASection(line String) returns bool
+	return line.startsWith(DumpFilesHeading) or line.startsWith(DumpFunctionsHeading) or line.startsWith(DumpTypesHeading) or line.startsWith(DumpLineTableHeading)
+end 'opensASection'
+
+// Whether any row names `name` as one of its words, or as the tail of a path one of them spells. The
+// `files (…)` rows carry an index (`[0] main.maxon`), so the test is on a row's WORDS, not on the line.
+function anyRowNames(rows StringArray, name String) returns bool
+	for row in rows 'eachRow'
+		for token in whitespaceTokens(row) 'eachToken'
+			if token.endsWith(name) 'namesIt'
+				return true
+			end 'namesIt'
+		end 'eachToken'
+	end 'eachRow'
+
+	return false
+end 'anyRowNames'
+
+// The function row whose first word is exactly `name`, or EMPTY when the section holds none.
+//
+// ⚠ A row must also carry a `[…)` code range. The locals nested under a function row are words followed by
+// `[rbp-0x10]` and no `)`, so without that test a local could be mistaken for the function it sits under
+// and answer this question with something that is not a range.
+function functionRowNamed(rows StringArray, name String) returns String
+	for row in rows 'eachRow'
+		let tokens = whitespaceTokens(row)
+		let first = try tokens.get(0) otherwise continue
+		if first == name and carriesCodeRange(row) 'theRow'
+			return row
+		end 'theRow'
+	end 'eachRow'
+
+	return ""
+end 'functionRowNamed'
+
+// Whether a row spells a `[START, END)` code range.
+function carriesCodeRange(row String) returns bool
+	let open = try row.findFirst(RangeOpen) otherwise return false
+	let rest = row.slice(open, endIndex: row.endIndex())
+
+	return rest.contains(RangeClose) and rest.contains(RangeSeparator)
+end 'carriesCodeRange'
+
+// One bound of a row's code range — the START, or the END past the separator. A row carrying no range
+// reads 0 for both, which fails the caller's `end exceeds start` assertion rather than passing it.
+function codeRangeBound(row String, upper bool) returns CodeOffset
+	if not carriesCodeRange(row) 'noRange'
+		return 0
+	end 'noRange'
+
+	let open = try row.findFirst(RangeOpen) otherwise return 0
+	let afterOpen = try row.indexAfter(open) otherwise return 0
+	let rest = row.slice(afterOpen, endIndex: row.endIndex())
+	let close = try rest.findFirst(RangeClose) otherwise return 0
+	let halves = rest.slice(rest.startIndex(), endIndex: close).split(RangeSeparator)
+
+	if upper 'theEnd'
+		return hexValue(try halves.get(1) otherwise return 0)
+	end 'theEnd'
+
+	return hexValue(try halves.get(0) otherwise return 0)
+end 'codeRangeBound'
+
+// The FIRST line-table row inside `[atLeast, below)`, as the dump spelled its offset — handed straight back
+// to `--symbolize` so nothing here re-spells a number the driver published. EMPTY when no row falls inside.
+function firstLineRowTokenWithin(dump String, atLeast CodeOffset, below CodeOffset) returns String
+	for row in dumpSectionRows(dump, heading: DumpLineTableHeading) 'eachRow'
+		let tokens = whitespaceTokens(row)
+		let first = try tokens.get(0) otherwise continue
+		if not first.startsWith(HexPrefix) 'notAnOffsetRow'
+			continue
+		end 'notAnOffsetRow'
+
+		let offset = hexValue(first)
+		if offset >= atLeast and offset < below 'insideTheFunction'
+			return first
+		end 'insideTheFunction'
+	end 'eachRow'
+
+	return ""
+end 'firstLineRowTokenWithin'
+
+// The line number following `marker` in a symbolize answer: the first run of digits after it, so
+// `<path>:12:3` and `<path> line 12` read alike and neither spelling is pinned.
+function lineNumberAfter(text String, marker String) returns FixtureLineNumber
+	var cursor = try text.findFirst(marker) otherwise panic("sidecar-dump.test: lineNumberAfter is reached only past an assertion that '{marker}' is present")
+	for _ in 0 upto marker.count() 'eachMarkerGrapheme'
+		cursor = try text.indexAfter(cursor) otherwise return 0
+	end 'eachMarkerGrapheme'
+
+	var value = 0
+	var seenADigit = false
+	for c in text.slice(cursor, endIndex: text.endIndex()) 'eachCharacter'
+		if Ascii.isDigit(c) 'aDigit'
+			value = value * DecimalBase + hexDigitValue(c)
+			seenADigit = true
+			continue
+		end 'aDigit'
+
+		if seenADigit 'pastTheRun'
+			break
+		end 'pastTheRun'
+	end 'eachCharacter'
+
+	return value
+end 'lineNumberAfter'
+
+// ============================================================================================
+// READING THE STAGED FIXTURE
+// ============================================================================================
+
+// The functions the staged program DECLARES, in source order. Derived from the source rather than listed
+// in this file, so a fixture that grows a function grows the roster this case checks.
+function declaredFunctionNames(staged FilePath) returns StringArray
+	var names = StringArray.create()
+	for line in stagedSourceLines(staged) 'eachLine'
+		if line.startsWith(FunctionDeclarationPrefix) 'aDeclaration'
+			names.push(declaredNameIn(line))
+		end 'aDeclaration'
+	end 'eachLine'
+
+	return names
+end 'declaredFunctionNames'
+
+// The name in a `function NAME(…)` line.
+function declaredNameIn(line String) returns String
+	let open = try line.findFirst(DeclarationNameEnd) otherwise panic("sidecar-dump.test: the gate could not run — the staged fixture line '{line}' opens a declaration and spells no '{DeclarationNameEnd}'.")
+
+	return line.slice(line.startIndex(), endIndex: open).replace(FunctionDeclarationPrefix, with: "").trim()
+end 'declaredNameIn'
+
+// The 1-based line of the staged source that starts with `prefix`. It refuses loudly: every prefix asked
+// for here was built from a name this process read out of that very file moments ago.
+function sourceLineStartingWith(staged FilePath, prefix String, what String) returns FixtureLineNumber
+	var number = 0
+	for line in stagedSourceLines(staged) 'eachLine'
+		number = number + 1
+		if line.startsWith(prefix) 'theLine'
+			return number
+		end 'theLine'
+	end 'eachLine'
+
+	panic("sidecar-dump.test: the gate could not run — the staged fixture holds no line starting with '{prefix}', which is {what}.")
+end 'sourceLineStartingWith'
+
+// The staged program's lines, CR folded. Read on demand rather than held: this is the cold path of a case
+// whose cost is three spawned processes.
+function stagedSourceLines(staged FilePath) returns StringArray
+	let path = staged.join("{SidecarProgramFileName}")
+	let body = try File.readText(path) otherwise panic("sidecar-dump.test: the gate could not run — could not read the staged program at {path.toString()}, which this process wrote moments ago.")
+
+	return withoutCarriageReturns(body).split(DumpLineFeed)
+end 'stagedSourceLines'
+
+// ============================================================================================
+// TEXT
+// ============================================================================================
+
+// A row's words, with the runs of spacing the dump lays its columns out with dropped. Tabs fold to spaces
+// first, so a column written with either separates two words.
+function whitespaceTokens(row String) returns StringArray
+	var tokens = StringArray.create()
+	for piece in row.replace(DumpTab, with: DumpSpace).split(DumpSpace) 'eachPiece'
+		if not piece.isEmpty() 'aWord'
+			tokens.push(piece)
+		end 'aWord'
+	end 'eachPiece'
+
+	return tokens
+end 'whitespaceTokens'
+
+// A list of rows as the text a failure report shows, so a disagreement reads as a listing rather than as
+// an array identity. EMPTY for an empty list, which is what makes the two roster assertions an `isEmpty`
+// over the very text a reader has to act on.
+function renderedRows(rows StringArray) returns String
+	var rendered = ""
+	for row in rows 'eachRow'
+		rendered.append("{DumpLineFeed}  {row}")
+	end 'eachRow'
+
+	return rendered
+end 'renderedRows'
+
+// A hex token's value. An optional `0x` opens it and the digits are read until the first character that is
+// not one, so a token carrying no digits reads 0 — which fails the assertion that consumes it rather than
+// standing in for a number nobody published.
+function hexValue(token String) returns CodeOffset
+	var value = 0
+	for c in token.trim().replace(HexPrefix, with: "") 'eachCharacter'
+		if not isHexDigit(c) 'pastTheDigits'
+			break
+		end 'pastTheDigits'
+
+		value = value * HexBase + hexDigitValue(c)
+	end 'eachCharacter'
+
+	return value
+end 'hexValue'
+
+// Whether a build-id carries any digit that is not zero. An unfilled field reads as zeros, and a sidecar
+// with an all-zero identity describes every build of every binary equally well.
+function hasNonZeroHexDigit(text String) returns bool
+	for c in text.trim().replace(HexPrefix, with: "") 'eachCharacter'
+		if isHexDigit(c) and hexDigitValue(c) != 0 'nonZero'
+			return true
+		end 'nonZero'
+	end 'eachCharacter'
+
+	return false
+end 'hasNonZeroHexDigit'
+
+function isHexDigit(c Character) returns bool
+	let code = try c.asciiValue() otherwise return false
+
+	return (code >= AsciiDigitZero and code <= AsciiDigitNine) or (code >= AsciiLowerA and code <= AsciiLowerF) or (code >= AsciiUpperA and code <= AsciiUpperF)
+end 'isHexDigit'
+
+// A hex digit's value. The caller has already classified `c`, so the conversion cannot fail.
+function hexDigitValue(c Character) returns HexDigitValue
+	let code = try c.asciiValue() otherwise panic("sidecar-dump.test: hexDigitValue is reached only past an isHexDigit test")
+	if code <= AsciiDigitNine 'aDecimalDigit'
+		return code - AsciiDigitZero
+	end 'aDecimalDigit'
+
+	if code <= AsciiUpperF 'anUpperCaseLetter'
+		return code - AsciiUpperA + HexLetterValue
+	end 'anUpperCaseLetter'
+
+	return code - AsciiLowerA + HexLetterValue
+end 'hexDigitValue'

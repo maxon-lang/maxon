@@ -1,0 +1,384 @@
+// Debug/DebugCommand.maxon — `maxon debug`, the READ-ONLY faces of the `.mxdbg` sidecar.
+//
+//   debug --dump-info  <exe|.mxdbg>            print the whole sidecar
+//   debug --symbolize  <exe|.mxdbg> <off...>   resolve `.text` code offsets to file:line:col
+//
+// ⭐⭐ **THE SHAPE OF THE DUMP IS THE REFERENCE DRIVER'S, AND THAT IS A CONTRACT RATHER THAN A STYLE.**
+// One sidecar printed two ways by two drivers is the drift `tests/README.md` rule 6 exists to prevent,
+// and `tests/debug/sidecar-dump.test.maxon`'s assertions were validated against the bootstrap's real
+// output. So the keyed head, the three section headings and a function row's `[START, END)` are copied
+// from `maxon-sharp/Program.cs`, not invented here.
+//
+// ⚠ **A SIDECAR IS CHECKED AGAINST THE BINARY BEFORE ONE ROW OF IT IS READ.** The build-id is the plain
+// FNV-1a fold of the code section, recomputed here out of the executable — nothing is embedded in the
+// image, which is what keeps the image byte-identical. A sidecar describing a DIFFERENT build of the
+// same binary is the one failure that would otherwise produce confident WRONG line numbers instead of
+// missing ones, so it is refused here, at the door.
+
+let DumpInfoOption = "--dump-info"
+let SymbolizeOption = "--symbolize"
+
+// The section the build-id is folded over, spelled per format. `readPeSectionData` and its two siblings
+// answer with the section's real extent, which is the same span the compiler hashed. PE and ELF name
+// their code section identically, so one constant serves both.
+let CodeSectionName = ".text"
+let MachoTextSegmentName = "__TEXT"
+let MachoTextSectionName = "__text"
+
+// How a code offset may be written on the command line.
+let HexOffsetPrefix = "0x"
+let HexBase = 16
+let DecimalBase = 10
+
+// Column widths of the dump, matching the reference's.
+let FunctionNameColumn = 32 as ColumnWidth
+
+// A `.text` code offset as this command reads one off the command line.
+typealias ParsedCodeOffset = int(0 to u32.max)
+
+// Wide enough to hold one more digit past the largest offset, so the accumulator below can OVERSHOOT
+// and be refused rather than trapping on the range check as it is written.
+typealias OffsetAccumulator = int(0 to i64.max)
+
+let MaxCodeOffset = u32.max as OffsetAccumulator
+
+// One digit's value in the widest base read here.
+typealias DigitValue = int(0 to 15)
+
+// How many leading characters of a token are its base prefix rather than digits.
+typealias PrefixLength = int(0 to u32.max)
+
+// Whether a command-line token named an offset at all. A union rather than a `-1`, because "not a
+// number" is a refusal the caller reports by name and 0 is a perfectly good offset.
+union OffsetParse
+	valid(offset ParsedCodeOffset)
+	invalid
+end 'OffsetParse'
+
+// Whether one character was a digit in the base being read. Its own union rather than `OffsetParse`,
+// because a digit is not an offset and a union that carried both would let one be returned for the other.
+union DigitParse
+	valid(digit DigitValue)
+	invalid
+end 'DigitParse'
+
+// The outcome of finding, reading and VOUCHING FOR the sidecar that describes a given path.
+union SidecarLoad
+	loaded(reader MxdbgReader)
+	refused(reason String)
+end 'SidecarLoad'
+
+export function runDebugCommand(args MaxonArgs) returns ExitCode
+	let subcommand = try args.paths.get(0) otherwise ""
+	if subcommand == DumpInfoOption 'dumpInfo'
+		return runDumpInfo(args)
+	end 'dumpInfo'
+
+	if subcommand == SymbolizeOption 'symbolize'
+		return runSymbolize(args)
+	end 'symbolize'
+
+	printDebugUsage()
+
+	return 1
+end 'runDebugCommand'
+
+function printDebugUsage()
+	printError("Usage: maxon-shv2 debug {DumpInfoOption} <exe|.mxdbg>\n")
+	printError("       maxon-shv2 debug {SymbolizeOption} <exe|.mxdbg> <codeOffset...>\n")
+end 'printDebugUsage'
+
+function runDumpInfo(args MaxonArgs) returns ExitCode
+	let spelled = try args.paths.get(1) otherwise ""
+	if spelled.isEmpty() 'noPath'
+		printError("maxon-shv2 debug {DumpInfoOption} needs a path to an executable or .mxdbg sidecar.\n")
+		return 1
+	end 'noPath'
+
+	match loadSidecarFor(spelled) 'sidecar'
+		refused(reason) then return refuseDebugCommand(reason)
+		loaded(reader) then return dumpSidecar(reader, path: spelled)
+	end 'sidecar'
+end 'runDumpInfo'
+
+function runSymbolize(args MaxonArgs) returns ExitCode
+	let spelled = try args.paths.get(1) otherwise ""
+	if spelled.isEmpty() or args.paths.count() < 3 'notEnough'
+		printError("maxon-shv2 debug {SymbolizeOption} needs a path and at least one code offset.\n")
+		return 1
+	end 'notEnough'
+
+	match loadSidecarFor(spelled) 'sidecar'
+		refused(reason) then return refuseDebugCommand(reason)
+		loaded(reader) then return symbolizeOffsets(reader, args: args)
+	end 'sidecar'
+end 'runSymbolize'
+
+function refuseDebugCommand(reason String) returns ExitCode
+	printError("maxon-shv2 debug: {reason}\n")
+
+	return 1
+end 'refuseDebugCommand'
+
+// ============================================================================================
+// PRINTING
+// ============================================================================================
+
+function dumpSidecar(reader MxdbgReader, path String) returns ExitCode
+	print("Debug info: {path}\n")
+	print("  target:   {reader.triple}\n")
+	print("  build-id: 0x{reader.buildId:016x}\n")
+
+	print("  files ({reader.fileCount()}):\n")
+	for i in 0 upto reader.fileCount() 'eachFile'
+		print("    [{i}] {reader.fileName(i as MxdbgIndex)}\n")
+	end 'eachFile'
+
+	print("  functions ({reader.functionCount()}):\n")
+	for i in 0 upto reader.functionCount() 'eachFunction'
+		let fn = reader.functionRecord(i as MxdbgIndex)
+		print("    {padRight(fn.name, width: FunctionNameColumn)} [0x{fn.codeStart:04x}, 0x{fn.codeEnd:04x})  frame=0x{fn.frameSize:x}  params={fn.paramCount}  lines={fn.lineCount}  locals={fn.localCount}\n")
+	end 'eachFunction'
+
+	// Printed even when the count is 0, and the count is what says so. A dump that omitted the heading
+	// could not be told apart from one whose reader does not know the section exists — and a reader of
+	// the dump uses these headings to tell one section's rows from the next's.
+	print("  types ({reader.typeCount()}):\n")
+
+	print("  line table ({reader.lineCount()}):\n")
+	for i in 0 upto reader.lineCount() 'eachRow'
+		let row = reader.lineRecord(i as MxdbgIndex)
+		print("    0x{row.codeOffset:04x}  {row.file}:{row.line}:{row.column}{lineFlagTags(row.flags)}\n")
+	end 'eachRow'
+
+	return 0
+end 'dumpSidecar'
+
+// The tag list a line row's flags render as, in the reference's spelling and order. `coverage` is a flag
+// this compiler never sets and the bootstrap does, and it is rendered here for the reason the whole
+// format is shared: a sidecar either compiler wrote must print the same either compiler reads it.
+function lineFlagTags(flags MxdbgIndex) returns String
+	let statement = (flags and MxdbgLineFlagStatement) != 0
+	let coverage = (flags and MxdbgLineFlagCoverage) != 0
+	if statement and coverage 'both'
+		return "  [statement, coverage]"
+	end 'both'
+
+	if statement 'statementOnly'
+		return "  [statement]"
+	end 'statementOnly'
+
+	return "  [coverage]" if coverage else ""
+end 'lineFlagTags'
+
+function symbolizeOffsets(reader MxdbgReader, args MaxonArgs) returns ExitCode
+	var exitCode = 0 as ExitCode
+	for i in 2 upto args.paths.count() 'eachOffset'
+		let spelled = try args.paths.get(i) otherwise ""
+		match parseCodeOffset(spelled) 'parsed'
+			invalid then exitCode = reportUnparsableOffset(spelled)
+			valid(offset) then printSymbolizedOffset(reader, offset: offset)
+		end 'parsed'
+	end 'eachOffset'
+
+	return exitCode
+end 'symbolizeOffsets'
+
+function reportUnparsableOffset(spelled String) returns ExitCode
+	printError("Not a code offset: '{spelled}' (use decimal or 0x-prefixed hex).\n")
+
+	return 1
+end 'reportUnparsableOffset'
+
+function printSymbolizedOffset(reader MxdbgReader, offset ParsedCodeOffset)
+	print("0x{offset:04x}  {sourcePositionAt(reader, offset: offset)}{enclosingFunctionAt(reader, offset: offset)}\n")
+end 'printSymbolizedOffset'
+
+// Where the offset is in the SOURCE, or the reference's own `<no line>` — which is the correct answer at
+// a prologue, where no statement has begun, rather than a defect.
+function sourcePositionAt(reader MxdbgReader, offset ParsedCodeOffset) returns String
+	return match reader.pcToLine(offset as MxdbgCodeOffset) 'row'
+		none gives "<no line>"
+		found(row) gives "{row.file}:{row.line}:{row.column}"
+	end 'row'
+end 'sourcePositionAt'
+
+function enclosingFunctionAt(reader MxdbgReader, offset ParsedCodeOffset) returns String
+	return match reader.functionContaining(offset as MxdbgCodeOffset) 'fn'
+		none gives ""
+		found(info) gives "  (in {info.name})"
+	end 'fn'
+end 'enclosingFunctionAt'
+
+// ============================================================================================
+// FINDING AND VOUCHING FOR THE SIDECAR
+// ============================================================================================
+
+// The sidecar that describes `spelled`, refused by name when it is absent, unreadable, or describes a
+// different build.
+//
+// A path ending in the sidecar suffix is read AS the sidecar, with no build-id check — there is no
+// binary to check it against, and a caller who named the sidecar directly has said which file they mean.
+function loadSidecarFor(spelled String) returns SidecarLoad
+	let named = try FilePath.from(spelled) otherwise return SidecarLoad.refused("'{spelled}' is not a spellable path")
+	if spelled.endsWith(MxdbgSidecarExtension) 'namedTheSidecar'
+		return parseSidecarAt(named)
+	end 'namedTheSidecar'
+
+	let sidecarPath = try FilePath.from(sidecarPathOf(named)) otherwise return SidecarLoad.refused("'{spelled}' has no spellable sidecar path")
+	if not File.exists(sidecarPath) 'noSidecar'
+		return SidecarLoad.refused("no debug-info sidecar at {sidecarPath}. It is written by default and leaves the executable byte-identical, so a binary that has none was built {NoDebugInfoFlag}: rebuild it without that flag")
+	end 'noSidecar'
+
+	match parseSidecarAt(sidecarPath) 'parsed'
+		refused(reason) then return SidecarLoad.refused(reason)
+		loaded(reader) then return vouchedForBinary(reader, binary: named)
+	end 'parsed'
+end 'loadSidecarFor'
+
+function parseSidecarAt(path FilePath) returns SidecarLoad
+	let image = try File.readBinary(path) otherwise return SidecarLoad.refused("cannot read {path}")
+
+	return SidecarLoad.loaded(try MxdbgReader.parse(image) otherwise (e) 'badImage'
+		return SidecarLoad.refused("{path}: {e.displayReason()}")
+	end 'badImage')
+end 'parseSidecarAt'
+
+// ⭐ The build-id check, recomputed from the binary's own code section. It is the only refusal here that
+// would otherwise produce a confident wrong answer rather than a missing one.
+//
+// ⚠ The two ids are deliberately NOT printed: they are a build-machine detail a reader can do nothing
+// with, and printing them would make every refusal transcript machine-specific.
+function vouchedForBinary(reader MxdbgReader, binary FilePath) returns SidecarLoad
+	match binaryCodeSection(binary) 'text'
+		refused(reason) then return SidecarLoad.refused(reason)
+		found(bytes) then return sidecarMatchingCode(reader, code: bytes)
+	end 'text'
+end 'vouchedForBinary'
+
+function sidecarMatchingCode(reader MxdbgReader, code ByteArray) returns SidecarLoad
+	if reader.buildId != Hasher.combined(Hasher.empty(), bytes: code) 'differentBuild'
+		return SidecarLoad.refused("the .mxdbg sidecar describes a different build of this binary — rebuild it")
+	end 'differentBuild'
+
+	return SidecarLoad.loaded(reader)
+end 'sidecarMatchingCode'
+
+// The bytes of a binary's code section, whatever container it is in. A union so a file in none of the
+// three formats is refused by name rather than folded into an empty section.
+union CodeSectionRead
+	found(bytes ByteArray)
+	refused(reason String)
+end 'CodeSectionRead'
+
+// ⚠ **THE FORMAT IS DECIDED BY THE FILE, NOT BY THIS HOST**, so a cross-built binary sitting on this
+// machine reads as what it is. Each reader refuses a container that is not its own, which is what lets
+// them be tried in turn.
+//
+// ⛔ And these are the SPEC SUITE's readers, deliberately: they were written to disagree with the three
+// WRITERS, so reaching for them here costs no second parser of a format this tree already parses — the
+// defect a hand-rolled PE walk beside the PE writer would reintroduce.
+function binaryCodeSection(binary FilePath) returns CodeSectionRead
+	if let pe = try readPeSectionData(binary, sectionName: CodeSectionName) 'aPeImage'
+		return CodeSectionRead.found(pe)
+	end 'aPeImage'
+
+	if let elf = try readElfSectionData(binary, sectionName: CodeSectionName) 'anElfImage'
+		return CodeSectionRead.found(elf)
+	end 'anElfImage'
+
+	if let macho = try readMachoSectionData(binary, segname: MachoTextSegmentName, sectname: MachoTextSectionName) 'aMachOImage'
+		return CodeSectionRead.found(macho)
+	end 'aMachOImage'
+
+	return CodeSectionRead.refused("cannot read a code section out of {binary} — it is not a PE, ELF or Mach-O image this build understands, so its sidecar cannot be checked against it")
+end 'binaryCodeSection'
+
+// ============================================================================================
+// COMMAND-LINE OFFSETS
+// ============================================================================================
+
+// A code offset written in decimal or as `0x`-prefixed hex. A token carrying no digits at all is
+// INVALID rather than 0 — an offset nobody wrote must not be answered for.
+//
+// ⚠ **THE PREFIX IS SKIPPED BY LENGTH, NEVER STRIPPED BY SUBSTITUTION.** A substitution removes EVERY
+// `0x` in the token, so `0x120x34` would read back as a perfectly good 0x1234 — a confident wrong answer
+// where the refusal below exists precisely to give a plain one.
+function parseCodeOffset(spelled String) returns OffsetParse
+	let text = spelled.trim()
+	if text.startsWith(HexOffsetPrefix) 'hex'
+		return parseDigits(text, skipping: HexOffsetPrefix.count() as PrefixLength, base: HexBase)
+	end 'hex'
+
+	return parseDigits(text, skipping: 0, base: DecimalBase)
+end 'parseCodeOffset'
+
+// ⚠ **A NUMBER TOO LARGE TO BE A CODE OFFSET IS INVALID, NOT A TRAP.** The accumulator is wider than the
+// offset it produces, so the bound is TESTED after each digit; accumulating into `ParsedCodeOffset`
+// directly would abort the process on its range check for a token a user simply mistyped.
+function parseDigits(text String, skipping PrefixLength, base ParsedCodeOffset) returns OffsetParse
+	var skipped = 0 as PrefixLength
+	var digits = 0 as PrefixLength
+	var value = 0 as OffsetAccumulator
+	for c in text 'eachCharacter'
+		if skipped < skipping 'stillThePrefix'
+			skipped = skipped + 1
+			continue
+		end 'stillThePrefix'
+
+		match digitValue(c, base: base) 'digit'
+			invalid then return OffsetParse.invalid
+			valid(d) then value = value * (base as OffsetAccumulator) + (d as OffsetAccumulator)
+		end 'digit'
+
+		if value > MaxCodeOffset 'pastEveryOffset'
+			return OffsetParse.invalid
+		end 'pastEveryOffset'
+
+		digits = digits + 1
+	end 'eachCharacter'
+
+	if digits == 0 'noDigits'
+		return OffsetParse.invalid
+	end 'noDigits'
+
+	return OffsetParse.valid(value as ParsedCodeOffset)
+end 'parseDigits'
+
+function digitValue(c Character, base ParsedCodeOffset) returns DigitParse
+	let code = try c.asciiValue() otherwise return DigitParse.invalid
+	match decodedDigit(code) 'decoded'
+		invalid then return DigitParse.invalid
+		valid(d) then return DigitParse.valid(d) if (d as ParsedCodeOffset) < base else DigitParse.invalid
+	end 'decoded'
+end 'digitValue'
+
+function decodedDigit(code AsciiCode) returns DigitParse
+	if code >= AsciiZero and code <= AsciiNine 'aDecimalDigit'
+		return DigitParse.valid((code - AsciiZero) as DigitValue)
+	end 'aDecimalDigit'
+
+	if code >= AsciiLowerA and code <= AsciiLowerF 'aLowerHexLetter'
+		return DigitParse.valid((code - AsciiLowerA + HexLetterValue) as DigitValue)
+	end 'aLowerHexLetter'
+
+	if code >= AsciiUpperA and code <= AsciiUpperF 'anUpperHexLetter'
+		return DigitParse.valid((code - AsciiUpperA + HexLetterValue) as DigitValue)
+	end 'anUpperHexLetter'
+
+	return DigitParse.invalid
+end 'decodedDigit'
+
+// The ASCII runs a hex digit comes from, and the value the letters start at. Spelled as numbers rather
+// than as character literals for `tests/debug/sidecar-dump.test.maxon`'s stated reason: a character
+// literal RECEIVER makes the bootstrap's resolver lose the declarations that follow it, and this file is
+// compiled by BOTH compilers.
+typealias AsciiCode = int(0 to 127)
+
+let AsciiZero = 48 as AsciiCode
+let AsciiNine = 57 as AsciiCode
+let AsciiUpperA = 65 as AsciiCode
+let AsciiUpperF = 70 as AsciiCode
+let AsciiLowerA = 97 as AsciiCode
+let AsciiLowerF = 102 as AsciiCode
+let HexLetterValue = 10

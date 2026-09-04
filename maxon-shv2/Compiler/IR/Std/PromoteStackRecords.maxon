@@ -1103,6 +1103,9 @@ function appendRewrittenOp(module StdModule, opIdx OpIndex, plans RecordPromotio
 	end 'notAConstruction'
 
 	let plan = try plans.get(planIndex) otherwise panic("appendRewrittenOp: plans.get OOB at {planIndex} — the index came from the plan-by-op map, which is built from this very array")
+	// The frame address and its stores ARE the constructor call, so they answer to the same statement it
+	// did. Read off the op being replaced rather than threaded in: `plan` is keyed by that very index.
+	module.spans.current = module.spans.at(opIdx)
 	emitPromotedRecord(module, plan: plan, mint: mint, rebuilt: rebuilt)
 end 'appendRewrittenOp'
 
@@ -1138,6 +1141,7 @@ end 'emitFieldConstant'
 function appendModuleOp(module StdModule, op StdOp) returns OpIndex
 	let opIdx = module.ops.count()
 	module.ops.push(op)
+	module.spans.pushCurrent(opIdx)
 	return opIdx
 end 'appendModuleOp'
 

@@ -436,6 +436,8 @@ function emitResequencedCapture(module TargetModule, resultDst RegNum, resultSrc
 		let swap = try moves.isSwap.get(i) otherwise panic("emitResequencedCapture: isSwap.get OOB")
 		let opIdx = module.ops.count()
 		module.ops.push(TargetOp.xchgRegReg(dst, b: src) if swap else TargetOp.movRegReg(dst, srcReg: src))
+		// A parallel-copy move is the ALLOCATOR's op, not the author's.
+		module.spans.pushNone(opIdx)
 		newRefs.push(opIdx)
 	end 'eachMove'
 end 'emitResequencedCapture'
@@ -485,6 +487,7 @@ function appendReuseCopyOp(module TargetModule, destReg RegNum, srcReg RegNum, n
 	let copyOp = TargetOp.movRegReg(TargetVReg.physical(destReg), srcReg: TargetVReg.physical(srcReg))
 	let copyIdx = module.ops.count()
 	module.ops.push(copyOp)
+	module.spans.pushNone(copyIdx)
 	newRefs.push(copyIdx)
 end 'appendReuseCopyOp'
 
@@ -587,6 +590,7 @@ function spliceSuccStart(module TargetModule, plan EdgeMovePlan)
 	for i in 0 upto plan.moveCount() 'eachMove'
 		let opIdx = module.ops.count()
 		module.ops.push(moveOpOf(plan, i: i))
+		module.spans.pushNone(opIdx)
 		var succBlock = try module.blocks.get(plan.succBlockRef) otherwise panic("spliceSuccStart: succBlockRef {plan.succBlockRef} not in module.blocks")
 		insertOpRef(succBlock, at: i, opIdx: opIdx)
 	end 'eachMove'

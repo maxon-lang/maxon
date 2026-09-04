@@ -505,6 +505,13 @@ export type PassPipeline
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 		end 'dispatch'
 
+		// ⭐ **THE DEBUG-SPAN CURSOR IS THIS PASS'S, NEVER THE NEXT ONE'S.** A pass that rewrites around a
+		// source op points the cursor at it; left pointed, the runtime installers below the pipeline would
+		// stamp thousands of emitted ops with the last statement a pass happened to touch. Cleared HERE,
+		// where every pass returns through, rather than at each pass's own exits — which is the same reason
+		// the measurement above sits here.
+		self.stdModule.spans.current = NoSpanId
+
 		recordPhase(self.project, phase: compilePhaseOfPass(pass), probe: probe)
 	end 'dispatch'
 end 'PassPipeline'

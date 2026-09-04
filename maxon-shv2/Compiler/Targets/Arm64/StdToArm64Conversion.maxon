@@ -398,6 +398,14 @@ end 'arm64RequireScalarDouble'
 
 export function lowerStdToArm64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns (TargetModule, ValueClassColumns)
 	var lowering = StdToArm64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usesGt)
+	// x64's twin, and for its stated reason: this is where the Std module stops being appended to, and its
+	// column is read by index below.
+	let stdOpCount = stdModule.ops.count()
+	stdModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
+
+	// The Target module carries spans exactly when the Std module it lowers from does. Armed BEFORE the
+	// skeleton, because `prepareSkeleton` is the first thing that can append.
+	lowering.targetModule.spans.armed = stdModule.spans.armed
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers (the divide-by-zero
 	// guard appends blocks to its `blockRefs` and bumps `nextBlockId`), so no `srcFunc` borrowed out of
@@ -529,6 +537,11 @@ type StdToArm64Lowering
 				outgoingArgBytes = blockOutgoing
 			end 'largerArgRegion'
 		end 'eachBlock'
+
+		// The cursor belongs to THIS function's walk; the prologue pass and the runtime band append after
+		// it and are nobody's statement.
+		self.targetModule.spans.current = NoSpanId
+
 		return outgoingArgBytes
 	end 'lowerFunctionBlocks'
 
@@ -556,11 +569,14 @@ type StdToArm64Lowering
 			if opOutgoing > outgoingArgBytes 'largerArgRegion'
 				outgoingArgBytes = opOutgoing
 			end 'largerArgRegion'
+			// The Target ops this one call appends inherit the Std op's span — x64's twin, same reason.
+			self.targetModule.spans.current = self.stdModule.spans.at(self.stdBlockOpIndexAt(blockRef, index: i))
 			self.lowerBodyOp(stdOp, dstRef: blockRef, returnType: returnType, paramFloatMask: paramFloatMask)
 		end 'eachOp'
 
 		if self.stdBlockHasTerminator(blockRef) 'hasTerm'
 			let termOp = self.stdBlockTerminator(blockRef)
+			self.targetModule.spans.current = self.stdModule.spans.at(self.stdBlockTerminatorIndex(blockRef))
 			self.lowerTerminatorOp(termOp, dstRef: blockRef, returnType: returnType)
 		end 'hasTerm'
 		return outgoingArgBytes
@@ -664,6 +680,19 @@ type StdToArm64Lowering
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpCount: blockRef {blockRef} not in stdModule.blocks")
 		return block.opRefs.count()
 	end 'stdBlockOpCount'
+
+	// The flat `stdModule.ops` index a block names at `index` — the coordinate a span is keyed by, which
+	// `stdBlockOpAt` resolves away. Read through a function for that helper's borrow reason.
+	function stdBlockOpIndexAt(blockRef BlockRef, index BlockOpPos) returns OpIndex
+		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpIndexAt: blockRef {blockRef} not in stdModule.blocks")
+		return try block.opRefs.get(index) otherwise panic("stdBlockOpIndexAt: opRefs.get OOB at {index}")
+	end 'stdBlockOpIndexAt'
+
+	// The flat `stdModule.ops` index of a block's terminator, for the same reason.
+	function stdBlockTerminatorIndex(blockRef BlockRef) returns OpIndex
+		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockTerminatorIndex: blockRef {blockRef} not in stdModule.blocks")
+		return block.terminatorIndex()
+	end 'stdBlockTerminatorIndex'
 
 	function stdBlockOpAt(blockRef BlockRef, index BlockOpPos) returns StdOp
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpAt: blockRef {blockRef} not in stdModule.blocks")

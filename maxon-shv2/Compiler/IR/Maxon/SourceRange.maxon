@@ -140,3 +140,264 @@ export type SourceRangeTable
 		self.columns.append(source.columns)
 	end 'appendFrom'
 end 'SourceRangeTable'
+
+// --- Debug spans: the channel that carries a source position PAST the Maxon tier ---
+//
+// `SourceRangeTable` above stops at the Maxon→Std boundary, and a line table is a statement about
+// EMITTED code — the far side of it. What crosses is an interned `SpanId`: one `int` per op, in a
+// column parallel to `module.ops` at each tier below.
+//
+// **WHY INTERNED, AND WHY THE FILE IS IN THE ENTRY.** `inlineLeaves` splices a CALLEE's ops into a
+// caller, so an op's file is not its function's. Carrying `(fileId, line, column)` in the table and
+// an index in the column is what lets an inlined body keep its own file while every tier moves a
+// scalar. Interning is also what makes "the span CHANGED" a comparison of two ints, which is the
+// rule the sidecar writes its line rows by.
+export typealias SpanId = int(0 to u32.max)
+export typealias SpanIdArray = Array with SpanId
+
+// A source file registered in a `DebugSpanTable`, as a line row names one.
+export typealias DebugFileId = int(0 to u32.max)
+typealias DebugFileIdArray = Array with DebugFileId
+
+// Entry 0 of every table is the POSITIONLESS span. An op that was never given a position resolves to
+// it and no line row is ever written for it — which is what makes "this op belongs to no statement"
+// representable without a sentinel that could be mistaken for a real position.
+export let NoSpanId = 0 as SpanId
+
+// File 0, likewise reserved: the empty `sourceFilePath` of a function the compiler emitted. A span
+// interned against it is `NoSpanId`, so a runtime body can never be attributed to a real file.
+export let NoDebugFileId = 0 as DebugFileId
+
+typealias SpanInternKey = int(0 to i64.max)
+typealias SpanInternMap = Map with (SpanInternKey, SpanId)
+typealias DebugFileIdMap = Map with (String, DebugFileId)
+
+// The field widths one intern key packs, and the shifts that lay them out inside 63 bits. A position
+// outside them is answered `NoSpanId` rather than truncated: a truncated key would hand one
+// statement another's slot, which is the one defect a line table cannot be checked for afterwards.
+let MaxSpanFileId = 524287 as DebugFileId
+let MaxSpanLine = 16777215 as LineNumber
+let MaxSpanColumn = 1048575 as ColumnNumber
+let SpanKeyLineShift = 20
+let SpanKeyFileShift = 44
+
+// THE WHOLE-PROGRAM SPAN POOL — one per `Project`: three dense scalar columns plus the intern map,
+// for `SourceRangeTable`'s stated reason. A `type` in an array is a heap box per entry, and this
+// table holds one entry per distinct source position in the program.
+export type DebugSpanTable
+	var filePaths as StringArray = StringArray.create()
+	var fileIdByPath as DebugFileIdMap = DebugFileIdMap.create()
+	var fileIds as DebugFileIdArray = DebugFileIdArray.create()
+	var lines as LineNumberArray = LineNumberArray.create()
+	var columns as ColumnNumberArray = ColumnNumberArray.create()
+	var internedByKey as SpanInternMap = SpanInternMap.create()
+	// The previous intern, so the run of ops one expression lowers to costs one hash probe rather than
+	// one per op. `NoSpanId` means there is none — `intern` never answers it out of the map.
+	var lastKey as SpanInternKey = 0
+	var lastId as SpanId = NoSpanId
+
+	// Entry 0 of BOTH tables is reserved. Span 0 is the positionless span; FILE 0 is the positionless
+	// file — the empty `sourceFilePath` a compiler-emitted function carries — so "this function was not
+	// written by anybody" needs no second spelling and cannot be confused with the program's first
+	// source file, which is what an unreserved 0 would have made it.
+	export static function create() returns DebugSpanTable
+		var table = Self{}
+		table.filePaths.push("")
+		table.fileIds.push(0)
+		table.lines.push(0)
+		table.columns.push(0)
+
+		return table
+	end 'create'
+
+	// The id of `path`, registering it on first sight.
+	export function fileId(path String) returns DebugFileId
+		if let known = try self.fileIdByPath.get(path) 'alreadyRegistered'
+			return known
+		end 'alreadyRegistered' else 'firstSight'
+			let id = self.filePaths.count() as DebugFileId
+			self.filePaths.push(path)
+			self.fileIdByPath.upsert(path, value: id)
+
+			return id
+		end 'firstSight'
+	end 'fileId'
+
+	// The id of `(fileId, line, column)`, minting it on first sight.
+	//
+	// A line of 0 is `SourceRange.none()` — a synthetic op with no source origin — and answers
+	// `NoSpanId`, so a positionless op needs no separate spelling at any caller.
+	export function intern(fileId DebugFileId, line LineNumber, column ColumnNumber) returns SpanId
+		if line == 0 or fileId == NoDebugFileId 'positionless'
+			return NoSpanId
+		end 'positionless'
+
+		if fileId > MaxSpanFileId or line > MaxSpanLine or column > MaxSpanColumn 'notRepresentable'
+			return NoSpanId
+		end 'notRepresentable'
+
+		let key = ((fileId as SpanInternKey) shl SpanKeyFileShift) or ((line as SpanInternKey) shl SpanKeyLineShift) or (column as SpanInternKey)
+		if self.lastId != NoSpanId and key == self.lastKey 'sameAsTheLastOne'
+			return self.lastId
+		end 'sameAsTheLastOne'
+
+		if let hit = try self.internedByKey.get(key) 'alreadyInterned'
+			self.lastKey = key
+			self.lastId = hit
+
+			return hit
+		end 'alreadyInterned' else 'firstSight'
+			let id = self.fileIds.count() as SpanId
+			self.fileIds.push(fileId)
+			self.lines.push(line)
+			self.columns.push(column)
+			self.internedByKey.upsert(key, value: id)
+			self.lastKey = key
+			self.lastId = id
+
+			return id
+		end 'firstSight'
+	end 'intern'
+
+	export function fileCount() returns DebugFileId
+		return self.filePaths.count() as DebugFileId
+	end 'fileCount'
+
+	export function filePath(fileId DebugFileId) returns String
+		return try self.filePaths.get(fileId) otherwise panic("DebugSpanTable.filePath: file {fileId} was never registered (the table holds {self.filePaths.count()})")
+	end 'filePath'
+
+	export function fileIdOf(spanId SpanId) returns DebugFileId
+		return try self.fileIds.get(spanId) otherwise panic("DebugSpanTable.fileIdOf: span {spanId} is past the table's {self.fileIds.count()} entries")
+	end 'fileIdOf'
+
+	export function lineOf(spanId SpanId) returns LineNumber
+		return try self.lines.get(spanId) otherwise panic("DebugSpanTable.lineOf: span {spanId} is past the table's {self.lines.count()} entries")
+	end 'lineOf'
+
+	export function columnOf(spanId SpanId) returns ColumnNumber
+		return try self.columns.get(spanId) otherwise panic("DebugSpanTable.columnOf: span {spanId} is past the table's {self.columns.count()} entries")
+	end 'columnOf'
+end 'DebugSpanTable'
+
+// THE PER-MODULE COLUMN: entry `i` is the span of `module.ops[i]`, at every tier below Maxon.
+//
+// ⭐ **A CURSOR, NOT A PER-CALL-SITE ARGUMENT.** `StdToX64Conversion` alone appends ops from hundreds
+// of inline sites; a span argument on each would be one each new site could forget. The three
+// appenders on `IrModule` push whatever `current` holds, and a lowering walk sets it ONCE per source
+// op.
+//
+// ⚠ **UNARMED IT TOUCHES NOTHING.** `armed` is false unless the build asked for debug info, and every
+// writer returns on it before reading the array — which is what makes the executable byte-identical
+// either way structurally, rather than merely observed to be.
+export type DebugSpanColumn
+	var ids as SpanIdArray = SpanIdArray.create()
+	// The span every op appended from here on is attributed to. A lowering walk sets it at each source
+	// op and CLEARS it when the walk ends: a cursor left set stamps the runtime band that is installed
+	// afterwards with the last user statement.
+	export var current as SpanId = NoSpanId
+	export var armed as bool = false
+
+	export static function create() returns DebugSpanColumn
+		return Self{}
+	end 'create'
+
+	export function count() returns OpCount
+		return self.ids.count()
+	end 'count'
+
+	// The span of op `opIndex`, or `NoSpanId` when this module carries none.
+	export function at(opIndex OpIndex) returns SpanId
+		return try self.ids.get(opIndex) otherwise NoSpanId
+	end 'at'
+
+	// Attribute a newly appended op to the cursor.
+	//
+	// ⚠ **THE INDEX MUST BE THE NEXT UNRECORDED SLOT**, which is `SourceRangeTable.record`'s rule for
+	// its reason: an op that entered `module.ops` by a route that does not record here fails loudly on
+	// the FOLLOWING op instead of shifting every later span by one.
+	export function pushCurrent(opIndex OpIndex)
+		if not self.armed 'notCapturing'
+			return
+		end 'notCapturing'
+
+		self.requireNextSlot(opIndex)
+		self.ids.push(self.current)
+	end 'pushCurrent'
+
+	// Attribute a newly appended op to NO statement — a spill, a reload, a parallel-copy move. Such an
+	// op is the allocator's rather than the author's, and a line row at it would stop a debugger on a
+	// statement whose code it is not.
+	export function pushNone(opIndex OpIndex)
+		if not self.armed 'notCapturing'
+			return
+		end 'notCapturing'
+
+		self.requireNextSlot(opIndex)
+		self.ids.push(NoSpanId)
+	end 'pushNone'
+
+	// Attribute a newly appended op to a span the caller already resolved.
+	export function pushId(opIndex OpIndex, spanId SpanId)
+		if not self.armed 'notCapturing'
+			return
+		end 'notCapturing'
+
+		self.requireNextSlot(opIndex)
+		self.ids.push(spanId)
+	end 'pushId'
+
+	// Attribute an op that was written over an index this column already holds (`ops.set` on a
+	// recycled slot) rather than appended.
+	export function placeAt(opIndex OpIndex, spanId SpanId)
+		if not self.armed 'notCapturing'
+			return
+		end 'notCapturing'
+
+		try self.ids.set(opIndex, value: spanId) otherwise panic("DebugSpanColumn.placeAt: op {opIndex} is past the column's {self.ids.count()} entries")
+	end 'placeAt'
+
+	// Fold `count` of `source`'s entries onto the end of this column, in order. A source module that
+	// carries no spans contributes positionless ones, which is what keeps this column parallel to an
+	// `ops` array that just grew by a band nobody recorded.
+	export function appendFrom(source Self, count OpCount)
+		if not self.armed 'notCapturing'
+			return
+		end 'notCapturing'
+
+		for i in 0 upto count 'eachSourceOp'
+			self.ids.push(source.at(i))
+		end 'eachSourceOp'
+	end 'appendFrom'
+
+	// ⭐⭐ **THE COLUMN HOLDS EXACTLY ONE ENTRY PER OP, AND NOTHING ELSE CAN SEE OTHERWISE.**
+	//
+	// `pushCurrent`'s next-slot refusal catches an op that entered `module.ops` by a route that does not
+	// record here — but only on the FOLLOWING append through one of the three doors, and several passes
+	// push onto `ops` directly and then stop. MEASURED: dropping the record at `SsaDestruction`'s
+	// succ-start edge-move site left the column one short and NOTHING fired, because every reader is
+	// keyed BY INDEX and a short column simply answers `NoSpanId` — a line table with a hole in it that
+	// loads, reads clean, and is silently wrong about the ops past it. The COUNT is the only thing that
+	// can see that, so it is asked wherever a module stops being appended to.
+	export function requireParallelTo(opCount OpCount, what String)
+		if not self.armed or self.ids.count() == opCount 'inStep'
+			return
+		end 'inStep'
+
+		panic("debug span column ({what}): {self.ids.count()} spans against {opCount} ops — an op was minted without recording a span, so every op past it is attributed to no statement at all")
+	end 'requireParallelTo'
+
+	export function swapAt(i OpIndex, j OpIndex)
+		self.ids.swap(i as SpanIdArray.SortIndex, j: j as SpanIdArray.SortIndex)
+	end 'swapAt'
+
+	export function dropLast()
+		_ = try self.ids.pop() otherwise panic("DebugSpanColumn.dropLast: pop on an empty column")
+	end 'dropLast'
+
+	function requireNextSlot(opIndex OpIndex)
+		if opIndex != self.ids.count() as OpIndex 'outOfStep'
+			panic("DebugSpanColumn: op {opIndex} recorded into slot {self.ids.count()} — an op reached module.ops without a span, and every later span would be misattributed")
+		end 'outOfStep'
+	end 'requireNextSlot'
+end 'DebugSpanColumn'

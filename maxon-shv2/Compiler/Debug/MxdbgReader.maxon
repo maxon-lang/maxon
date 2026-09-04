@@ -1,0 +1,217 @@
+// Compiler/Debug/MxdbgReader.maxon — read a `.mxdbg` image back.
+//
+// It holds the raw bytes and indexes them in place; nothing is copied out beyond the strings a caller
+// asks for. Every table is found through its own header slot, so this reads a file the bootstrap wrote
+// exactly as it reads one this compiler wrote — which is the whole point of matching the format.
+//
+// ⚠ **A FILE THIS READER CANNOT VOUCH FOR IS REFUSED, NEVER PARTLY TRUSTED.** Bad magic, a version it
+// does not speak, or a header claiming more than the file holds are all refusals with a reason: an
+// instrument that answers confidently from a container it misread is worse than one that will not
+// answer at all.
+
+export union MxdbgReadError implements Error
+	notASidecar
+	unsupportedVersion(version MxdbgIndex)
+	truncated
+
+	export function displayReason() returns String
+		return match self 'k'
+			notASidecar gives "not a .mxdbg file (bad magic)"
+			unsupportedVersion(version) gives ".mxdbg format version {version} is not supported (this build speaks {MxdbgFormatVersion})"
+			truncated gives "the .mxdbg header describes more data than the file holds"
+		end 'k'
+	end 'displayReason'
+end 'MxdbgReadError'
+
+// One function record, materialized.
+export type MxdbgFunctionInfo
+	export var name as String
+	export var codeStart as MxdbgCodeOffset
+	export var codeEnd as MxdbgCodeOffset
+	export var frameSize as MxdbgIndex
+	export var paramCount as MxdbgIndex
+	export var lineFirst as MxdbgIndex
+	export var lineCount as MxdbgIndex
+	export var localFirst as MxdbgIndex
+	export var localCount as MxdbgIndex
+
+	export static function create(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, lineFirst MxdbgIndex, lineCount MxdbgIndex, localFirst MxdbgIndex, localCount MxdbgIndex) returns MxdbgFunctionInfo
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, lineFirst: lineFirst, lineCount: lineCount, localFirst: localFirst, localCount: localCount}
+	end 'create'
+end 'MxdbgFunctionInfo'
+
+// One line record, materialized. `file` is the path the row's file id names, resolved here so a caller
+// never has to hold the reader and an id together.
+export type MxdbgLineInfo
+	export var codeOffset as MxdbgCodeOffset
+	export var file as String
+	export var line as MxdbgIndex
+	export var column as MxdbgIndex
+	export var flags as MxdbgIndex
+
+	export static function create(codeOffset MxdbgCodeOffset, file String, line MxdbgIndex, column MxdbgIndex, flags MxdbgIndex) returns MxdbgLineInfo
+		return Self{codeOffset: codeOffset, file: file, line: line, column: column, flags: flags}
+	end 'create'
+end 'MxdbgLineInfo'
+
+// A lookup that legitimately finds nothing: an offset in a gap (padding, the appended symbol table), or
+// a function with no line rows. A union rather than a zero record, because "no code there" and "code at
+// line 0" are different answers and a debugger must be able to say the first one.
+export union MxdbgFunctionLookup
+	none
+	found(info MxdbgFunctionInfo)
+end 'MxdbgFunctionLookup'
+
+export union MxdbgLineLookup
+	none
+	found(info MxdbgLineInfo)
+end 'MxdbgLineLookup'
+
+export type MxdbgReader
+	var image as ByteArray
+	export var buildId as HashDigest
+	export var triple as String
+	var stringPoolOff as ByteOffset
+	var fileTableOff as ByteOffset
+	var fileTally as MxdbgIndex
+	var funcTableOff as ByteOffset
+	var funcTally as MxdbgIndex
+	var lineTableOff as ByteOffset
+	var lineTally as MxdbgIndex
+	var typeTally as MxdbgIndex
+
+	export static function parse(image ByteArray) returns MxdbgReader throws MxdbgReadError
+		if not mxdbgMagicMatches(image) 'badMagic'
+			throw MxdbgReadError.notASidecar
+		end 'badMagic'
+
+		let version = imageReadU32(image, at: MxdbgOffVersion) as MxdbgIndex
+		if version != MxdbgFormatVersion 'wrongVersion'
+			throw MxdbgReadError.unsupportedVersion(version)
+		end 'wrongVersion'
+
+		let stringPoolOff = imageReadU32(image, at: MxdbgOffStringPoolOff) as ByteOffset
+		let poolSize = imageReadU32(image, at: MxdbgOffStringPoolSize) as BytePos
+		if not imageRangeFits(image, start: stringPoolOff, count: poolSize) 'poolPastEnd'
+			throw MxdbgReadError.truncated
+		end 'poolPastEnd'
+
+		let fileTableOff = imageReadU32(image, at: MxdbgOffFileTableOff) as ByteOffset
+		let fileTally = imageReadU32(image, at: MxdbgOffFileCount) as MxdbgIndex
+		let funcTableOff = imageReadU32(image, at: MxdbgOffFuncTableOff) as ByteOffset
+		let funcTally = imageReadU32(image, at: MxdbgOffFuncCount) as MxdbgIndex
+		let lineTableOff = imageReadU32(image, at: MxdbgOffLineTableOff) as ByteOffset
+		let lineTally = imageReadU32(image, at: MxdbgOffLineCount) as MxdbgIndex
+		if not imageRangeFits(image, start: fileTableOff, count: (fileTally * MxdbgFileEntrySize) as BytePos) or not imageRangeFits(image, start: funcTableOff, count: (funcTally * MxdbgFuncEntrySize) as BytePos) or not imageRangeFits(image, start: lineTableOff, count: (lineTally * MxdbgLineEntrySize) as BytePos) 'tablePastEnd'
+			throw MxdbgReadError.truncated
+		end 'tablePastEnd'
+
+		let tripleOff = imageReadU32(image, at: MxdbgOffTripleOff) as ByteOffset
+		let tripleLen = imageReadU32(image, at: MxdbgOffTripleLen) as BytePos
+
+		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTally: imageReadU32(image, at: MxdbgOffTypeCount) as MxdbgIndex}
+	end 'parse'
+
+	export function fileCount() returns MxdbgIndex
+		return self.fileTally
+	end 'fileCount'
+
+	export function functionCount() returns MxdbgIndex
+		return self.funcTally
+	end 'functionCount'
+
+	export function lineCount() returns MxdbgIndex
+		return self.lineTally
+	end 'lineCount'
+
+	// How many source-level TYPES this sidecar describes. Zero for every build this compiler writes
+	// today; reported rather than omitted, because a dump that printed no `types` section could not be
+	// told apart from one whose reader does not know the section exists.
+	export function typeCount() returns MxdbgIndex
+		return self.typeTally
+	end 'typeCount'
+
+	export function fileName(fileId MxdbgIndex) returns String
+		if fileId >= self.fileTally 'noSuchFile'
+			return ""
+		end 'noSuchFile'
+
+		let rec = self.fileTableOff + (fileId * MxdbgFileEntrySize) as ByteOffset
+
+		return self.poolString(imageReadU32(self.image, at: rec) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFieldSize) as BytePos)
+	end 'fileName'
+
+	export function functionRecord(index MxdbgIndex) returns MxdbgFunctionInfo
+		if index >= self.funcTally 'noSuchFunction'
+			panic("MxdbgReader.functionRecord: function {index} is past the sidecar's {self.funcTally} — every caller bounds itself by `functionCount`")
+		end 'noSuchFunction'
+
+		let rec = self.funcTableOff + (index * MxdbgFuncEntrySize) as ByteOffset
+
+		return MxdbgFunctionInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgFuncNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFuncNameLen) as BytePos), codeStart: imageReadU32(self.image, at: rec + MxdbgFuncCodeStart) as MxdbgCodeOffset, codeEnd: imageReadU32(self.image, at: rec + MxdbgFuncCodeEnd) as MxdbgCodeOffset, frameSize: imageReadU32(self.image, at: rec + MxdbgFuncFrameSize) as MxdbgIndex, paramCount: imageReadU32(self.image, at: rec + MxdbgFuncParamCount) as MxdbgIndex, lineFirst: imageReadU32(self.image, at: rec + MxdbgFuncLineFirst) as MxdbgIndex, lineCount: imageReadU32(self.image, at: rec + MxdbgFuncLineCount) as MxdbgIndex, localFirst: imageReadU32(self.image, at: rec + MxdbgFuncLocalFirst) as MxdbgIndex, localCount: imageReadU32(self.image, at: rec + MxdbgFuncLocalCount) as MxdbgIndex)
+	end 'functionRecord'
+
+	export function lineRecord(index MxdbgIndex) returns MxdbgLineInfo
+		if index >= self.lineTally 'noSuchRow'
+			panic("MxdbgReader.lineRecord: row {index} is past the sidecar's {self.lineTally} — every caller bounds itself by `lineCount` or by a function's line window")
+		end 'noSuchRow'
+
+		let rec = self.lineTableOff + (index * MxdbgLineEntrySize) as ByteOffset
+
+		return MxdbgLineInfo.create(imageReadU32(self.image, at: rec + MxdbgLineCodeOffset) as MxdbgCodeOffset, file: self.fileName(imageReadU32(self.image, at: rec + MxdbgLineFileId) as MxdbgIndex), line: imageReadU32(self.image, at: rec + MxdbgLineLine) as MxdbgIndex, column: imageReadU32(self.image, at: rec + MxdbgLineCol) as MxdbgIndex, flags: imageReadU32(self.image, at: rec + MxdbgLineFlags) as MxdbgIndex)
+	end 'lineRecord'
+
+	// The function whose `.text` range contains `codeOffset`, or none in a gap — padding, or the symbol
+	// table the backends append past the last chunk.
+	//
+	// ⚠ It relies on the table being ASCENDING BY CODE START, which the concat pass gives it by
+	// construction (`funcStart` is the running `code.count()`), and it breaks on the first record that
+	// starts past the offset rather than scanning the rest.
+	export function functionContaining(codeOffset MxdbgCodeOffset) returns MxdbgFunctionLookup
+		for i in 0 upto self.funcTally 'eachFunction'
+			let rec = self.funcTableOff + ((i as MxdbgIndex) * MxdbgFuncEntrySize) as ByteOffset
+			let codeStart = imageReadU32(self.image, at: rec + MxdbgFuncCodeStart) as MxdbgCodeOffset
+			if codeStart > codeOffset 'pastTheOffset'
+				break
+			end 'pastTheOffset'
+
+			if codeOffset < (imageReadU32(self.image, at: rec + MxdbgFuncCodeEnd) as MxdbgCodeOffset) 'inThisFunction'
+				return MxdbgFunctionLookup.found(self.functionRecord(i as MxdbgIndex))
+			end 'inThisFunction'
+		end 'eachFunction'
+
+		return MxdbgFunctionLookup.none
+	end 'functionContaining'
+
+	// The source position of `codeOffset`: the last row at or before it inside the enclosing function.
+	// None when no function covers the offset, or when the function has no row at or before it — which
+	// is the honest answer at a prologue, where no statement has begun.
+	export function pcToLine(codeOffset MxdbgCodeOffset) returns MxdbgLineLookup
+		match self.functionContaining(codeOffset) 'enclosing'
+			none then return MxdbgLineLookup.none
+			found(fn) then return self.lastRowAtOrBefore(fn, codeOffset: codeOffset)
+		end 'enclosing'
+	end 'pcToLine'
+
+	function lastRowAtOrBefore(fn MxdbgFunctionInfo, codeOffset MxdbgCodeOffset) returns MxdbgLineLookup
+		var best = MxdbgLineLookup.none
+		for i in fn.lineFirst upto fn.lineFirst + fn.lineCount 'eachRow'
+			let row = self.lineRecord(i as MxdbgIndex)
+			if row.codeOffset > codeOffset 'pastTheOffset'
+				break
+			end 'pastTheOffset'
+
+			best = MxdbgLineLookup.found(row)
+		end 'eachRow'
+
+		return best
+	end 'lastRowAtOrBefore'
+
+	function poolString(offset ByteOffset, length BytePos) returns String
+		if length == 0 'theEmptyString'
+			return ""
+		end 'theEmptyString'
+
+		return String.from(imageSlice(self.image, start: self.stringPoolOff + offset, count: length))
+	end 'poolString'
+end 'MxdbgReader'

@@ -855,9 +855,14 @@ type LeafInliner
 	// every reader asks `liveOpIndices` rather than scanning the array.
 	function spliceCallAtTailOf(predRef BlockRef, contRef BlockRef, calleeIndex FuncIndex)
 		let tail = self.blockAt(predRef).opRefs.count() - 1
+		// The splice's own ops — the branch into the copied entry, and the slow arm that re-issues this
+		// very call — are the CALLER's statement. The clone loop between them re-points the cursor per
+		// callee op and leaves it there, so the site's span is CARRIED rather than left on the cursor.
+		let siteSpan = self.module.spans.at(self.blockOpRefAt(predRef, pos: tail))
+		self.module.spans.current = siteSpan
 		match self.opAt(predRef, pos: tail) 'site'
 			const to param then self.refuseNotTheSplitCall()
-			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId)
+			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId, siteSpan: siteSpan)
 			retVoid to osEnterBackgroundPriority then self.refuseNotTheSplitCall()
 			osFileOpenWriteExecutable then self.refuseNotTheSplitCall()
 			osEnvBlock to osEnvBlockFree then self.refuseNotTheSplitCall()
@@ -882,7 +887,7 @@ type LeafInliner
 
 	// ⭐⭐ **THE SPLICE.** `predRef` ends in the call (about to be dropped); `contRef` holds everything
 	// that followed it, and — if this is the block's last site — the block's whole exit.
-	function splice(predRef BlockRef, contRef BlockRef, calleeIndex FuncIndex, callee ByteArray, args ValueIdArray, resultId ValueId)
+	function splice(predRef BlockRef, contRef BlockRef, calleeIndex FuncIndex, callee ByteArray, args ValueIdArray, resultId ValueId, siteSpan SpanId)
 		let calleeFunc = self.module.getFunc(calleeIndex)
 		if args.count() != calleeFunc.paramCount 'arity'
 			panic("LeafInliner.splice: '{String.from(self.func.name)}' calls '{String.from(callee)}' with {args.count()} argument(s) against {calleeFunc.paramCount} parameter(s) — `lowerCall` emits arguments in declaration order and fills every slot, the trailing layout/witness parameters of a generic callee included, so a mismatch here is a malformed call rather than a shape to decline")
@@ -905,6 +910,10 @@ type LeafInliner
 		// The head's own exit was moved onto the continuation by the split, so it is un-terminated here
 		// and carries no edge. The copied entry block takes no block args (`scanLeafBody` refuses a
 		// callee whose entry carries phis), so this branch carries none either.
+		//
+		// ⚠ The cursor is where the body clone above left it — on a CALLEE op — so the site's own span is
+		// restored first: this branch is the caller's call statement, not any line inside the callee.
+		self.module.spans.current = siteSpan
 		self.module.setTerminator(self.blockAt(predRef), op: StdOp.branch(blocks.targetOf(self.calleeEntryBlockId(calleeFunc))))
 	end 'splice'
 
@@ -1098,6 +1107,8 @@ type LeafInliner
 	// and nothing rewrites either. `InlineManagedPrimitives.openPlain` shares the same way.
 	function mintSlowArm(contRef BlockRef, callee ByteArray, args ValueIdArray, calleeFunc IrFunction, blocks SpliceBlocks)
 		let contId = self.blockAt(contRef).id
+		// The slow arm re-runs the call this site inlined, so it belongs to the CALLER's statement — which
+		// is where `spliceCallAtTailOf` left the cursor, the body clone not having started.
 		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
 		let slowResult = self.valueIds().mint()
 		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
@@ -1195,7 +1206,12 @@ type LeafInliner
 				continue
 			end 'parameterOp'
 
+			// ⭐ **THE CLONE KEEPS THE CALLEE'S SPAN, WHICH IS THE WHOLE REASON THE FILE RIDES IN THE ROW.**
+			// A span carried per-FUNCTION would report the caller's file for every inlined body, so a
+			// debugger could never step into one. Read before the append, for the borrow reason above.
+			let calleeSpan = self.module.spans.at(opIdx)
 			let cloned = remapStdOpForClone(op, valueSubst: subst, blockSubst: blocks.blockSubst)
+			self.module.spans.current = calleeSpan
 			self.module.appendOp(self.blockAt(freshRef), op: cloned)
 		end 'eachOp'
 	end 'copyBlockOps'
@@ -1210,6 +1226,9 @@ type LeafInliner
 		end 'oplessTerminator'
 
 		let term = self.opAtIndex(calleeBlock.terminatorIndex(), ofFunc: calleeFunc)
+		// The cloned exit is the callee's terminator, so it answers to the callee's own line — the body
+		// walk left the cursor on this block's LAST op, which is a different statement.
+		self.module.spans.current = self.module.spans.at(calleeBlock.terminatorIndex())
 		match term 'exit'
 			const to mod then refuseNotATerminator(calleeFunc)
 			condBranch to branch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
@@ -1303,9 +1322,15 @@ type LeafInliner
 		return try self.module.blocks.get(blockRef) otherwise panic("LeafInliner: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")
 	end 'blockAt'
 
+	// The flat `module.ops` index a block names at `pos`. Read through a function for `opAtIndex`'s
+	// stated reason: an inline `self.blockAt(...).opRefs.get(...)` borrows `module` across the append
+	// that follows, which the self-compile refuses.
+	function blockOpRefAt(blockRef BlockRef, pos BlockOpPos) returns OpIndex
+		return try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("LeafInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
+	end 'blockOpRefAt'
+
 	function opAt(blockRef BlockRef, pos BlockOpPos) returns StdOp
-		let opIdx = try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("LeafInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
-		return self.opAtIndex(opIdx, ofFunc: self.func)
+		return self.opAtIndex(self.blockOpRefAt(blockRef, pos: pos), ofFunc: self.func)
 	end 'opAt'
 
 	// ⚠ **EVERY OP READ ON A MUTATING PATH GOES THROUGH HERE, and that is E3070 rather than tidiness.**

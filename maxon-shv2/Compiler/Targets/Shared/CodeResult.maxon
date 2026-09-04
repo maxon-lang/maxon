@@ -269,6 +269,17 @@ export function rebaseJumpTableReloc(reloc JumpTableReloc, funcStart CodeOffset)
 	return JumpTableReloc.create(reloc.tableLabel, targetTextOffsets: rebased)
 end 'rebaseJumpTableReloc'
 
+// ⭐ **ONE CHUNK'S DEBUG INFO, FOLDED INTO THE WHOLE-MODULE TABLES.** Both native concat passes call
+// it at the spot they push a `DebugSymbol`, which is the one place holding a chunk and its `.text`
+// start. `codeEnd` is `funcStart + chunk.code.count()` — exact and O(1), where a search of the symbol
+// table for the next function would be neither.
+export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, functions DebugFunctionRangeArray, lineRows DebugLineRowArray)
+	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), frameSize: chunk.frameSize, paramCount: chunk.paramCount))
+	for row in chunk.lineRows 'eachRow'
+		lineRows.push(DebugLineRow.create(funcStart + row.codeOffset, spanId: row.spanId))
+	end 'eachRow'
+end 'foldChunkDebugInfo'
+
 // ⭐ **PATCH EVERY JUMP-TABLE SLOT into the `.rdata` IMAGE**, shared by all three writers. `rdata` is the
 // section image about to be written; `textAddr`/`rdataAddr` are the two sections' resolved addresses (an RVA
 // for the fixed-base PE, a VA for the PIE ELF/Mach-O — the arithmetic is identical because each slot is a
@@ -309,6 +320,63 @@ end 'jumpTableEntry'
 let I32MinValue = -0x80000000 as ParsedInt
 let I32MaxValue = 0x7FFFFFFF as ParsedInt
 
+// ONE ROW OF THE EMITTED LINE TABLE: at `codeOffset`, execution is at the source position `spanId`
+// names. Chunk-local while the chunk is being emitted, rebased to whole-`.text` at the concat exactly
+// as a jump-table reloc is.
+export type DebugLineRow
+	export var codeOffset as CodeOffset
+	export var spanId as SpanId
+
+	export static function create(codeOffset CodeOffset, spanId SpanId) returns DebugLineRow
+		return Self{codeOffset: codeOffset, spanId: spanId}
+	end 'create'
+end 'DebugLineRow'
+
+export typealias DebugLineRowArray = Array with DebugLineRow
+
+// ⭐⭐ **STATEMENT GRANULARITY IS A PROPERTY OF THIS TABLE, NOT OF THE CARRIER.** Every op carries a
+// span; a row is written only where the span CHANGES, and every row written is a statement boundary.
+// That is what makes a step land on statements without one mark being placed anywhere upstream — the
+// parser needs no statement marking at all.
+//
+// A positionless op does NOT close the run: a spill in the middle of a statement is still that
+// statement's code, so the row that opened it still describes the offset.
+export type DebugLineRowBuilder
+	export var rows as DebugLineRowArray
+	var last as SpanId
+	var armed as bool
+
+	export static function create(armed bool) returns DebugLineRowBuilder
+		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, armed: armed}
+	end 'create'
+
+	export function note(spanId SpanId, codeOffset CodeOffset)
+		if not self.armed or spanId == NoSpanId or spanId == self.last 'noRowHere'
+			return
+		end 'noRowHere'
+
+		self.rows.push(DebugLineRow.create(codeOffset, spanId: spanId))
+		self.last = spanId
+	end 'note'
+end 'DebugLineRowBuilder'
+
+// One function as the debug-info sidecar names it: where its code sits in `.text`, how much frame it
+// reserves, and how many parameters it takes. Filled at the concat, which is the one place that holds
+// both a chunk and its whole-`.text` start.
+export type DebugFunctionRange
+	export var name as ByteArray
+	export var codeStart as CodeOffset
+	export var codeEnd as CodeOffset
+	export var frameSize as StackSize
+	export var paramCount as ParamCount
+
+	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, frameSize StackSize, paramCount ParamCount) returns DebugFunctionRange
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount}
+	end 'create'
+end 'DebugFunctionRange'
+
+export typealias DebugFunctionRangeArray = Array with DebugFunctionRange
+
 // Per-function code chunk. B2's incremental backend emits one chunk per
 // function, then a module-level fixup pass concatenates them into the final
 // `.text` section. All offsets inside a chunk are CHUNK-LOCAL (`entryOffset` is
@@ -339,6 +407,14 @@ export type FunctionCodeChunk
 	// exactly like `funcAdrpRelocs`). Resolved after the block loop, when every block's chunk-local offset is
 	// known; empty for any function with no dense `match`.
 	export var jumpTableRelocs as JumpTableRelocArray
+	// This chunk's line rows, at CHUNK-LOCAL code offsets (rebased at concat like `jumpTableRelocs`).
+	// Empty on every build that did not ask for debug info, and on every hand-assembled runtime chunk.
+	export var lineRows as DebugLineRowArray
+	// The frame this chunk's prologue reserves and the arity its function was declared with — the two
+	// facts a sidecar's function record carries that the code bytes do not. Both 0 for a hand-assembled
+	// chunk, which has no `IrFunction` behind it.
+	export var frameSize as StackSize
+	export var paramCount as ParamCount
 
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
@@ -350,7 +426,10 @@ export type FunctionCodeChunk
 			iatRelocs: RelocationArray.create(),
 			rdataConstants: GlobalDataTable.create(),
 			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create()
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			lineRows: DebugLineRowArray.create(),
+			frameSize: 0,
+			paramCount: 0
 		}
 	end 'create'
 
@@ -370,7 +449,10 @@ export type FunctionCodeChunk
 			iatRelocs: iatRelocs,
 			rdataConstants: rdataConstants,
 			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create()
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			lineRows: DebugLineRowArray.create(),
+			frameSize: 0,
+			paramCount: 0
 		}
 	end 'createWith'
 end 'FunctionCodeChunk'
@@ -438,6 +520,13 @@ export type CodeResult
 	// Retaining the array is a LIFETIME, not a copy: these are the same chunk objects the concat pass
 	// walked, so nothing is allocated for it. Empty for the wasm path, which builds no chunks at all.
 	export var codeChunks as FunctionCodeChunkArray
+	// ⭐ **WHAT THE `.mxdbg` SIDECAR IS BUILT FROM, AND THE ONLY THING ANY OF IT IS READ BY.** No pass
+	// reads either table and nothing branches on one, which is what makes the emitted image identical
+	// whether or not they were filled. Both empty on a build that did not ask for debug info.
+	export var debugFunctions as DebugFunctionRangeArray
+	// Every function's line rows, concatenated in `.text` order and rebased to whole-`.text` offsets, so
+	// the table is ascending by construction and the writer asserts that rather than sorting.
+	export var debugLineRows as DebugLineRowArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
 		return Self{
@@ -456,7 +545,9 @@ export type CodeResult
 			wasmCoreModule: ByteArray.create(),
 			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
 			jumpTableRelocs: JumpTableRelocArray.create(),
-			codeChunks: FunctionCodeChunkArray.create()
+			codeChunks: FunctionCodeChunkArray.create(),
+			debugFunctions: DebugFunctionRangeArray.create(),
+			debugLineRows: DebugLineRowArray.create()
 		}
 	end 'create'
 
@@ -482,7 +573,9 @@ export type CodeResult
 			wasmCoreModule: wasmCoreModule,
 			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
 			jumpTableRelocs: JumpTableRelocArray.create(),
-			codeChunks: FunctionCodeChunkArray.create()
+			codeChunks: FunctionCodeChunkArray.create(),
+			debugFunctions: DebugFunctionRangeArray.create(),
+			debugLineRows: DebugLineRowArray.create()
 		}
 	end 'forWasm'
 end 'CodeResult'

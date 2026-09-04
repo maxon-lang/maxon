@@ -1,0 +1,269 @@
+// Compiler/Debug/MxdbgWriter.maxon — build a `.mxdbg` image.
+//
+// The compiler feeds it the source files, the functions and the line rows it OBSERVED of the already
+// emitted `.text`, then asks for the bytes. Strictly additive: nothing here can influence a single
+// emitted code byte, which is what the byte-identity gate rests on.
+//
+// ⭐ **THE LINE TABLE IS NOT SORTED HERE, IT IS ASSERTED ASCENDING.** The reference sorts because its
+// caller adds rows in any order; this one's caller walks the chunks in `.text` order and each chunk's
+// rows in emission order, so the table is ascending by construction. Sorting it would hide a caller
+// that had stopped being — and the reader binary-searches, so an unsorted table is a wrong answer
+// rather than a slow one.
+
+// The type/field/local/coverage sections this rung writes EMPTY. They are real sections with real
+// header slots, and a count of 0 is the honest statement that this build recorded none — not that the
+// format cannot say. Named rather than written as bare `0`s so the four are visibly one decision.
+let MxdbgEmptySectionCount = 0
+
+// A `(offset, length)` pair into the string pool.
+type MxdbgPoolSlice
+	export var offset as MxdbgIndex
+	export var length as MxdbgIndex
+
+	export static function create(offset MxdbgIndex, length MxdbgIndex) returns MxdbgPoolSlice
+		return Self{offset: offset, length: length}
+	end 'create'
+end 'MxdbgPoolSlice'
+
+typealias MxdbgPoolSliceArray = Array with MxdbgPoolSlice
+typealias MxdbgPoolSliceMap = Map with (String, MxdbgPoolSlice)
+
+// One function record, as the writer holds it before the line windows are computed.
+type MxdbgFuncRecord
+	export var name as MxdbgPoolSlice
+	export var codeStart as MxdbgCodeOffset
+	export var codeEnd as MxdbgCodeOffset
+	export var frameSize as MxdbgIndex
+	export var paramCount as MxdbgIndex
+
+	export static function create(name MxdbgPoolSlice, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex) returns MxdbgFuncRecord
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount}
+	end 'create'
+end 'MxdbgFuncRecord'
+
+typealias MxdbgFuncRecordArray = Array with MxdbgFuncRecord
+
+// One line record.
+type MxdbgLineRecord
+	export var codeOffset as MxdbgCodeOffset
+	export var fileId as MxdbgIndex
+	export var line as MxdbgIndex
+	export var column as MxdbgIndex
+	export var flags as MxdbgIndex
+
+	export static function create(codeOffset MxdbgCodeOffset, fileId MxdbgIndex, line MxdbgIndex, column MxdbgIndex, flags MxdbgIndex) returns MxdbgLineRecord
+		return Self{codeOffset: codeOffset, fileId: fileId, line: line, column: column, flags: flags}
+	end 'create'
+end 'MxdbgLineRecord'
+
+typealias MxdbgLineRecordArray = Array with MxdbgLineRecord
+
+export type MxdbgWriter
+	var stringPool as ByteArray = ByteArray.create()
+	var interned as MxdbgPoolSliceMap = MxdbgPoolSliceMap.create()
+	var files as MxdbgPoolSliceArray = MxdbgPoolSliceArray.create()
+	var funcs as MxdbgFuncRecordArray = MxdbgFuncRecordArray.create()
+	var lines as MxdbgLineRecordArray = MxdbgLineRecordArray.create()
+
+	export static function create() returns MxdbgWriter
+		return Self{}
+	end 'create'
+
+	// Intern `text` into the shared pool. The empty string interns to `(0, 0)` and writes nothing, so a
+	// nameless entry costs no bytes and reads back as empty.
+	function intern(text String) returns MxdbgPoolSlice
+		if text.isEmpty() 'nothingToIntern'
+			return MxdbgPoolSlice.create(0, length: 0)
+		end 'nothingToIntern'
+
+		if let hit = try self.interned.get(text) 'alreadyInterned'
+			return hit
+		end 'alreadyInterned' else 'firstSight'
+			// The LENGTH is measured by pushing rather than asked of the String: a pool slice is a byte
+			// range, and the count of bytes a String lays down is the only measure that can address it.
+			let offset = self.stringPool.count() as MxdbgIndex
+			for b in text.bytes() 'eachByte'
+				self.stringPool.push(b)
+			end 'eachByte'
+			let slice = MxdbgPoolSlice.create(offset, length: (self.stringPool.count() - offset) as MxdbgIndex)
+			self.interned.upsert(text, value: slice)
+
+			return slice
+		end 'firstSight'
+	end 'intern'
+
+	// Register a source file; its id is its position, which is what a line row names.
+	export function addFile(path String)
+		self.files.push(self.intern(path))
+	end 'addFile'
+
+	export function addFunction(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex)
+		self.funcs.push(MxdbgFuncRecord.create(self.intern(name), codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount))
+	end 'addFunction'
+
+	export function addLine(codeOffset MxdbgCodeOffset, fileId MxdbgIndex, line MxdbgIndex, column MxdbgIndex, flags MxdbgIndex)
+		self.lines.push(MxdbgLineRecord.create(codeOffset, fileId: fileId, line: line, column: column, flags: flags))
+	end 'addLine'
+
+	// Serialize everything added so far into a `.mxdbg` image bound to `buildId`.
+	export function build(buildId HashDigest, targetTriple String) returns ByteArray
+		self.requireAscendingTables()
+		let windows = self.lineWindows()
+		let triple = self.intern(targetTriple)
+
+		// ⭐ **THE SECTION ORDER IS THE REFERENCE'S AND IS NOT THE HEADER SLOT ORDER** — header, files,
+		// funcs, lines, types, fields, locals, coverage, string pool. The four sections this build records
+		// none of contribute their stride times zero, which is the same arithmetic a build that DID record
+		// them would run: an empty section is a count of 0, never a special case.
+		let fileTableOff = MxdbgHeaderSize as ByteOffset
+		let funcTableOff = fileTableOff + (self.files.count() * MxdbgFileEntrySize) as ByteOffset
+		let lineTableOff = funcTableOff + (self.funcs.count() * MxdbgFuncEntrySize) as ByteOffset
+		let typeTableOff = lineTableOff + (self.lines.count() * MxdbgLineEntrySize) as ByteOffset
+		let fieldTableOff = typeTableOff + (MxdbgEmptySectionCount * MxdbgTypeEntrySize) as ByteOffset
+		let localTableOff = fieldTableOff + (MxdbgEmptySectionCount * MxdbgFieldEntrySize) as ByteOffset
+		let covTableOff = localTableOff + (MxdbgEmptySectionCount * MxdbgLocalEntrySize) as ByteOffset
+		let stringPoolOff = covTableOff + (MxdbgEmptySectionCount * MxdbgCovEntrySize) as ByteOffset
+
+		// ⛔ **PATCHED BY SLOT, NEVER WRITTEN AS A RUN.** The reader indexes these 96 bytes by the very same
+		// named offsets, so writing them positionally would let the two ends drift by one word — the failure
+		// this format's header calls out, and one that does not fail to load: it slides the parse and turns
+		// every later record into garbage.
+		var buf = ByteArray.create()
+		writeMxdbgMagic(buf)
+		writeZeros(buf, n: (MxdbgHeaderSize - buf.count()) as BytePos)
+		patchDword(buf, offset: MxdbgOffVersion, value: MxdbgFormatVersion as MachineWord)
+		patchDword(buf, offset: MxdbgOffReserved, value: 0)
+		patchQword(buf, offset: MxdbgOffBuildId, value: buildId as MachineWord)
+		patchDword(buf, offset: MxdbgOffTripleOff, value: triple.offset as MachineWord)
+		patchDword(buf, offset: MxdbgOffTripleLen, value: triple.length as MachineWord)
+		patchDword(buf, offset: MxdbgOffStringPoolOff, value: stringPoolOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffStringPoolSize, value: self.stringPool.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffFileTableOff, value: fileTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffFileCount, value: self.files.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffFuncTableOff, value: funcTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffFuncCount, value: self.funcs.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffLineTableOff, value: lineTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffLineCount, value: self.lines.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffTypeTableOff, value: typeTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffTypeCount, value: MxdbgEmptySectionCount as MachineWord)
+		patchDword(buf, offset: MxdbgOffFieldTableOff, value: fieldTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffFieldCount, value: MxdbgEmptySectionCount as MachineWord)
+		patchDword(buf, offset: MxdbgOffLocalTableOff, value: localTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffLocalCount, value: MxdbgEmptySectionCount as MachineWord)
+		patchDword(buf, offset: MxdbgOffCovTableOff, value: covTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffCovCount, value: MxdbgEmptySectionCount as MachineWord)
+
+		for file in self.files 'eachFile'
+			writeDword(buf, value: file.offset as MachineWord)
+			writeDword(buf, value: file.length as MachineWord)
+		end 'eachFile'
+
+		for i in 0 upto self.funcs.count() 'eachFunc'
+			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.build: funcs.get OOB at {i} despite the upto bound")
+			writeDword(buf, value: f.name.offset as MachineWord)
+			writeDword(buf, value: f.name.length as MachineWord)
+			writeDword(buf, value: f.codeStart as MachineWord)
+			writeDword(buf, value: f.codeEnd as MachineWord)
+			writeDword(buf, value: f.frameSize as MachineWord)
+			writeDword(buf, value: f.paramCount as MachineWord)
+			let window = try windows.get(i) otherwise panic("MxdbgWriter.build: windows.get OOB at {i} — one window is computed per function, in this very order")
+			writeDword(buf, value: window.first as MachineWord)
+			writeDword(buf, value: window.count as MachineWord)
+			writeDword(buf, value: 0 as MachineWord)
+			writeDword(buf, value: 0 as MachineWord)
+		end 'eachFunc'
+
+		for row in self.lines 'eachLine'
+			writeDword(buf, value: row.codeOffset as MachineWord)
+			writeDword(buf, value: row.fileId as MachineWord)
+			writeDword(buf, value: row.line as MachineWord)
+			writeDword(buf, value: row.column as MachineWord)
+			writeDword(buf, value: row.flags as MachineWord)
+		end 'eachLine'
+
+		buf.append(self.stringPool)
+
+		return buf
+	end 'build'
+
+	// ⭐⭐ **EVERY FUNCTION'S `[first, first + count)` SLICE OF THE LINE TABLE, IN ONE SWEEP OF EACH.**
+	//
+	// Both tables are in code order — the functions because the concat pass laid `.text` out that way,
+	// the rows because they were collected off those very chunks — so ONE cursor walks the rows once
+	// across the whole function list and never goes back.
+	//
+	// ⚠ **SCANNING THE WHOLE LINE TABLE PER FUNCTION IS NOT A CONSTANT FACTOR, IT IS THE PRODUCT.**
+	// MEASURED on this compiler compiling itself: that shape spent 23.4 G CPU ticks in the sidecar
+	// phase, against 28.0 G for the WHOLE register allocator.
+	function lineWindows() returns MxdbgLineWindowArray
+		var windows = MxdbgLineWindowArray.create()
+		windows.reserve(self.funcs.count())
+
+		var at = 0 as ElementIndex
+		for i in 0 upto self.funcs.count() 'eachFunc'
+			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.lineWindows: funcs.get OOB at {i} despite the upto bound")
+			at = self.firstRowAtOrPast(at, offset: f.codeStart)
+			let first = at
+			at = self.firstRowAtOrPast(at, offset: f.codeEnd)
+			let count = (at - first) as MxdbgIndex
+
+			// An empty window reports first = 0, matching the all-zero record the reference writes, so a
+			// reader that trusts `count` alone cannot be led anywhere by the other field.
+			windows.push(MxdbgLineWindow.create(first as MxdbgIndex if count > 0 else 0, count: count))
+		end 'eachFunc'
+
+		return windows
+	end 'lineWindows'
+
+	// The first row at or past `offset`, resuming from `from`. The cursor only ever moves forward across
+	// the walk above, which is what makes that walk one sweep rather than one per function.
+	function firstRowAtOrPast(from ElementIndex, offset MxdbgCodeOffset) returns ElementIndex
+		var at = from
+		while at < self.lines.count() 'eachRow'
+			let row = try self.lines.get(at) otherwise panic("MxdbgWriter.firstRowAtOrPast: lines.get OOB at {at} despite the while guard")
+			if row.codeOffset >= offset 'atOrPast'
+				break
+			end 'atOrPast'
+
+			at = at + 1
+		end 'eachRow'
+
+		return at
+	end 'firstRowAtOrPast'
+
+	// ⭐ **BOTH TABLES MUST BE ASCENDING, AND THE WINDOW WALK IS WHY BOTH ARE ASKED.** The caller gets
+	// both for free by walking chunks in `.text` order. Refused rather than sorted: the reader
+	// binary-searches the line table and the window cursor never goes back, so a table that had stopped
+	// being ordered is a wrong answer at every later offset rather than a slow one.
+	function requireAscendingTables()
+		var previousRow = 0 as MxdbgCodeOffset
+		for i in 0 upto self.lines.count() 'eachRow'
+			let row = try self.lines.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: lines.get OOB at {i} despite the upto bound")
+			if row.codeOffset < previousRow 'rowOutOfOrder'
+				panic("MxdbgWriter: line row {i} is at 0x{row.codeOffset:x} behind 0x{previousRow:x} — the table is built by walking chunks in `.text` order, and both the reader's search and the window walk read it forward only")
+			end 'rowOutOfOrder'
+			previousRow = row.codeOffset
+		end 'eachRow'
+
+		var previousFunc = 0 as MxdbgCodeOffset
+		for i in 0 upto self.funcs.count() 'eachFunc'
+			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: funcs.get OOB at {i} despite the upto bound")
+			if f.codeStart < previousFunc 'funcOutOfOrder'
+				panic("MxdbgWriter: function {i} starts at 0x{f.codeStart:x} behind 0x{previousFunc:x} — the concat pass lays chunks out in `.text` order, and the window walk consumes both tables forward together")
+			end 'funcOutOfOrder'
+			previousFunc = f.codeStart
+		end 'eachFunc'
+	end 'requireAscendingTables'
+end 'MxdbgWriter'
+
+// One function's slice of the line table.
+type MxdbgLineWindow
+	export var first as MxdbgIndex
+	export var count as MxdbgIndex
+
+	export static function create(first MxdbgIndex, count MxdbgIndex) returns MxdbgLineWindow
+		return Self{first: first, count: count}
+	end 'create'
+end 'MxdbgLineWindow'
+
+typealias MxdbgLineWindowArray = Array with MxdbgLineWindow

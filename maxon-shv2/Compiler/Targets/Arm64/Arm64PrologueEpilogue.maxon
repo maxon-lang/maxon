@@ -200,8 +200,10 @@ function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at Block
 	let scratchBase = arm64WideFrameScratchBase(byteOffset as MachineWord)
 	let residue = ((byteOffset as MachineWord) - scratchBase) as Imm32
 	foldPositions.push(at)
-	foldOps.push(module.ops.count())
+	let scratchOpIdx = module.ops.count()
+	foldOps.push(scratchOpIdx)
 	module.ops.push(TargetOp.arm64AddImm(arm64PhysVReg(Arm64Ip1RegNum), src: arm64PhysVReg(Arm64FramePointerRegNum), imm: scratchBase as Imm32))
+	module.spans.pushNone(scratchOpIdx)
 	arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64Ip1RegNum, disp: residue, width: width)
 end 'resolveOneArm64IncomingArg'
 
@@ -370,6 +372,8 @@ end 'arm64PhysVReg'
 function arm64PrependOp(module TargetModule, block IrBlock, op TargetOp)
 	let opIdx = module.ops.count()
 	module.ops.push(op)
+	// Frame setup is the ABI's, not the author's — it precedes the function's first statement.
+	module.spans.pushNone(opIdx)
 	insertOpRef(block, at: 0, opIdx: opIdx)
 end 'arm64PrependOp'
 

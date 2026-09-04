@@ -1,0 +1,36 @@
+// The debug-info fixture: three DECLARED functions, each with a body of several statements, so a
+// sidecar has functions to name, code ranges to bound and line rows to place.
+//
+// ⛔ **EVERY FUNCTION LOOPS, AND THAT IS WHAT KEEPS IT IN THE SIDECAR.** `inlineLeaves` copies a tiny
+// callee's body into its caller and `DeadFunctionElimination` then drops the callee, so a one-line
+// helper is a name the dump can honestly answer nothing about. A loop makes each of these a real
+// function with a real code range whatever the inliner decides.
+typealias Step = int(0 to 1000)
+
+function accumulate(limit Step) returns Step
+	var total = 0
+	var i = 0
+	while i < limit 'sum'
+		total = total + i
+		i = i + 1
+	end 'sum'
+
+	return total
+end 'accumulate'
+
+function scale(seed Step) returns Step
+	var scaled = seed
+	var rounds = 0
+	while rounds < 3 'grow'
+		scaled = scaled + accumulate(rounds)
+		rounds = rounds + 1
+	end 'grow'
+
+	return scaled
+end 'scale'
+
+function main() returns ExitCode
+	print("spans\n")
+	let answer = scale(2)
+	return answer as ExitCode
+end 'main'

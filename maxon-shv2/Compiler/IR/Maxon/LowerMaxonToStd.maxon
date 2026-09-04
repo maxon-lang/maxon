@@ -1203,7 +1203,38 @@ type MaxonToStdLowering
 		return value < valueIdAtParamPosition(self.currentParamCount) and maskHasParam(self.currentByRefParams, param: paramPositionOfValueId(value))
 	end 'valueIsByRefParam'
 
+	// The `DebugSpanTable` id of the file `func` was written in, or `NoDebugFileId` for a function the
+	// compiler emitted (an empty `sourceFilePath`), which interns to `NoSpanId` — so a runtime body can
+	// never be attributed to a statement of the program's first source file.
+	function spanFileIdOf(func IrFunction, project Project) returns DebugFileId
+		if not project.debugInfo or func.sourceFilePath.isEmpty() 'noFile'
+			return NoDebugFileId
+		end 'noFile'
+
+		return project.debugSpanTable.fileId(func.sourceFilePath.toString())
+	end 'spanFileIdOf'
+
+	// The interned span of one Maxon op.
+	//
+	// ⚠ An index past `opRanges` is answered `NoSpanId` rather than refused: the table is recorded at the
+	// merge, so an op minted into the Maxon module after it genuinely HAS no recorded position, and
+	// "belongs to no statement" is the honest answer to give a line table.
+	function spanOf(opIdx OpIndex, file DebugFileId, project Project) returns SpanId
+		if not project.debugInfo or opIdx >= project.opRanges.count() as OpIndex 'noSpan'
+			return NoSpanId
+		end 'noSpan'
+
+		let range = project.opRanges.get(opIdx)
+		return project.debugSpanTable.intern(file, line: range.line, column: range.column)
+	end 'spanOf'
+
 	function lower(project Project) returns StdModule
+		// ⭐ **THE STD TIER IS WHERE A SPAN STARTS BEING CARRIED RATHER THAN LOOKED UP.** `StdOp` has no
+		// range field, so what crosses this boundary is an interned id in a column parallel to `ops`,
+		// pushed by the cursor the walk below sets at each Maxon op. Off unless the build asked for debug
+		// info, and then every writer on that column returns before touching it.
+		self.stdModule.spans.armed = project.debugInfo
+
 		// Which functions carry a hidden layout-descriptor parameter (P1.6-B1) — computed ONCE, up front,
 		// so both directions of the ABI (a callee binding its slot, a caller appending the argument) read
 		// one whole-program answer. An op-scan over the Maxon module; O(total ops), linear.
@@ -1337,6 +1368,11 @@ type MaxonToStdLowering
 			self.bindRangeSiteWalk(srcFunc)
 			self.emitParams(srcFunc)
 
+			// This function's source file, resolved ONCE. A compiler-emitted function has no path and so no
+			// file — its ops carry `NoSpanId`, which is what makes an unreset cursor detectable at the
+			// sidecar rather than silently attributing a runtime body to a user statement.
+			let spanFile = self.spanFileIdOf(srcFunc, project: project)
+
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				// ⚠ **THE SOURCE BLOCK IS READ FOR ITS THREE FACTS AND NOT HELD ACROSS THE OP LOOP.** A block
 				// read out of `maxonModule.blocks` is a BORROW of that module, and `lowerOp`/`lowerTerminator`
@@ -1362,6 +1398,10 @@ type MaxonToStdLowering
 					// `lowerOp`'s callees because the depth is arbitrary — the one reader today
 					// (`allocTagIndexOf`) sits four frames down.
 					self.currentMaxonOpIndex = opIdx
+					// The debug-span cursor, set beside the op index for the same reason: the Std ops this one
+					// call is about to append are at an arbitrary depth, and a span threaded as an argument is
+					// one every new emitter could forget to pass on.
+					self.stdModule.spans.current = self.spanOf(opIdx, file: spanFile, project: project)
 					self.lowerOp(hlOp, dstBlock: dstBlock)
 				end 'eachOp'
 
@@ -1370,7 +1410,12 @@ type MaxonToStdLowering
 				self.rangeSites.recordAt(srcBlockId, maxonOpPos: srcOpCount, stdOpPos: dstBlock.opRefs.count())
 
 				if terminatorNamesAnOp(srcTerminator) 'hasTerm'
-					let termOp = self.maxonOpAt(terminatorOpIndexOf(srcTerminator))
+					let termIdx = terminatorOpIndexOf(srcTerminator)
+					let termOp = self.maxonOpAt(termIdx)
+					// ⚠ **THE TERMINATOR IS OUTSIDE THE BODY LOOP, SO IT NEEDS ITS OWN CURSOR SET.** Without
+					// this every `ret` would inherit the last body op's line — and a block with no body ops
+					// would inherit some earlier block's.
+					self.stdModule.spans.current = self.spanOf(termIdx, file: spanFile, project: project)
 					self.lowerTerminator(termOp, dstBlock: dstBlock)
 				end 'hasTerm' else 'noTermOp'
 					// An op-less terminator (`dead` for an unreachable if/else continuation,
@@ -1380,6 +1425,10 @@ type MaxonToStdLowering
 					carryOplessTerminator(srcTerminator, srcBlockId: srcBlockId, dstBlock: dstBlock)
 				end 'noTermOp'
 			end 'eachBlock'
+
+			// The cursor belongs to THIS function's walk. `installParametricWitnessChecks` and
+			// `installWitnessSlotAdapters` append below, and neither is any statement's code.
+			self.stdModule.spans.current = NoSpanId
 		end 'eachFunc'
 
 		// AFTER the walk, never inside it: both of these read a body the walk had to finish first — the

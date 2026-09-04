@@ -69,6 +69,12 @@ let FmtUsageLine = "usage: maxon fmt [<file|directory>]   (formats in place; no 
 // an inline literal.
 let MonitorCommandName = "monitor"
 
+// ⭐ `debug` — READ THE `.mxdbg` SIDECAR BACK. Like `monitor`, its tail is not this driver's: its
+// subcommands are spelled `--dump-info` / `--symbolize`, which every other arm of the parser would read
+// as options this driver does not implement and abort the run over. So the parse stops at this word and
+// files the rest verbatim, exactly as it does for `monitor`.
+let DebugCommandName = "debug"
+
 module let WorkerPersistentFlag = "--worker-persistent"
 
 // Read by the parser and written by `specSelectionArgv`, both in this file, so neither leaves it.
@@ -199,6 +205,18 @@ let AsyncTraceFlag = "--async-trace"
 // change, no event site is branched over. Thousands of committed `.test` fragment goldens depend on it.
 // See `DebugStreamRuntime`'s header for the two-level gating rule this is the compile-time half of.
 let DebugStreamFlag = "--debugstream"
+
+// ⭐⭐ `--no-debug-info` — DON'T write the `<output>.mxdbg` sidecar. An OPT-OUT, because the default is
+// ON: a binary built without debug info is one nobody can debug after the fact, and a user who never
+// heard of the flag would have every one of them.
+//
+// ⚠ **THE SIDECAR IS METADATA AND THE EXECUTABLE IS BYTE-IDENTICAL EITHER WAY**, which is what makes an
+// on-by-default safe — the binary a user debugs is the binary they shipped. That property is gated where
+// it can be observed, in `tests/debug/byte-identical-debug-info.test.maxon`.
+//
+// ⚠ Only `build` acts on it. Every other command leaves the compiler's own default (off), so a spec-test
+// or a `maxon test` compile pays nothing for a sidecar nothing would read.
+module let NoDebugInfoFlag = "--no-debug-info"
 let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
 // `--metrics=<path>`, exported because the SCALE runner spawns one build per rung with it
@@ -253,6 +271,7 @@ function main() returns ExitCode
 		test gives runTest(args)
 		fmt gives runFmt(args)
 		monitor gives runMonitor(args)
+		debug gives runDebugCommand(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -443,7 +462,7 @@ end 'acquireBuildTreeLock'
 // forgets — the lock would then survive its holder and be broken 60 s later as abandoned, which is
 // correct behaviour covering for a bug.
 function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs) returns ExitCode
-	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -644,6 +663,12 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// costs microseconds; see `SpecVerdictSelfTest` for why a lane whose whole job is reporting
 	// "not run" needs a guard that the reporting cannot quietly become "passed".
 	requireSpecVerdictMapping()
+
+	// ⭐ **AND THAT THE `.mxdbg` CONTAINER STILL ROUND-TRIPS**, asked in the same slot and for the same
+	// reason: it is pure, it costs microseconds, and the format is a contract with ANOTHER driver — the
+	// bootstrap reads a sidecar this compiler writes. A layout that has drifted is not a failed read, it
+	// is a silent misread, so it is checked before any case that writes one runs.
+	requireMxdbgRoundTrip()
 
 	// The hand-built ladders' index against the ladders themselves, asked once and by the PARENT for
 	// `requireRunnerAvailable`'s reason. It rides the suite because the suite is the thing that already
@@ -1104,6 +1129,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		scaleTest gives 1
 		fmt gives 1
 		monitor gives 1
+		debug gives 1
 		unknown gives 1
 	end 'whichCommand'
 end 'refusedCommandLineExit'
@@ -1154,6 +1180,8 @@ function printUsage()
 	print("                                `build.maxon`, anything under a `.maxonignore`, and any\n")
 	print("                                subdirectory that is its own checkout. Takes no options.\n")
 	print("  monitor <exe> [args...]       Launch executable with shared-memory debug stream monitor\n")
+	print("  debug --dump-info <exe>       Print the `.mxdbg` debug-info sidecar beside a binary\n")
+	print("  debug --symbolize <exe> <off> Resolve `.text` code offsets to file:line:col\n")
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
@@ -1165,6 +1193,10 @@ function printUsage()
 	print("                                selected test and runs it under the vendored runtime. For test it\n")
 	print("                                builds the test binary for that target and then SPAWNS it, so a\n")
 	print("                                target this host cannot execute reports every test as not run.\n")
+	print("  --no-debug-info               (build) Do NOT write the <output>.mxdbg debug-info sidecar.\n")
+	print("                                It is written BY DEFAULT, and the executable is byte-identical\n")
+	print("                                either way — the sidecar never decides which instructions are\n")
+	print("                                emitted, so the binary you debug is the binary you shipped.\n")
 	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
 	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
 	print("                                the same numbers as a human-readable table.\n")
@@ -1255,6 +1287,9 @@ enum MaxonCommand
 	// events it writes into it. The one command whose TAIL belongs to a child process rather than to this
 	// driver; see the `monitorTail` arm in `parse`.
 	monitor
+	// `maxon debug --dump-info <exe>` / `--symbolize <exe> <offset...>` — the read-only faces of the
+	// `.mxdbg` sidecar. Tail-stopping like `monitor`; see `DebugCommandName`.
+	debug
 	unknown
 end 'MaxonCommand'
 
@@ -1285,6 +1320,9 @@ module type MaxonArgs
 	export var asyncTrace as bool
 	// Whether this build emits the DebugStream producer (`--debugstream`). See `DebugStreamFlag`.
 	export var debugStream as bool
+	// Whether this build writes the `<output>.mxdbg` sidecar. TRUE unless `--no-debug-info` was typed —
+	// see that flag for why the default is on. Read only by `build`.
+	export var debugInfo as bool
 	// `--emit-ir-runtime=<name>,<name>` (build only): the compiler-EMITTED functions the IR sidecar
 	// must ALSO render. EMPTY is the ordinary build and is the literal count of names given, not a
 	// sentinel. It IMPLIES `--emit-ir` (see `parse`), because a list of functions to print is a
@@ -1406,7 +1444,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -1469,6 +1507,14 @@ module type MaxonArgs
 				break
 			end 'monitorCmd'
 
+			// `debug` stops the parse for the same reason `monitor` does — its own subcommand words are
+			// `-`-leading, and every one of them would otherwise abort the run as an unknown option.
+			if arg == DebugCommandName and parsed.command == MaxonCommand.unknown 'debugCmd'
+				parsed.command = MaxonCommand.debug
+				parsed.paths = monitorTail(args, from: i + 1)
+				break
+			end 'debugCmd'
+
 			// The command as it stood BEFORE this argument, so the arms below can stay a plain chain and
 			// the first-word rule be applied once, after them. See `laterCommandWordIsAPath`.
 			//
@@ -1506,7 +1552,9 @@ module type MaxonArgs
 				parsed.asyncTrace = true
 			end 'asyncTraceFlag' else if arg == DebugStreamFlag 'debugStreamFlag'
 				parsed.debugStream = true
-			end 'debugStreamFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
+			end 'debugStreamFlag' else if arg == NoDebugInfoFlag 'noDebugInfoFlag'
+				parsed.debugInfo = false
+			end 'noDebugInfoFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
 				// ⚠ It cannot be swallowed by the arm above even though it shares its prefix: that one
 				// tests `==`, and this one is the only arm that tests this prefix.
 				// ⚠ **THE CHECK IS ON THE PARSED NAMES, NOT ON THE RAW VALUE, and that is the whole

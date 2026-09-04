@@ -2010,7 +2010,7 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), stdlibDirOverride: staged.stdlibDir) otherwise (e) 'compileFailed'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: staged.stdlibDir) otherwise (e) 'compileFailed'
 		reportCompileError(e)
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: endDiagnosticCapture()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
 	end 'compileFailed'
@@ -4937,11 +4937,14 @@ end 'referenceFragmentPath'
 // written (`stageSourceFiles`) and `Compiler.discardPreviousOutput` clears the output ahead of every
 // compile, so a leftover can never join a later build.
 //
-// ⚠ There are no sidecars to remove any more. The IR comes back as a VALUE and the CPU total with it
-// (see `CompiledTest`), so this run writes no `<name>.ir` and no `<name>.metrics` at all.
+// ⚠ The IR comes back as a VALUE and the CPU total with it (see `CompiledTest`), so this run writes no
+// `<name>.ir` and no `<name>.metrics`. A `<!-- DebugInfo -->` case DOES write a `<name>.exe.mxdbg`, and it
+// goes here with the executable it describes: the pair is written together and must not outlive it
+// separately, or the next run's `--dump-info` on a stale path would answer from a build that is gone.
 function cleanup(staged StagedTest, exePath FilePath)
 	for path in staged.writtenFiles 'eachSource'
 		try File.delete(path) otherwise ignore
 	end 'eachSource'
+	discardDebugInfoSidecar(exePath)
 	try File.delete(exePath) otherwise ignore
 end 'cleanup'

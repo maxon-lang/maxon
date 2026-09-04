@@ -213,6 +213,18 @@ let ArgsMarker = "<!-- Args:"
 // stay independent and none can swallow another.
 let AsyncTraceMarker = "<!-- AsyncTrace"
 
+// ⭐ **`<!-- DebugInfo -->` — COMPILE THIS CASE THE WAY `maxon build` DOES.** The suite compiles every
+// other case with debug info OFF, which is right: 7000+ compiles must not pay for a sidecar nothing
+// reads, and the reference draws the same line. But then the path a user gets BY DEFAULT would have no
+// spec coverage on any target at all, so a case marks itself and that one compile takes it.
+//
+// ⚠ Valueless, so it must NOT go through `markerValue` — see `AsyncTraceMarker`, whose note carries why
+// an empty answer being indistinguishable from a missing one is how a marker goes silently unread.
+//
+// It is not a superstring or substring of any other marker ("<!-- DebugInfo" first differs from every one
+// of them at the character after "<!-- "), so the marker checks stay independent.
+let DebugInfoMarker = "<!-- DebugInfo"
+
 // ⭐⭐ **WHICH FAMILY OF THE DEBUG STREAM A CAPTURE CASE ASSERTS.** Both families ride the SAME shared-memory
 // ring, are built the same way (`--debugstream`) and are read by the same consumer (`maxon monitor`), and
 // they differ in exactly four derived things: the marker that requests one, the fence that holds the
@@ -297,8 +309,8 @@ end 'traceMarkerOf'
 // today — v1's hard-coded list still excludes them, the bootstrap still runs them.
 //
 // It is not a superstring or substring of any other marker ("<!-- network:" first differs from
-// "<!-- test:", "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace"
-// and "<!-- LogTrace"
+// "<!-- test:", "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace",
+// "<!-- LogTrace" and "<!-- DebugInfo"
 // at the character after "<!-- "), so the marker checks stay independent and none can swallow another.
 export let NetworkMarker = "<!-- network:"
 
@@ -324,9 +336,9 @@ export let NetworkLiveValue = "live"
 // the silently-declined claim `AsyncTraceMarker` records having shipped.
 //
 // It is not a superstring or substring of any other marker ("<!-- procs:" first differs from "<!-- test:",
-// "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace", "<!-- LogTrace"
-// and "<!-- network:" at the character after "<!-- "), so the marker checks stay independent and none can
-// swallow another.
+// "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace", "<!-- LogTrace",
+// "<!-- DebugInfo" and "<!-- network:" at the character after "<!-- "), so the marker checks stay
+// independent and none can swallow another.
 let ProcsMarker = "<!-- procs:"
 
 // ⭐⭐ **WHETHER THIS CASE'S PROGRAM IS GIVEN A STDIN THAT BLOCKS — `<!-- stdin: hold -->` and
@@ -361,8 +373,8 @@ let ProcsMarker = "<!-- procs:"
 //
 // It is not a superstring or substring of any other marker ("<!-- stdin:" first differs from
 // "<!-- test:", "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace",
-// "<!-- MmTrace", "<!-- LogTrace", "<!-- network:" and "<!-- procs:" at the character after "<!-- "),
-// so the marker checks stay independent and none can swallow another.
+// "<!-- MmTrace", "<!-- LogTrace", "<!-- DebugInfo", "<!-- network:" and "<!-- procs:" at the character
+// after "<!-- "), so the marker checks stay independent and none can swallow another.
 let StdinMarker = "<!-- stdin:"
 
 // The two values `StdinMarker` recognizes, for `NetworkLiveValue`'s reason.
@@ -896,6 +908,16 @@ export type SpecTest
 	// one fact in two places.
 	export let asyncTrace as bool
 
+	// Whether this case is compiled the way `maxon build` is — with the `<output>.mxdbg` sidecar written
+	// (an `<!-- DebugInfo -->` marker). It sits beside `asyncTrace` for that field's stated reason and it
+	// is the same kind of fact: it changes how the program is BUILT, not what the run must produce.
+	//
+	// ⚠ **AND WHAT IT PINS IS THAT THE CASE STILL COMPILES AND STILL ANSWERS THE SAME.** The sidecar leaves
+	// the executable byte-identical, so a marked case's exit code and output are exactly what they were —
+	// which is what makes the case a gate on the span channel staying in step, through the tripwires that
+	// refuse a desync, rather than on the sidecar's contents.
+	export let debugInfo as bool
+
 	// Whether this case asserts a DEBUG-STREAM trace, which family, and what it expects (see
 	// `SpecTraceCapture`). It sits beside `asyncTrace` for that field's stated reason and it is the same
 	// kind of fact: it changes how the program is BUILT (`--debugstream`) and how its output is COMPARED
@@ -926,9 +948,9 @@ export type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, stdin SpecStdin) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, stdin SpecStdin) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1293,6 +1315,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var runtimeNames = RuntimeFunctionNameArray.create()
 	var programArgs = ProgramArgArray.create()
 	var asyncTrace = false
+	var debugInfo = false
 	// Starts `off`; the MARKER raises it to `unpinned` and the BLOCK to `pinned`. A case carrying both
 	// ends `pinned` whichever order they appear in, because the block never lowers the mode.
 	var traceCapture = SpecTraceCapture.off
@@ -1322,7 +1345,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			break
 		end 'sectionEnd'
 		// Computed ONCE and asked of every family below — see `markerOpeningsIn` for why that matters here
-		// in particular: this loop runs over every line of every case and asks eight questions of each.
+		// in particular: this loop runs over every line of every case and asks nine questions of each.
 		let openings = markerOpeningsIn(line)
 
 		if openingsCarry(openings, marker: TestMarker) or openingsCarry(openings, marker: DisabledTestMarker) 'nextMarker'
@@ -1357,6 +1380,14 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'asyncTraceMarker'
+
+		// The other valueless flag marker, consumed identically — including on a DISABLED case, so shelving
+		// a debug-info case does not leave its marker to fall through as unread prose.
+		if openingsCarry(openings, marker: DebugInfoMarker) 'debugInfoMarker'
+			debugInfo = true
+			i = i + 1
+			continue
+		end 'debugInfoMarker'
 
 		// The other two valueless flag markers, consumed identically — including on a DISABLED case, so
 		// shelving a capture case does not leave its marker to fall through as unread prose. Each only RAISES
@@ -1575,7 +1606,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			unpinned to pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
 		end 'traceCaptureOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
 		return i
 	end 'rejected'
 
@@ -1589,7 +1620,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
 
 	return i
 end 'scanTestFromMarker'

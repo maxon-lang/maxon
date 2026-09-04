@@ -7492,6 +7492,15 @@ export type Project
 	// is where every later part — the `.data` slots, the producer install, the module flag the runtime
 	// builders read, and through it the entry stub's `__ds_init`/`__ds_shutdown` — takes its one answer from.
 	export var debugStream as bool
+	// ⭐ Whether this build writes the `<output>.mxdbg` debug-info sidecar. Set by the driver right after
+	// the project is loaded, exactly as `asyncTrace` and `debugStream` are, and a per-BUILD switch for the
+	// same reason. It ARMS the span columns and nothing else: no pass reads a span and nothing branches on
+	// one, so the executable is byte-identical whichever way this is set — which is the whole reason the
+	// sidecar may exist at all.
+	export var debugInfo as bool
+	// The interned `(file, line, column)` pool every span column below the Maxon tier indexes into. It is
+	// FILLED at the lowering and READ by the sidecar builder; a build with `debugInfo` off never interns.
+	export var debugSpanTable as DebugSpanTable
 	// ⭐⭐ **THE FUNCTION THIS BUILD ENTERS AT — `main` for every ordinary build, and the ONE place that
 	// name is now written down for a compile to read.** Before this field the answer was spelled three
 	// times in three tiers — `BackendDispatch.UserEntryName`, `SemanticCheck.MainFunctionName` and
@@ -7719,6 +7728,8 @@ export type Project
 			opRanges: SourceRangeTable.create(),
 			asyncTrace: false,
 			debugStream: false,
+			debugInfo: false,
+			debugSpanTable: DebugSpanTable.create(),
 			// The DEFAULT entry, read off the one constant that also states which name stays unqualified —
 			// so `checkMainFunction`, the entry stub and the parser's exclusion cannot come to name three
 			// different functions. A caller that enters somewhere else overwrites it after the load.

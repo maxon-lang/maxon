@@ -14,6 +14,8 @@ This document covers the Maxon command-line interface and project system.
 | `maxon test [directory]` | Run a project's `*.test.maxon` unit tests |
 | `maxon spec-test [options]` | Run the COMPILER's own spec suite (not a project's tests) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
+| `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary |
+| `maxon debug --symbolize <exe> <off...>` | Resolve `.text` code offsets to `file:line:col` |
 | `maxon lsp-server` | Start the language server (LSP) |
 
 ---
@@ -45,6 +47,7 @@ maxon build [file|directory] [options]
 | `--leak-check` | Wire the process-exit leak gate (`mrt_leak_check`) into the binary so it exits `101` if any allocation is still live at exit. Unlike `--mm-trace`, does NOT bypass the stdlib cache, so it reproduces the cached-build path |
 | `--async-trace` | Enable async/await runtime trace output (stderr) |
 | `--debugstream` | Enable the shared-memory debug stream (use with `maxon monitor`). Also enables the `__DebugStream` builtin: without it, every `__DebugStream` call emits zero instructions |
+| `--no-debug-info` | Do NOT write the `<output>.mxdbg` debug-info sidecar. It is written by DEFAULT, and the executable is byte-identical either way — the sidecar is metadata and never decides which instructions are emitted, so the binary you debug is the binary you shipped |
 | `--timing` | Print per-stage compile timings to stderr |
 | `--timing-functions=N` | Print top-N hottest functions per heavy pass (implies `--timing`) |
 

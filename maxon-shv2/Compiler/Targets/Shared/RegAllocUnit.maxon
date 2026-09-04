@@ -112,6 +112,17 @@ module type RegAllocUnit
 	// The blocks in `func.blockRefs` order. The allocator re-orders them (RPO) and the result carries
 	// the order it chose.
 	export var blocks as RegAllocUnitBlockArray
+	// ⭐⭐ **THE DEBUG-SPAN COLUMN, FLAT AND IN `liveOpIndices` ORDER — WHICH IS THE ONLY THING THAT CAN
+	// CROSS.** Ops go over BY VALUE and come home at recycled, arbitrary indices, so no op-index-keyed
+	// table survives the round trip. What does survive is ORDER: `liveOpIndices` is "each block's
+	// `opRefs`, then its terminator, in `blockRefs` order", which is exactly the order `fillRebuiltBlock`
+	// pushes and exactly the order `spliceRegAllocResult` places. One array per UNIT rather than per
+	// block, because the deep-move walk visits every record and a per-block array multiplies them.
+	export var spanIds as SpanIdArray
+	// Whether the compile is capturing spans at all. Carried rather than derived from `spanIds.count()`:
+	// an empty column and a function with no live ops are different facts, and the private module has to
+	// know which it is before it appends anything.
+	export var spansArmed as bool
 
 	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
 	// argument of a send: `returnsFreshValue` admits exactly that shape, and E3138 refuses everything it
@@ -120,12 +131,16 @@ module type RegAllocUnit
 	export static function extract(module TargetModule, func IrFunction, valueClass ValueClassColumn) returns RegAllocUnit
 		var blocks = RegAllocUnitBlockArray.create()
 		blocks.reserve(func.blockRefs.count())
+		// ⚠ **BUILT FRESH, NEVER ALIASED.** A unit is MOVED to a worker, so every record reachable from
+		// it must be sole or the transfer walk aborts the process (`RuntimeAbort.transferredRecordNotSole`).
+		var spanIds = SpanIdArray.create()
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("RegAllocUnit.extract: blockRef {blockRef} from '{String.from(func.name)}' is not in module.blocks")
+			collectBlockSpanIds(module, block: block, into: spanIds)
 			blocks.push(extractUnitBlock(module, block: block))
 		end 'eachBlock'
 
-		return Self{name: func.name.clone(), hasAuthor: not func.sourceFilePath.isEmpty(), paramCount: func.paramCount, stackSize: func.stackSize, valueClass: valueClass.clone(), blocks: blocks}
+		return Self{name: func.name.clone(), hasAuthor: not func.sourceFilePath.isEmpty(), paramCount: func.paramCount, stackSize: func.stackSize, valueClass: valueClass.clone(), blocks: blocks, spanIds: spanIds, spansArmed: module.spans.armed}
 	end 'extract'
 end 'RegAllocUnit'
 
@@ -207,6 +222,23 @@ function extractUnitBlock(module TargetModule, block IrBlock) returns RegAllocUn
 
 	return RegAllocUnitBlock.create(block.id, label: block.label.clone(), body: body.ops, terminator: unitTerminatorOf(module, block: block, moduleKeepsOps: true), condBranch: body.condBranch(), blockArgIds: blockArgIds, edges: edges)
 end 'extractUnitBlock'
+
+// One block's spans, in the order `liveOpIndices` reports them — the body, then the terminator when the
+// block has one. Nothing is collected when the compile is not capturing, so an ordinary build carries an
+// empty array across the wire.
+function collectBlockSpanIds(module TargetModule, block IrBlock, into SpanIdArray)
+	if not module.spans.armed 'notCapturing'
+		return
+	end 'notCapturing'
+
+	for opIdx in block.opRefs 'eachOp'
+		into.push(module.spans.at(opIdx))
+	end 'eachOp'
+
+	if block.hasTerminatorOp() 'hasTerm'
+		into.push(module.spans.at(block.terminatorIndex()))
+	end 'hasTerm'
+end 'collectBlockSpanIds'
 
 function unitTerminatorOf(module TargetModule, block IrBlock, moduleKeepsOps bool) returns UnitTerminator
 	return match block.terminator 'term'
@@ -412,13 +444,25 @@ function rebuildUnitModule(unit RegAllocUnit) returns TargetModule
 	func.blockRefs.reserve(unit.blocks.count())
 	module.ops.reserve(unitBodyTally(unit) + unit.blocks.count())
 
+	// ⚠ **ARMED BEFORE THE FILL, so every op that enters the private module is placed against the very
+	// span the caller collected for it.** The ops the splitter and SSA destruction mint below belong to no
+	// statement and push `NoSpanId` at their own sites.
+	module.spans.armed = unit.spansArmed
+
+	var spanAt = 0 as SpanCursor
 	for unitBlock in unit.blocks 'eachBlock'
 		let blockRef = module.blocks.count()
 		var block = IrBlock.create(unitBlock.id, label: unitBlock.label)
 		module.pushBlock(block)
 		func.blockRefs.push(blockRef)
-		fillRebuiltBlock(module, block: block, unitBlock: unitBlock)
+		spanAt = fillRebuiltBlock(module, block: block, unitBlock: unitBlock, spanIds: unit.spanIds, spanAt: spanAt)
 	end 'eachBlock'
+
+	// The unit's column and the rebuilt module's ops must have come out even; anything else means the two
+	// orders — `liveOpIndices` at the extract, and this fill — have drifted apart.
+	if unit.spansArmed and (spanAt as OpCount) != module.ops.count() 'spansOutOfStep'
+		panic("rebuildUnitModule: the unit carried {unit.spanIds.count()} spans against {module.ops.count()} rebuilt ops — the extract's `liveOpIndices` order and this fill's order have drifted")
+	end 'spansOutOfStep'
 
 	module.functions.push(func)
 	return module
@@ -440,11 +484,14 @@ end 'unitBodyTally'
 // and the wrong one for a rebuild: this block's op order is already whatever the tiers before the
 // allocator settled on, and re-deriving a verdict about it here would be a second opinion about a
 // question that was answered upstream.
-function fillRebuiltBlock(module TargetModule, block IrBlock, unitBlock RegAllocUnitBlock)
+function fillRebuiltBlock(module TargetModule, block IrBlock, unitBlock RegAllocUnitBlock, spanIds SpanIdArray, spanAt SpanCursor) returns SpanCursor
+	var cursor = spanAt
 	block.opRefs.reserve(unitBlock.body.count())
 	for op in unitBlock.body 'eachOp'
 		let opIdx = module.ops.count()
 		module.ops.push(op)
+		module.spans.pushId(opIdx, spanId: spanIdAt(spanIds, at: cursor, armed: module.spans.armed))
+		cursor = cursor + 1
 		block.opRefs.push(opIdx)
 	end 'eachOp'
 
@@ -457,7 +504,7 @@ function fillRebuiltBlock(module TargetModule, block IrBlock, unitBlock RegAlloc
 		unset then block.terminator = Terminator.unset
 		dead then block.terminator = Terminator.dead
 		fallthrough then block.terminator = Terminator.fallthrough
-		op(instruction) then module.setTerminator(block, op: instruction)
+		op(instruction) then cursor = fillRebuiltTerminator(module, block: block, op: instruction, spanIds: spanIds, spanAt: cursor)
 	end 'term'
 
 	var blockArgs = IrBlockArgArray.create()
@@ -475,7 +522,33 @@ function fillRebuiltBlock(module TargetModule, block IrBlock, unitBlock RegAlloc
 		branchEdges.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds))
 	end 'eachEdge'
 	block.branchEdges = branchEdges
+
+	return cursor
 end 'fillRebuiltBlock'
+
+// The terminator goes in through `setTerminator`, which pushes the CURSOR — so the cursor is pointed at
+// this op's own span first. Split out because a `match` arm is one expression.
+function fillRebuiltTerminator(module TargetModule, block IrBlock, op TargetOp, spanIds SpanIdArray, spanAt SpanCursor) returns SpanCursor
+	module.spans.current = spanIdAt(spanIds, at: spanAt, armed: module.spans.armed)
+	module.setTerminator(block, op: op)
+	module.spans.current = NoSpanId
+
+	return spanAt + 1
+end 'fillRebuiltTerminator'
+
+// Position in a unit's or a result's flat span column.
+typealias SpanCursor = int(0 to u64.max)
+
+// The span at `at`, or `NoSpanId` when nothing is being captured. An in-range read on a capturing build
+// cannot fail — the column was collected from the very walk being replayed — so a miss is a drift
+// between the two orders and says so.
+function spanIdAt(spanIds SpanIdArray, at SpanCursor, armed bool) returns SpanId
+	if not armed 'notCapturing'
+		return NoSpanId
+	end 'notCapturing'
+
+	return try spanIds.get(at) otherwise panic("regalloc span column: position {at} is past the {spanIds.count()} spans that crossed — the order the column was collected in and the order being replayed have drifted")
+end 'spanIdAt'
 
 // ==========================================================================
 // The result, and splicing it back into the real module
@@ -509,6 +582,11 @@ module type RegAllocResult
 	export var counters as RegAllocCounters
 	export var facts as RegAllocFacts
 	export var costs as RegAllocCosts
+	// The spans of the ops in `blocks`, flat and in the order those blocks list them — the same
+	// `liveOpIndices` order the unit's column arrived in, re-derived on THIS side because the allocator
+	// reordered the blocks and minted ops of its own. `spliceRegAllocResult` consumes it in lockstep with
+	// the ops and refuses if the two do not come out even.
+	export var spanIds as SpanIdArray
 
 	// ALLOCATE ONE UNIT - the whole of what a pool worker does, and the whole of what the serial path
 	// does. It takes the four per-ISA facts rather than deriving them, because both callers already hold
@@ -541,7 +619,14 @@ module type RegAllocResult
 
 		try allocateFunctionCore(module, func: func, hasAuthor: unit.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: unit.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal)
 
+		// Asked HERE because this is where the private module stops being appended to: the splitter and SSA
+		// destruction have both run, and both mint ops by pushing onto `ops` directly.
+		module.spans.requireParallelTo(module.ops.count(), what: "after allocation")
+
 		let blocks = harvestAllocatedBlocks(module, func: func)
+		// ⚠ **BEFORE `module.ops.clear()`, and built FRESH** — the column is read through the block walk,
+		// which needs the ops still in place, and the array crosses a reply so it must be sole.
+		let spanIds = harvestResultSpanIds(module, func: func)
 		let stackSize = func.stackSize
 		// ⭐⭐ **THE REPLY MOVES THE OPS HOME, AND THIS IS THE HALF THAT MAKES THEM SOLE.** Every op box the
 		// allocator settled on is in exactly two places by now — this module's flat `ops` and the blocks
@@ -549,7 +634,7 @@ module type RegAllocResult
 		// rather than a third copy of every one. Nothing reads `module` past here.
 		module.ops.clear()
 
-		return Self{stackSize: stackSize, blocks: blocks, counters: counters, facts: facts, costs: costs}
+		return Self{stackSize: stackSize, blocks: blocks, counters: counters, facts: facts, costs: costs, spanIds: spanIds}
 	end 'byAllocating'
 end 'RegAllocResult'
 
@@ -570,6 +655,22 @@ function harvestAllocatedBlocks(module TargetModule, func IrFunction) returns Re
 	return blocks
 end 'harvestAllocatedBlocks'
 
+// The spans of every op the allocator settled on, in the order `harvestAllocatedBlocks` lists them.
+// Empty when the compile is not capturing, which is what `spliceRegAllocResult` reads as "nothing to
+// place" rather than as a desync.
+function harvestResultSpanIds(module TargetModule, func IrFunction) returns SpanIdArray
+	var ids = SpanIdArray.create()
+	if not module.spans.armed 'notCapturing'
+		return ids
+	end 'notCapturing'
+
+	for opIdx in module.liveOpIndices(func) 'eachLiveOp'
+		ids.push(module.spans.at(opIdx))
+	end 'eachLiveOp'
+
+	return ids
+end 'harvestResultSpanIds'
+
 function harvestResultBlock(module TargetModule, block IrBlock) returns RegAllocResultBlock
 	let body = SoleBody.of(module, block: block, moduleKeepsOps: false)
 	return RegAllocResultBlock.create(block.id, ops: body.ops, terminator: unitTerminatorOf(module, block: block, moduleKeepsOps: false), condBranch: body.condBranch())
@@ -589,7 +690,7 @@ end 'harvestResultBlock'
 module function spliceRegAllocResult(module TargetModule, func IrFunction, result RegAllocResult)
 	let blockRefById = blockRefsByIdOf(module, func: func)
 	let noSuchBlock = module.blocks.count()
-	var slots = OpSlotSupply.create(module.liveOpIndices(func))
+	var slots = OpSlotSupply.create(module.liveOpIndices(func), spanIds: result.spanIds)
 
 	var newRefs = BlockRefArray.create()
 	newRefs.reserve(result.blocks.count())
@@ -626,6 +727,13 @@ module function spliceRegAllocResult(module TargetModule, func IrFunction, resul
 
 	func.blockRefs = newRefs
 	func.stackSize = result.stackSize
+
+	// ⭐ **THE COLUMN AND THE OPS CAME OUT EVEN.** The splice walks the result's blocks and the column was
+	// collected off those very blocks, so a leftover or a shortfall is the two orders having drifted —
+	// which would misattribute every line row from that point on, silently.
+	if module.spans.armed and slots.spansConsumed() != result.spanIds.count() 'spansOutOfStep'
+		panic("spliceRegAllocResult: '{String.from(func.name)}' placed {slots.spansConsumed()} spans against the {result.spanIds.count()} the allocator sent home — the harvest's op order and this splice's order have drifted")
+	end 'spansOutOfStep'
 end 'spliceRegAllocResult'
 
 // WHERE A SPLICED OP GOES: THIS FUNCTION'S OWN SLOTS FIRST, THEN THE TAIL OF `module.ops`.
@@ -638,26 +746,52 @@ end 'spliceRegAllocResult'
 //
 // The recycled list is `liveOpIndices`, not every index in the function's range: the array is
 // append-only and earlier passes leave orphans in it, and an orphan is not this splice's to reuse.
+// ⚠ **THE SPAN COLUMN RIDES HERE RATHER THAN AT THE CALL SITES**, because a slot is either RECYCLED (an
+// `ops.set`, which the column mirrors with a `set` of its own) or APPENDED (a push past the tail, which it
+// mirrors with a push) — and a caller that had to mirror that choice itself would be the one place the two
+// halves could disagree.
 type OpSlotSupply
 	var recycled as OpIndexArray
 	var taken as ElementIndex
+	var spanIds as SpanIdArray
+	var spanTaken as ElementIndex
 
-	export static function create(recycled OpIndexArray) returns OpSlotSupply
-		return Self{recycled: recycled, taken: 0}
+	export static function create(recycled OpIndexArray, spanIds SpanIdArray) returns OpSlotSupply
+		return Self{recycled: recycled, taken: 0, spanIds: spanIds, spanTaken: 0}
 	end 'create'
 
+	export function spansConsumed() returns ElementIndex
+		return self.spanTaken
+	end 'spansConsumed'
+
 	export function place(module TargetModule, op TargetOp) returns OpIndex
+		let spanId = self.nextSpan()
 		if self.taken < self.recycled.count() 'reuseThisFunctionsOwnSlot'
 			let recycledIdx = try self.recycled.get(self.taken) otherwise panic("OpSlotSupply.place: recycled.get OOB at {self.taken} below count {self.recycled.count()}")
 			self.taken = self.taken + 1
 			try module.ops.set(recycledIdx, value: op) otherwise panic("OpSlotSupply.place: ops.set OOB at {recycledIdx}")
+			module.spans.placeAt(recycledIdx, spanId: spanId)
 			return recycledIdx
 		end 'reuseThisFunctionsOwnSlot'
 
 		let freshIdx = module.ops.count()
 		module.ops.push(op)
+		module.spans.pushId(freshIdx, spanId: spanId)
 		return freshIdx
 	end 'place'
+
+	// The next span the result sent home. A build that is not capturing carries none and never advances,
+	// which is what makes the caller's even-count refusal a statement about capturing builds only.
+	function nextSpan() returns SpanId
+		if self.spanIds.count() == 0 'notCapturing'
+			return NoSpanId
+		end 'notCapturing'
+
+		let at = self.spanTaken
+		self.spanTaken = self.spanTaken + 1
+
+		return try self.spanIds.get(at) otherwise panic("OpSlotSupply.nextSpan: the result carried {self.spanIds.count()} spans and the splice asked for more — the allocator's op order and this splice's order have drifted")
+	end 'nextSpan'
 end 'OpSlotSupply'
 
 // This function's `BlockId -> BlockRef` map, as a dense column over the id space. One pass over the

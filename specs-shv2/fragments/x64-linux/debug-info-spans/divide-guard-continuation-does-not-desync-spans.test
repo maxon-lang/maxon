@@ -1,0 +1,65 @@
+// Test: divide-guard-continuation-does-not-desync-spans
+typealias Num = int(0 to 1000)
+
+function pick(x Num) returns Num
+	return x
+end 'pick'
+
+function main() returns ExitCode
+	print("before\n")
+	let n = pick(10)
+	let d = pick(0)
+	let q = try (n / d) otherwise 77
+	print("after\n")
+	return q as ExitCode
+end 'main'
+---
+ExitCode: 77
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "before\x0a"
+    x64.callDirect print
+    x64.movRegImm32 rax, 10
+  __il_cont#8:
+    x64.movRegImm32 rcx, 0
+  __il_cont#7:
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rsi
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 77
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, rax
+  trycont:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "after\x0a"
+    x64.callDirect print
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at divide-guard-continuation-does-not-desync-spans.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -26,7 +26,7 @@ SERVER its tests spawn.
 | `lsp/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the server, not the dir |
 | `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
 | `parallel-compile/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the compiler it spawns |
-| `debug/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` + `BootstrapMonitorStem` — the two monitors it spawns |
+| `debug/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` + `BootstrapMonitorStem` — the two monitors it spawns, and the first is also what the sidecar cases build with |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler, `maxon-sharp/` and
@@ -68,7 +68,10 @@ tests/
     fixtures/<program>/main.maxon.fixture   stored name only - see rule 1
   debug/
     monitor-agreement.test.maxon            the DebugStream consumers, compared to each other
+    byte-identical-debug-info.test.maxon    the sidecar is metadata: ONE source, two builds, one image
+    sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
     fixtures/trace/main.maxon.fixture       stored name only - see rule 1
+    fixtures/spans/main.maxon.fixture       stored name only - see rule 1
 ```
 
 ## The six rules, and the hazard each one answers
@@ -188,7 +191,39 @@ test` runs files concurrently, so every case stages into a directory named for I
 report prefix, byte identity, stderr equality between two runs), each guarded by a positive
 control so two runs that both failed to build cannot read as agreement.
 
-## `debug/` — the two DebugStream ring consumers, compared to each other
+## `debug/` — what a binary can be asked about after it is built
+
+Three cases over two subjects that share one shape: stage a fixture, build it with the compiler under
+test, and ask a second tool what the binary says about itself. The staging and spawning half is
+exported ONCE from `byte-identical-debug-info.test.maxon` and shared, because every free function in a
+directory shares one namespace whatever its visibility (E3006, measured here).
+
+### The `.mxdbg` sidecar — `byte-identical-debug-info` and `sidecar-dump`
+
+`maxon build` writes `<output>.mxdbg` beside the binary BY DEFAULT and `--no-debug-info` opts out. The
+whole design rests on the sidecar changing nothing about the emitted code, so the first case builds ONE
+staged source path twice, to two outputs, differing only by the flag, and compares the two images byte
+for byte — plus asserts the sidecar present on one side and ABSENT on the other, which is the half a
+byte comparison alone is blind to.
+
+A sidecar that is merely PRESENT proves nothing, so the second case reads it back: `debug --dump-info`
+must name this host's target, a build-id that is not all zeros, the fixture's own source file, and every
+function the fixture DECLARES — read out of the staged source, so a fixture that grows a function grows
+the roster — each with a non-empty code range. Then `--symbolize`, handed an offset the dump itself
+published inside one of those functions, must answer that file and a line inside that function's body.
+That last one is the JOIN: a function table and a line table can each be internally consistent and still
+disagree, and only asking one about the other can see it.
+
+⭐ **WHAT IS PINNED IS RELATIONSHIPS, NEVER NUMBERS.** Code offsets, the row count and the shape of a
+prologue all move with codegen, and a case that pinned them would go red for every unrelated change and
+teach its reader to re-bless it.
+
+⛔ **THE DUMP'S SHAPE IS THE REFERENCE DRIVER'S**, because one sidecar printed two ways by two drivers is
+the drift rule 6 exists to prevent. It is checkable by hand in the other direction too:
+`bin/maxon.exe debug --dump-info <an shv2-built exe>` prints the same rows shv2 does (the two
+drivers differ only in their line terminators).
+
+### `monitor-agreement` — the two DebugStream ring consumers, compared to each other
 
 `maxon monitor --filter=mm <exe>` creates the shared section a `--debugstream` binary writes its
 ring into, spawns the binary, decodes every `mm` event and exits with the CHILD's code. shv2's spec

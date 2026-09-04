@@ -1,0 +1,187 @@
+// Testing/MxdbgSelfTest.maxon — round-trip the `.mxdbg` container through its own writer and reader.
+//
+// ⭐ **THE FORMAT IS A SHARED CONTRACT AND THIS IS THE HALF THAT NEEDS NO COMPILED PROGRAM.** A sidecar
+// this compiler writes is read by the bootstrap's driver and vice versa, so the layout has to be right
+// before any question about a real build's contents is worth asking. `tests/debug/sidecar-dump.test.maxon`
+// asks the other half — whether a sidecar says something TRUE about the binary beside it — and it needs
+// three spawned processes to do it. This one is pure and costs microseconds.
+//
+// It is a port of `maxon-sharp/Debug/MxdbgSelfTest.cs`, scoped to the surface this compiler HAS: the
+// build-id, the file, function and line tables, the two lookups and their boundaries. The reference's
+// type, field, local and coverage assertions have no counterpart here because nothing writes those
+// sections — a test of a table this compiler cannot fill would pass by not selecting anything.
+//
+// ⚠ **THE ROWS GO IN ASCENDING**, where the reference deliberately adds them out of order to prove its
+// sort. This writer does not sort — it REFUSES an out-of-order row (`requireAscendingLineTable`), because
+// its caller walks chunks in `.text` order — so ascending is the contract being exercised, not a
+// convenience.
+
+let AccountFileName = "account.maxon"
+let IoFileName = "io.maxon"
+let WithdrawName = "withdraw"
+let ParseBatchName = "parseBatch"
+let SelfTestTriple = "x64-windows"
+
+// `withdraw` occupies [0, 100) and `parseBatch` [100, 200); 250 is the gap past both, which every lookup
+// must answer nothing for rather than naming the nearest function.
+let WithdrawStart = 0 as MxdbgCodeOffset
+let WithdrawEnd = 100 as MxdbgCodeOffset
+let ParseBatchStart = 100 as MxdbgCodeOffset
+let ParseBatchEnd = 200 as MxdbgCodeOffset
+let PastEverything = 250 as MxdbgCodeOffset
+
+let WithdrawFrame = 64 as MxdbgIndex
+let ParseBatchFrame = 32 as MxdbgIndex
+let WithdrawParams = 1 as MxdbgIndex
+let ParseBatchParams = 2 as MxdbgIndex
+
+let AccountFileId = 0 as MxdbgIndex
+let IoFileId = 1 as MxdbgIndex
+
+let BrokenRowIndent = "\n  "
+
+export function requireMxdbgRoundTrip()
+	var broken = StringArray.create()
+
+	checkBuildIdIsAFunctionOfTheBytes(broken)
+	checkTablesRoundTrip(broken)
+
+	if broken.isEmpty() 'everyRowHeld'
+		return
+	end 'everyRowHeld'
+
+	// ⚠ `panic` takes a STRING LITERAL, so the list is built as text and INTERPOLATED — the constraint
+	// `SpecVerdictSelfTest` and `HarnessSelfTest` both document.
+	let report = indentedList(broken, indent: BrokenRowIndent)
+	panic("MxdbgSelfTest: {broken.count()} row(s) of the .mxdbg round trip no longer hold. The bootstrap's driver reads this container and this compiler's reads the bootstrap's, so a layout that has drifted is a sidecar one of them silently misreads.{report}")
+end 'requireMxdbgRoundTrip'
+
+// The build-id is the plain FNV-1a fold of the code section and nothing else — deterministic over equal
+// bytes, and different over bytes that differ by one character.
+function checkBuildIdIsAFunctionOfTheBytes(broken StringArray)
+	let hello = Hasher.combined(Hasher.empty(), bytes: b"hello")
+	let again = Hasher.combined(Hasher.empty(), bytes: b"hello")
+	let hellp = Hasher.combined(Hasher.empty(), bytes: b"hellp")
+
+	if hello != again 'notDeterministic'
+		broken.push("the build-id of one byte sequence differs between two folds")
+	end 'notDeterministic'
+
+	if hello == hellp 'doesNotDistinguish'
+		broken.push("two different code sections fold to the same build-id, so a stale sidecar could never be refused")
+	end 'doesNotDistinguish'
+end 'checkBuildIdIsAFunctionOfTheBytes'
+
+function checkTablesRoundTrip(broken StringArray)
+	let buildId = Hasher.combined(Hasher.empty(), bytes: b"the text of a program")
+	let reader = try MxdbgReader.parse(selfTestImage(buildId)) otherwise (e) 'unreadable'
+		broken.push("the writer's own image does not parse: {e.displayReason()}")
+		return
+	end 'unreadable'
+
+	checkHeader(broken, reader: reader, buildId: buildId)
+	checkFunctionWindows(broken, reader: reader)
+	checkLineLookups(broken, reader: reader)
+end 'checkTablesRoundTrip'
+
+// The image the checks below read: two files, two functions with disjoint ranges, and five line rows in
+// code order — three inside the first function and two inside the second.
+function selfTestImage(buildId HashDigest) returns ByteArray
+	var writer = MxdbgWriter.create()
+	writer.addFile(AccountFileName)
+	writer.addFile(IoFileName)
+	writer.addFunction(WithdrawName, codeStart: WithdrawStart, codeEnd: WithdrawEnd, frameSize: WithdrawFrame, paramCount: WithdrawParams)
+	writer.addFunction(ParseBatchName, codeStart: ParseBatchStart, codeEnd: ParseBatchEnd, frameSize: ParseBatchFrame, paramCount: ParseBatchParams)
+	writer.addLine(0, fileId: AccountFileId, line: 10, column: 1, flags: MxdbgLineFlagStatement)
+	writer.addLine(16, fileId: AccountFileId, line: 11, column: 5, flags: MxdbgLineFlagStatement)
+	writer.addLine(40, fileId: AccountFileId, line: 12, column: 5, flags: MxdbgLineFlagStatement)
+	writer.addLine(100, fileId: IoFileId, line: 5, column: 1, flags: MxdbgLineFlagStatement)
+	writer.addLine(120, fileId: IoFileId, line: 6, column: 9, flags: MxdbgLineFlagStatement)
+
+	return writer.build(buildId, targetTriple: SelfTestTriple)
+end 'selfTestImage'
+
+function checkHeader(broken StringArray, reader MxdbgReader, buildId HashDigest)
+	if reader.buildId != buildId 'buildIdLost'
+		broken.push("the build-id does not survive the round trip")
+	end 'buildIdLost'
+
+	if reader.triple != SelfTestTriple 'tripleLost'
+		broken.push("the target triple reads back as '{reader.triple}' rather than '{SelfTestTriple}'")
+	end 'tripleLost'
+
+	if reader.fileCount() != 2 or reader.functionCount() != 2 or reader.lineCount() != 5 'countsLost'
+		broken.push("the table counts read back as {reader.fileCount()} files / {reader.functionCount()} functions / {reader.lineCount()} rows against 2 / 2 / 5")
+	end 'countsLost'
+
+	if reader.fileName(AccountFileId) != AccountFileName or reader.fileName(IoFileId) != IoFileName 'namesLost'
+		broken.push("the file table reads back as '{reader.fileName(AccountFileId)}' / '{reader.fileName(IoFileId)}'")
+	end 'namesLost'
+end 'checkHeader'
+
+// Each function's record, and the LINE WINDOW the writer computed for it — the one field nothing else
+// would notice being wrong, because the rows themselves would still all be present and in order.
+function checkFunctionWindows(broken StringArray, reader MxdbgReader)
+	let withdraw = reader.functionRecord(0)
+	if withdraw.name != WithdrawName or withdraw.codeStart != WithdrawStart or withdraw.codeEnd != WithdrawEnd or withdraw.frameSize != WithdrawFrame or withdraw.paramCount != WithdrawParams 'firstRecordLost'
+		broken.push("function 0 reads back as '{withdraw.name}' [0x{withdraw.codeStart:x}, 0x{withdraw.codeEnd:x}) frame=0x{withdraw.frameSize:x} params={withdraw.paramCount}")
+	end 'firstRecordLost'
+
+	if withdraw.lineFirst != 0 or withdraw.lineCount != 3 'firstWindowWrong'
+		broken.push("'{WithdrawName}' claims rows [{withdraw.lineFirst}, +{withdraw.lineCount}) against the 3 that lie inside its range")
+	end 'firstWindowWrong'
+
+	let parseBatch = reader.functionRecord(1)
+	if parseBatch.lineFirst != 3 or parseBatch.lineCount != 2 'secondWindowWrong'
+		broken.push("'{ParseBatchName}' claims rows [{parseBatch.lineFirst}, +{parseBatch.lineCount}) against the 2 that lie inside its range")
+	end 'secondWindowWrong'
+
+	if not functionAtIs(reader, offset: 150, name: ParseBatchName) 'containmentWrong'
+		broken.push("offset 150 does not resolve to '{ParseBatchName}', whose range holds it")
+	end 'containmentWrong'
+
+	match reader.functionContaining(PastEverything) 'inTheGap'
+		none then break 'inTheGap'
+		found(fn) then broken.push("offset {PastEverything} is past every function and resolved to '{fn.name}'")
+	end 'inTheGap'
+end 'checkFunctionWindows'
+
+// ⭐ **THE PC→LINE ANSWERS, INCLUDING THE THREE THAT ARE ONLY RIGHT BY THE `greatest row at or before`
+// RULE**: between two rows, on a function's LAST byte, and on the first byte of the NEXT function — where
+// a naive search lands on the previous function's last row and reports another file entirely.
+function checkLineLookups(broken StringArray, reader MxdbgReader)
+	requireLineAt(broken, reader: reader, offset: 0, file: AccountFileName, line: 10)
+	requireLineAt(broken, reader: reader, offset: 8, file: AccountFileName, line: 10)
+	requireLineAt(broken, reader: reader, offset: 16, file: AccountFileName, line: 11)
+	requireLineAt(broken, reader: reader, offset: 50, file: AccountFileName, line: 12)
+	requireLineAt(broken, reader: reader, offset: 99, file: AccountFileName, line: 12)
+	requireLineAt(broken, reader: reader, offset: 100, file: IoFileName, line: 5)
+	requireLineAt(broken, reader: reader, offset: 130, file: IoFileName, line: 6)
+
+	match reader.pcToLine(PastEverything) 'inTheGap'
+		none then break 'inTheGap'
+		found(row) then broken.push("offset {PastEverything} is in no function and resolved to {row.file}:{row.line}")
+	end 'inTheGap'
+end 'checkLineLookups'
+
+function requireLineAt(broken StringArray, reader MxdbgReader, offset MxdbgCodeOffset, file String, line MxdbgIndex)
+	match reader.pcToLine(offset) 'row'
+		none then broken.push("offset {offset} resolves to no line, against {file}:{line}")
+		found(got) then noteLineMismatch(broken, offset: offset, got: got, file: file, line: line)
+	end 'row'
+end 'requireLineAt'
+
+function noteLineMismatch(broken StringArray, offset MxdbgCodeOffset, got MxdbgLineInfo, file String, line MxdbgIndex)
+	if got.file == file and got.line == line 'asExpected'
+		return
+	end 'asExpected'
+
+	broken.push("offset {offset} resolves to {got.file}:{got.line}, against {file}:{line}")
+end 'noteLineMismatch'
+
+function functionAtIs(reader MxdbgReader, offset MxdbgCodeOffset, name String) returns bool
+	return match reader.functionContaining(offset) 'fn'
+		none gives false
+		found(info) gives info.name == name
+	end 'fn'
+end 'functionAtIs'

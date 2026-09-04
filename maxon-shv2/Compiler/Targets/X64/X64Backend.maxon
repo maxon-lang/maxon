@@ -2300,6 +2300,11 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	let emitGuard = mightGuard and guardFrameBytes > 0
 	var isFirstBlock = true
 
+	// ⭐ **THE DEBUG-INFO PATH IS ONE BOOL TEST PER OP AND NOTHING ELSE WHEN IT IS OFF.** Hoisted out of
+	// the loop so an ordinary build never reads the span column at all.
+	let captureSpans = module.spans.armed
+	var lineRows = DebugLineRowBuilder.create(captureSpans)
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
@@ -2313,11 +2318,17 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 		isFirstBlock = false
 
 		for opIdx in block.opRefs 'eachOp'
+			if captureSpans 'aRowMayOpenHere'
+				lineRows.note(module.spans.at(opIdx), codeOffset: code.count())
+			end 'aRowMayOpenHere'
 			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
 			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
+			if captureSpans 'aRowMayOpenAtTheTerminator'
+				lineRows.note(module.spans.at(block.terminatorIndex()), codeOffset: code.count())
+			end 'aRowMayOpenAtTheTerminator'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
 			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
 		end 'hasTerm'
@@ -2329,8 +2340,46 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// M3 (floats) / M10 (strings).
 	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
+	if captureSpans 'debugInfo'
+		chunk.lineRows = lineRows.rows
+		chunk.frameSize = x64PrologueFrameBytes(module, func: func)
+		chunk.paramCount = func.paramCount
+	end 'debugInfo'
 	return chunk
 end 'emitFunctionChunk'
+
+// ⭐ **THE FRAME THIS FUNCTION RESERVES, READ OFF THE PROLOGUE OP RATHER THAN DERIVED A SECOND TIME.**
+// `computeGuardFrameBytes` arrives at the same number by recomputing it; two derivations of one fact can
+// come to disagree, and this one is only ever reported, never acted on.
+//
+// ⚠ **IT SCANS THE ENTRY BLOCK RATHER THAN READING INDEX 0** — x64's prologue is PREPENDED in reverse,
+// so the `sub rsp` sits after the frame-pointer setup and the callee-saved pushes. And ABSENT means 0,
+// which is correct rather than a fallback: `insertPrologueAtEntry` emits no `prologue` op at all for a
+// function that reserves nothing.
+function x64PrologueFrameBytes(module TargetModule, func IrFunction) returns StackSize
+	let entryRef = try func.blockRefs.get(0) otherwise return 0
+	let entry = try module.blocks.get(entryRef) otherwise return 0
+	for opIdx in entry.opRefs 'eachOp'
+		let reserved = x64OpFrameBytes(try module.ops.get(opIdx) otherwise return 0)
+		if reserved > 0 'thePrologue'
+			return reserved
+		end 'thePrologue'
+	end 'eachOp'
+
+	return 0
+end 'x64PrologueFrameBytes'
+
+// The bytes one op reserves: the `prologue`'s operand, and 0 for everything else. Split out because the
+// scan above needs an answer for every op and `prologue(0)` is never emitted, so 0 says "not it".
+//
+// EXHAUSTIVE by range rather than by `default`, so a variant appended past `arm64Smulh` fails to compile
+// here until it is consciously placed.
+function x64OpFrameBytes(op TargetOp) returns StackSize
+	return match op 'frame'
+		prologue(stackSize) gives stackSize
+		epilogue to arm64Smulh gives 0
+	end 'frame'
+end 'x64OpFrameBytes'
 
 // ==========================================================================
 // Concatenation: lay out .text, rebase fixups, resolve intra-module calls
@@ -2358,6 +2407,9 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	var debugSymbols = DebugSymbolArray.create()
 	var rdataRelocations = RdataRelocationArray.create()
 	var jumpTableRelocs = JumpTableRelocArray.create()
+	let captureSpans = targetModule.spans.armed
+	var debugFunctions = DebugFunctionRangeArray.create()
+	var debugLineRows = DebugLineRowArray.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends.
@@ -2367,6 +2419,9 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
 		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
+		if captureSpans 'debugInfo'
+			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows)
+		end 'debugInfo'
 		code.append(chunk.code)
 
 		// Rebase chunk-local fixup offsets to absolute `.text` offsets.
@@ -2436,6 +2491,8 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	// golden over a hand-assembled chunk (`mrt_panic`, `__gt_context_switch`, …), which has no
 	// `IrFunction` and therefore no IR body to print. See `CodeResult.codeChunks`.
 	result.codeChunks = chunks
+	result.debugFunctions = debugFunctions
+	result.debugLineRows = debugLineRows
 	return result
 end 'concatX64FunctionChunks'
 

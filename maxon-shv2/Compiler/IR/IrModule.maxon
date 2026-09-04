@@ -39,6 +39,11 @@ export type IrModule uses Op
 	// Blocks created outside the parser (e.g. by later passes) keep the
 	// BlockSourceInfo.empty() sentinel.
 	export var blockSourceInfo as BlockSourceInfoArray = BlockSourceInfoArray.create()
+	// Parallel to `ops`: entry i is the SOURCE SPAN of ops[i], as an id into `Project.debugSpanTable`.
+	// Filled through the cursor on the column rather than at each append site — see `DebugSpanColumn`.
+	// Empty and untouched unless the build asked for debug info, which is what keeps the emitted code
+	// byte-identical either way.
+	export var spans as DebugSpanColumn = DebugSpanColumn.create()
 	// ⭐⭐ **WHETHER THE CODE THIS MODULE EMITS CARRIES THE DEBUGSTREAM PRODUCER (`--debugstream`,
 	// Workstream O3), AND IT IS A FIELD RATHER THAN A PARAMETER FOR ONE REASON: A BUILDER THAT FORGETS TO
 	// THREAD IT EMITS A SILENTLY INCOMPLETE TRACE.** Every runtime builder that allocates or refcounts must
@@ -337,6 +342,16 @@ export type IrModule uses Op
 			return
 		end 'noOrphans'
 
+		// The span column is parallel to `ops` only on a build that asked for debug info; on every other
+		// one it is empty and there is nothing to compact. Guarded exactly as `compactBlocks` guards
+		// `blockSourceInfo`, and for the same reason.
+		//
+		// ⚠ **THE COUNT IS ASKED, NOT USED AS THE CONDITION.** A capturing module whose column had gone
+		// short would fail a `count == oldCount` test and be quietly left uncompacted — desynced from the
+		// swaps below rather than merely short, which is a wrong line at every op past the first move.
+		let compactSpans = self.spans.armed
+		self.spans.requireParallelTo(oldCount, what: "before compactOps")
+
 		// Move each live op leftward into its compacted slot by SWAPPING (never
 		// `set`): a swap moves ownership between the two slots with refcounts
 		// unchanged, whereas `set` would decref the slot's prior occupant —
@@ -354,6 +369,9 @@ export type IrModule uses Op
 			end 'orphan'
 			if newIdx != oldIdx 'needsSwap'
 				self.ops.swap(newIdx, j: oldIdx)
+				if compactSpans 'swapSpan'
+					self.spans.swapAt(newIdx, j: oldIdx)
+				end 'swapSpan'
 			end 'needsSwap'
 		end 'move'
 
@@ -366,6 +384,9 @@ export type IrModule uses Op
 		// is O(1) (no tail shift), so the loop is O(orphan count).
 		for _ in plan.liveCount upto oldCount 'dropOrphan'
 			_ = try self.ops.pop() otherwise panic("compactOps: ops.pop on non-empty tail failed")
+			if compactSpans 'popSpan'
+				self.spans.dropLast()
+			end 'popSpan'
 		end 'dropOrphan'
 
 		rewriteBlockOpRefs(self.functions, blocks: self.blocks, plan: plan)
@@ -453,6 +474,10 @@ export type IrModule uses Op
 
 	export function appendOps(source Self)
 		self.ops.append(source.ops)
+		// In lockstep, for `merge`'s reason: a column that is not parallel to `ops` makes the NEXT append
+		// through one of the three doors fail its next-slot check, and a source module carrying no spans
+		// contributes positionless ones rather than nothing.
+		self.spans.appendFrom(source.spans, count: source.ops.count())
 	end 'appendOps'
 
 	export function blockCount() returns BlockCount
@@ -499,6 +524,7 @@ export type IrModule uses Op
 		end 'pastCondBranch'
 		let idx = self.ops.count()
 		self.ops.push(op)
+		self.spans.pushCurrent(idx)
 		block.opRefs.push(idx)
 	end 'appendOp'
 
@@ -519,6 +545,7 @@ export type IrModule uses Op
 		end 'second'
 		let idx = self.ops.count()
 		self.ops.push(op)
+		self.spans.pushCurrent(idx)
 		block.opRefs.push(idx)
 		block.condBranch = CondBranch.opIndex(idx)
 	end 'appendCondBranch'
@@ -526,6 +553,7 @@ export type IrModule uses Op
 	export function setTerminator(block IrBlock, op Op)
 		let idx = self.ops.count()
 		self.ops.push(op)
+		self.spans.pushCurrent(idx)
 		block.terminator = Terminator.opIndex(idx)
 	end 'setTerminator'
 
@@ -603,6 +631,7 @@ export type IrModule uses Op
 		let blockOffset = self.blocks.count()
 
 		self.ops.append(source.ops)
+		self.spans.appendFrom(source.spans, count: source.ops.count())
 
 		for i in 0 upto source.blocks.count() 'eachBlock'
 			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")

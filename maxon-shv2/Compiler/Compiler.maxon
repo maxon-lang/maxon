@@ -36,8 +36,8 @@
 //
 // A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
 // `compileToProduct`'s drain owns that reason.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false) returns FilePath throws CompileError
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream)
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false) returns FilePath throws CompileError
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo)
 
 	if emitIr 'emitIr'
 		writeTargetIr(product.irText, outputPath: product.outputPath)
@@ -108,7 +108,7 @@ end 'CompileProduct'
 // diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
 // `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
 // re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns CompileProduct throws CompileError
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -146,7 +146,7 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// in general: it is reached only from `Main.runVerifyWarmRebuild`, which turns a throw into an exit
 	// code, so a throw really does end the process there with nothing left to mis-nest. An in-process
 	// caller of THAT gate would need this drain too.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -155,7 +155,7 @@ end 'compileToProduct'
 // The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, stdlibDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, unit TraceUnit) returns CompileProduct throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, stdlibDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, unit TraceUnit) returns CompileProduct throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
@@ -163,6 +163,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins)
 	project.asyncTrace = asyncTrace
 	project.debugStream = debugStream
+	project.debugInfo = debugInfo
 	recordPhase(project, phase: CompilePhase.load, probe: whole)
 
 	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
@@ -182,6 +183,16 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
 	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
 	try requireOutputWritten(project, outputPath: outputPath)
+
+	// ⭐ **AFTER THE EXECUTABLE IS PROVEN WRITTEN, because the sidecar describes THAT file** — its
+	// build-id is the fold of the very bytes just published, and a driver recomputes it from the binary
+	// before trusting a single row. Written past `requireOutputWritten` so a build that produced no
+	// executable also leaves no sidecar claiming to describe one.
+	if debugInfo 'writeDebugInfo'
+		let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
+		writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: outputPath)
+		recordPhase(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
+	end 'writeDebugInfo'
 
 	// ⭐ **THE BRACKET KEEPS THE RENDER, WHICH IS THE COST — the WRITE is the command line's and is
 	// not in it** (see `compile` and `writeTargetIr`). `printTargetModule` walks the whole Target
@@ -258,6 +269,10 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 	// throw carries no information here. The existence re-check below is the only test that can tell
 	// "it was not there" from "it would not go", which is the distinction that matters.
 	try File.delete(outputPath.changeExtension(IrFileExtension)) otherwise ignore
+	// UNCONDITIONALLY, for the `.ir` sidecar's reason exactly: ADDING `--no-debug-info` must not leave the
+	// previous build's debug info beside a fresh executable. The build-id would refuse that stale pair — but
+	// only at the moment somebody tried to debug it, which is the worst moment to find out.
+	discardDebugInfoSidecar(outputPath)
 	try File.delete(outputPath) otherwise ignore
 
 	if File.exists(outputPath) 'undeletable'

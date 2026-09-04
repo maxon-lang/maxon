@@ -1,0 +1,126 @@
+// Compiler/Debug/MxdbgFormat.maxon — the `.mxdbg` sidecar's byte layout.
+//
+// ⭐⭐ **THE CONTRACT IS `maxon-sharp/Debug/MxdbgFormat.cs`, BYTE FOR BYTE, AND THE AUTHORITY IS THE
+// WRITER RATHER THAN THE DESIGN DOC.** Two drivers read this container — this compiler's `debug` command
+// and the bootstrap's — so a sidecar either compiler writes must be one either can read. That is the
+// same parity rule `tests/README.md` states for the fixture corpora, and it is checkable by hand:
+// `bin/maxon.exe debug --dump-info <an shv2-built exe>`.
+//
+// ⚠ **THE LINE TABLE IS NOT DELTA-ENCODED.** The design doc says it is; the reference writer emits a
+// FIXED 20-byte stride and the reference reader binary-searches it. A delta encoding here would produce
+// a file the bootstrap parses as garbage without failing to load.
+//
+// Position-independent, little-endian, mmap-friendly: a fixed header carrying absolute
+// `(offset, count)` for each section, then arrays of fixed-width records, then one shared string pool
+// addressed by `(offset, len)`.
+//
+// ⛔ **THE HEADER SLOT ORDER IS NOT THE SECTION ORDER**, and both are the reference's. The slots run
+// … lines, LOCALS, types, COVERAGE, fields; the sections run … lines, types, fields, locals, coverage.
+// Matching one and not the other yields a file that loads and reads every later record as garbage.
+
+// `MXDBG\0\0\0`, 8 bytes so the header stays 4/8-byte aligned. A reader that does not see this refuses
+// the file. Written as codes rather than as a string literal because the trailing NULs are part of it.
+let MxdbgMagicByte0 = 77
+let MxdbgMagicByte1 = 88
+let MxdbgMagicByte2 = 68
+let MxdbgMagicByte3 = 66
+let MxdbgMagicByte4 = 71
+
+// Bumped on any change to what the file MEANS. v3 is what the bootstrap speaks; a reader refuses a
+// version it does not know rather than misreading it.
+module let MxdbgFormatVersion = 3
+
+// The one width of every count/offset/length word in the file.
+module let MxdbgFieldSize = 4
+
+// Appended to the binary's path WITH its extension still on: `foo.exe` -> `foo.exe.mxdbg`.
+export let MxdbgSidecarExtension = ".mxdbg"
+
+// Header slots.
+module let MxdbgOffVersion = 8
+module let MxdbgOffReserved = 12
+module let MxdbgOffBuildId = 16
+module let MxdbgOffTripleOff = 24
+module let MxdbgOffTripleLen = 28
+module let MxdbgOffStringPoolOff = 32
+module let MxdbgOffStringPoolSize = 36
+module let MxdbgOffFileTableOff = 40
+module let MxdbgOffFileCount = 44
+module let MxdbgOffFuncTableOff = 48
+module let MxdbgOffFuncCount = 52
+module let MxdbgOffLineTableOff = 56
+module let MxdbgOffLineCount = 60
+module let MxdbgOffLocalTableOff = 64
+module let MxdbgOffLocalCount = 68
+module let MxdbgOffTypeTableOff = 72
+module let MxdbgOffTypeCount = 76
+module let MxdbgOffCovTableOff = 80
+module let MxdbgOffCovCount = 84
+module let MxdbgOffFieldTableOff = 88
+module let MxdbgOffFieldCount = 92
+module let MxdbgHeaderSize = 96
+
+// Fixed record strides.
+module let MxdbgFileEntrySize = 8
+// nameOff nameLen codeStart codeEnd frameSize paramCount lineFirst lineCount localFirst localCount
+module let MxdbgFuncEntrySize = 40
+// codeOffset fileId line col flags — five raw u32s, no deltas.
+module let MxdbgLineEntrySize = 20
+module let MxdbgTypeEntrySize = 28
+module let MxdbgFieldEntrySize = 16
+module let MxdbgLocalEntrySize = 28
+module let MxdbgCovEntrySize = 36
+
+// Line-entry flag bits. A row this compiler writes is always a statement boundary — see
+// `DebugLineRowBuilder`, which is where that granularity is decided.
+export let MxdbgLineFlagStatement = 1
+// Never set by this compiler — coverage instrumentation is the bootstrap's — but READ by the dump, which
+// prints a sidecar the bootstrap wrote exactly as the bootstrap prints one this compiler wrote.
+export let MxdbgLineFlagCoverage = 2
+
+// Where a function record's fields sit inside its 40 bytes.
+module let MxdbgFuncNameOff = 0
+module let MxdbgFuncNameLen = 4
+module let MxdbgFuncCodeStart = 8
+module let MxdbgFuncCodeEnd = 12
+module let MxdbgFuncFrameSize = 16
+module let MxdbgFuncParamCount = 20
+module let MxdbgFuncLineFirst = 24
+module let MxdbgFuncLineCount = 28
+module let MxdbgFuncLocalFirst = 32
+module let MxdbgFuncLocalCount = 36
+
+// Where a line record's fields sit inside its 20 bytes.
+module let MxdbgLineCodeOffset = 0
+module let MxdbgLineFileId = 4
+module let MxdbgLineLine = 8
+module let MxdbgLineCol = 12
+module let MxdbgLineFlags = 16
+
+// An index into one of the sidecar's tables.
+export typealias MxdbgIndex = int(0 to u32.max)
+
+// A `.text` code offset as the sidecar records one.
+export typealias MxdbgCodeOffset = int(0 to u32.max)
+
+// Whether `image` opens with the sidecar magic. Split from the reader so a caller can ask before
+// paying for a parse.
+module function mxdbgMagicMatches(image ByteArray) returns bool
+	if image.count() < MxdbgHeaderSize 'tooShort'
+		return false
+	end 'tooShort'
+
+	return imageByteAt(image, at: 0) == MxdbgMagicByte0 and imageByteAt(image, at: 1) == MxdbgMagicByte1 and imageByteAt(image, at: 2) == MxdbgMagicByte2 and imageByteAt(image, at: 3) == MxdbgMagicByte3 and imageByteAt(image, at: 4) == MxdbgMagicByte4 and imageByteAt(image, at: 5) == 0 and imageByteAt(image, at: 6) == 0 and imageByteAt(image, at: 7) == 0
+end 'mxdbgMagicMatches'
+
+// Write the eight magic bytes.
+module function writeMxdbgMagic(buf ByteArray)
+	buf.push(MxdbgMagicByte0)
+	buf.push(MxdbgMagicByte1)
+	buf.push(MxdbgMagicByte2)
+	buf.push(MxdbgMagicByte3)
+	buf.push(MxdbgMagicByte4)
+	buf.push(0)
+	buf.push(0)
+	buf.push(0)
+end 'writeMxdbgMagic'

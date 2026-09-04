@@ -2339,6 +2339,10 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	let guarded = greenThreads and not skipsGreenThreadStackGuard(func)
 	var isFirstBlock = true
 
+	// ⭐ x64's twin: one bool test per op when debug info is off, and the span column untouched.
+	let captureSpans = module.spans.armed
+	var lineRows = DebugLineRowBuilder.create(captureSpans)
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitArm64FunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
@@ -2357,11 +2361,17 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 		isFirstBlock = false
 
 		for opIdx in block.opRefs 'eachOp'
+			if captureSpans 'aRowMayOpenHere'
+				lineRows.note(module.spans.at(opIdx), codeOffset: code.count())
+			end 'aRowMayOpenHere'
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
 			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, shimmed: greenThreads)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
+			if captureSpans 'aRowMayOpenAtTheTerminator'
+				lineRows.note(module.spans.at(block.terminatorIndex()), codeOffset: code.count())
+			end 'aRowMayOpenAtTheTerminator'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
 			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, shimmed: greenThreads)
 		end 'hasTerm'
@@ -2376,8 +2386,22 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
+	if captureSpans 'debugInfo'
+		chunk.lineRows = lineRows.rows
+		chunk.frameSize = arm64FunctionFrameBytes(module, func: func)
+		chunk.paramCount = func.paramCount
+	end 'debugInfo'
 	return chunk
 end 'emitArm64FunctionChunk'
+
+// The frame the sidecar reports for `func`, read off the same prologue op the stack guard projects —
+// so the two cannot come to disagree about one function's frame.
+function arm64FunctionFrameBytes(module TargetModule, func IrFunction) returns StackSize
+	let entryRef = try func.blockRefs.get(0) otherwise return 0
+	let entry = try module.blocks.get(entryRef) otherwise return 0
+
+	return arm64PrologueFrameBytes(module, block: entry)
+end 'arm64FunctionFrameBytes'
 
 // ⭐ **THE FRAME THE GUARD PROJECTS, READ OFF THE PROLOGUE OP RATHER THAN RE-DERIVED.** x64's guard
 // recomputes the number with `computeGuardFrameBytes`, because its prologue is a `push`/`sub` sequence with
@@ -2437,6 +2461,9 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	var rdataRelocations = RdataRelocationArray.create()
 	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create()
 	var jumpTableRelocs = JumpTableRelocArray.create()
+	let captureSpans = targetModule.spans.armed
+	var debugFunctions = DebugFunctionRangeArray.create()
+	var debugLineRows = DebugLineRowArray.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends. `__symtable` goes through the same door
@@ -2447,6 +2474,9 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
 		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
+		if captureSpans 'debugInfo'
+			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows)
+		end 'debugInfo'
 		code.append(chunk.code)
 
 		for fx in chunk.callFixups 'rebaseCalls'
@@ -2508,6 +2538,8 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	// golden over a hand-assembled chunk (here, the entry stub — arm64 builds it as bytes, not as a
 	// Target function). See `CodeResult.codeChunks`.
 	result.codeChunks = chunks
+	result.debugFunctions = debugFunctions
+	result.debugLineRows = debugLineRows
 	return result
 end 'concatArm64FunctionChunks'
 

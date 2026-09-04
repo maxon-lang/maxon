@@ -1,0 +1,120 @@
+// Compiler/Debug/MxdbgEmit.maxon — write the `<output>.mxdbg` sidecar beside a finished executable.
+//
+// ⭐⭐ **EVERY INPUT IS A READ-ONLY OBSERVATION OF CODE THAT IS ALREADY EMITTED.** The function ranges
+// come off the concat pass, the line rows off the chunks it stitched, the build-id off the `.text` bytes
+// themselves. Nothing here can move an instruction, which is what makes
+// `tests/debug/byte-identical-debug-info.test.maxon` a structural property rather than a hope.
+//
+// A write failure is REPORTED AND SWALLOWED, exactly as `MetricsEmit.writeMetrics` and the `.ir` sidecar
+// are: debug info is a diagnostic side output, and a build that produced a correct executable must not
+// be failed by a full disk under the sidecar path.
+
+// The first REAL source file in a `DebugSpanTable`. Entry `NoDebugFileId` is the positionless file — the
+// empty `sourceFilePath` a compiler-emitted function carries — and the sidecar's table holds real paths
+// only, which is why its ids run one behind (`sidecarFileIdOf`).
+let MxdbgFirstSourceFileId = 1 as DebugFileId
+
+export function writeDebugInfoSidecar(project Project, codeResult CodeResult, outputPath FilePath)
+	// The wasm lane emits a whole core module rather than a `.text` image and builds no function chunks,
+	// so there is nothing for a `.text`-offset-keyed table to describe. Skipped rather than written empty:
+	// a sidecar naming no function is one a driver would refuse anyway, at a step further from the reason.
+	if codeResult.debugFunctions.count() == 0 'nothingToDescribe'
+		return
+	end 'nothingToDescribe'
+
+	// The whole-module twin of the check the allocator's private module runs: this is where the Target
+	// module stops being appended to, and the prologue pass and the runtime band both mint ops after the
+	// allocator has handed everything back.
+	codeResult.targetModule.spans.requireParallelTo(codeResult.targetModule.ops.count(), what: "at the sidecar")
+	requireNoLeakedSpanCursor(project, targetModule: codeResult.targetModule)
+
+	var writer = MxdbgWriter.create()
+	// ⭐ **THE POSITIONLESS FILE IS NOT A SOURCE FILE AND IS NOT WRITTEN.** Emitting it would put a nameless
+	// row at the head of a table the reference driver fills with real paths only, and a sidecar either
+	// driver prints has to say the same thing about the same program.
+	for fileId in MxdbgFirstSourceFileId upto project.debugSpanTable.fileCount() 'eachFile'
+		writer.addFile(project.debugSpanTable.filePath(fileId as DebugFileId))
+	end 'eachFile'
+
+	for fn in codeResult.debugFunctions 'eachFunction'
+		writer.addFunction(String.from(fn.name), codeStart: fn.codeStart as MxdbgCodeOffset, codeEnd: fn.codeEnd as MxdbgCodeOffset, frameSize: fn.frameSize as MxdbgIndex, paramCount: fn.paramCount as MxdbgIndex)
+	end 'eachFunction'
+
+	for row in codeResult.debugLineRows 'eachRow'
+		writer.addLine(row.codeOffset as MxdbgCodeOffset, fileId: sidecarFileIdOf(project.debugSpanTable.fileIdOf(row.spanId)), line: project.debugSpanTable.lineOf(row.spanId) as MxdbgIndex, column: project.debugSpanTable.columnOf(row.spanId) as MxdbgIndex, flags: MxdbgLineFlagStatement)
+	end 'eachRow'
+
+	// ⭐ **BARE FNV-1a OVER THE `.text` BYTES — `ContentHash.mixBytes` IS THE WRONG FOLD HERE.** That one
+	// appends a length tag, which is right for a content-addressed cache key and wrong for a digest another
+	// implementation recomputes: the driver reads the code section back out of the binary and folds it
+	// plainly, so a tagged digest would never match and every sidecar would be refused as belonging to a
+	// different build. Nothing is embedded in the executable — that would break byte-identity.
+	let image = writer.build(Hasher.combined(Hasher.empty(), bytes: codeResult.code), targetTriple: targetToString(project.target))
+
+	let sidecarPath = try FilePath.from(sidecarPathOf(outputPath)) otherwise 'badPath'
+		logError(LogCategory.compiler, message: function() gives "Could not spell the debug-info sidecar path for {outputPath}")
+		return
+	end 'badPath'
+
+	try File.writeBinary(sidecarPath, content: image) otherwise 'writeErr'
+		logError(LogCategory.compiler, message: function() gives "Failed to write the debug-info sidecar to {sidecarPath}")
+		return
+	end 'writeErr'
+
+	logInfo(LogCategory.compiler, message: function() gives "Wrote {image.count()} bytes of debug info to {sidecarPath}")
+end 'writeDebugInfoSidecar'
+
+// A `DebugSpanTable` file id as the sidecar's file table numbers it: one behind, because that table
+// holds the program's real files only and the span table reserves entry 0 for the positionless file.
+// Every row that reaches here carries a POSITIONED span, so it can never name that entry.
+function sidecarFileIdOf(fileId DebugFileId) returns MxdbgIndex
+	if fileId == NoDebugFileId 'positionless'
+		panic("debug info: a line row names the positionless file — only a positioned span becomes a row, and a positionless one interns to NoSpanId")
+	end 'positionless'
+
+	return (fileId - 1) as MxdbgIndex
+end 'sidecarFileIdOf'
+
+// The sidecar beside `outputPath`: the WHOLE output name with the suffix appended, extension and all
+// (`foo.exe` -> `foo.exe.mxdbg`). Spelled once here because three readers need it — this writer, the
+// `debug` command that finds a sidecar from a binary, and `discardPreviousOutput`, which clears a stale
+// one ahead of every build.
+export function sidecarPathOf(outputPath FilePath) returns String
+	return "{outputPath.toString()}{MxdbgSidecarExtension}"
+end 'sidecarPathOf'
+
+// Remove the sidecar beside `outputPath`. Two callers clear one: `Compiler.discardPreviousOutput` ahead of
+// every build, and the spec runner beside the executable it staged. Written here, with the path rule it
+// depends on, rather than twice — and it is a REMOVAL, so an unspellable path is simply nothing to remove.
+export function discardDebugInfoSidecar(outputPath FilePath)
+	let sidecarPath = try FilePath.from(sidecarPathOf(outputPath)) otherwise return
+
+	try File.delete(sidecarPath) otherwise ignore
+end 'discardDebugInfoSidecar'
+
+// ⭐⭐ **THE LEAKED-CURSOR DETECTOR, AND IT IS THE ONE TRIPWIRE NOTHING ELSE COULD FIRE.**
+//
+// The span cursor is set by a lowering walk and cleared when that walk ends. Left set, the runtime
+// installers — which build thousands of ops through `appendOp` after the lowering — would every one of
+// them be stamped with the last user statement, and the result would be a line table that looks full,
+// loads cleanly and points a debugger at a source line for code that source never wrote.
+//
+// A compiler-emitted function has an EMPTY `sourceFilePath`, so "every op of such a function carries no
+// span" is exactly the condition a leak breaks, and it is checkable here with the module in hand.
+function requireNoLeakedSpanCursor(project Project, targetModule TargetModule)
+	if not project.debugInfo 'notCapturing'
+		return
+	end 'notCapturing'
+
+	for func in targetModule.functions 'eachFunction'
+		if not func.sourceFilePath.isEmpty() 'writtenByAnAuthor'
+			continue
+		end 'writtenByAnAuthor'
+
+		for opIdx in targetModule.liveOpIndices(func) 'eachOp'
+			if targetModule.spans.at(opIdx) != NoSpanId 'stampedWithAStatement'
+				panic("debug info: op {opIdx} of the compiler-emitted function '{String.from(func.name)}' carries a source span — a lowering walk left its cursor set, so the emitted runtime is being attributed to whatever statement ran last")
+			end 'stampedWithAStatement'
+		end 'eachOp'
+	end 'eachFunction'
+end 'requireNoLeakedSpanCursor'

@@ -142,6 +142,7 @@ let VirtualAllocLetOsChooseBase = 0x0
 // `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` call to grow a GT stack — one
 // spelling of the two flags, shared by the Std lowering here and the byte code there, not two copies.
 export let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
+
 // `PAGE_READWRITE` — the memory protection `VirtualAlloc` commits with and `CreateFileMappingA`
 // publishes a section with. ONE Win32 constant, so one name: it is not `VirtualAlloc`'s.
 export let PageReadWriteProtection = 0x4
@@ -281,6 +282,7 @@ let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT �
 let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
 let IocpNoCompletionKey = 0x0  // CreateIoCompletionPort CompletionKey for an associate
 let IocpNoConcurrentThreads = 0x0  // CreateIoCompletionPort NumberOfConcurrentThreads for an associate
+
 // `INVALID_HANDLE_VALUE`. `CreateIoCompletionPort` reads it as "make a new port" and `CreateFileMappingA`
 // as "back this section with the page file rather than with a file on disk".
 let InvalidHandleValue = -1
@@ -781,6 +783,16 @@ end 'x64AtomicAdd'
 // makes it impossible to have one without the other.
 export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns (TargetModule, ValueClassColumns)
 	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usesGt)
+	// ⭐ **THE STD COLUMN CAME OUT EVEN, ASKED HERE BECAUSE THIS IS WHERE THAT MODULE STOPS BEING
+	// APPENDED TO.** It is the one tier whose column nothing else counts: the walk below reads it BY
+	// INDEX, so a pass that pushed onto `ops` without recording leaves it short and every span from that
+	// op on is off by one — a line table that is confidently WRONG rather than missing.
+	let stdOpCount = stdModule.ops.count()
+	stdModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
+
+	// The Target module carries spans exactly when the Std module it lowers from does. Armed BEFORE the
+	// skeleton, because `prepareSkeleton` is the first thing that can append.
+	lowering.targetModule.spans.armed = stdModule.spans.armed
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
 	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
@@ -1108,14 +1120,23 @@ type StdToX64Lowering
 				if opOutgoing > outgoingArgBytes 'largerArgRegion'
 					outgoingArgBytes = opOutgoing
 				end 'largerArgRegion'
+				// The Target ops this one call appends inherit the Std op's span. Set here rather than
+				// threaded, for the reason `DebugSpanColumn` gives: this file appends from hundreds of sites.
+				self.targetModule.spans.current = self.stdModule.spans.at(opIdx)
 				self.lowerBodyOp(stdOp, dstBlock: dstBlock, returnType: srcFunc.returnType, paramFloatMask: paramFloatMask)
 			end 'eachOp'
 
 			if srcBlock.hasTerminatorOp() 'hasTerm'
-				let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerStdToX64: terminatorIndex not in stdModule.ops")
+				let termIdx = srcBlock.terminatorIndex()
+				let termOp = try self.stdModule.ops.get(termIdx) otherwise panic("lowerStdToX64: terminatorIndex not in stdModule.ops")
+				self.targetModule.spans.current = self.stdModule.spans.at(termIdx)
 				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
 			end 'hasTerm'
 		end 'eachBlock'
+
+		// The cursor belongs to THIS function's walk; the prologue pass and the runtime band append after
+		// it and are nobody's statement.
+		self.targetModule.spans.current = NoSpanId
 
 		return outgoingArgBytes
 	end 'lowerFunctionBlocks'
