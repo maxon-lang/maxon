@@ -5108,6 +5108,22 @@ end 'shortCircuitOperator'
 // CALLER's: there is one table per Parser and one on `ProgramSignatures`, and which one a type belongs to
 // is a fact only the caller has. `constantValueTypeIn` below is the one door that does that interning, and
 // it names the table in its signature so no caller can mint into a table its reader cannot read.
+// Does an enum's declared backing produce values of `tag`? Only the two BYTE-RECORD backings answer true,
+// and that is the whole of the question `enumCaseAtItsBacking` asks: an `integer` backing needs no coercion
+// (the tag IS the raw value), and the rest name domains a comparison never reaches with a byte record on
+// the other side.
+function enumBackingProduces(backing EnumBacking, tag ValueTypeTag) returns bool
+	return match backing 'b'
+		character gives tag == ValueTypeTag.character
+		string gives tag == ValueTypeTag.string
+		unresolved gives false
+		integer gives false
+		float gives false
+		functionRef gives false
+		structRecord gives false
+	end 'b'
+end 'enumBackingProduces'
+
 function constantValueType(tag ValueTypeTag, typeNameId TypeNameId) returns MaxonType
 	if tag == ValueTypeTag.named 'anEnumCase'
 		return MaxonType.named(typeNameId)
@@ -52116,6 +52132,9 @@ export type Parser
 	// ⚠ THIS FUNCTION ONCE PROMOTED, and that is exactly the bug P1.0d.4 shipped and then fixed:
 	// the promotion built for `emitBinOp` was routed through here too, because a compare's
 	// operands looked like a binOp's. They are not: one produces a number, the other a verdict.
+	// ⭐⭐ **THE TWO QUESTIONS THAT COME BEFORE "ARE THESE OPERANDS COMPARABLE?"** — one refusal and one
+	// coercion, both about what an ENUM value means at a comparison, and both settled here so the rules
+	// below see operands that are already in one domain.
 	function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
 		// E3097, asked at the TOP — ahead of the byte-record interception below, so the `.name` (String)
 		// spelling is refused by the same line as the `.ordinal` (integer) one rather than by a second rule
@@ -52124,6 +52143,51 @@ export type Parser
 			try self.requireNotAnEnumAccessorComparison(lhs, rhs: rhs, opTok: opTok)
 		end 'aCaseTestSpelling'
 
+		// ⚠ **THE SECOND COERCION IS ASKED AGAINST THE FIRST'S ANSWER**, so `ContentType.json == ct` and
+		// `ct == ContentType.json` reach the compare identically. Only one side can ever move: a case
+		// coerced against a byte record leaves a byte record behind, and the other side was one already.
+		let left = try self.enumCaseAtItsBacking(lhs, against: self.tagOf(rhs), opTok: opTok)
+		return try self.emitComparableCompare(left, rhs: try self.enumCaseAtItsBacking(rhs, against: self.tagOf(left), opTok: opTok), op: op, opTok: opTok)
+	end 'emitCompare'
+
+	// ⭐⭐ **A CHAR- OR STRING-BACKED ENUM CASE COMPARES AT ITS RAW VALUE.** For an INT-backed enum the tag
+	// IS the raw value, so `n == HttpStatus.ok` needs nothing and gets nothing; for these two backings the
+	// tag is a declaration index and the raw value lives in a COLUMN, so the case has to be read before the
+	// two sides are in one domain at all. Without it `ct == ContentType.json` is *"cannot compare String
+	// with int"* — a sentence naming an int the program does not contain.
+	//
+	// ⚠ **ONLY AGAINST AN OPERAND OF THE BACKING'S OWN TYPE.** Two cases of one enum compared with each
+	// other is a CASE TEST and stays one — coercing there would compare two raw values to answer the same
+	// question more slowly, and against any other type it would invent a comparison the language has not got.
+	//
+	// ⚠ It reaches `emitEnumRawValue` and NOT the accessor door, so the value it mints carries no E3097
+	// taint: the author wrote no accessor, and marking one here would refuse the comparison this exists to
+	// admit.
+	function enumCaseAtItsBacking(value ValueId, against ValueTypeTag, opTok Token) returns ValueId throws ParseError
+		// The tag pre-check is the hot-path allocation guard `valueIsUnion` documents: `enumMatchFor`
+		// returns a union VALUE, so asking it for the `int`/`bool` operands of every comparison in the
+		// program would allocate two throwaway boxes per compare.
+		if self.tagOf(value) != ValueTypeTag.named or not tagIsByteRecord(against) 'notTheShape'
+			return value
+		end 'notTheShape'
+
+		match self.enumMatchFor(value) 'declared'
+			undeclared then return value
+			declared(layout) then return try self.enumCaseRawValueAgainst(layout, value: value, against: against, opTok: opTok)
+		end 'declared'
+	end 'enumCaseAtItsBacking'
+
+	// The arm above with a layout in hand — a `match` arm is one statement and this is a test and an emit.
+	function enumCaseRawValueAgainst(layout EnumLayout, value ValueId, against ValueTypeTag, opTok Token) returns ValueId throws ParseError
+		if not enumBackingProduces(layout.backing, tag: against) 'aDifferentDomain'
+			return value
+		end 'aDifferentDomain'
+
+		let range = SourceRange.ofToken(opTok)
+		return try self.emitEnumRawValue(layout, tag: self.emitEnumTagOf(value, layout: layout, range: range), anchor: opTok, range: range)
+	end 'enumCaseRawValueAgainst'
+
+	function emitComparableCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
 
@@ -52312,7 +52376,7 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: left, rhs: right, op: op, signedness: self.comparisonSignedness(left, rhs: right, op: op, leftTag: leftNumberTag, rightTag: rightNumberTag)), range: SourceRange.ofToken(opTok))
 		self.adoptOperandAlias(result, aliasName: comparedAlias, resultTag: ValueTypeTag.boolean)
 		return result
-	end 'emitCompare'
+	end 'emitComparableCompare'
 
 	// ⭐⭐ **DOES THIS SOURCE COMPARISON RUN UNSIGNED?** — the parser's half of `TypeRules`' ⭐⭐ THE
 	// ORDERING-COMPARISON SIGNEDNESS RULE, and the exact shape of `divisionRunsUnsigned` one operator

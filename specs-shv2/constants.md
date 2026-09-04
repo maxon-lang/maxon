@@ -697,9 +697,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: string-comparison -->
-<!-- MEASURED 2026-09-04: `error E3005: type mismatch: 'cannot compare String with int'`. A String-backed enum case
-     does not decay to its backing at the comparison door; the bootstrap accepts the program and answers 1. -->
+<!-- test: string-comparison -->
 String-backed enum can be compared with string values.
 ```maxon
 enum ContentType
@@ -719,9 +717,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: char-comparison -->
-<!-- MEASURED 2026-09-04: `error E3005: type mismatch: 'cannot compare Character with int'`. A char-backed enum
-     case does not decay to its backing at the comparison door; the bootstrap accepts the program and answers 1. -->
+<!-- test: char-comparison -->
 Character-backed enum can be compared with character values.
 ```maxon
 enum Escape
