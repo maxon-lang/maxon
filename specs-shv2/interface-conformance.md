@@ -361,16 +361,25 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: builtin-interface-user-code -->
-<!-- MEASURED 2026-09-04: `E3005: Cannot return 'ByteArray' from function declared to return
-     'MyCollection_Te051b2272b3afaf0'`. A user interface instantiated over a builtin container does not accept the
-     builtin's own instance as a conformer at the return door. -->
+### A user type implementing a compiler builtin interface
+
+<!-- test: builtin-interface-user-code -->
+`stdlib/Builtins.maxon`'s `BuiltinArrayLiteral` is a MARKER: the compiler finds the type implementing it and
+uses that declaration as the record a `[…]` literal builds. A user program may declare its own conformer, and
+`stdlib/Array.maxon` is one — the compiler reads the corpus's declaration rather than transcribing a layout.
+
+⚠ **THE FIELD MUST BE A BUFFER OVER THE TYPE PARAMETER, AND THE INNER `typealias` IS HOW ONE IS SPELT.** A
+field declaration may not carry a `with` clause directly (both compilers refuse `var managed as
+__ManagedMemory with Element`), so the alias is not a style choice — it is the only spelling, and it is
+`stdlib/Array.maxon`'s own. The refusal one case down is what a field over the WRONG element earns.
 ```maxon
 type MyCollection uses Element implements BuiltinArrayLiteral
-	var managed as __ManagedMemory
+	typealias Buf = __ManagedMemory with Element
 
-	static function init(managed __ManagedMemory) returns Self
-		return MyCollection{managed: managed}
+	var managed as Buf
+
+	static function init(managed Buf) returns Self
+		return Self{managed: managed}
 	end 'init'
 end 'MyCollection'
 
@@ -380,6 +389,35 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: error.builtin-array-conformer-over-the-wrong-element -->
+⭐⭐ **shv2 REFUSES A CONFORMER WHOSE BUFFER IS NOT OVER ITS OWN TYPE PARAMETER, AND THE ORACLE ACCEPTS IT.**
+Since the envelope collapse, `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`, so a
+`MyCollection{managed: m}` literal is not a CONSTRUCTION at all — it is an IDENTITY on the record, handed back
+wearing `Self`. A bare `__ManagedMemory` field is a buffer over `Byte`, so the value handed back would wear an
+identity its bytes do not have: a container declared generic over `Element` whose storage has a one-byte
+stride whatever `Element` is.
+
+⚠ **THE PROGRAM WAS ALREADY REFUSED HERE, BY THE LATER RETURN COMPARE, IN A SENTENCE THAT NAMED NEITHER
+FAULT**: `Cannot return 'ByteArray' from function declared to return 'MyCollection_Te051b2272b3afaf0'` — a
+mangled instance name at the author, about a RETURN, in a program whose fault is a FIELD. The refusal is at
+the field now.
+```maxon
+type MyCollection uses Element implements BuiltinArrayLiteral
+	var managed as __ManagedMemory
+
+	static function init(managed __ManagedMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+end 'MyCollection'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:10: Unsupported: the field 'managed' of `MyCollection`, which declares itself the compiler's array record — such a literal IS its buffer and is handed back as `Self`, so the field's element must be the type parameter `MyCollection` is generic over, and this one's is not. The value would wear an identity its bytes do not have. Declare the field through an inner `typealias` over the parameter, which is `stdlib/Array.maxon`'s own spelling
 ```
 
 <!-- test: interface-method-unused-param-allowed -->

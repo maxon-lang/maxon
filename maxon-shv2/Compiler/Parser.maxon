@@ -56161,6 +56161,7 @@ export type Parser
 		if self.signatures.firstFieldIsItsOwnBuffer(layout) 'theBufferRecord'
 			try self.requireBufferIsItsOwnRecord(layout, anchor: anchor)
 			let buffer = try fieldValues.get(0) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at 0 — `requireBufferIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")
+			try self.requireBufferElementIsTheDeclarationsOwn(layout, buffer: buffer, anchor: anchor)
 			return self.coOwnAggregateAsTemp(buffer, range: range)
 		end 'theBufferRecord'
 
@@ -56209,6 +56210,30 @@ export type Parser
 		let flag = try fieldValues.get(flagIndex) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at {flagIndex} — the column is sized to the layout's field count")
 		return self.emitOwnedRuntimeResult(StrOfBufferName, args: pairArgs(source, second: flag), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
 	end 'emitFusedWrapperLiteral'
+
+	// ⭐⭐ **THE IDENTITY ARM HANDS THE BUFFER BACK *AS* `Self`, SO THE TWO MUST BE THE SAME INSTANCE.** A
+	// `type Bag uses Element implements BuiltinArrayLiteral` whose sole field is the BARE `__ManagedMemory` has
+	// the buffer SURFACE — which is what `firstFieldIsItsOwnBuffer` tests — while its element is `Byte` and
+	// `Self`'s is `Element`. The bytes and the identity are each internally consistent; they are simply not the
+	// container the declaration promised.
+	//
+	// ⛔ **WITHOUT THIS THE PROGRAM WAS STILL REFUSED, BY THE LATER RETURN COMPARE, IN A SENTENCE THAT NAMED
+	// NEITHER FAULT**: `E3005 Cannot return 'ByteArray' from function declared to return
+	// 'MyCollection_Te051b2272b3afaf0'` — a mangled instance name at the author, about a RETURN, in a program
+	// whose fault is a FIELD. That is the same shape `firstFieldIsItsOwnBuffer`'s own header records for the
+	// `var managed as Num` case it was tightened to catch, one field type over.
+	//
+	// ⚠ The sized-container arm below does NOT ask this and must not: a `Vector`'s buffer is an
+	// `Array with Element` and its `Self` carries a SIZE the array has no column for, so there the difference
+	// is the point and the value is RETYPED instead.
+	function requireBufferElementIsTheDeclarationsOwn(layout StructLayout, buffer ValueId, anchor Token) throws ParseError
+		let held = self.typeOf(buffer)
+		if maxonTypeTag(held) == ValueTypeTag.genericInstance and genericInstanceIdOf(held) == self.signatures.ownRecordSelfInstance(layout.name) 'theSameContainer'
+			return
+		end 'theSameContainer'
+
+		throw ParseError.unsupported("the field '{String.from(layout.fieldNameAt(0))}' of `{String.from(layout.name)}`, which declares itself the compiler's array record — such a literal IS its buffer and is handed back as `Self`, so the field's element must be the type parameter `{String.from(layout.name)}` is generic over, and this one's is not. The value would wear an identity its bytes do not have. Declare the field through an inner `typealias` over the parameter, which is `stdlib/Array.maxon`'s own spelling", line: anchor.line, column: anchor.column)
+	end 'requireBufferElementIsTheDeclarationsOwn'
 
 	// A byte-record tag carries no name (`String` and `Character` are their own `MaxonType` arms); a
 	// `structRef` is nothing BUT its name, and `p.flag` on the result needs it to find the layout. One place
