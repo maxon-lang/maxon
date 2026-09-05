@@ -236,10 +236,19 @@ mm_free String #1
 ```
 
 <!-- test: value-tuple-return-through-function-value -->
-A function whose address is taken is called by its TYPE, and a function type cannot say whether
-its target throws — a throwing and a non-throwing `(Num, Num) -> (Num, Num)` are the same type.
-So an indirect call cannot tell which return convention its target uses, and `pair` is held to
-the heap convention here precisely because `apply(pair)` takes its address. Returns 33.
+⛔⛔ **EVERY CASE IN THIS FAMILY DESCRIBED A RETURN CONVENTION shv2 DOES NOT HAVE, AND ALL FIVE WERE
+MEASURED FALSE ON 2026-09-05.** The sibling `for-in-over-map-allocates-no-tuple` states the fact plainly —
+*"shv2 has no multi-register or hidden-pointer return path on any target, so every tuple is a heap record"* —
+and these cases were written as if it did, each explaining why ITS shape is the exception. There is no rule
+for them to be exceptions to: a `__Tuple2` record is allocated on every shape below, measured under
+`maxon monitor --filter=mm`. They pass on their ```exitcode blocks, which assert the ANSWER and were never
+wrong.
+
+⚠ **WHAT THIS CASE WOULD PIN ONCE THE ABI LANDS**: a function whose address is taken is called by its
+TYPE, and a function type cannot say whether its target throws — a throwing and a non-throwing
+`(Num, Num) -> (Num, Num)` are the same type — so an indirect call could not tell which convention its
+target uses and `pair` would be held to the heap one. MEASURED today: the record is allocated here AND at
+the direct call one case down, so the case does not yet discriminate. Returns 33.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias PairOp = function(Num, Num) returns (Num, Num)
@@ -262,8 +271,15 @@ end 'main'
 ```
 
 <!-- test: value-tuple-return-forwarded -->
-`return pair(...)` forwards a two-register result straight back out. The record is never bound
-to a user name, so it is stack-promoted and no allocation is made at either end. Returns 33.
+<!-- MmTrace -->
+⛔⛔ **THIS CASE CLAIMED "no allocation is made at either end" AND ONE IS MADE — the claim is a LEDGER
+block now rather than a sentence.** It said the result is never bound to a user name and so stack-promoted;
+`PromoteStackRecords` promotes nothing here, because the record is built inside `pair` and RETURNED, which
+is an escape at the only site that could promote it. See `value-tuple-return-through-function-value` for the
+family's shared correction.
+
+`return pair(...)` forwards the result straight back out. Returns 33, and allocates one `__Tuple2` record —
+which the ```mm-trace below is what makes visible on every run instead of only in a shelve note.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -283,11 +299,19 @@ end 'main'
 ```exitcode
 33
 ```
+```mm-trace
+mm_alloc __Tuple2.int.int #1 size=16
+mm_decref __Tuple2.int.int #1 rc=0
+mm_free __Tuple2.int.int #1
+```
 
 <!-- test: value-tuple-return-of-param -->
-Returning a tuple PARAM. Params keep the pointer convention, so the return reads both halves
-back out of the record rather than copying registers along. The param is borrowed — returning
-it by value must not release it. Returns 11.
+Returning a tuple PARAM. The param is borrowed — returning it must not release it — and the returned value
+is a record of its own, so this shape allocates TWO: the literal in `main` and the return's copy. Returns 11.
+
+⚠ The sentence here read *"Params keep the POINTER convention, so the return reads both halves back out of
+the record rather than copying registers along"*, which contrasted against a register convention that does
+not exist. See `value-tuple-return-through-function-value`.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -305,11 +329,15 @@ end 'main'
 ```
 
 <!-- test: value-tuple-escaping-into-array-stays-heap -->
-A returned tuple that ESCAPES into an array must fall back to a heap record: an array holds
-8-byte element pointers, and a stack record would die with the frame while the array still
-pointed at it. Here `p` both escapes into `xs` AND is returned by value, so the record is the
-array's while the return copies its halves out — releasing it would be a leak on one side and a
-double-free on the other. Returns 66 (11+22 from the return, 11+22 read back out of the array).
+A returned tuple that escapes into an array is a heap record — as every tuple is today. An array holds
+8-byte element pointers, so a stack record would die with the frame while the array still pointed at it,
+which is why this shape would stay on the heap even once the value convention lands: `p` both escapes into
+`xs` AND is returned, so the record is the array's while the return would copy its halves out, and releasing
+it would be a leak on one side and a double-free on the other.
+
+⚠ The sentence said the record "must FALL BACK to" the heap, which named an exception to a rule shv2 does
+not have. See `value-tuple-return-through-function-value`. Returns 66 (11+22 from the return, 11+22 read
+back out of the array).
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Pair = (Num, Num)
@@ -337,9 +365,13 @@ end 'main'
 ```
 
 <!-- test: throwing-value-tuple-return -->
-A THROWING tuple-returning function keeps the heap convention: a try-call's second return
-register already carries the error flag, and the error path has no tuple to hand back. The
-success path yields 33 and the error path takes the `otherwise`, giving 75.
+A THROWING tuple-returning function is on the heap — as every tuple is today — and would stay there once
+the value convention lands: a try-call's second return register already carries the error flag, and the
+error path has no tuple to hand back.
+
+⚠ The sentence said it "KEEPS the heap convention", which named an exception to a rule shv2 does not have.
+See `value-tuple-return-through-function-value`. The success path yields 33 and the error path takes the
+`otherwise`, giving 75.
 ```maxon
 typealias Num = int(0 to 1000)
 
