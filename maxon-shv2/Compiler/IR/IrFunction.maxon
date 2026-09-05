@@ -654,6 +654,18 @@ export type IrFunction
 	// give.
 	export var bodyWasSkippedAsUnreached as bool
 
+	// ⭐⭐ **THIS FUNCTION HANDS ITS TUPLE BACK IN THE TWO RETURN REGISTERS** — the THIRD writer of the
+	// secondary return slot, beside a throwing function's error flag and an interface-returning one's
+	// witness half (`functionUsesSecondaryReturnSlot`).
+	//
+	// ⚠ **IT IS A FIELD BECAUSE THE DECLARATION CANNOT ANSWER IT.** The other two disjuncts are pure
+	// functions of the return type and the `throws` clause; this one is a WHOLE-MODULE verdict — it depends
+	// on the body's return shapes, on every call site, and on whether anything takes the address. So it is
+	// decided once, by `applyValueTupleReturn`, and recorded here for the readers below the Std tier: wasm's
+	// `funcSignatureResultValTypes`, whose functype must declare the second result the body writes or the
+	// module does not validate.
+	export var usesValueTupleReturn as bool
+
 	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE (PBR-2) — an ABI fact, and the ONE of the three
 	// masks on this record that is not a diagnostic's seed.**
 	//
@@ -780,6 +792,7 @@ export type IrFunction
 			assignsIntoAnExistingAggregate: false,
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
+			usesValueTupleReturn: false,
 			borrowFacts: sharedEmptyBorrowFacts,
 			paramGuards: sharedEmptyParamGuards,
 			debugLocals: sharedEmptyDebugLocals,
@@ -847,6 +860,7 @@ export type IrFunction
 			assignsIntoAnExistingAggregate: false,
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
+			usesValueTupleReturn: false,
 			borrowFacts: BorrowFacts.create(),
 			paramGuards: RangeCheckParamGuardArray.create(),
 			debugLocals: DebugLocalDeclArray.create(),
@@ -903,6 +917,7 @@ export type IrFunction
 			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
 			writesModuleStorage: src.writesModuleStorage,
 			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
+			usesValueTupleReturn: src.usesValueTupleReturn,
 			borrowFacts: src.borrowFacts,
 			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
 			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by

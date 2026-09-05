@@ -969,16 +969,17 @@ end 'indirectCallResultValTypes'
 //
 // ⭐ **THE SECOND RESULT IS NOT "THE ERROR FLAG", IT IS "THE SECONDARY RETURN SLOT" (P1.7a slice 2).** An
 // interface-returning function writes the witness half into exactly the register/result a throwing one
-// spends on the flag, so the question this signature must answer is `functionUsesSecondaryReturnSlot`'s and
-// not `throwsClauseIsThrowing`'s. ⚠ It is asked HERE through the same one predicate the frontend's return
-// emitters ask, because wasm is the lane where a disagreement is fatal rather than silent: a function whose
-// BODY returns two values under a type declaring one does not validate, and a `call`/`call_indirect` against
-// a functype the target does not have traps. On x64 the same disagreement merely drops a machine word.
+// spends on the flag, and a small VALUE TUPLE's second half rides the same slot again — so the question
+// this signature must answer is `irFunctionUsesSecondaryReturnSlot`'s and not `throwsClauseIsThrowing`'s.
+// ⚠ It is asked HERE through the same one predicate every other reader of that fact asks, because wasm is
+// the lane where a disagreement is fatal rather than silent: a function whose BODY returns two values under
+// a type declaring one does not validate, and a `call`/`call_indirect` against a functype the target does
+// not have traps. On x64 the same disagreement merely drops a machine word.
 //
-// The parameter is `IrFunction` and both fields it reads survive into the Std module untouched — the SAME
+// The parameter is `IrFunction` and every field it reads survives into the Std module untouched — the SAME
 // object is pushed there by `transferFuncs`, which only ADDS the collapsed `returnType`/`paramTypes`.
 function funcSignatureResultValTypes(func IrFunction) returns WasmValTypeArray
-	return indirectCallResultValTypes(func.returnType, usesSecondarySlot: functionUsesSecondaryReturnSlot(func.maxonReturnType, throws: func.throwsTypeName))
+	return indirectCallResultValTypes(func.returnType, usesSecondarySlot: irFunctionUsesSecondaryReturnSlot(func))
 end 'funcSignatureResultValTypes'
 
 function singletonValTypes(vt WasmValType) returns WasmValTypeArray

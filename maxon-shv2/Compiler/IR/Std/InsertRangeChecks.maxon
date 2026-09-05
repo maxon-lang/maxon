@@ -1048,28 +1048,27 @@ type RangeCheckEmitter
 	// verifying backend reads the shape whether or not the path runs.
 	//
 	// ⛔⛔ **IT WROTE ONE REGISTER IN A FUNCTION WHOSE ABI RETURNS TWO, AND wasm REFUSED THE MODULE (X6).**
-	// A THROWING function returns through `errorReturn` — the primary value AND the error flag — which
-	// `LowerMaxonToStd.emitRetOrErrorReturn` calls *"the ONE place the ABI decides ret-vs-errorReturn"*.
-	// It was not: this pass appends its blocks AFTER lowering has run, so it is a second decider, and it
-	// answered `ret` for every function. On x64 the missing flag register is invisible (the path aborts);
-	// on wasm the functype is multi-value and `wasm-tools component new` rejected the whole component with
+	// A function that uses the SECONDARY RETURN SLOT leaves through `errorReturn` — the primary value AND
+	// the second word — which `LowerMaxonToStd.emitRetOrErrorReturn` calls *"the ONE place the ABI decides
+	// ret-vs-errorReturn"*. It was not: this pass appends its blocks AFTER lowering has run, so it is a
+	// second decider. On x64 the missing second register is invisible (the path aborts); on wasm the
+	// functype is multi-value and `wasm-tools component new` rejected the whole component with
 	// `type mismatch: expected i64, found i32`.
 	//
-	// ⚠ **PRE-EXISTING, and it stayed unreachable for a precise reason**: it needs a throwing function
-	// that also carries a guard, i.e. one with a ranged parameter or a ranged return. Nothing had one on a
-	// verifying backend until `ExitCode` gained a range. Pinned by `try-otherwise-value-flow`'s five
-	// `returns ExitCode throws E` cases on the wasm lane, which were RED against the first X6 build.
+	// ⚠ **THE QUESTION IS `functionUsesSecondaryReturnSlot`'S, NOT `throwsClauseIsThrowing`'S**, and asking
+	// the narrow one left the INTERFACE-RETURNING disjunct — whose second word is the witness half of the
+	// fat pointer — writing one register under a two-register type. One predicate, so a third writer of
+	// that slot cannot reach here without this door already knowing about it.
 	//
 	// ⭐ The zero's TYPE is `stdDefaultPrimaryReturnType`'s, which is also lowering's THROW-edge answer —
-	// one rule for one fact, in the dialect both passes already read (X6 review). It used to be spelled
-	// here, differently from lowering's, and that header carries the divergence.
+	// one rule for one fact, in the dialect both passes already read (X6 review).
 	function emitDeadReturn(block IrBlock)
-		if throwsClauseIsThrowing(self.func.throwsTypeName) 'throwing'
+		if functionUsesSecondaryReturnSlot(self.func.maxonReturnType, throws: self.func.throwsTypeName) 'aSecondReturnWord'
 			let dead = self.emitZeroConstOf(block, valueType: stdDefaultPrimaryReturnType(self.func.returnType))
-			let flag = self.emitZeroConstOf(block, valueType: StdType.i64)
-			self.module.setTerminator(block, op: StdOp.errorReturn(dead, errorFlagId: flag))
+			let second = self.emitZeroConstOf(block, valueType: StdType.i64)
+			self.module.setTerminator(block, op: StdOp.errorReturn(dead, errorFlagId: second))
 			return
-		end 'throwing'
+		end 'aSecondReturnWord'
 
 		match self.func.returnType 'rt'
 			void then self.module.setTerminator(block, op: StdOp.retVoid)

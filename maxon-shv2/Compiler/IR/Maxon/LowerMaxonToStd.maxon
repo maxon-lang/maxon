@@ -205,6 +205,19 @@ export function functionUsesSecondaryReturnSlot(returnType MaxonReturnType, thro
 	end 'theWitnessHalf'
 end 'functionUsesSecondaryReturnSlot'
 
+// ⭐⭐ **THE SAME QUESTION ASKED OF A WHOLE FUNCTION, which is the only form that can see the THIRD
+// disjunct.** A function returning a small VALUE TUPLE writes the pair into the same two registers, and
+// that is not a fact its declaration carries: `applyValueTupleReturn` decides it whole-module, off the
+// body's return shapes and every call site, and records it on the function (`usesValueTupleReturn`).
+//
+// ⚠ Asked by the readers that run AFTER that pass — wasm's `funcSignatureResultValTypes`, whose functype
+// must declare the second result the body writes. The frontend's own return emitters run BEFORE it and ask
+// the declaration-only form above, which is what lets the pass rewrite the `ret` they emitted; the two are
+// one rule with one extra disjunct rather than two rules, so they cannot drift.
+export function irFunctionUsesSecondaryReturnSlot(func IrFunction) returns bool
+	return func.usesValueTupleReturn or functionUsesSecondaryReturnSlot(func.maxonReturnType, throws: func.throwsTypeName)
+end 'irFunctionUsesSecondaryReturnSlot'
+
 // Map a source-level binary operator to its width/ABI-resolved Std `binOp` opcode.
 // Every NON-TRAPPING operator maps to a `StdBinOpcode` — the arithmetic set
 // (`add`/`sub`/`mul`), the bit set (`bitAnd`/`bitOr`/`bitXor`/`shl`/`shr`), and the FLOAT

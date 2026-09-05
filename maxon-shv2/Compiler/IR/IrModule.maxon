@@ -273,19 +273,28 @@ export type IrModule uses Op
 	// and a Maxon-tier consumer must reach ops through a block like every other.
 	export function liveOpIndices(func IrFunction) returns OpIndexArray
 		var indices = OpIndexArray.create()
+		self.collectLiveOpIndices(func, into: indices)
+		return indices
+	end 'liveOpIndices'
+
+	// ⭐ THE SAME WALK INTO A CALLER-OWNED COLUMN — for a WHOLE-MODULE pass, which asks it once per
+	// function and discards the answer before the next iteration. `liveOpIndices`' fresh array is then
+	// one allocation per function OF THE PROGRAM; `Array.clear` keeps capacity, so a buffer hoisted out
+	// of the function loop allocates once for the whole walk instead.
+	export function collectLiveOpIndices(func IrFunction, into OpIndexArray)
+		into.clear()
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try self.blocks.get(blockRef) otherwise panic("liveOpIndices: blockRef from func.blockRefs not in blocks")
+			let block = try self.blocks.get(blockRef) otherwise panic("collectLiveOpIndices: blockRef from func.blockRefs not in blocks")
 
 			for opIdx in block.opRefs 'eachOp'
-				indices.push(opIdx)
+				into.push(opIdx)
 			end 'eachOp'
 
 			if block.hasTerminatorOp() 'hasTerm'
-				indices.push(block.terminatorIndex())
+				into.push(block.terminatorIndex())
 			end 'hasTerm'
 		end 'eachBlock'
-		return indices
-	end 'liveOpIndices'
+	end 'collectLiveOpIndices'
 
 	// THE INVERSE OF `func.blockRefs` — a block's `BlockId` to its POSITION in that array, dense and
 	// built in one walk. It answers the question every consumer of a TERMINATOR has: a terminator

@@ -1,0 +1,1218 @@
+// ValueTupleReturn — THE TWO-REGISTER RETURN CONVENTION FOR A SMALL VALUE TUPLE.
+//
+// A function returning a two-element tuple hands its pair back as a heap record: the callee
+// `__mm_alloc`s two slots, writes both words, returns the pointer, and the caller reads the two words back
+// out and drops the box. This pass finds the shapes where that record is pure ceremony and puts the two
+// words in the two RETURN REGISTERS instead, deleting the allocation at both ends.
+//
+// ⭐⭐ **IT IS A THIRD DISJUNCT OF AN ABI THAT ALREADY EXISTS, NOT A NEW ONE.** shv2 already returns a
+// second machine word for a THROWING function (the error flag) and for an INTERFACE-RETURNING one (the
+// witness half of the fat pointer) — `functionUsesSecondaryReturnSlot`. `StdOp.errorReturn` is that
+// dual-register epilogue and `StdOp.tryCall` is the call that captures both halves, on every target. So
+// there is no new Std op and no new backend arm here: the pass rewrites `ret` into `errorReturn` and
+// `call` into `tryCall`, and stamps `IrFunction.usesValueTupleReturn` so the wasm signature builder
+// declares the second result the body now writes.
+//
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// ⭐⭐⭐ THE GATE: A VALUE-CONVENTION FUNCTION HOLDS NO RECORD AT ALL, WHICH IS WHY OWNERSHIP NEVER MOVES
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// The obvious wider rule — *"any non-throwing function returning a two-slot tuple"* — is a DOUBLE FREE
+// waiting for a managed element. Under the heap convention a returned record OWNS its two elements and
+// ownership travels to the caller with the pointer; under a register convention the caller receives two
+// bare words. Reading the halves out of a record the callee did not mint — a borrowed parameter, a record
+// that also escaped into an array — and handing them over as owned would release them twice, and
+// retaining them per element is not something this tier can express: a tuple over a TYPE PARAMETER, which
+// is what `stdlib`'s `MapIterator.current()` returns, has no statically known element drop at all.
+//
+// ⇒ **So the rule is that a value-convention function's return NEVER TOUCHES A RECORD.** Every `ret` in it
+// must be one of exactly two shapes (plus the unreachable panic return a range guard appends, which reads
+// no record because it returns a constant — see `TupleValueRow.isAnUnreachableZero`):
+//
+//   • **A FRESH LITERAL** — the returned value is an `__mm_alloc` made in this very function whose only
+//     uses are its two half stores and that `ret`. Nothing else can see the box, so deleting it and
+//     returning the two STORED VALUES moves exactly the ownership the record was carrying, whatever the
+//     elements are. That is `pair`'s shape, and `MapIterator.current()`'s.
+//   • **A FORWARDED PAIR** — the returned value is the result of a call to another value-convention
+//     function and its only use is that `ret`. The pair arrives in registers and leaves in registers, and
+//     no record is built in between.
+//
+// A `return t` of a borrowed PARAMETER, and a `return p` of a record that also escaped, are neither — so
+// those functions keep the heap convention entirely, and every element-ownership question with them.
+//
+// ⭐ **AND THE CALLER MUST BE ABLE TO TAKE THE PAIR TOO, OR THE CALLEE DOES NOT GET THE CONVENTION.** A
+// call site qualifies when the result's only uses are whole-slot loads of its two halves plus the one
+// trivial `__mm_decref` that drops it — no record needed, so none is built — or when the result flows
+// straight into the enclosing function's own value-convention `ret`. Anything else (the pair escapes into
+// an array, its drop is a `__destruct_<T>` cascade because the elements are managed at THIS instantiation,
+// it crosses a branch merge) takes the callee OFF the convention for the whole compile. That is what keeps
+// this pass from ever having to materialize a record out of two registers — which in a `--debugstream`
+// build would also have to invent an mm-trace tag for a box no source line asked for.
+//
+// ⚠ **BOTH ENDS READ ONE VERDICT, AND THAT IS THE WHOLE SAFETY ARGUMENT.** A callee lowered to
+// `errorReturn` whose caller still reads one register hands back a scalar where a pointer is expected; the
+// reverse drops a word. So the decision is made ONCE, module-wide, and both rewrites are driven from it.
+//
+// ⛔ **THE VERDICT IS A FIXPOINT, because the two conditions are mutually recursive** — a `ret` may forward
+// another candidate's pair, and a call site may forward into its own caller's `ret` — so a refused
+// candidate is removed and the removal propagates until nothing changes. The loop is bounded by the
+// candidate count (functions returning a two-element tuple at all) and re-reads only the two verdict
+// lists; the per-function analysis behind them is done once, before it.
+//
+// ⚠ **ONLY A TUPLE.** A named struct with two word fields has the same layout and is deliberately
+// excluded: a struct has reference identity a user can observe (`is`, aliasing, mutation through an
+// alias), and while the call-site test above refuses every site that observes it, widening this pass to
+// user records is a different rung with a different acceptance.
+//
+// Scheduled last in `PassPipeline.buildLoweringPasses`, after `promoteStackRecords`, so every shape it
+// matches is the final one — a record a promotion already turned into frame storage is no longer a call
+// this pass can see, and the two therefore cannot both claim one site.
+
+// A tally of one value's uses, by category. Counts, not indices: the rewrite walk re-reads the ops it is
+// changing, so nothing here has to remember where they were.
+typealias UseTally = int(0 to u64.max)
+typealias UseTallyArray = Array with UseTally
+
+// Op indices this pass deletes. A `Set` and not a dense column: op indices are MODULE-wide, so a dense
+// mark would cost one bool per op in the whole program for each function rewritten, and the doomed set is
+// a handful of entries. (`StdDialect.removeOpsDefining` deletes by DEF instead, which cannot serve here:
+// a `storeIndirect` into a deleted record defines nothing.)
+typealias DoomedOpSet = Set with OpIndex
+
+// A tuple that rides the two return registers is exactly two whole machine words, at the offsets
+// `LayoutDescriptor` gives a record of two word-sized fields.
+let LowHalfOffset = 0 as ByteOffset
+let HighHalfOffset = MachineWordBytes
+
+// `__mm_alloc(size, destructor)` — plus a trace tag in a `--debugstream` build, which this pass reads
+// past: it deletes the allocation, so the tag loses its reader with it.
+let MmAllocMinArgCount = 2 as ParamCount
+let MmDecrefArgCount = 1 as ParamCount
+
+// A call that is not the one-argument `__mm_decref` a record's whole drop lowers to.
+enum NotTheTrivialDrop
+	someOtherCall
+end 'NotTheTrivialDrop'
+
+// The value a trivial drop releases. THE shape this pass admits as a record's release: a
+// `__destruct_<T>` cascade — which is what the drop lowers to when the elements are managed at this
+// instantiation — is some other call and refuses the pair. Asked by the census, by the classifier's
+// complement and by the rewrite, so the three cannot come to disagree about what a trivial drop is.
+function trivialDropOf(callee ByteArray, args ValueIdArray) returns ValueId throws NotTheTrivialDrop
+	if not callee.equals(MmDecrefName) or args.count() != MmDecrefArgCount 'notTheTrivialDrop'
+		throw NotTheTrivialDrop.someOtherCall
+	end 'notTheTrivialDrop'
+	return try args.get(0) otherwise panic("trivialDropOf: args.get(0) OOB on a one-argument `__mm_decref`")
+end 'trivialDropOf'
+
+// Whether a dense mark column answers true for `value`. The columns are minted over one function's value
+// space, and a value minted by the rewrite itself lies past their extent — outside is a `false` answer,
+// not an error.
+function columnMarks(column BoolArray, value ValueId) returns bool
+	if value >= column.count() 'outsideTheValueSpace'
+		return false
+	end 'outsideTheValueSpace'
+	return try column.get(value) otherwise panic("columnMarks: column.get OOB at {value} after a bounds test")
+end 'columnMarks'
+
+// How a value this pass reasons about is DEFINED, which decides which rewrite it can take.
+union TupleValueOrigin
+	// `__mm_alloc(...)` in this function: a record that may be elidable at its `ret`.
+	freshBox
+	// A direct `call` to a candidate: a pair that may arrive in registers.
+	directCall(calleeIndex FuncIndex)
+	// A `const` in this function. A tuple-returning function cannot return a constant, so the only way one
+	// reaches a `ret` here is `InsertRangeChecks.emitDeadReturn` — the unreachable terminator it appends
+	// after `mrt_panic` so a guard block still LEAVES the function the way the ABI says.
+	constant
+	// A parameter, a block argument, a load — anything else. Neither rewrite applies, and saying so by
+	// NAME is what makes a returned parameter a refusal rather than an absence.
+	elsewhere
+end 'TupleValueOrigin'
+
+// One value's census within one function: where it comes from, and what reads it.
+//
+// ⚠ **`storedLow`/`storedHigh` MEAN SOMETHING ONLY WHERE THE MATCHING TALLY IS 1**, exactly as
+// `typeNameIdOf`'s name column means something only on the arms whose tag carries a name. They are read
+// under that guard and nowhere else.
+type TupleValueRow
+	export var value as ValueId
+	export var origin as TupleValueOrigin
+	export var loadLow as UseTally
+	export var loadHigh as UseTally
+	export var storeLow as UseTally
+	export var storeHigh as UseTally
+	export var returnUses as UseTally
+	export var trivialDrops as UseTally
+	// Every read this pass has no rewrite for: an argument to some other call, a store of the value
+	// ITSELF into somewhere, a branch-edge argument, a comparison. One is enough to refuse.
+	export var other as UseTally
+	export var storedLow as ValueId
+	export var storedHigh as ValueId
+
+	export static function create(value ValueId) returns TupleValueRow
+		return Self{value: value, origin: TupleValueOrigin.elsewhere, loadLow: 0, loadHigh: 0, storeLow: 0, storeHigh: 0, returnUses: 0, trivialDrops: 0, other: 0, storedLow: 0, storedHigh: 0}
+	end 'create'
+
+	// The FRESH-LITERAL shape: this box is written once at each half and returned, and nothing else in the
+	// function can see it. Both stores must be there or the `errorReturn` would have no second word.
+	export function isAnUnsharedFreshPair() returns bool
+		return self.storeLow == 1 and self.storeHigh == 1 and self.returnUses == 1 and self.loadLow == 0 and self.loadHigh == 0 and self.trivialDrops == 0 and self.other == 0
+	end 'isAnUnsharedFreshPair'
+
+	// The CALL-SITE shape that needs no record: the halves are read out and the box is released by the one
+	// trivial decref. Zero loads is admitted — a result nobody reads still costs the call.
+	export function isReadThenDropped() returns bool
+		return self.trivialDrops == 1 and self.returnUses == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
+	end 'isReadThenDropped'
+
+	// ⛔⛔ **THE UNREACHABLE PANIC RETURN, which is not an exception to the gate but the same rule applied to
+	// a block that never runs.** A range-guarded parameter gives its function one `ret <zero const>` per
+	// guard (`InsertRangeChecks.emitDeadReturn`), appended AFTER lowering and therefore against the
+	// convention this pass has not yet decided. Nothing reads either register there — `mrt_panic` does not
+	// return — but the block must still leave the function with the arity its type declares, or the wasm
+	// module does not validate, which is the X6 defect that door's own header records.
+	export function isAnUnreachableZero() returns bool
+		return self.returnUses >= 1 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.trivialDrops == 0 and self.other == 0
+	end 'isAnUnreachableZero'
+
+	// The FORWARDED shape: the pair's one use is the enclosing function's own return.
+	export function isForwardedToTheReturn() returns bool
+		return self.returnUses == 1 and self.trivialDrops == 0 and self.loadLow == 0 and self.loadHigh == 0 and self.storeLow == 0 and self.storeHigh == 0 and self.other == 0
+	end 'isForwardedToTheReturn'
+end 'TupleValueRow'
+
+typealias TupleValueRowArray = Array with TupleValueRow
+
+// One function's analysis: the census rows, and the dense value→row column that finds them.
+type FunctionTupleFlow
+	export var rows as TupleValueRowArray
+	// Dense over the function's value space. `hasRow` is the membership half; `rowAt` is read only where it
+	// is true, so no absent-marker value is needed.
+	export var hasRow as BoolArray
+	export var rowAt as UseTallyArray
+
+	export static function create(valueBound ValueId) returns FunctionTupleFlow
+		var hasRow = BoolArray.create()
+		hasRow.growFilled(valueBound as ElementIndex, value: false)
+		var rowAt = UseTallyArray.create()
+		rowAt.growFilled(valueBound as ElementIndex, value: 0)
+		return Self{rows: TupleValueRowArray.create(), hasRow: hasRow, rowAt: rowAt}
+	end 'create'
+
+	export function tracks(value ValueId) returns bool
+		return columnMarks(self.hasRow, value: value)
+	end 'tracks'
+
+	export function rowOf(value ValueId) returns TupleValueRow
+		let rowIndex = try self.rowAt.get(value) otherwise panic("FunctionTupleFlow.rowOf: rowAt.get OOB at {value} — asked of a value `tracks` answered true for")
+		return try self.rows.get(rowIndex) otherwise panic("FunctionTupleFlow.rowOf: rows.get OOB at {rowIndex} — the row-index column is written only by `track`, which pushes the row it indexes")
+	end 'rowOf'
+
+	// Begin tracking `value`, or leave the row it already has alone.
+	export function track(value ValueId)
+		if self.tracks(value) 'alreadyTracked'
+			return
+		end 'alreadyTracked'
+
+		try self.rowAt.set(value, value: self.rows.count()) otherwise panic("FunctionTupleFlow.track: rowAt.set OOB at {value} against a column of {self.rowAt.count()}")
+		try self.hasRow.set(value, value: true) otherwise panic("FunctionTupleFlow.track: hasRow.set OOB at {value} against a column of {self.hasRow.count()}")
+		self.rows.push(TupleValueRow.create(value))
+	end 'track'
+end 'FunctionTupleFlow'
+
+// A function's analysis, or the absence of one: only functions that RETURN a candidate tuple or CALL a
+// candidate are analysed, and in most programs that is none of them.
+union FunctionTupleFlowSlot
+	absent
+	present(flow FunctionTupleFlow)
+end 'FunctionTupleFlowSlot'
+
+typealias FunctionTupleFlowSlotArray = Array with FunctionTupleFlowSlot
+
+// The absence of an analysis, as a throw rather than a marker value: a function nothing could turn on was
+// never walked, and its readers say so at the `try`.
+enum NoFunctionFlow
+	notAnalysed
+end 'NoFunctionFlow'
+
+// What one `ret` of a candidate can do — the callee half of the gate.
+union ValueTupleRetKind
+	// A fresh box written at both halves and returned: elidable outright.
+	freshPair
+	// The result of a direct call to a candidate, used by nothing but this return.
+	forwarded(calleeIndex FuncIndex)
+	// The unreachable zero a range-check panic block returns: both registers get it.
+	unreachableZero(zero ValueId)
+	// Anything else. The function cannot take the convention.
+	unusable
+end 'ValueTupleRetKind'
+
+// One recorded `ret` of one candidate.
+type ValueTupleRetVerdict
+	export let funcIndex as FuncIndex
+	export let kind as ValueTupleRetKind
+
+	export static function create(funcIndex FuncIndex, kind ValueTupleRetKind) returns ValueTupleRetVerdict
+		return Self{funcIndex: funcIndex, kind: kind}
+	end 'create'
+end 'ValueTupleRetVerdict'
+
+typealias ValueTupleRetVerdictArray = Array with ValueTupleRetVerdict
+
+// What one CALL SITE of a candidate can do — the caller half of the gate.
+union ValueTupleCallShape
+	// The halves are read out and the box trivially dropped: no record is needed at this site.
+	readThenDropped
+	// The pair flows straight into the caller's own return, so the caller must be on the convention too.
+	forwardedByCaller
+	// Anything else. This site alone takes the callee off the convention.
+	unusable
+end 'ValueTupleCallShape'
+
+// One recorded call site: which function holds it, which candidate it calls, and what it can do.
+type ValueTupleCallSite
+	export let callerIndex as FuncIndex
+	export let calleeIndex as FuncIndex
+	export let shape as ValueTupleCallShape
+
+	export static function create(callerIndex FuncIndex, calleeIndex FuncIndex, shape ValueTupleCallShape) returns ValueTupleCallSite
+		return Self{callerIndex: callerIndex, calleeIndex: calleeIndex, shape: shape}
+	end 'create'
+end 'ValueTupleCallSite'
+
+typealias ValueTupleCallSiteArray = Array with ValueTupleCallSite
+
+// ⭐ **THE PASS.** Whole-module: a callee's convention and its call sites' shapes are one decision, and
+// neither end may be judged without the other.
+export function applyValueTupleReturn(project Project, module StdModule)
+	logDebug(LogCategory.ir, message: function() gives "applyValueTupleReturn: {module.funcCount()} function(s)")
+
+	// ⚠ **A DUPLICATE FUNCTION NAME DECLINES THE WHOLE PASS**, for `promoteStackRecords`' stated reason:
+	// every judgement here resolves a callee by NAME, so two bodies under one name would let a call site be
+	// judged against the wrong one. Raising E4015 belongs to `DeadFunctionElimination`, which runs later and
+	// sees strictly more collisions.
+	match FunctionNameIndex.build(module.functions) 'names'
+		duplicateAt then return
+		built(byName) then convertWithNameIndex(project, module: module, byName: byName)
+	end 'names'
+end 'applyValueTupleReturn'
+
+function convertWithNameIndex(project Project, module StdModule, byName FunctionNameIndex)
+	// PHASE 1 — the structural candidates. Most programs have none, and then nothing below runs.
+	var onTheConvention = collectCandidates(project, module: module)
+	if not anyCandidate(onTheConvention) 'noTupleReturningFunction'
+		return
+	end 'noTupleReturningFunction'
+
+	// PHASE 2 — one analysis per function a verdict can turn on, and the two verdict lists read off it.
+	let flows = analyseAffectedFunctions(module, byName: byName, onTheConvention: onTheConvention)
+	let retVerdicts = collectRetVerdicts(module, flows: flows, onTheConvention: onTheConvention)
+	let callSites = collectCallSites(module, byName: byName, flows: flows, onTheConvention: onTheConvention)
+
+	// PHASE 3 — remove every candidate one of those lists refuses, until nothing changes.
+	settleTheConvention(onTheConvention, retVerdicts: retVerdicts, callSites: callSites)
+	if not anyCandidate(onTheConvention) 'everyCandidateWasRefused'
+		return
+	end 'everyCandidateWasRefused'
+
+	// PHASE 4 — stamp the bit the ABI readers ask, then rewrite both ends against it.
+	logTheSettledConvention(module, onTheConvention: onTheConvention)
+	stampTheConvention(module, onTheConvention: onTheConvention)
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
+		rewriteOneFunction(module, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention)
+	end 'eachFunc'
+end 'convertWithNameIndex'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 1 — the structural candidates
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Which functions came out of the fixpoint on the convention — the one reading that says whether a
+// program the pass was expected to change actually changed, without disassembling it.
+function logTheSettledConvention(module StdModule, onTheConvention BoolArray)
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'notOnIt'
+			continue
+		end 'notOnIt'
+
+		let name = module.getFunc(funcIndex).name
+		logDebug(LogCategory.ir, message: function() gives "applyValueTupleReturn: `{String.from(name)}` returns its pair in two registers")
+	end 'eachFunc'
+end 'logTheSettledConvention'
+
+function anyCandidate(onTheConvention BoolArray) returns bool
+	for on in onTheConvention 'eachFunc'
+		if on 'found'
+			return true
+		end 'found'
+	end 'eachFunc'
+	return false
+end 'anyCandidate'
+
+// Which functions could take the convention on their DECLARATION alone: a tuple return, no `throws` (the
+// secondary slot is the error flag there, and both want the one register), and an address nothing takes.
+// ⭐ **THE DECLARATION TEST COMES FIRST AND IS THE PASS'S WHOLE-PROGRAM GATE.** It reads two fields per
+// function and walks nothing; the address scan below it is a walk of every op in the module, and a program
+// that declares no tuple-returning function must not pay for one. Most programs are that program.
+function collectCandidates(project Project, module StdModule) returns BoolArray
+	var candidates = BoolArray.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+		candidates.push(returnsATupleRecord(project, func: func) and not throwsClauseIsThrowing(func.throwsTypeName))
+	end 'eachFunc'
+
+	if not anyCandidate(candidates) 'noTupleReturningFunction'
+		return candidates
+	end 'noTupleReturningFunction'
+
+	refuseAddressTakenCandidates(project, module: module, candidates: candidates)
+	return candidates
+end 'collectCandidates'
+
+// ⚠ The two address spellings are asked per CANDIDATE, not per function, because `fnRefThunkName` builds a
+// name: asking it of every function would allocate one per function in the program to answer a question
+// only a tuple-returning one can be affected by.
+function refuseAddressTakenCandidates(project Project, module StdModule, candidates BoolArray)
+	let addressTaken = collectAddressTakenFunctions(project, module: module)
+	for funcIndex in 0 upto candidates.count() 'eachFunc'
+		if not isOnTheConvention(candidates, funcIndex: funcIndex) 'notACandidate'
+			continue
+		end 'notACandidate'
+
+		let name = module.getFunc(funcIndex).name
+		if not addressTaken.contains(name) and not addressTaken.contains(fnRefThunkName(name)) 'addressNeverTaken'
+			continue
+		end 'addressNeverTaken'
+
+		try candidates.set(funcIndex, value: false) otherwise panic("refuseAddressTakenCandidates: candidates.set OOB at {funcIndex}")
+	end 'eachFunc'
+end 'refuseAddressTakenCandidates'
+
+// ⭐⭐ **EVERY FUNCTION WHOSE ADDRESS THIS PROGRAM MATERIALIZES, from the two places an address can come
+// from.** A function reached through a POINTER is called by its TYPE, and a function type cannot say which
+// return convention its target uses — `StdOp.callIndirect` captures exactly one result, and so does every
+// witness dispatch. So an address-taken function keeps the pointer convention.
+//
+//   • `StdOp.funcAddr` — the op that materializes one. A plain function used as a VALUE names its
+//     `__fnref_<name>` env thunk rather than itself, and that thunk does not exist yet at this point in the
+//     pipeline, so a candidate asks about BOTH spellings of its own name. An `async` spawn names its target
+//     directly and is caught by the same walk without a second rule.
+//   • **`.rdata` FUNCTION SLOTS** (`GlobalDataTable.pendingRdataRelocs`) — a witness table's method slots,
+//     a layout descriptor's `destroyFunc`/`copyFunc`/`retainFunc`. Those are addresses no op holds, which
+//     is exactly why an op walk alone would miss them; `DeadFunctionElimination` roots the same list for
+//     the same reason.
+function collectAddressTakenFunctions(project Project, module StdModule) returns FnRefThunkSet
+	var taken = FnRefThunkSet.create()
+	// ⚠ HOISTED, because this walk is WHOLE-MODULE: `liveOpIndices` mints a fresh column per call, which
+	// over every function of the program is one allocation per function for an answer discarded at the end
+	// of the iteration. `collectLiveOpIndices` refills this one, keeping its capacity.
+	var liveOps = OpIndexArray.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		module.collectLiveOpIndices(module.getFunc(funcIndex), into: liveOps)
+		for opIdx in liveOps 'eachOp'
+			noteAddressTakenByOp(try module.ops.get(opIdx) otherwise panic("collectAddressTakenFunctions: live op index {opIdx} not in module.ops"), taken: taken)
+		end 'eachOp'
+	end 'eachFunc'
+
+	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
+		taken.insert(reloc.funcName)
+	end 'eachRdataSlot'
+	return taken
+end 'collectAddressTakenFunctions'
+
+function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
+	match op 'op'
+		const to osExit then break 'op'
+		funcAddr(_, funcName) then taken.insert(funcName)
+		callIndirect to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'noteAddressTakenByOp'
+
+// Is this function's declared return a TUPLE record? A tuple is a synthesized struct, so it arrives as a
+// `structRef` at a `__Tuple…` name (`ProgramSignatures.internTupleType`). A name the project's interner
+// cannot resolve is not one this pass may reason about.
+function returnsATupleRecord(project Project, func IrFunction) returns bool
+	return match func.maxonReturnType 'declared'
+		void gives false
+		value(inner) gives typeIsATupleRecord(project, t: inner)
+	end 'declared'
+end 'returnsATupleRecord'
+
+function typeIsATupleRecord(project Project, t MaxonType) returns bool
+	if maxonTypeTag(t) != ValueTypeTag.structRef 'notARecordName'
+		return false
+	end 'notARecordName'
+
+	let name = try project.typeNames.nameOf(typeNameIdOf(t)) otherwise return false
+	return isTupleTypeName(name)
+end 'typeIsATupleRecord'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 2 — the per-function census
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Analyse only the functions a verdict can turn on: a candidate (whose own returns are judged) and any
+// function holding a direct call to one (whose call sites are). Everything else stays `absent`, which in
+// most programs is every function there is.
+function analyseAffectedFunctions(module StdModule, byName FunctionNameIndex, onTheConvention BoolArray) returns FunctionTupleFlowSlotArray
+	var flows = FunctionTupleFlowSlotArray.create()
+	// Hoisted for `collectAddressTakenFunctions`' reason: the screen below is whole-module.
+	var liveOps = OpIndexArray.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+		module.collectLiveOpIndices(func, into: liveOps)
+		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) and not callsACandidate(module, liveOps: liveOps, byName: byName, onTheConvention: onTheConvention) 'nothingToJudgeHere'
+			flows.push(FunctionTupleFlowSlot.absent)
+			continue
+		end 'nothingToJudgeHere'
+
+		flows.push(FunctionTupleFlowSlot.present(analyseOneFunction(module, func: func, liveOps: liveOps, byName: byName, onTheConvention: onTheConvention)))
+	end 'eachFunc'
+	return flows
+end 'analyseAffectedFunctions'
+
+function isOnTheConvention(onTheConvention BoolArray, funcIndex FuncIndex) returns bool
+	return try onTheConvention.get(funcIndex) otherwise panic("isOnTheConvention: onTheConvention.get OOB at {funcIndex} — the column has one entry per module function")
+end 'isOnTheConvention'
+
+function flowOf(flows FunctionTupleFlowSlotArray, funcIndex FuncIndex) returns FunctionTupleFlow throws NoFunctionFlow
+	match try flows.get(funcIndex) otherwise panic("flowOf: flows.get OOB at {funcIndex} — the column has one entry per module function") 'slot'
+		absent then throw NoFunctionFlow.notAnalysed
+		present(flow) then return flow
+	end 'slot'
+end 'flowOf'
+
+function callsACandidate(module StdModule, liveOps OpIndexArray, byName FunctionNameIndex, onTheConvention BoolArray) returns bool
+	for opIdx in liveOps 'eachOp'
+		if opCallsACandidate(try module.ops.get(opIdx) otherwise panic("callsACandidate: live op index {opIdx} not in module.ops"), byName: byName, onTheConvention: onTheConvention) 'found'
+			return true
+		end 'found'
+	end 'eachOp'
+	return false
+end 'callsACandidate'
+
+function opCallsACandidate(op StdOp, byName FunctionNameIndex, onTheConvention BoolArray) returns bool
+	return match op 'op'
+		const to param gives false
+		call(_, callee, _) gives isCandidateCallee(byName, callee: callee, onTheConvention: onTheConvention)
+		retVoid to osUnpublishNamedSegment gives false
+	end 'op'
+end 'opCallsACandidate'
+
+function isCandidateCallee(byName FunctionNameIndex, callee ByteArray, onTheConvention BoolArray) returns bool
+	let funcIndex = try byName.byName.get(callee) otherwise return false
+	return isOnTheConvention(onTheConvention, funcIndex: funcIndex)
+end 'isCandidateCallee'
+
+// ⭐ **ONE PASS TO TRACK, ONE TO CLASSIFY, AND THE CLASSIFIER FAILS CLOSED.** Every value this pass could
+// rewrite gets a row first — the returned values and the results of `__mm_alloc` and of calls to
+// candidates — so no later reader can meet a value whose row does not exist yet. Then every op and every
+// BRANCH EDGE is read once. A read the classifier has no arm for lands in `other`, which refuses the
+// value, so an op variant appended tomorrow costs a missed rewrite and never a wrong one.
+function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexArray, byName FunctionNameIndex, onTheConvention BoolArray) returns FunctionTupleFlow
+	var flow = FunctionTupleFlow.create(nextFreeValueId(module, func: func))
+
+	// ⚠ THE RETURNED VALUES FIRST, AND SEPARATELY. A `const` gets a row only where a `ret` already named it
+	// (every function holds constants, and a row per constant would make the census as large as the code) —
+	// so the walk that stamps origins has to run against a table the returns have already seeded.
+	for opIdx in liveOps 'eachReturn'
+		trackReturnedValue(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), flow: flow)
+	end 'eachReturn'
+
+	for opIdx in liveOps 'eachDef'
+		trackValueOrigin(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), byName: byName, onTheConvention: onTheConvention, flow: flow)
+	end 'eachDef'
+
+	var readByOneOp = StdValueUseSet.createRecordingIds()
+	for opIdx in liveOps 'eachUse'
+		classifyOneOp(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), flow: flow, readByOneOp: readByOneOp)
+	end 'eachUse'
+
+	// ⚠ BRANCH-EDGE ARGS LIVE ON THE BLOCK, NOT ON AN OP, so `collectStdOpUses` structurally cannot see them
+	// and says so. A pair reaching a merge is refused: the merge would need a record to name.
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("analyseOneFunction: blockRef from func.blockRefs not in module.blocks")
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				noteOtherUse(flow, value: argId)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+
+	return flow
+end 'analyseOneFunction'
+
+// A `ret`'s operand is tracked wherever it comes from, so a returned parameter gets a row whose origin
+// stays `elsewhere` and is refused BY NAME at `retKindOf` rather than by there being no row.
+function trackReturnedValue(op StdOp, flow FunctionTupleFlow)
+	match op 'op'
+		const to branch then break 'op'
+		ret(retValId) then flow.track(retValId)
+		param to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'trackReturnedValue'
+
+// Stamp where a tracked value came from, and give a row to the call results a rewrite could name.
+function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow)
+	match op 'op'
+		const(resultId, _, _) then trackConstant(resultId, flow: flow)
+		binOp to branch then break 'op'
+		ret then break 'op'
+		param then break 'op'
+		call(resultId, callee, args) then trackCallResult(resultId, callee: callee, args: args, byName: byName, onTheConvention: onTheConvention, flow: flow)
+		retVoid to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'trackValueOrigin'
+
+function trackConstant(resultId ValueId, flow FunctionTupleFlow)
+	if not flow.tracks(resultId) 'noReturnNamesIt'
+		return
+	end 'noReturnNamesIt'
+	var row = flow.rowOf(resultId)
+	row.origin = TupleValueOrigin.constant
+end 'trackConstant'
+
+function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow)
+	// ⚠ Like a constant, a BOX gets a row only where a `ret` already named it — one that is not returned can
+	// never be a fresh-pair return, and giving every allocation a row would make the classifier's per-op
+	// scan of the rows grow with the function's allocation count.
+	if callee.equals(MmAllocName) and args.count() >= MmAllocMinArgCount 'aHeapBox'
+		if not flow.tracks(resultId) 'noReturnNamesIt'
+			return
+		end 'noReturnNamesIt'
+
+		var box = flow.rowOf(resultId)
+		box.origin = TupleValueOrigin.freshBox
+		return
+	end 'aHeapBox'
+
+	let calleeIndex = try byName.byName.get(callee) otherwise return
+	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'notACandidate'
+		return
+	end 'notACandidate'
+
+	flow.track(resultId)
+	var pair = flow.rowOf(resultId)
+	pair.origin = TupleValueOrigin.directCall(calleeIndex)
+end 'trackCallResult'
+
+// Read one op's uses into the census: the four rewritable shapes are tallied by name, and every other read
+// the op makes is refused through `collectStdOpUses` — the dialect's one "what does this op read?" oracle.
+function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUseSet)
+	match op 'op'
+		const to branch then break 'op'
+		ret(retValId) then noteReturnedValue(flow, retValId: retValId)
+		param then break 'op'
+		call(_, callee, args) then noteTrivialDrop(flow, callee: callee, args: args)
+		retVoid or globalAddr then break 'op'
+		loadIndirect(_, addrId, offset, valueType) then noteHalfLoad(flow, addrId: addrId, offset: offset, valueType: valueType)
+		storeIndirect(addrId, offset, valueId, valueType) then noteHalfStore(flow, addrId: addrId, offset: offset, valueId: valueId, valueType: valueType)
+		osAllocPages to osUnpublishNamedSegment then break 'op'
+	end 'op'
+
+	// ⚠ **OVER THE OP'S READS, NEVER OVER THE CENSUS ROWS.** The two enumerate the same intersection, but
+	// a row scan per op is O(ops x rows) and both grow with the function — a body that returns and calls a
+	// tuple-returning function many times is then quadratic in its own size. `createRecordingIds` is what
+	// makes the op's own reads enumerable, and its sparse `clear` is what makes the per-op refill cheap.
+	readByOneOp.clear()
+	collectStdOpUses(op, referenced: readByOneOp)
+	for readIndex in 0 upto readByOneOp.insertedIdCount() 'eachRead'
+		let value = readByOneOp.insertedIdAt(readIndex)
+		if opAccountsForTheValue(op, value: value) 'alreadyTallied'
+			continue
+		end 'alreadyTallied'
+
+		noteOtherUse(flow, value: value)
+	end 'eachRead'
+end 'classifyOneOp'
+
+// Whether the arm above already tallied this op's read of `value` — the exact complement of the catch-all,
+// written once so the two cannot come to disagree about which reads are accounted for.
+function opAccountsForTheValue(op StdOp, value ValueId) returns bool
+	return match op 'op'
+		const to branch gives false
+		ret(retValId) gives retValId == value
+		param gives false
+		call(_, callee, args) gives callIsTheTrivialDropOf(callee, args: args, value: value)
+		retVoid or globalAddr gives false
+		loadIndirect(_, addrId, offset, valueType) gives addrId == value and isAWholeHalf(offset, valueType: valueType)
+		storeIndirect(addrId, offset, valueId, valueType) gives addrId == value and valueId != value and isAWholeHalf(offset, valueType: valueType)
+		osAllocPages to osUnpublishNamedSegment gives false
+	end 'op'
+end 'opAccountsForTheValue'
+
+// An access at offset 0 or 8, one whole machine word wide. Anything narrower, wider or misaligned is not a
+// half of the pair — and a FLOAT half is refused here too, because the secondary return slot is a
+// general-purpose register and an `f64` virtual constrained to it would cross register files.
+function isAWholeHalf(offset ByteOffset, valueType StdType) returns bool
+	if valueType != StdType.i64 'notAWholeIntegralWord'
+		return false
+	end 'notAWholeIntegralWord'
+	return offset == LowHalfOffset or offset == HighHalfOffset
+end 'isAWholeHalf'
+
+function callIsTheTrivialDropOf(callee ByteArray, args ValueIdArray, value ValueId) returns bool
+	let dropped = try trivialDropOf(callee, args: args) otherwise return false
+	return dropped == value
+end 'callIsTheTrivialDropOf'
+
+function noteOtherUse(flow FunctionTupleFlow, value ValueId)
+	if not flow.tracks(value) 'notOurs'
+		return
+	end 'notOurs'
+	var row = flow.rowOf(value)
+	row.other = row.other + 1
+end 'noteOtherUse'
+
+function noteReturnedValue(flow FunctionTupleFlow, retValId ValueId)
+	var row = flow.rowOf(retValId)
+	row.returnUses = row.returnUses + 1
+end 'noteReturnedValue'
+
+function noteTrivialDrop(flow FunctionTupleFlow, callee ByteArray, args ValueIdArray)
+	let dropped = try trivialDropOf(callee, args: args) otherwise return
+	if not flow.tracks(dropped) 'notOurs'
+		return
+	end 'notOurs'
+	var row = flow.rowOf(dropped)
+	row.trivialDrops = row.trivialDrops + 1
+end 'noteTrivialDrop'
+
+function noteHalfLoad(flow FunctionTupleFlow, addrId ValueId, offset ByteOffset, valueType StdType)
+	if not flow.tracks(addrId) or not isAWholeHalf(offset, valueType: valueType) 'notAHalfOfATrackedPair'
+		return
+	end 'notAHalfOfATrackedPair'
+
+	var row = flow.rowOf(addrId)
+	if offset == LowHalfOffset 'low'
+		row.loadLow = row.loadLow + 1
+		return
+	end 'low'
+	row.loadHigh = row.loadHigh + 1
+end 'noteHalfLoad'
+
+function noteHalfStore(flow FunctionTupleFlow, addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType)
+	if not flow.tracks(addrId) or valueId == addrId or not isAWholeHalf(offset, valueType: valueType) 'notAHalfOfATrackedPair'
+		return
+	end 'notAHalfOfATrackedPair'
+
+	var row = flow.rowOf(addrId)
+	if offset == LowHalfOffset 'low'
+		row.storeLow = row.storeLow + 1
+		row.storedLow = valueId
+		return
+	end 'low'
+	row.storeHigh = row.storeHigh + 1
+	row.storedHigh = valueId
+end 'noteHalfStore'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 2b — the two verdict lists
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+function collectRetVerdicts(module StdModule, flows FunctionTupleFlowSlotArray, onTheConvention BoolArray) returns ValueTupleRetVerdictArray
+	var verdicts = ValueTupleRetVerdictArray.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'notACandidate'
+			continue
+		end 'notACandidate'
+
+		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise panic("collectRetVerdicts: function {funcIndex} is a candidate and so was analysed — `analyseAffectedFunctions` analyses every candidate")
+		let func = module.getFunc(funcIndex)
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			noteRetVerdict(try module.ops.get(opIdx) otherwise panic("collectRetVerdicts: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, flow: flow, verdicts: verdicts)
+		end 'eachOp'
+	end 'eachFunc'
+	return verdicts
+end 'collectRetVerdicts'
+
+function noteRetVerdict(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, verdicts ValueTupleRetVerdictArray)
+	match op 'op'
+		const to branch then break 'op'
+		ret(retValId) then verdicts.push(ValueTupleRetVerdict.create(funcIndex, kind: retKindOf(flow, retValId: retValId)))
+		param to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'noteRetVerdict'
+
+// ⭐ **THE CALLEE HALF OF THE GATE**, and the admitted shapes are exactly this file's header's two plus the
+// unreachable panic return. Everything else — a returned parameter, a returned record something else also
+// reads — is `unusable`, which is what keeps a value-convention body free of any record whose ownership
+// would have to move word by word.
+function retKindOf(flow FunctionTupleFlow, retValId ValueId) returns ValueTupleRetKind
+	if not flow.tracks(retValId) 'noRowAtAll'
+		return ValueTupleRetKind.unusable
+	end 'noRowAtAll'
+
+	let row = flow.rowOf(retValId)
+	return match row.origin 'origin'
+		freshBox gives freshPairKindOf(row)
+		directCall(calleeIndex) gives forwardedKindOf(row, calleeIndex: calleeIndex)
+		constant gives unreachableZeroKindOf(row, retValId: retValId)
+		elsewhere gives ValueTupleRetKind.unusable
+	end 'origin'
+end 'retKindOf'
+
+function freshPairKindOf(row TupleValueRow) returns ValueTupleRetKind
+	if not row.isAnUnsharedFreshPair() 'somethingElseSeesTheBox'
+		return ValueTupleRetKind.unusable
+	end 'somethingElseSeesTheBox'
+	return ValueTupleRetKind.freshPair
+end 'freshPairKindOf'
+
+function unreachableZeroKindOf(row TupleValueRow, retValId ValueId) returns ValueTupleRetKind
+	if not row.isAnUnreachableZero() 'theConstantIsAlsoReadElsewhere'
+		return ValueTupleRetKind.unusable
+	end 'theConstantIsAlsoReadElsewhere'
+	return ValueTupleRetKind.unreachableZero(retValId)
+end 'unreachableZeroKindOf'
+
+function forwardedKindOf(row TupleValueRow, calleeIndex FuncIndex) returns ValueTupleRetKind
+	if not row.isForwardedToTheReturn() 'thePairIsAlsoReadHere'
+		return ValueTupleRetKind.unusable
+	end 'thePairIsAlsoReadHere'
+	return ValueTupleRetKind.forwarded(calleeIndex)
+end 'forwardedKindOf'
+
+// Every direct call to a candidate, wherever it is, with what that site can do.
+function collectCallSites(module StdModule, byName FunctionNameIndex, flows FunctionTupleFlowSlotArray, onTheConvention BoolArray) returns ValueTupleCallSiteArray
+	var sites = ValueTupleCallSiteArray.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
+		let func = module.getFunc(funcIndex)
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			noteCallSite(try module.ops.get(opIdx) otherwise panic("collectCallSites: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
+		end 'eachOp'
+	end 'eachFunc'
+	return sites
+end 'collectCallSites'
+
+function noteCallSite(op StdOp, funcIndex FuncIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
+	match op 'op'
+		const to param then break 'op'
+		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
+		retVoid to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'noteCallSite'
+
+function noteCandidateCallSite(resultId ValueId, callee ByteArray, funcIndex FuncIndex, byName FunctionNameIndex, flow FunctionTupleFlow, onTheConvention BoolArray, sites ValueTupleCallSiteArray)
+	let calleeIndex = try byName.byName.get(callee) otherwise return
+	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'notACandidate'
+		return
+	end 'notACandidate'
+
+	sites.push(ValueTupleCallSite.create(funcIndex, calleeIndex: calleeIndex, shape: callShapeOf(flow, pair: resultId, callerIsACandidate: isOnTheConvention(onTheConvention, funcIndex: funcIndex))))
+end 'noteCandidateCallSite'
+
+// ⭐ **THE CALLER HALF OF THE GATE.** A pair that is read out and trivially dropped needs no record; one
+// that flows into the caller's own return needs none either, PROVIDED the caller is on the convention.
+//
+// ⛔⛔ **A CALLER THAT IS NOT A CANDIDATE FORWARDS NOTHING, AND THE REFUSAL HAS TO BE STATED HERE.** The
+// fixpoint carries "the caller fell, so the callee falls" along an edge between two CANDIDATES; a caller
+// the declaration test already excluded — one whose address is taken, one that throws — is never a node
+// that edge can be seeded at, so admitting its site would leave the callee on the convention with a
+// forwarding `ret` in a function whose ABI hands back one register. Then `rewriteOneReturn` writes the
+// low half where the caller's type says a record pointer, and the indirect call reading it faults.
+function callShapeOf(flow FunctionTupleFlow, pair ValueId, callerIsACandidate bool) returns ValueTupleCallShape
+	if not flow.tracks(pair) 'noRowAtAll'
+		return ValueTupleCallShape.unusable
+	end 'noRowAtAll'
+
+	let row = flow.rowOf(pair)
+	if row.isReadThenDropped() 'noRecordNeeded'
+		return ValueTupleCallShape.readThenDropped
+	end 'noRecordNeeded'
+	if row.isForwardedToTheReturn() and callerIsACandidate 'straightBackOut'
+		return ValueTupleCallShape.forwardedByCaller
+	end 'straightBackOut'
+	return ValueTupleCallShape.unusable
+end 'callShapeOf'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 3 — the fixpoint
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ⭐ **WHICH CANDIDATES FALL WHEN ONE FALLS.** Both verdict lists say the same kind of thing — *this
+// candidate is refused if THAT function is*: a `ret` that forwards a pair depends on the callee it forwards
+// from, and a call site that forwards into its caller's own return depends on that caller. So the removal is
+// a transitive closure over ONE relation, seeded by the refusals that depend on nothing — the shape
+// `reverseReachabilityMark` answers in O(candidates + edges) and a re-scan until nothing changes answers at
+// one pass per LINK of the longest refusal chain, which is quadratic in a program of forwarding wrappers.
+function settleTheConvention(onTheConvention BoolArray, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
+	var dependedOn = CsrColumn.create()
+	var dependent = CsrColumn.create()
+	collectDependencyEdges(dependedOn, dependent: dependent, retVerdicts: retVerdicts, callSites: callSites)
+
+	var seeds = BoolArray.create()
+	seeds.growFilled(onTheConvention.count(), value: false)
+	seedRefusals(seeds, retVerdicts: retVerdicts, callSites: callSites)
+
+	let refused = reverseReachabilityMark(buildCsr(dependedOn, to: dependent, nodeCount: onTheConvention.count() as CsrIndex), seeds: seeds)
+	for funcIndex in 0 upto onTheConvention.count() 'eachFunc'
+		if not (try refused.get(funcIndex) otherwise panic("settleTheConvention: refused.get OOB at {funcIndex} — the mark spans the same function count the seeds did")) 'kept'
+			continue
+		end 'kept'
+
+		try onTheConvention.set(funcIndex, value: false) otherwise panic("settleTheConvention: onTheConvention.set OOB at {funcIndex}")
+	end 'eachFunc'
+end 'settleTheConvention'
+
+// One edge per dependency, as the parallel columns `buildCsr` takes: a `ret` that forwards depends on the
+// callee it forwards from, and a call site that forwards into its caller's return depends on that caller.
+function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
+	for verdict in retVerdicts 'eachReturn'
+		match verdict.kind 'kind'
+			freshPair then break 'kind'
+			forwarded(calleeIndex) then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: calleeIndex, dependentIndex: verdict.funcIndex)
+			unreachableZero then break 'kind'
+			unusable then break 'kind'
+		end 'kind'
+	end 'eachReturn'
+
+	for site in callSites 'eachSite'
+		match site.shape 'shape'
+			readThenDropped then break 'shape'
+			forwardedByCaller then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: site.callerIndex, dependentIndex: site.calleeIndex)
+			unusable then break 'shape'
+		end 'shape'
+	end 'eachSite'
+end 'collectDependencyEdges'
+
+function noteDependency(dependedOn CsrColumn, dependent CsrColumn, dependedOnIndex FuncIndex, dependentIndex FuncIndex)
+	dependedOn.push(dependedOnIndex as CsrIndex)
+	dependent.push(dependentIndex as CsrIndex)
+end 'noteDependency'
+
+// The refusals that depend on nothing: a `ret` no rewrite fits, and a call site no rewrite fits.
+function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
+	for verdict in retVerdicts 'eachReturn'
+		match verdict.kind 'kind'
+			freshPair then break 'kind'
+			forwarded then break 'kind'
+			unreachableZero then break 'kind'
+			unusable then markSeed(seeds, funcIndex: verdict.funcIndex)
+		end 'kind'
+	end 'eachReturn'
+
+	for site in callSites 'eachSite'
+		match site.shape 'shape'
+			readThenDropped then break 'shape'
+			forwardedByCaller then break 'shape'
+			unusable then markSeed(seeds, funcIndex: site.calleeIndex)
+		end 'shape'
+	end 'eachSite'
+end 'seedRefusals'
+
+function markSeed(seeds BoolArray, funcIndex FuncIndex)
+	try seeds.set(funcIndex, value: true) otherwise panic("markSeed: seeds.set OOB at {funcIndex} against a column of {seeds.count()}")
+end 'markSeed'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 4 — the rewrite
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ⭐ **THE BIT EVERY ABI READER ASKS.** The two return emitters in `LowerMaxonToStd` have already run, so
+// this pass writes the `errorReturn` itself; what the bit is for is the readers BELOW it — wasm's
+// `funcSignatureResultValTypes`, whose functype must declare the second result the body now writes, or the
+// module does not validate.
+function stampTheConvention(module StdModule, onTheConvention BoolArray)
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'notOnIt'
+			continue
+		end 'notOnIt'
+
+		var func = module.getFunc(funcIndex)
+		func.usesValueTupleReturn = true
+	end 'eachFunc'
+end 'stampTheConvention'
+
+// The rewrite plan for one function: which values leave through the two return registers, which boxes stop
+// being built, which call results now arrive as a register pair, and the second value id each pair is
+// captured into.
+//
+// The three marks are not alternatives — a fresh pair is BOTH elided and returned as a pair, and a
+// captured pair whose one use is the return is BOTH a register pair and returned as one — so each op's
+// rewrite asks the mark that governs IT rather than a single classification.
+type ValueTuplePlan
+	// `ret v` becomes `errorReturn(lowOf[v], highOf[v])`.
+	export var returnsAsAPair as BoolArray
+	// The `__mm_alloc` defining this value, and every store into it, disappear.
+	export var elidedBox as BoolArray
+	// The `call` defining this value becomes a `tryCall` capturing both registers; its half loads become
+	// reads of those two values and its trivial drop disappears.
+	export var registerPair as BoolArray
+	export var lowOf as ValueIdArray
+	export var highOf as ValueIdArray
+	export var anyRewrite as bool
+	// Whether the fixpoint left THIS function on the convention. Only such a function may hand back two
+	// registers, and `markRegisterPair` marks a captured pair as returnable without knowing which function
+	// holds it — so the ABI rewrite asks here before it writes.
+	export let onTheConvention as bool
+
+	export static function create(valueBound ValueId, onTheConvention bool) returns ValueTuplePlan
+		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, onTheConvention: onTheConvention}
+	end 'create'
+
+	export function returnsAPair(value ValueId) returns bool
+		return columnMarks(self.returnsAsAPair, value: value)
+	end 'returnsAPair'
+
+	export function isAnElidedBox(value ValueId) returns bool
+		return columnMarks(self.elidedBox, value: value)
+	end 'isAnElidedBox'
+
+	export function isARegisterPair(value ValueId) returns bool
+		return columnMarks(self.registerPair, value: value)
+	end 'isARegisterPair'
+
+	export function lowHalfOf(value ValueId) returns ValueId
+		return try self.lowOf.get(value) otherwise panic("ValueTuplePlan.lowHalfOf: lowOf.get OOB at {value} — asked of a value a mark column answered true for")
+	end 'lowHalfOf'
+
+	export function highHalfOf(value ValueId) returns ValueId
+		return try self.highOf.get(value) otherwise panic("ValueTuplePlan.highHalfOf: highOf.get OOB at {value} — asked of a value a mark column answered true for")
+	end 'highHalfOf'
+
+	// The FRESH-LITERAL return: the box stops being built and its two stored words leave in the registers.
+	export function markFreshPair(box ValueId, low ValueId, high ValueId)
+		self.mark(self.elidedBox, value: box)
+		self.markPairHalves(box, low: low, high: high)
+	end 'markFreshPair'
+
+	// The unreachable panic return: both registers take the same zero. Nothing reads either, and minting a
+	// second constant for a block that never runs would be one more op to keep in step with the first.
+	export function markUnreachableZero(zero ValueId)
+		self.markPairHalves(zero, low: zero, high: zero)
+	end 'markUnreachableZero'
+
+	// A captured pair's LOW half is the call's own result id, so only the high half is minted — which is
+	// what keeps every existing reader of the result naming the value it already named.
+	export function markRegisterPair(pair ValueId, high ValueId)
+		self.mark(self.registerPair, value: pair)
+		self.markPairHalves(pair, low: pair, high: high)
+	end 'markRegisterPair'
+
+	function markPairHalves(value ValueId, low ValueId, high ValueId)
+		self.mark(self.returnsAsAPair, value: value)
+		try self.lowOf.set(value, value: low) otherwise panic("ValueTuplePlan.markPairHalves: lowOf.set OOB at {value}")
+		try self.highOf.set(value, value: high) otherwise panic("ValueTuplePlan.markPairHalves: highOf.set OOB at {value}")
+	end 'markPairHalves'
+
+	function mark(column BoolArray, value ValueId)
+		try column.set(value, value: true) otherwise panic("ValueTuplePlan.mark: column.set OOB at {value} against a column of {column.count()}")
+		self.anyRewrite = true
+	end 'mark'
+end 'ValueTuplePlan'
+
+function markColumn(valueBound ValueId) returns BoolArray
+	var column = BoolArray.create()
+	column.growFilled(valueBound as ElementIndex, value: false)
+	return column
+end 'markColumn'
+
+function halfColumn(valueBound ValueId) returns ValueIdArray
+	var column = ValueIdArray.create()
+	column.growFilled(valueBound as ElementIndex, value: 0)
+	return column
+end 'halfColumn'
+
+function rewriteOneFunction(module StdModule, funcIndex FuncIndex, flow FunctionTupleFlow, onTheConvention BoolArray)
+	let func = module.getFunc(funcIndex)
+	let liveOps = module.liveOpIndices(func)
+	// The value space, read ONCE: it is a walk of the function, and the minter and the plan's columns are
+	// two readings of the same number.
+	let valueBound = nextFreeValueId(module, func: func)
+	var mint = ValueMinter.create(valueBound as ParamCount)
+	var plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex))
+
+	for opIdx in liveOps 'eachOp'
+		planOneOp(try module.ops.get(opIdx) otherwise panic("rewriteOneFunction: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
+	end 'eachOp'
+
+	if not plan.anyRewrite 'nothingToDoHere'
+		return
+	end 'nothingToDoHere'
+
+	var subst = ValueIdArray.create()
+	var doomed = DoomedOpSet.create()
+	for opIdx in liveOps 'eachOp'
+		rewriteOneOp(module, opIdx: opIdx, plan: plan, subst: subst, doomed: doomed)
+	end 'eachOp'
+
+	// The substitution must land before the removal: it walks the LIVE ops, and the loads it retires are
+	// still among them until `removeDoomedOps` takes them out.
+	substituteValuesInFunc(module, func: func, subst: subst)
+	removeDoomedOps(module, func: func, doomed: doomed)
+	removeConstantsNothingReadsAnyMore(module, func: func)
+end 'rewriteOneFunction'
+
+// ⭐ **THE SIZE AND THE DESTRUCTOR OF A BOX THAT IS NO LONGER BUILT.** Deleting an `__mm_alloc` orphans the
+// two `const`s it read, and this pass is the LAST in the pipeline — no later fold retires them — so they
+// would reach the backend as two `mov reg, imm` writing a register nothing reads, in the very functions
+// this rung exists to make cheaper.
+//
+// It runs only in a function this pass actually rewrote, so the constants it sweeps are the ones it
+// orphaned plus whatever was already dead in that one function; the removal itself is `removeOpsDefining`,
+// the one block rebuild every Std pass that retires a def shares.
+function removeConstantsNothingReadsAnyMore(module StdModule, func IrFunction)
+	var stillRead = StdValueUseSet.create()
+	collectFunctionValueUses(module, func: func, referenced: stillRead)
+
+	var orphaned = StdValueUseSet.create()
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		noteOrphanedConstant(try module.ops.get(opIdx) otherwise panic("removeConstantsNothingReadsAnyMore: live op index {opIdx} not in module.ops"), stillRead: stillRead, orphaned: orphaned)
+	end 'eachOp'
+	removeOpsDefining(module, func: func, doomed: orphaned)
+end 'removeConstantsNothingReadsAnyMore'
+
+function noteOrphanedConstant(op StdOp, stillRead StdValueUseSet, orphaned StdValueUseSet)
+	match op 'op'
+		const(resultId, _, _) then noteUnreadValue(resultId, stillRead: stillRead, orphaned: orphaned)
+		binOp to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'noteOrphanedConstant'
+
+function noteUnreadValue(resultId ValueId, stillRead StdValueUseSet, orphaned StdValueUseSet)
+	if stillRead.contains(resultId) 'somethingReadsIt'
+		return
+	end 'somethingReadsIt'
+	orphaned.insert(resultId)
+end 'noteUnreadValue'
+
+// Decide what happens to one op's value. Both marks come off the SETTLED verdict, so a shape the fixpoint
+// refused cannot be reached here — and a `ret` of a candidate that is neither admitted shape is an
+// internal disagreement rather than a program this pass declines, which is why it panics.
+function planOneOp(op StdOp, funcIndex FuncIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
+	match op 'op'
+		const to branch then break 'op'
+		ret(retValId) then planOneReturn(retValId, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan)
+		param then break 'op'
+		call(resultId, _, _) then planOneCallResult(resultId, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
+		retVoid to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'planOneOp'
+
+function planOneReturn(retValId ValueId, funcIndex FuncIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan)
+	if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'theHeapConvention'
+		return
+	end 'theHeapConvention'
+
+	match retKindOf(flow, retValId: retValId) 'kind'
+		freshPair then markTheFreshPair(retValId, flow: flow, plan: plan)
+		// Both registers take the same zero: nothing reads either, and inventing a second constant for a
+		// block that never runs would be a second op to keep in step with the first.
+		unreachableZero(zero) then plan.markUnreachableZero(zero)
+		// The call site's own plan entry has already captured the pair into two registers; this return
+		// merely reads them, and `rewriteOneOp` finds it through the `registerPair` mark.
+		forwarded then break 'kind'
+		unusable then panic("planOneReturn: function {funcIndex} is on the value-tuple convention but one of its returns is neither a fresh pair nor a forwarded one — `settleTheConvention` removes exactly such a candidate before this runs")
+	end 'kind'
+end 'planOneReturn'
+
+function markTheFreshPair(retValId ValueId, flow FunctionTupleFlow, plan ValueTuplePlan)
+	let row = flow.rowOf(retValId)
+	plan.markFreshPair(retValId, low: row.storedLow, high: row.storedHigh)
+end 'markTheFreshPair'
+
+function planOneCallResult(resultId ValueId, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
+	if not flow.tracks(resultId) 'notOurs'
+		return
+	end 'notOurs'
+
+	match flow.rowOf(resultId).origin 'origin'
+		freshBox then break 'origin'
+		directCall(calleeIndex) then markThePairIfTheCalleeKeptTheConvention(resultId, calleeIndex: calleeIndex, onTheConvention: onTheConvention, plan: plan, mint: mint)
+		constant then break 'origin'
+		elsewhere then break 'origin'
+	end 'origin'
+end 'planOneCallResult'
+
+function markThePairIfTheCalleeKeptTheConvention(resultId ValueId, calleeIndex FuncIndex, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
+	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'refusedByTheFixpoint'
+		return
+	end 'refusedByTheFixpoint'
+	plan.markRegisterPair(resultId, high: mint.mint())
+end 'markThePairIfTheCalleeKeptTheConvention'
+
+// Rewrite one op in place, or doom it. A `ret` may be a TERMINATOR or the rare mid-block body op, so both
+// are reached through the one live-op walk and rewritten by `ops.set` at the index they already occupy —
+// a terminator names its op by index, so nothing else has to move.
+function rewriteOneOp(module StdModule, opIdx OpIndex, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
+	match try module.ops.get(opIdx) otherwise panic("rewriteOneOp: live op index {opIdx} not in module.ops") 'op'
+		const to branch then break 'op'
+		ret(retValId) then rewriteOneReturn(module, opIdx: opIdx, retValId: retValId, plan: plan)
+		param then break 'op'
+		call(resultId, callee, args) then rewriteOneCall(module, opIdx: opIdx, resultId: resultId, callee: callee, args: args, plan: plan, doomed: doomed)
+		retVoid or globalAddr then break 'op'
+		loadIndirect(resultId, addrId, offset, _) then rewriteOneHalfLoad(opIdx, resultId: resultId, addrId: addrId, offset: offset, plan: plan, subst: subst, doomed: doomed)
+		storeIndirect(addrId, _, _, _) then doomAStoreIntoAnElidedBox(opIdx, addrId: addrId, plan: plan, doomed: doomed)
+		osAllocPages to osUnpublishNamedSegment then break 'op'
+	end 'op'
+end 'rewriteOneOp'
+
+function rewriteOneReturn(module StdModule, opIdx OpIndex, retValId ValueId, plan ValueTuplePlan)
+	if not plan.returnsAPair(retValId) 'anOrdinaryReturn'
+		return
+	end 'anOrdinaryReturn'
+
+	if not plan.onTheConvention 'theHeapConvention'
+		panic("rewriteOneReturn: value {retValId} is returned as a register pair by a function the fixpoint left on the HEAP convention — its declared one-register return would hand back the low half where a record pointer is expected; `callShapeOf` refuses a forwarding site whose caller is not a candidate so this cannot be reached")
+	end 'theHeapConvention'
+
+	try module.ops.set(opIdx, value: StdOp.errorReturn(plan.lowHalfOf(retValId), errorFlagId: plan.highHalfOf(retValId))) otherwise panic("rewriteOneReturn: ops.set({opIdx}) OOB")
+end 'rewriteOneReturn'
+
+function rewriteOneCall(module StdModule, opIdx OpIndex, resultId ValueId, callee ByteArray, args ValueIdArray, plan ValueTuplePlan, doomed DoomedOpSet)
+	if plan.isARegisterPair(resultId) 'capturesBothRegisters'
+		try module.ops.set(opIdx, value: StdOp.tryCall(resultId, errorFlagId: plan.highHalfOf(resultId), callee: callee, args: args)) otherwise panic("rewriteOneCall: ops.set({opIdx}) OOB")
+		return
+	end 'capturesBothRegisters'
+
+	if callee.equals(MmAllocName) and plan.isAnElidedBox(resultId) 'theBoxThatIsNoLongerBuilt'
+		doomed.insert(opIdx)
+		return
+	end 'theBoxThatIsNoLongerBuilt'
+
+	let dropped = try trivialDropOf(callee, args: args) otherwise return
+	if plan.isARegisterPair(dropped) 'theDropOfANonExistentRecord'
+		doomed.insert(opIdx)
+	end 'theDropOfANonExistentRecord'
+end 'rewriteOneCall'
+
+function rewriteOneHalfLoad(opIdx OpIndex, resultId ValueId, addrId ValueId, offset ByteOffset, plan ValueTuplePlan, subst ValueIdArray, doomed DoomedOpSet)
+	if not plan.isARegisterPair(addrId) 'notAHalfOfACapturedPair'
+		return
+	end 'notAHalfOfACapturedPair'
+
+	let half = plan.lowHalfOf(addrId) if offset == LowHalfOffset else plan.highHalfOf(addrId)
+	recordValueSubstitution(subst, resultId: resultId, replacement: half)
+	doomed.insert(opIdx)
+end 'rewriteOneHalfLoad'
+
+function doomAStoreIntoAnElidedBox(opIdx OpIndex, addrId ValueId, plan ValueTuplePlan, doomed DoomedOpSet)
+	if not plan.isAnElidedBox(addrId) 'notTheBoxThatIsNoLongerBuilt'
+		return
+	end 'notTheBoxThatIsNoLongerBuilt'
+	doomed.insert(opIdx)
+end 'doomAStoreIntoAnElidedBox'
+
+// ⚠ A TERMINATOR IS NEVER DOOMED — a `ret` is REWRITTEN into an `errorReturn` at the same index — so
+// rebuilding `opRefs` alone reaches every removal, exactly as `applyPromotions` states for its own.
+function removeDoomedOps(module StdModule, func IrFunction, doomed DoomedOpSet)
+	if doomed.count() == 0 'nothingDoomed'
+		return
+	end 'nothingDoomed'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("removeDoomedOps: blockRef from func.blockRefs not in module.blocks")
+		var kept = OpIndexArray.create()
+		for opIdx in block.opRefs 'eachRef'
+			if doomed.contains(opIdx) 'removed'
+				continue
+			end 'removed'
+			kept.push(opIdx)
+		end 'eachRef'
+		block.opRefs = kept
+	end 'eachBlock'
+end 'removeDoomedOps'

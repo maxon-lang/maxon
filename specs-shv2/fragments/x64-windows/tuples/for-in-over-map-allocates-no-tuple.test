@@ -54,11 +54,7 @@ func @sum {
     x64.leaRegRdata r9, [rip + __witness_int.Equatable]
     x64.movRegReg rcx, r12
     x64.callDirect MapIterator.current
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.leaRegRegReg rbx, rbx, rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
+    x64.leaRegRegReg rbx, rbx, r10
   forstep:
     x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
@@ -120,8 +116,6 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect sum
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __destruct_Map_int_int
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -139,6 +133,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_int_int
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r13

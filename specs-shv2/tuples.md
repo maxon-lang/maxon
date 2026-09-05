@@ -195,18 +195,17 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: small-tuple-return-allocates-nothing -->
-<!-- MEASURED 2026-09-04: ```mm-trace mismatch — shv2's allocation trace for a small tuple return does not match
-     the pinned sequence. The case is about a tuple returned in registers allocating nothing. -->
+<!-- test: small-tuple-return-allocates-nothing -->
 <!-- MmTrace -->
-A returned tuple of exactly two primitive fields totalling <= 16 bytes is a VALUE: it comes back
-in two registers rather than a heap record, so the call allocates nothing. The only allocation
-left is the `String` that `print` builds. Returning the pair by register is what makes this
-observable — the heap lowering is still the fallback for every tuple that does not fit the gate.
+A returned tuple of exactly two whole-word fields is a VALUE: it comes back in the two return
+registers rather than a heap record, so the call allocates nothing. Returning the pair by register
+is what makes this observable — the heap lowering is still the fallback for every tuple and every
+shape that does not fit the gate.
 
-The single `mm_alloc` is the assertion here; the refcount lines around it are not. `print`'s
-`incref`/`decref` pair is the owned reference returned by `String.addressableBytes()`, the
-stdlib-internal door that replaced the raw `.managed` field in Stage 4c — see `specs/mm-trace.md`.
+⭐ **THE ASSERTION IS THE ABSENCE OF A `__Tuple2` LINE.** Everything the golden below does hold is
+the interpolation `print` builds — one `InterpolationScratch` per `{…}` and the `StringRecord` they
+are copied into, the same shape `mm-trace.md`'s `heap-alloc-free` pins. A `__Tuple2` line reappearing
+here is the value convention ceasing to cover `pair`, which is the regression to chase.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -227,28 +226,29 @@ end 'main'
 11 22
 ```
 ```mm-trace
-mm_alloc String #1 size=54
-mm_incref String #1 rc=1
-mm_incref String #1 rc=2
-mm_decref String #1 rc=1
-mm_decref String #1 rc=0
-mm_free String #1
+mm_alloc InterpolationScratch #1 size=21
+mm_alloc InterpolationScratch #2 size=21
+mm_alloc StringRecord #3 size=62
+mm_decref InterpolationScratch #1 rc=0
+mm_free InterpolationScratch #1
+mm_decref InterpolationScratch #2 rc=0
+mm_free InterpolationScratch #2
+mm_decref StringRecord #3 rc=0
+mm_free StringRecord #3
 ```
 
 <!-- test: value-tuple-return-through-function-value -->
-⛔⛔ **EVERY CASE IN THIS FAMILY DESCRIBED A RETURN CONVENTION shv2 DOES NOT HAVE, AND ALL FIVE WERE
-MEASURED FALSE ON 2026-09-05.** The sibling `for-in-over-map-allocates-no-tuple` states the fact plainly —
-*"shv2 has no multi-register or hidden-pointer return path on any target, so every tuple is a heap record"* —
-and these cases were written as if it did, each explaining why ITS shape is the exception. There is no rule
-for them to be exceptions to: a `__Tuple2` record is allocated on every shape below, measured under
-`maxon monitor --filter=mm`. They pass on their ```exitcode blocks, which assert the ANSWER and were never
-wrong.
+A function whose address is taken is called by its TYPE, and a function type cannot say which return
+convention its target uses — a throwing and a non-throwing `(Num, Num) -> (Num, Num)` are the same type,
+and an indirect call captures exactly one result. So `apply(pair)` holds `pair` to the heap convention,
+here and at every other call site in the program.
 
-⚠ **WHAT THIS CASE WOULD PIN ONCE THE ABI LANDS**: a function whose address is taken is called by its
-TYPE, and a function type cannot say whether its target throws — a throwing and a non-throwing
-`(Num, Num) -> (Num, Num)` are the same type — so an indirect call could not tell which convention its
-target uses and `pair` would be held to the heap one. MEASURED today: the record is allocated here AND at
-the direct call one case down, so the case does not yet discriminate. Returns 33.
+⭐ **THE FAMILY'S SHARED RULE, which the four cases below are shapes outside of.** shv2 gives a function
+the two-register convention only when its return touches no record at all: every `return` in it either
+builds a fresh two-word box nothing else in that function can see, or forwards another value-convention
+call's pair straight back out — AND every call site of it either reads the two halves and drops the box
+through the trivial `__mm_decref`, or forwards the pair into its own value-convention return. Everything
+else keeps the heap record, and every element-ownership question with it. Returns 33.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias PairOp = function(Num, Num) returns (Num, Num)
@@ -270,16 +270,55 @@ end 'main'
 33
 ```
 
+<!-- test: value-tuple-forwarded-through-an-address-taken-wrapper -->
+⛔⛔ **THE CASE THE SET DID NOT HAVE, AND IT WAS A SILENT WRONG ANSWER — found at review, 2026-09-05.**
+`forward`'s address is taken, so it is off the convention; `pair` is not, so it was on it. The call-site gate
+admitted `forward`'s `return pair(…)` as a FORWARD without asking whether the enclosing function could be on
+the convention at all — and the refusal fixpoint's `caller → callee` edge only carries between CANDIDATES, so
+a caller the declaration test had already excluded is a node the refusal can never be seeded at. `pair` kept
+the convention and `forward`'s `ret` was rewritten to a two-register `errorReturn` while its own
+`usesValueTupleReturn` stayed FALSE: it returned the low half in the register its TYPE says holds a record
+pointer.
+
+**MEASURED: `panic: nil pointer or invalid memory access … in apply`, against the oracle's 33.** On wasm the
+same disagreement is a `call_indirect` validation failure rather than a dropped word.
+
+⚠ **NEITHER NEIGHBOUR CATCHES IT.** `value-tuple-return-through-function-value` takes `pair`'s address
+DIRECTLY, so `pair` is excluded and nothing is rewritten; `value-tuple-return-forwarded` forwards through a
+wrapper nobody takes the address of, so both ends are on the convention and agree. It takes BOTH facts at
+once — a forwarding wrapper that is itself excluded — and this is that program. Returns 33.
+```maxon
+typealias Num = int(0 to 1000)
+typealias PairOp = function(Num, Num) returns (Num, Num)
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function forward(a Num, b Num) returns (Num, Num)
+	return pair(a, b: b)
+end 'forward'
+
+function apply(f PairOp) returns Num
+	let r = f(10, 20)
+	return r._0 + r._1
+end 'apply'
+
+function main() returns ExitCode
+	return apply(forward)
+end 'main'
+```
+```exitcode
+33
+```
+
 <!-- test: value-tuple-return-forwarded -->
 <!-- MmTrace -->
-⛔⛔ **THIS CASE CLAIMED "no allocation is made at either end" AND ONE IS MADE — the claim is a LEDGER
-block now rather than a sentence.** It said the result is never bound to a user name and so stack-promoted;
-`PromoteStackRecords` promotes nothing here, because the record is built inside `pair` and RETURNED, which
-is an escape at the only site that could promote it. See `value-tuple-return-through-function-value` for the
-family's shared correction.
-
-`return pair(...)` forwards the result straight back out. Returns 33, and allocates one `__Tuple2` record —
-which the ```mm-trace below is what makes visible on every run instead of only in a shelve note.
+`return pair(...)` forwards a two-register result straight back out: `pair` writes the pair into the two
+return registers, `forward` hands those same two values on without ever naming a record, and `main` reads
+them out of the registers. Nothing allocates at either end, and the EMPTY ```mm-trace below is what says so
+on every run — a `__Tuple2` line appearing there is the forwarding shape ceasing to be recognised, at
+either end. Returns 33.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -300,18 +339,15 @@ end 'main'
 33
 ```
 ```mm-trace
-mm_alloc __Tuple2.int.int #1 size=16
-mm_decref __Tuple2.int.int #1 rc=0
-mm_free __Tuple2.int.int #1
+
 ```
 
 <!-- test: value-tuple-return-of-param -->
-Returning a tuple PARAM. The param is borrowed — returning it must not release it — and the returned value
-is a record of its own, so this shape allocates TWO: the literal in `main` and the return's copy. Returns 11.
-
-⚠ The sentence here read *"Params keep the POINTER convention, so the return reads both halves back out of
-the record rather than copying registers along"*, which contrasted against a register convention that does
-not exist. See `value-tuple-return-through-function-value`.
+Returning a tuple PARAM. The param keeps the POINTER convention — it arrives as a record and is BORROWED,
+so returning it must not release it — and `return t` therefore COPIES: it reads both halves back out of the
+record into a fresh one. That copy is a box nothing else in `echo` can see, which is the fresh-pair shape,
+so it is elided and the two halves leave in the registers instead. The one allocation left is `main`'s
+`(5, 6)` literal, which is an ARGUMENT and so has to be a record. Returns 11.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -329,15 +365,13 @@ end 'main'
 ```
 
 <!-- test: value-tuple-escaping-into-array-stays-heap -->
-A returned tuple that escapes into an array is a heap record — as every tuple is today. An array holds
-8-byte element pointers, so a stack record would die with the frame while the array still pointed at it,
-which is why this shape would stay on the heap even once the value convention lands: `p` both escapes into
-`xs` AND is returned, so the record is the array's while the return would copy its halves out, and releasing
-it would be a leak on one side and a double-free on the other.
-
-⚠ The sentence said the record "must FALL BACK to" the heap, which named an exception to a rule shv2 does
-not have. See `value-tuple-return-through-function-value`. Returns 66 (11+22 from the return, 11+22 read
-back out of the array).
+A returned tuple that ESCAPES into an array stays a heap record. An array holds 8-byte element pointers, so
+the record has to outlive the frame; `p` both escapes into `xs` AND is returned, so the record is the
+array's while a register return would copy its halves out, and releasing it would be a leak on one side and
+a double-free on the other. The record `stash` returns is therefore read by something other than the
+return, which is exactly what the gate refuses — and `pair` loses the convention here too, because this
+call site cannot take a register pair. Returns 66 (11+22 from the return, 11+22 read back out of the
+array).
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Pair = (Num, Num)
@@ -365,13 +399,11 @@ end 'main'
 ```
 
 <!-- test: throwing-value-tuple-return -->
-A THROWING tuple-returning function is on the heap — as every tuple is today — and would stay there once
-the value convention lands: a try-call's second return register already carries the error flag, and the
-error path has no tuple to hand back.
-
-⚠ The sentence said it "KEEPS the heap convention", which named an exception to a rule shv2 does not have.
-See `value-tuple-return-through-function-value`. The success path yields 33 and the error path takes the
-`otherwise`, giving 75.
+A THROWING tuple-returning function keeps the heap convention: there is ONE secondary return register, a
+try-call's already carries the error flag, and the error path has no tuple to hand back. The two claimants
+are mutually exclusive by the same predicate that decides either, so a throwing function is off the value
+convention at its declaration. The success path yields 33 and the error path takes the `otherwise`, giving
+75.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -402,34 +434,23 @@ end 'main'
 ```
 
 <!-- test: for-in-over-map-allocates-no-tuple -->
-⛔⛔ **THE ALLOCATION PROPERTY THIS CASE IS NAMED FOR WAS PINNED BY NOTHING FROM THE DAY IT WAS PORTED,
-AND IS PINNED AGAIN NOW.** It arrived carrying a `<!-- MmTrace -->` directive and an ```mm-trace block
-listing every allocation the Map machinery makes, and its own prose said *"the golden is the pin"* — but
-shv2's `SpecParser` had an arm for neither, so both were walked past in silence. The case was ACTIVE and
-PASSING on its ```exitcode block alone. The dropped block was removed 2026-08-06 (BATCH29/A3a) by
-`SpecParser.isUnimplementedFenceOpen`, which refuses an unreadable fence instead of skipping it; the
-directive stayed, and pinned nothing, until mm-trace capture mode landed.
+A `for` loop over a Map allocates NO tuple record per iteration. `MapIterator.current()` builds its
+`(key, value)` pair as a fresh box nothing else in that body can see and returns it, so the box is deleted
+and the pair leaves in the two return registers; the loop reads both halves out and drops nothing.
 
-⇒ **The mm-trace arm and the runner's monitor capture now exist** (`/spec-port mm-trace`: an
-`<!-- MmTrace -->` case is built with `--debugstream`, run under `maxon monitor --filter=mm`, and its
-decoded trace compared against the ```mm-trace golden below). The directive is live and the block is
-minted from what this compiler actually allocates.
+⭐⭐ **THE GATE IS DECIDED PER COMPILE, AND THIS PROGRAM IS WHY IT HAS TO BE.** `current()` is ONE shared
+generic body over `(Key, Value)`, so it cannot know whether its two words need dropping — but its CALL SITE
+does, from the concrete instantiation. Here the pair is `(Integer, Integer)`, the loop's drop of it is the
+trivial `__mm_decref`, and no record is needed at either end. Over a `Map with (String, String)` that drop
+is a `__destruct___Tuple2.String.String` cascade instead, the call site cannot take a register pair, and
+`current()` keeps the heap convention for that whole program — which is what makes handing the two words
+over as owned impossible to get wrong.
 
-⛔⛔ **AND WHAT IT RECORDS IS THAT THE PROPERTY DOES NOT HOLD: ONE 16-byte `__Tuple2` RECORD IS ALLOCATED
-AND FREED PER ITERATION.** The golden shows three, for a three-entry map. That is not a regression this
-port introduced — it is the SAME missing mechanism the sibling `small-tuple-return-allocates-nothing` is
-shelved on, stated in its shelve note: shv2 has no multi-register or hidden-pointer return path on any
-target, so `current()` cannot hand its `(key, value)` pair back in registers and every tuple is a heap
-record. The case still passes: its ```exitcode block asserts the answer, and the golden now asserts the
-allocation behaviour AS IT IS rather than asserting nothing at all.
-
-⇒ **The block is therefore a LEDGER, not a green light.** When the two-register value-tuple ABI lands,
-the three `__Tuple2` lines disappear from it and the case's name becomes true; until then the golden is
-what makes the gap visible on every run instead of only in a shelve note.
-
-A `for` loop over a Map allocates NO tuple record per iteration. The iterator's `current()`
-returns its `(key, value)` pair in two registers, and the loop's item binding does not escape,
-so the pair lives in stack slots for the iteration and dies with it.
+⛔ **THE GOLDEN IS THE PIN, AND IT HOLDS EVERY ALLOCATION THE Map MACHINERY ITSELF MAKES AND NOT ONE
+`__Tuple2` LINE.** A per-iteration record coming back — by the value convention ceasing to cover
+`current()`, or by the loop body gaining a use of the pair that is neither a half read nor the drop — puts
+three of them there and turns this red. Its ids are densely renumbered by first appearance, so a
+regenerated golden shifts every later `#n`; regenerate it with `--update-required`, never by hand.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntMap = Map with (Integer, Integer)
@@ -482,15 +503,6 @@ mm_incref ArrayRecord #10 rc=3
 mm_decref ArrayRecord #10 rc=2
 mm_decref ArrayRecord #8 rc=2
 mm_decref ArrayRecord #6 rc=2
-mm_alloc __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #15 size=16
-mm_decref __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #15 rc=0
-mm_free __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #15
-mm_alloc __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #16 size=16
-mm_decref __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #16 rc=0
-mm_free __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #16
-mm_alloc __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #17 size=16
-mm_decref __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #17 rc=0
-mm_free __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #17
 mm_decref MapIterator #14 rc=0
 mm_decref ArrayRecord #6 rc=1
 mm_decref ArrayRecord #8 rc=1

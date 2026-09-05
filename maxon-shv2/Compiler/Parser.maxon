@@ -6309,6 +6309,11 @@ enum IntrinsicArgShape
 	cstringFirst
 	// Argument 1 is a `cstring` — `subprocessWriteStdinAll`, whose argument 0 is the stream handle.
 	cstringSecond
+	// The LAST argument is a `cstring` — `sharedMemoryClose`'s published section NAME, whose three leading
+	// arguments are the handle, the view base and the mapping's length. Named by POSITION-FROM-THE-END for
+	// `bufferLast`'s reason, which is the same shape one class over: an index would be a constant to keep in
+	// step with an arity that has already moved once.
+	cstringLast
 	// The fourteen-argument spawn contract: the argv blob and the environment block, plus the working
 	// directory and the three stdio payloads.
 	spawn
@@ -6340,6 +6345,7 @@ function intrinsicSlotClass(shape IntrinsicArgShape, index ParamCount, arity Par
 		bufferLast gives IntrinsicSlotClass.buffer if index == arity - 1 else IntrinsicSlotClass.machineWord
 		cstringFirst gives IntrinsicSlotClass.cstring if index == IntrinsicFirstSlot else IntrinsicSlotClass.machineWord
 		cstringSecond gives IntrinsicSlotClass.cstring if index == IntrinsicSecondSlot else IntrinsicSlotClass.machineWord
+		cstringLast gives IntrinsicSlotClass.cstring if index == arity - 1 else IntrinsicSlotClass.machineWord
 		spawn gives spawnSlotClass(index)
 		streamingSpawn gives streamingSpawnSlotClass(index)
 	end 's'
@@ -76351,7 +76357,7 @@ export type Parser
 			filled.push(false)
 		end 'initSlots'
 
-		try self.evalConstPayloadArgs(calls, stack: stack, layout: layout, declared: declared, payloads: payloads, filled: filled)
+		try self.evalConstPayloadArgs(calls, stack: stack, layout: layout, declared: declared, payloads: payloads, filled: filled, caseTok: caseTok)
 		try self.requireAllPayloadsProvided(layout, payloads: declared, filled: filled, caseTok: caseTok) otherwise (err) 'unfilledSlot'
 			throw ConstEvalError.defective(err)
 		end 'unfilledSlot'
@@ -76371,7 +76377,7 @@ export type Parser
 	// are slotted against a declared signature and checked there, so the evaluator records them untouched; a
 	// payload has no callee to be checked against, and the position rule — first positional, every later one
 	// named — is the body's own and is enforced here by the body's own door.
-	function evalConstPayloadArgs(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, layout EnumLayout, declared PayloadFieldArray, payloads ConstFactoryArgumentValueArray, filled BoolArray) throws ConstEvalError
+	function evalConstPayloadArgs(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, layout EnumLayout, declared PayloadFieldArray, payloads ConstFactoryArgumentValueArray, filled BoolArray, caseTok Token) throws ConstEvalError
 		try self.consumeConstToken(TokenKind.leftParen)
 
 		var argIndex = 0 as ParamCount
@@ -76380,7 +76386,7 @@ export type Parser
 			let label = try self.consumeArgLabel(argIndex, rule: ArgLabelRule.ordinary) otherwise (err) 'misplacedLabel'
 				throw ConstEvalError.defective(err)
 			end 'misplacedLabel'
-			let slot = try self.payloadSlotFor(layout, payloads: declared, argIndex: argIndex, label: label, labelTok: labelTok) otherwise (err) 'noSuchPayload'
+			let slot = try self.payloadSlotFor(layout, payloads: declared, argIndex: argIndex, label: label, labelTok: labelTok, caseTok: caseTok) otherwise (err) 'noSuchPayload'
 				throw ConstEvalError.defective(err)
 			end 'noSuchPayload'
 
@@ -78800,7 +78806,7 @@ export type Parser
 			end 'sharedMemoryWriteWord'
 
 			if callee.equals(BuiltinsSharedMemoryCloseName) 'sharedMemoryClose'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCloseName, arity: SharedMemoryFourArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCloseName, arity: SharedMemoryFourArgArity, shape: IntrinsicArgShape.cstringLast, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
 			end 'sharedMemoryClose'
 
 			if callee.equals(BuiltinsSharedMemoryCopyOutName) 'sharedMemoryCopyOut'

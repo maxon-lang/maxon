@@ -183,9 +183,15 @@ union PassKind
 	// hang a guard off it, and a multi-block body is not a record constructor — so running before it
 	// would recognize a constructor the guard is about to invalidate.
 	//
-	// It is the only WHOLE-MODULE pass in this list (see `classifyPass`): a call site cannot be judged
-	// without the callee's summary.
+	// WHOLE-MODULE (see `classifyPass`): a call site cannot be judged without the callee's summary.
 	promoteStackRecords
+	// Phase 3.7: Std → Std VALUE-TUPLE RETURN CONVENTION (`ValueTupleReturn`).
+	//
+	// ⭐ **AFTER THE PROMOTION, AND FOR THE SAME REASON THE PROMOTION IS LAST**: both decide on the FINAL
+	// shape of the code, and a record the promotion has already turned into frame storage is no longer a
+	// call this pass can see — so the two cannot both claim one site. Whole-module, like its neighbour: a
+	// callee's return convention and its call sites are one decision.
+	valueTupleReturn
 end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
@@ -233,9 +239,11 @@ function classifyPass(pass PassKind) returns PassClassification
 		// Intra-function by construction: a natural loop, its preheader and the values it defines are all
 		// inside one function, and nothing about a callee is consulted.
 		loopInvariantCodeMotion gives PassClassification.perFunction
-		// The one whole-module Std pass: the constructor table and the parameter-escape summary are facts
-		// about the CALL GRAPH, and a call site cannot be judged without the callee's row.
+		// The whole-module Std passes: a constructor table, a parameter-escape summary and a return
+		// convention are all facts about the CALL GRAPH, and a call site cannot be judged without the
+		// callee's row.
 		promoteStackRecords gives PassClassification.wholeModule
+		valueTupleReturn gives PassClassification.wholeModule
 	end 'classify'
 end 'classifyPass'
 
@@ -261,6 +269,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
 		promoteStackRecords gives CompilePhase.promoteStackRecords
+		valueTupleReturn gives CompilePhase.valueTupleReturn
 	end 'phase'
 end 'compilePhaseOfPass'
 
@@ -282,6 +291,7 @@ function passKindToString(pass PassKind) returns String
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
 		promoteStackRecords gives "promoteStackRecords"
+		valueTupleReturn gives "valueTupleReturn"
 	end 'name'
 end 'passKindToString'
 
@@ -330,6 +340,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
 	passes.push(PassKind.promoteStackRecords)
+	passes.push(PassKind.valueTupleReturn)
 	return passes
 end 'buildLoweringPasses'
 
@@ -503,6 +514,7 @@ export type PassPipeline
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
 			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
+			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule)
 		end 'dispatch'
 
 		// ⭐ **THE DEBUG-SPAN CURSOR IS THIS PASS'S, NEVER THE NEXT ONE'S.** A pass that rewrites around a

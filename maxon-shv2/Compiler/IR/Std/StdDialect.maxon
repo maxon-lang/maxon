@@ -3204,6 +3204,12 @@ end 'classifyLoadOperands'
 //
 // It needs no size up front — the column grows to fit the highest id it is given — so it is a drop-in
 // for the `Set` it replaces, with the same three operations and no hashing at all.
+
+// The id column every set that does not record its ids shares. NEVER MUTATED — every write to that field
+// is guarded by `recordsIds`, and the two readers of it panic without it — which is what lets one instance
+// stand in for all of them, exactly as `IrFunction`'s shared-empty anchors do.
+let sharedEmptyUseIds = ValueIdArray.create()
+
 export type StdValueUseSet
 	var member as BoolArray
 	// ⭐ THE SECOND READING THE SAME WALK CAN GIVE: which ids were inserted MORE THAN ONCE — "this
@@ -3211,8 +3217,8 @@ export type StdValueUseSet
 	// rather than merely reading it (EC16's scaled-index address is the first).
 	//
 	// ⚠ THE **GROWTH** IS OPT-IN, NOT THE FIELD — and the difference is measured. A second `BoolArray`
-	// over the function's whole value space is real memory, and nine of this type's ten users only ever
-	// ask `contains`, so `create` leaves `tracksRepeats` false and `insert` never GROWS the column for
+	// over the function's whole value space is real memory, and almost every user of this type only ever
+	// asks `contains`, so `create` leaves `tracksRepeats` false and `insert` never GROWS the column for
 	// them. What they still pay is the empty `BoolArray.create()` in the constructor: `scale-test`
 	// charges that ~25,000 allocations at rung 5, one per `StdValueUseSet.create()`, spread over
 	// `foldConstOperands` / `foldConstants` / `promoteStackRecords` / `pruneDeadBlockArgs` / `isel`
@@ -3221,20 +3227,56 @@ export type StdValueUseSet
 	// thing the instrument exists to prevent, not because it is large.
 	var tracksRepeats as bool
 	var repeated as BoolArray
+	// ⭐⭐ THE THIRD READING THE SAME WALK CAN GIVE: WHICH ids were inserted, in first-insertion order —
+	// the question a dense membership column cannot answer without scanning the whole value space. It is
+	// what a caller that REFILLS ONE SET PER OP needs, and it buys two things:
+	//
+	//   • the reads of one op, ITERABLE. The alternative is to probe `contains` once per candidate the
+	//     caller is tracking, which is O(ops x tracked) with both growing with the function.
+	//   • a `clear` that is O(WHAT WAS INSERTED). The whole-column form resets the extent to zero, so the
+	//     next `insert` regrows and refills from 0 to the id it is given — Θ(the function's value space)
+	//     per op, in the clear AND in the regrowth, and quadratic across the walk.
+	//
+	// ⚠ OPT-IN like `tracksRepeats`, and here the FIELD is shared as well as the growth: every other user
+	// would otherwise pay one more empty `ValueIdArray` per set, which is the same per-set constructor
+	// cost that column's own note measures.
+	var recordsIds as bool
+	var insertedIds as ValueIdArray
 
 	export static function create() returns StdValueUseSet
-		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create()}
+		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create(), recordsIds: false, insertedIds: sharedEmptyUseIds}
 	end 'create'
 
 	// The counting form — same set, plus `containsRepeat`. See `tracksRepeats`.
 	export static function createTrackingRepeats() returns StdValueUseSet
-		return Self{member: BoolArray.create(), tracksRepeats: true, repeated: BoolArray.create()}
+		return Self{member: BoolArray.create(), tracksRepeats: true, repeated: BoolArray.create(), recordsIds: false, insertedIds: sharedEmptyUseIds}
 	end 'createTrackingRepeats'
+
+	// The ITERABLE form — same set, plus `insertedIdCount`/`insertedIdAt`. See `recordsIds`.
+	export static function createRecordingIds() returns StdValueUseSet
+		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create(), recordsIds: true, insertedIds: ValueIdArray.create()}
+	end 'createRecordingIds'
 
 	// Empty the set, KEEPING the column's capacity — for a per-function set that is hoisted out of
 	// the function loop rather than re-created inside it (`Array.clear` keeps capacity, so the second
 	// function's inserts reuse the first's buffer and the whole walk allocates once per compilation).
+	//
+	// ⭐ A RECORDING SET EMPTIES SPARSELY — it knows exactly which entries are set, so it unsets those and
+	// keeps the column's EXTENT as well as its capacity. That is what a set refilled per OP needs; see
+	// `insertedIds` for the two Θ(value space) costs the whole-column form charges such a caller.
 	export function clear()
+		if self.recordsIds 'sparse'
+			for id in self.insertedIds 'eachInserted'
+				try self.member.set(id, value: false) otherwise panic("StdValueUseSet.clear: member.set OOB at {id} against a column of {self.member.count()} — every recorded id was inserted, and `insert` grows the column to hold it")
+				if id < self.repeated.count() 'alsoCounted'
+					try self.repeated.set(id, value: false) otherwise panic("StdValueUseSet.clear: repeated.set OOB at {id} after a bounds test")
+				end 'alsoCounted'
+			end 'eachInserted'
+
+			self.insertedIds.clear()
+			return
+		end 'sparse'
+
 		self.member.clear()
 		self.repeated.clear()
 	end 'clear'
@@ -3257,6 +3299,10 @@ export type StdValueUseSet
 	end 'containsRepeat'
 
 	export function insert(valueId ValueId)
+		if self.recordsIds and not self.contains(valueId) 'firstInsertion'
+			self.insertedIds.push(valueId)
+		end 'firstInsertion'
+
 		// `growFilled`, NOT `resize`: this column is extended ONE ENTRY AT A TIME (inserting ids in
 		// increasing order is exactly what the collect walk does), and `resize` reserves EXACTLY the length
 		// it is given — Θ(values²) of allocator traffic for a column that ends up Θ(values) long. Measured,
@@ -3279,10 +3325,35 @@ export type StdValueUseSet
 		return try self.member.get(valueId) otherwise panic("StdValueUseSet.contains: member.get OOB at {valueId}")
 	end 'contains'
 
+	// How many DISTINCT ids were inserted, and the id at one position of that order.
+	//
+	// They PANIC on a set that was not created recording, for `containsRepeat`'s reason: a count of zero
+	// would read as "this op reads nothing" — the permissive answer, and for a reader that refuses a
+	// value on the strength of an unaccounted read, a WRONG answer rather than a missed one.
+	export function insertedIdCount() returns ElementIndex
+		if not self.recordsIds 'notRecording'
+			panic("StdValueUseSet.insertedIdCount: this set was built by `create()`, which records membership only — a reader that needs the ids themselves must build it with `createRecordingIds()`")
+		end 'notRecording'
+		return self.insertedIds.count()
+	end 'insertedIdCount'
+
+	export function insertedIdAt(position ElementIndex) returns ValueId
+		if not self.recordsIds 'notRecording'
+			panic("StdValueUseSet.insertedIdAt: this set was built by `create()`, which records membership only — a reader that needs the ids themselves must build it with `createRecordingIds()`")
+		end 'notRecording'
+		return try self.insertedIds.get(position) otherwise panic("StdValueUseSet.insertedIdAt: insertedIds.get OOB at {position} against a column of {self.insertedIds.count()}")
+	end 'insertedIdAt'
+
 	// Whether NOTHING has been inserted. The column is only ever extended by `insert`, so an empty
 	// backing store is an exact answer rather than an approximation of one — which is what lets
 	// `removeOpsDefining` skip a function's whole block walk when there is nothing to remove.
+	//
+	// ⚠ A RECORDING SET IS ASKED OF ITS ID LIST INSTEAD, because its `clear` keeps the membership
+	// column's extent: the backing store of an emptied one is full of `false`, not empty.
 	export function isEmpty() returns bool
+		if self.recordsIds 'sparse'
+			return self.insertedIds.count() == 0
+		end 'sparse'
 		return self.member.count() == 0
 	end 'isEmpty'
 end 'StdValueUseSet'
@@ -4275,11 +4346,12 @@ function anyEdgeArgIsRemapped(block IrBlock, subst ValueIdArray) returns bool
 	return false
 end 'anyEdgeArgIsRemapped'
 
-// ⭐⭐ **DELETE EVERY OP THAT DEFINES A VALUE IN `doomed` — THE one block-rebuild both Std passes that
-// remove ops share.** `foldConstOperands`' const/identity DCE dooms the defs it detached from their
+// ⭐⭐ **DELETE EVERY OP THAT DEFINES A VALUE IN `doomed` — THE one block-rebuild the Std passes that
+// remove a DEF share.** `foldConstOperands`' const/identity DCE dooms the defs it detached from their
 // readers; `eliminateCommonSubexpressions` dooms the defs it redirected onto an earlier equal
-// computation. Each decides its OWN set — the two questions are nothing alike — and neither owns a
-// second copy of the walk that acts on it.
+// computation; `applyValueTupleReturn` dooms the constants its deleted allocations orphaned. Each
+// decides its OWN set — the questions are nothing alike — and none owns a second copy of the walk that
+// acts on it.
 //
 // It reads the def through `stdOpDefinedValue`, this file's one def enumerator, so a new `StdOp`
 // variant is a compile error there rather than an op this walk silently cannot classify.
@@ -4290,7 +4362,7 @@ end 'anyEdgeArgIsRemapped'
 // below is allocation-free and asks exactly what the rebuild asks, so the two cannot disagree about
 // what survives.
 //
-// ⚠ It removes from `block.opRefs` only. A TERMINATOR is never doomed by either caller (a const and an
+// ⚠ It removes from `block.opRefs` only. A TERMINATOR is never doomed by any caller (a const and an
 // identity `binOpImm` are body ops, and CSE's roster answers `neither` for every control op), and
 // removing one would leave a block with no exit at all.
 module function removeOpsDefining(module StdModule, func IrFunction, doomed StdValueUseSet)
@@ -4333,7 +4405,7 @@ function opDefinesADoomedValue(module StdModule, opIdx OpIndex, doomed StdValueU
 	return match stdOpDefinedValue(op) 'defines'
 		none gives false
 		defines(valueId) gives doomed.contains(valueId)
-		// ⚠ A TWO-DEF op is a `tryCall`/`witnessTryCall` — a CALL, `isPure: false`, which neither caller
+		// ⚠ A TWO-DEF op is a `tryCall`/`witnessTryCall` — a CALL, `isPure: false`, which no caller
 		// can doom (a const DCE retires `const`s and identity `binOpImm`s; CSE's roster answers `neither`
 		// for every call). It is CHECKED rather than assumed, because dooming ONE half of a pair would
 		// delete the op that defines the OTHER, and the survivor's readers would be left naming a value
