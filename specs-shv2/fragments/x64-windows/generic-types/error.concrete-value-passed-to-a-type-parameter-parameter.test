@@ -1,0 +1,36 @@
+// Test: error.concrete-value-passed-to-a-type-parameter-parameter
+typealias Num = int(i64.min to i64.max)
+
+type Label
+	export let n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Label'
+
+type Box uses T
+	export var value as T
+
+	static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function put(v T) returns T
+		return v
+	end 'put'
+
+	export function clobber() returns T
+		return put(Label.create(77))
+	end 'clobber'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+function main() returns ExitCode
+	var b = NumBox.create(1)
+	return b.clobber() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:24:10: argument type mismatch for 'v': expected 'type parameter', got 'Label': one body serves every instantiation, so a concrete type named here is claimed of every 'with' in the program — true of at most one of them. Pass a value of the parameter's own type, or make the call from a concrete instantiation, where the type argument is known

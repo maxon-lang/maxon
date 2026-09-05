@@ -1,0 +1,24 @@
+// Test: async-await.error.qualified-spawn-instance-receiver
+typealias Tally = int(0 to 1000)
+
+type Counter
+	export var n as Tally
+
+	export static function create() returns Counter
+		return Counter{n: 0}
+	end 'create'
+
+	export function bump() returns Tally
+		self.n = self.n + 1
+		return self.n
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	let p = async c.bump()
+	return await p
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:19:16: Unsupported: `async c.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument
