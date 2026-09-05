@@ -508,6 +508,11 @@ export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 // shape that drifts, and with an injective label there is nothing the pair knows that the label does not.
 export typealias WitnessTableLabelSet = Set with String
 
+// The `.rdata` labels of the immortal EMPTY-container records already registered — the dedup gate for
+// their `element_destroy@40` relocation, and injective for `WitnessTableLabelSet`'s reason: the label is
+// built from the stride and the destructor's own name, which is the whole of what the record encodes.
+export typealias ImmortalEmptyArrayLabelSet = Set with String
+
 // The set of witness-slot ABI adapters already REQUESTED (WASM3) — keyed on the adapter's symbol, which is
 // the `(conformer, interface, method)` triple by construction (`witnessSlotAdapterSymbol`). One conformer's
 // slot can be reached from several tables — a requirement inherited through `extends` sits in the derived
@@ -980,6 +985,8 @@ type MaxonToStdLowering
 	var witnessSlotMemo as WitnessSlotListMemo
 	// The witness tables already emitted (P1.7a slice 2a) — the dedup gate for the blob's relocations + root.
 	var emittedWitnessTables as WitnessTableLabelSet
+	// The immortal EMPTY-container records already registered — see `ImmortalEmptyArrayLabelSet`.
+	var emittedImmortalEmptyArrays as ImmortalEmptyArrayLabelSet
 	// The witness-slot ABI adapters already requested (WASM3) — see `WitnessAdapterNameSet`.
 	var emittedWitnessAdapters as WitnessAdapterNameSet
 	// The adapters whose bodies are still to be built — see `WitnessAdapterRequest`. Drained ONCE, after the
@@ -1046,7 +1053,7 @@ type MaxonToStdLowering
 
 	// Which `constArrayLiteral` ops materialize an IMMORTAL `.rdata` record rather than an owned heap one
 	// (`project.immortalConstArraySites`). Read by `lowerConstArrayLiteral` and by nothing else.
-	let immortalConstArraySites as ImmortalConstArraySiteSet
+	let immortalConstArraySites as ImmortalConstArraySiteMap
 	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE (EC15)** — the container stamp
 	// of every runtime call whose first argument is a CONCRETE `Array with T`, keyed by the Std op index the
 	// call is about to occupy (`project.stdOpElementStrides`). Written by `recordStaticElementStride` and read
@@ -1167,7 +1174,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1648,10 +1655,18 @@ type MaxonToStdLowering
 		// ⚠ **ONLY THAT DECLARATION FORM, WHICH IS WHY THE OP CANNOT DECIDE IT.** An inline `b"…"` and a
 		// STORED global's initializer emit the identical op and must keep the owned heap record below — a
 		// `var` REWRITES it (`push` republishes `buffer@0`/`capacity@16`/`length@8`), and a `.rdata` record
-		// cannot be written. The parser marks the reads that may take this door; see
-		// `Project.immortalConstArraySites`.
-		if self.immortalConstArraySites.contains(self.currentMaxonOpIndex) 'imageData'
-			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: registerImmortalByteArrayRecord(self.globalData, elementSize: elementSize, elementCount: elementCount, bytes: bytes).toByteArray()))
+		// cannot be written. The parser marks the reads that may take this door and says which SHAPE each
+		// one is; see `Project.immortalConstArraySites`.
+		//
+		// ⚠ **THE SHAPE IS THE MARK'S AND NOT `elementCount == 0`.** An empty byte string is a `constBlob`
+		// with no bytes and keeps the record over its (empty) blob, where an empty CONTAINER names no blob
+		// at all and carries its element's destructor — two records the op cannot tell apart.
+		if let kind = try self.immortalConstArraySites.get(self.currentMaxonOpIndex) 'imageData'
+			let label = match kind 'shape'
+				constBlob gives registerImmortalByteArrayRecord(self.globalData, elementSize: elementSize, elementCount: elementCount, bytes: bytes)
+				emptyContainer(elementDestroy) gives self.ensureImmortalEmptyArrayRecord(elementSize, elementDestroy: elementDestroy)
+			end 'shape'
+			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
 			return
 		end 'imageData'
 
@@ -1688,6 +1703,27 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: elementSize as ParsedInt, valueType: StdType.i64))
 		self.emitConstArrayField(result, offset: ManagedRecordElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
 	end 'lowerConstArrayLiteral'
+
+	// ⭐⭐ **THE ONE `.rdata` RECORD EVERY READ OF EVERY EMPTY `Array with T` OF THIS SHAPE SHARES** — the
+	// `ensureLayoutDescriptor` pattern, and here for its two reasons: the registration is idempotent by
+	// LABEL, and the `element_destroy@40` relocation beside it must be recorded EXACTLY ONCE. A second
+	// identical relocation would be a second entry patching one slot, which the fixed-base writers survive
+	// and Mach-O's chained-rebase list does not.
+	//
+	// ⭐ **THE RELOCATION IS ALSO WHAT ROOTS THE DESTRUCTOR.** Imaging the global deletes its `__module_init`
+	// construction, and with it the `functionRef` that used to be the callee's only compile-time mention —
+	// `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names, so recording
+	// one here is what keeps the symbol the writer resolves against in the program at all.
+	function ensureImmortalEmptyArrayRecord(elementSize ElementStride, elementDestroy ByteArray) returns String
+		let label = registerImmortalEmptyArrayRecord(self.globalData, elementSize: elementSize, elementDestroy: elementDestroy)
+		if self.emittedImmortalEmptyArrays.contains(label) 'alreadyStamped'
+			return label
+		end 'alreadyStamped'
+
+		self.emittedImmortalEmptyArrays.insert(label)
+		self.stampOwnershipWord(elementDestroy, label: label, offsetInLabel: ManagedRecordElementDestroyOffset)
+		return label
+	end 'ensureImmortalEmptyArrayRecord'
 
 	// Store `value` into the constant array record's `offset` field (an 8-byte slot). The one store shape the
 	// four field stamps share, so the record layout is written in one place. Named for the RECORD rather than
@@ -2783,11 +2819,12 @@ type MaxonToStdLowering
 	// because the empty test IS the encoding, and a second copy of it is where one word would come to be
 	// stamped on a rule another had already stopped using.
 	//
-	// ⚠ It serves the WITNESS TABLE's two ownership words and the LAYOUT DESCRIPTOR's two
-	// (`destroyFunc@40`, `retainFunc@64`) — which is why it names neither blob. Both pairs are non-zero
-	// TOGETHER precisely because each pair's two callees come off one protocol answer and meet the one EMPTY
-	// test here; the descriptor's `copyFunc@32` is a fact about an opaque `Array` COLUMN rather than about the
-	// type argument, so it keeps its own predicate and does not come through here.
+	// ⚠ It serves the WITNESS TABLE's two ownership words, the LAYOUT DESCRIPTOR's two (`destroyFunc@40`,
+	// `retainFunc@64`) and an imaged empty container's `element_destroy@40` — which is why it names no blob.
+	// Each witness/descriptor pair is non-zero TOGETHER precisely because its two callees come off one
+	// protocol answer and meet the one EMPTY test here; the descriptor's `copyFunc@32` is a fact about an
+	// opaque `Array` COLUMN rather than about the type argument, so it keeps its own predicate and does not
+	// come through here.
 	function stampOwnershipWord(callee ByteArray, label String, offsetInLabel ByteOffset)
 		if callee.isEmpty() 'ownsNothing'
 			return

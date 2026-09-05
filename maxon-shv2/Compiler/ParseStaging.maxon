@@ -251,10 +251,10 @@ export type FileParseArtifact
 	// op index. `mergeArtifact` folds it into `project.debugStreamNameSites` with the merge's op offset,
 	// exactly as `allocTagSites` is. See `Project.debugStreamNameSites` for why the name is a side channel.
 	export var debugStreamNameSites as DebugStreamNameSiteMap
-	// Every `constArrayLiteral` this file emits whose record is IMAGE DATA, keyed by the op index in THIS
-	// artifact's module and folded with the merge's offset, exactly as `debugStreamNameSites` is. See
-	// `Project.immortalConstArraySites`.
-	export var immortalConstArraySites as ImmortalConstArraySiteSet
+	// Every `constArrayLiteral` this file emits whose record is IMAGE DATA, and which shape of one, keyed by
+	// the op index in THIS artifact's module and folded with the merge's offset, exactly as
+	// `debugStreamNameSites` is. See `Project.immortalConstArraySites`.
+	export var immortalConstArraySites as ImmortalConstArraySiteMap
 	// (funcIndex, ValueId) -> Maxon OpIndex for every value an op DEFINES in this file
 	// (see ValueOrigin). Recorded inside the emit choke points below in the same
 	// op/value lockstep `opRanges` uses, and folded into `project.valueOrigins` by
@@ -411,7 +411,7 @@ export type FileParseArtifact
 			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
-			immortalConstArraySites: ImmortalConstArraySiteSet.create(),
+			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
@@ -506,9 +506,10 @@ export type FileParseArtifact
 	end 'recordDebugStreamNameSite'
 
 	// Record that the `constArrayLiteral` `emitOp` is about to append materializes an IMMORTAL `.rdata`
-	// record — the same read-it-through-here contract its two neighbours state, and for their reason.
-	export function recordImmortalConstArraySite()
-		self.immortalConstArraySites.insert(self.module.opCount() as OpIndex)
+	// record of `kind` — the same read-it-through-here contract its two neighbours state, and for their
+	// reason.
+	export function recordImmortalConstArraySite(kind ImmortalRecordKind)
+		self.immortalConstArraySites.upsert(self.module.opCount() as OpIndex, value: kind)
 	end 'recordImmortalConstArraySite'
 
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
@@ -1600,11 +1601,11 @@ function commitDebugStreamNameSites(project Project, artifact FileParseArtifact,
 	end 'each'
 end 'commitDebugStreamNameSites'
 
-// Fold this file's immortal-record `constArrayLiteral` sites onto the whole-program set, RE-KEYED by the
+// Fold this file's immortal-record `constArrayLiteral` sites onto the whole-program table, RE-KEYED by the
 // merge's op offset — `commitDebugStreamNameSites`' twin, for its stated reason.
 function commitImmortalConstArraySites(project Project, artifact FileParseArtifact, opOffset OpIndex)
-	for opIndex in artifact.immortalConstArraySites 'each'
-		project.immortalConstArraySites.insert(opIndex + opOffset)
+	for (opIndex, kind) in artifact.immortalConstArraySites 'each'
+		project.immortalConstArraySites.upsert(opIndex + opOffset, value: kind)
 	end 'each'
 end 'commitImmortalConstArraySites'
 

@@ -161,11 +161,50 @@ let ByteArrayRecordPrefix = "__barr_rec_"
 // exactly as two identical String literals do.
 export function registerImmortalByteArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray) returns String
 	let blobLabel = registerByteArrayLiteralBlob(globalData, bytes: bytes)
-	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(blobLabel), length: elementCount, elementSize: elementSize as ParsedInt)
+	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(blobLabel), length: elementCount, elementSize: elementSize as ParsedInt, elementDestroy: TrivialElementDestroy)
 	let recordLabel = globalData.registerRdataConstant(ByteArrayRecordPrefix, bytes: recordBytes, kind: RdataPayloadKind.byteArrayRecord)
 	globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
 	return recordLabel
 end 'registerImmortalByteArrayRecord'
+
+// The `.rdata` label prefix an EMPTY module-level `Array with T` registers under, and the name its element
+// destructor takes in that label when there is none — a label segment rather than an empty gap, so a
+// trivial-element record and a managed-element one can never spell the same name.
+let EmptyArrayRecordPrefix = "__barr_empty_"
+let TrivialElementDestroyLabelSegment = "trivial"
+
+// `element_destroy@40` as it is REGISTERED for a managed element — the zero-fill a `funcAbs64InRdata`
+// relocation overwrites with the destructor's `.text` VA, the same encoding a witness table's method slots
+// and a layout descriptor's `destroyFunc@40` are registered under. It equals `TrivialElementDestroy` and is
+// named apart from it because the two say opposite things: that one is the finished answer for an element
+// that owns nothing, this one is an unfinished slot the writer must fill.
+let RelocatedElementDestroy = 0 as ParsedInt
+
+// ⭐⭐ **THE IMMORTAL RECORD A MODULE-LEVEL EMPTY `Array with T` IS** — `registerImmortalByteArrayRecord`'s
+// sibling over the same six slots, differing in the two things an empty container has no answer for and one
+// it alone has: there is no blob (`NoImmortalBlob`, and so no buffer fixup), no payload, and the element
+// type is a REAL one whose destructor the record must name.
+//
+// ⛔⛔ **IT TAKES THE LABELLED DOOR AND NOT THE BYTE-DEDUPED ONE, AND THE LABEL IS THE ONLY THING KEEPING
+// `element_destroy@40` HONEST.** A managed element's slot is stamped 0 here and filled by the writer from a
+// `.text` relocation, so two instances of the same STRIDE and different element types assemble
+// BYTE-IDENTICAL records — under byte dedup they would collapse into one label and the second relocation
+// would overwrite the first's destructor with its own. The label names both facts the record encodes, which
+// is what separates them. ⚠ `requireIdenticalPayload` cannot help here and must not be read as a backstop:
+// the differing datum is the relocation TARGET, which is not in the bytes it compares.
+//
+// ⚠ **THE RELOCATION IS THE CALLER'S**, because it must be recorded exactly once per label and only the
+// caller holds the memo that knows whether this label is fresh (`LowerMaxonToStd.ensureImmortalEmptyArrayRecord`).
+// It is also what ROOTS the destructor: `MmRuntime.noteRelocatedFunctionUsage` installs every callee named
+// by an `.rdata` relocation, and this record is that callee's only compile-time reference once the global's
+// `__module_init` construction is gone.
+export function registerImmortalEmptyArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementDestroy ByteArray) returns String
+	let trivial = elementDestroy.isEmpty()
+	let destroyName = TrivialElementDestroyLabelSegment if trivial else String.from(elementDestroy)
+	let destroySlot = TrivialElementDestroy if trivial else RelocatedElementDestroy
+	let recordBytes = immortalRecordBytes(NoImmortalBlob, length: 0, elementSize: elementSize as ParsedInt, elementDestroy: destroySlot)
+	return globalData.registerRdataConstantLabeled("{EmptyArrayRecordPrefix}{elementSize}_{destroyName}", bytes: recordBytes, kind: RdataPayloadKind.byteArrayRecord)
+end 'registerImmortalEmptyArrayRecord'
 
 // ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** They used to be four
 // file-local `let`s picked against a file-local list, which is how this file's element-size-zero code and

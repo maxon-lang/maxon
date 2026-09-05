@@ -2383,7 +2383,12 @@ let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 // The same COW anchor for the GENERIC-INSTANCE typealiases declared in an `interface` body (W61) — see
 // `Parser.interfaceAliasScratch`. An interface that declares none, which is every interface in the corpus
 // outside `stdlib/Builtins.maxon` and `specs-shv2/associated-types.md`, INCREFS this rather than allocating.
-let sharedEmptyInterfaceAliases = GenericAliasEntryArray.create()
+// ⛔ **A `var`, AND THE KEYWORD IS WHAT KEEPS THIS ANCHOR FREE.** A `let` holding an empty container is
+// IMAGE DATA (⚖ user ruling), and an immortal record cannot be co-owned: every field seeded from it — at
+// `create` and at each reset — is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`). That is
+// correct but it is an allocation exactly where this anchor exists to avoid one, and it leaves the
+// copy-on-write test below unable to fire at all.
+var sharedEmptyInterfaceAliases = GenericAliasEntryArray.create()
 
 // The same anchor for the two ASSOCIATED-TYPE columns an interface-extension body is parsed under
 // (conditional extensions) — see `Parser.extensionAssociatedTypeNames`. Never mutated: an extension pass
@@ -2515,7 +2520,12 @@ let sharedEmptySizedContainerBufferValues = ValueMarkSet.create()
 // stack that is EMPTY unless a `for … in` body is being parsed. `lockIterationSource` copy-on-writes a
 // fresh array the first time it must push, keyed on this instance's `is`-identity, so the shared one
 // stays empty and safe across the per-file parse fan-out.
-let sharedEmptyIterationLocks = VarInfoArray.create()
+// ⛔ **A `var`, AND THE KEYWORD IS WHAT KEEPS THIS ANCHOR FREE.** A `let` holding an empty container is
+// IMAGE DATA (⚖ user ruling), and an immortal record cannot be co-owned: every field seeded from it — at
+// `create` and at each reset — is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`). That is
+// correct but it is an allocation exactly where this anchor exists to avoid one, and it leaves the
+// copy-on-write test below unable to fire at all.
+var sharedEmptyIterationLocks = VarInfoArray.create()
 
 // The module-level shared EMPTY table of E3070 module-storage subject stand-ins, held as the initial value
 // of `Parser.topLevelBorrowSubjects` AND as the COW anchor `topLevelBorrowSubjectOf` keys on —
@@ -2685,7 +2695,12 @@ typealias PendingDefaultHelperArray = Array with PendingDefaultHelper
 // a reader sent from here to there would have found a mechanism that is gone. **The remaining COW anchors
 // are described by their own headers, never by a pointer at a sibling** — a cross-reference is one fact
 // written in two files' worth of places, and it goes stale in exactly this direction.
-let sharedEmptyPendingDefaultHelpers = PendingDefaultHelperArray.create()
+// ⛔ **A `var`, AND THE KEYWORD IS WHAT KEEPS THIS ANCHOR FREE.** A `let` holding an empty container is
+// IMAGE DATA (⚖ user ruling), and an immortal record cannot be co-owned: every field seeded from it — at
+// `create` and at each reset — is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`). That is
+// correct but it is an allocation exactly where this anchor exists to avoid one, and it leaves the
+// copy-on-write test below unable to fire at all.
+var sharedEmptyPendingDefaultHelpers = PendingDefaultHelperArray.create()
 
 // ⚠ **IT IS A FREE FUNCTION, NOT TWO LINES INSIDE THE WALK, AND THE REASON IS A COMPILER SHAPE RATHER
 // THAN ANYTHING ABOUT DEFAULTS.** Reassigning the walk's own enclosing binding from INSIDE a branch
@@ -7952,7 +7967,12 @@ end 'stringIndexSurfaceMemberNames'
 // ⚠ ONE anchor for ALL SIX memos, not one each: it is only ever compared for identity, never read or
 // written, so a second would add nothing but a chance to test a field against the wrong one — a copy-paste
 // that disables the memo silently, with no compile error and no wrong answer to find it by.
-let sharedEmptySurfaceRoster = ByteArrayArray.create()
+// ⛔ **A `var`, AND THE KEYWORD IS LOAD-BEARING: THIS ANCHOR'S RUNTIME IDENTITY IS THE HAS-IT-BEEN-BUILT
+// GATE.** A `let` holding an empty container is IMAGE DATA (⚖ user ruling), and an immortal record cannot
+// be co-owned — a durable sink is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`), so `is`
+// against the anchor is false from the first store and the gate answers *already built* over an empty
+// column. A `var` is one heap record every holder increfs, which is the identity this test needs.
+var sharedEmptySurfaceRoster = ByteArrayArray.create()
 
 // ⭐ **WHICH BUILTIN SURFACE A ROSTER ANSWERS FOR.** Eight surfaces carry members shv2 dispatches by name, and
 // each has exactly one roster — so the surface is the memo's key, the builder's selector and the refusal's
@@ -9766,14 +9786,28 @@ end 'CaptureScopeResult'
 union ManagedReceiverBinding
 	// A managed `let` (P1.7a) — `bytes`/`kind` are what `emitManagedConstant` re-materializes.
 	constant(bytes ByteArray, kind ManagedConstKind)
-	// A STORED managed binding (a `var`, P1.7 slice 2a; or an array `let`, P1.7 slice 2b) —
-	// `label`/`valueType` are what `emitGlobalLoad` reads the slot with, and `mutable` is what decides
-	// whether a receiver-writing method on it is legal. It carries that bit rather than assuming `true`
-	// because an array `let` is stored AND immutable: `Live.push(1)` must be E3019 where `Buffer.push(1)`
-	// is legal, and the synthetic `VarInfo` the dispatch wears is the only thing that can say so.
+	// A STORED managed binding (a `var`, P1.7 slice 2a; or a record `let` the compiler cannot image, P1.7
+	// slice 2b) — `label`/`valueType` are what `emitGlobalLoad` reads the slot with, and `mutable` is what
+	// decides whether a receiver-writing method on it is legal. It carries that bit rather than assuming
+	// `true` because such a `let` is stored AND immutable: `Live.push(1)` must be E3019 where
+	// `Buffer.push(1)` is legal, and the synthetic `VarInfo` the dispatch wears is the only thing that can
+	// say so.
 	global(label ByteArray, valueType MaxonType, mutable bool)
 	none
+	// ⭐ An IMAGE-DATA `let` — a constant array literal or an empty `Array with T`. It materializes its
+	// record at the receiver exactly as the `constant` arm does, and is immutable for that arm's reason:
+	// `.rdata` is not writable, so `Live.push(1)` is E3019 and the synthetic `VarInfo` is what says so.
+	imageRecord(image TopLevelImageRecord)
 end 'ManagedReceiverBinding'
+
+// ⭐ **DID A TOP-LEVEL MANAGED RECEIVER ANSWER THIS CALL?** — `dispatchOnManagedTopLevelReceiver`'s two
+// outcomes. The `none` half is a union arm and not a sentinel `ValueId` because 0 is a real value id
+// (`self`'s), and the two callers do different things with it: one falls back to a plain reference, the
+// other panics on a gate that promised there was a receiver here.
+union ManagedTopLevelDispatch
+	dispatched(result ValueId)
+	notAManagedReceiver
+end 'ManagedTopLevelDispatch'
 
 // One incoming edge at a control-flow join, for the move reconciliation: the predecessor block a drop is
 // emitted INTO when this edge kept a binding live, paired with the move state that edge carries. An
@@ -9854,7 +9888,13 @@ typealias MutableVarPositionByName = Map with ByteArray, MutableVarPosition
 // the pair unconditionally measured **+13,410 allocations and +590,040 bytes in `phase:signatures`
 // at scale rung 5**, a phase this change has no business touching at all; off the shared empties it
 // is +0 in every column there.
-let sharedEmptyMutableVarShadowed = MutableVarPositionArray.create()
+// ⛔⛔ **A `var`, AND THE KEYWORD GUARDS THE MAP BESIDE IT RATHER THAN THIS ARRAY.** `pushMutableVar`'s one
+// copy-on-write test is an `is` against THIS anchor and it replaces BOTH columns. A `let` holding an empty
+// container is IMAGE DATA (⚖ user ruling), and an immortal record cannot be co-owned — every field seeded
+// from it holds a private CLONE (`Parser.coOwnConcreteRecordForSink`), so the test never fires; this array
+// would still be private, and `mutableVarInnermost` — a `Map`, which imaging does not reach — would stay
+// the one process-wide record every Parser writes into.
+var sharedEmptyMutableVarShadowed = MutableVarPositionArray.create()
 let sharedEmptyMutableVarInnermost = MutableVarPositionByName.create()
 
 // Insert `position` into an ASCENDING, duplicate-free list, and say whether it was new. Binary
@@ -9926,7 +9966,12 @@ end 'ascendingTokenIndexHolds'
 // `buildBlockExtentIndex` REPLACES the field with a fresh column rather than mutating this one, so it stays
 // empty and is safe to share across the per-file parse fan-out. Reading it before the build is harmless:
 // `matchingEndOf` is the only reader and an empty column makes it panic rather than answer.
-let sharedEmptyBlockExtentEnds = TokenIndexColumn.create()
+// ⛔ **A `var`, AND THE KEYWORD IS LOAD-BEARING: THIS ANCHOR'S RUNTIME IDENTITY IS THE HAS-IT-BEEN-BUILT
+// GATE.** A `let` holding an empty container is IMAGE DATA (⚖ user ruling), and an immortal record cannot
+// be co-owned — a durable sink is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`), so `is`
+// against the anchor is false from the first store and the gate answers *already built* over an empty
+// column. A `var` is one heap record every holder increfs, which is the identity this test needs.
+var sharedEmptyBlockExtentEnds = TokenIndexColumn.create()
 
 // The INITIAL `Parser.blockKeywordNames`. It has no `is`-identity gate of its own because it is filled by
 // `buildBlockExtentIndex` in the SAME pass as `blockExtentEnds`, whose anchor above is the gate: one walk
@@ -33621,15 +33666,16 @@ export type Parser
 	// The name is not a local and not a top-level binding WITH STORAGE. Say which of the two remaining things
 	// it is: an INLINED top-level constant (E2013) or nothing at all (E2004).
 	//
-	// A stored-but-immutable binding — an array `let` (P1.7 slice 2b) — never reaches here: it resolves
-	// through `globalDeclFor` like any other global, and `storeToGlobal` refuses it there, holding the
-	// resolution that proves the name is declared. So the constant probe below is the whole remaining
-	// question, exactly as it was before that binding existed.
+	// A STORED-but-immutable binding — an array `let` the compiler could not image (a managed element, a
+	// non-empty container) — never reaches here: it resolves through `globalDeclFor` like any other global,
+	// and `storeToGlobal` refuses it there with this same diagnostic, holding the resolution that proves the
+	// name is declared.
 	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
 		match self.signatures.constantValueOf(nameTok.value, readerFilePath: self.filePath) 'constant'
-			// Either kind of constant is immutable — assigning to a managed `let` is the same mistake as
-			// assigning to a scalar one, and gets the same diagnostic.
+			// Every kind of constant is immutable — assigning to a managed `let`, to an imaged record or to
+			// a scalar one is the same mistake and gets the same diagnostic.
 			found to foundManaged then throw assignToImmutableError(nameTok)
+			foundImageRecord then throw assignToImmutableError(nameTok)
 			notFound then throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'constant'
 	end 'rejectNonGlobalAssignment'
@@ -53644,7 +53690,7 @@ export type Parser
 		// Filed BEFORE the emit, off the count that IS the index the append will land at —
 		// `recordAllocTagSite`'s contract, for its reason. The check above may throw, so it is asked first.
 		if storage == ByteStringRecordStorage.immortalImage 'imageData'
-			self.artifact.recordImmortalConstArraySite()
+			self.artifact.recordImmortalConstArraySite(ImmortalRecordKind.constBlob)
 		end 'imageData'
 
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: ByteStringElementSize, elementCount: bytes.count(), bytes: bytes), range: range)
@@ -55905,10 +55951,9 @@ export type Parser
 		self.pos = self.pos + TokensPerQualifierSegment
 
 		if self.memberCallFollows(self.pos + 1) 'aMethodOnTheMember'
-			match self.managedReceiverBindingOf(nameTok) 'binding'
-				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: nameTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(nameTok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed)
-				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: nameTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(nameTok), reader: self.moduleSlotReaderOf(nameTok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
-				none then break 'binding'
+			match try self.dispatchOnManagedTopLevelReceiver(func, tok: nameTok, resultUsed: resultUsed) 'binding'
+				dispatched(result) then return result
+				notAManagedReceiver then break 'binding'
 			end 'binding'
 		end 'aMethodOnTheMember'
 
@@ -56037,6 +56082,7 @@ export type Parser
 	function namesTopLevelBinding(name ByteArray) returns bool
 		let isConstant = match self.signatures.constantValueOf(name, readerFilePath: self.filePath) 'constant'
 			found to foundManaged gives true
+			foundImageRecord gives true
 			notFound gives false
 		end 'constant'
 
@@ -58299,15 +58345,33 @@ export type Parser
 		//
 		// A `let`'s literal is re-materialized at the use, exactly as a bare reference to it would be.
 		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelBase'
-			match self.managedReceiverBindingOf(baseTok) 'binding'
-				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed)
-				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok), reader: self.moduleSlotReaderOf(baseTok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
-				none then break 'binding'
+			match try self.dispatchOnManagedTopLevelReceiver(func, tok: baseTok, resultUsed: resultUsed) 'binding'
+				dispatched(result) then return result
+				notAManagedReceiver then break 'binding'
 			end 'binding'
 		end 'managedTopLevelBase'
 
 		panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding, a capture, nor a top-level managed binding, but `methodCallsAt` gated this call — the two must agree on what a method receiver is, and on the ORDER they resolve one in")
 	end 'parseMethodCall'
+
+	// ⭐⭐ **THE THREE STORAGE MODELS A TOP-LEVEL MANAGED RECEIVER CAN HAVE, JOINED IN ONE DOOR** — asked by
+	// both receiver sites (`parseStaticMemberAccess` for `Names.items.push(9)`, `parseMethodCall` for a bare
+	// base). They differ only in the token they resolve and in what they do when the answer is `none`, so a
+	// per-site copy of the arms would be one rule written twice: a fourth storage model taught to one site
+	// and not the other is a wrong answer at the other, with nothing to make the two disagree loudly.
+	//
+	// What each arm carries is the same three facts `dispatchOnManagedReceiver` takes — the VALUE the
+	// receiver is, its TYPE, and whether a receiver-writing method on it is legal. Only a `var`'s slot
+	// answers `mutable`; a managed constant and an imaged record are `.rdata` and can be written through by
+	// nothing.
+	function dispatchOnManagedTopLevelReceiver(func IrFunction, tok Token, resultUsed bool) returns ManagedTopLevelDispatch throws ParseError
+		match self.managedReceiverBindingOf(tok) 'binding'
+			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed))
+			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok), reader: self.moduleSlotReaderOf(tok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed))
+			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), varType: image.valueType, mutable: false, resultUsed: resultUsed))
+			none then return ManagedTopLevelDispatch.notAManagedReceiver
+		end 'binding'
+	end 'dispatchOnManagedTopLevelReceiver'
 
 	// ⭐ **THE SHAPE OF A SYNTHETIC RECEIVER BINDING, DECIDED ONCE.** A top-level managed receiver is not a
 	// declaration the parser read, so its `VarInfo` is invented here — and every field of it is a claim the
@@ -59209,6 +59273,7 @@ export type Parser
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			found then break 'constant'
 			foundManaged(bytes, kind) then return ManagedReceiverBinding.constant(bytes, kind: kind)
+			foundImageRecord(image) then return ManagedReceiverBinding.imageRecord(image)
 			notFound then break 'constant'
 		end 'constant'
 
@@ -69973,12 +70038,13 @@ export type Parser
 			try self.consume(TokenKind.dot)
 			let nameTok = self.staticMemberNameToken(baseTok, memberTok: try self.consumeMemberNameToken())
 			match self.managedReceiverBindingOf(nameTok) 'binding'
-				// A managed CONSTANT (a `String`, a `b"…"`) and an INLINED scalar have no field to chain
-				// through, so both take the `undefinedVariable` an unknown base does — the arm below's own
-				// choice, spelled at the QUALIFIED name because that is what this chain is rooted at.
+				// A managed CONSTANT (a `String`, a `b"…"`), an IMAGED record and an INLINED scalar have no
+				// field to chain through, so all three take the `undefinedVariable` an unknown base does —
+				// the arm below's own choice, spelled at the QUALIFIED name because that is what this chain
+				// is rooted at.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
-				none then break 'binding'
+				none to imageRecord then break 'binding'
 			end 'binding'
 
 			throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
@@ -69995,11 +70061,12 @@ export type Parser
 		// needs no ownership bookkeeping it did not already have.
 		if self.managedTopLevelBaseAt(baseIndex) 'managedTopLevelBase'
 			match self.managedReceiverBindingOf(baseTok) 'binding'
-				// A managed CONSTANT is a `String` or a `b"…"`, neither of which has a field, so it takes the
-				// same `undefinedVariable` an unknown base does rather than an arm that could only refuse.
+				// A managed CONSTANT is a `String` or a `b"…"` and an IMAGED record is an array, none of which
+				// has a field, so each takes the same `undefinedVariable` an unknown base does rather than an
+				// arm that could only refuse.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
-				none then break 'binding'
+				none to imageRecord then break 'binding'
 			end 'binding'
 		end 'managedTopLevelBase'
 
@@ -72477,6 +72544,7 @@ export type Parser
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			found(payload, tag, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
+			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
 			notFound then break 'constant'
 		end 'constant'
 
@@ -72542,6 +72610,30 @@ export type Parser
 			byteArray gives try self.emitByteStringLiteralValue(bytes, storage: ByteStringRecordStorage.immortalImage, range: range)
 		end 'k'
 	end 'emitManagedConstant'
+
+	// ⭐⭐ **A USE OF AN IMAGE-DATA `let` IS ONE `.rdata` ADDRESS** — the record-shaped half of the ⚖ *a `let`
+	// is image data* ruling, and the same emitter a byte string's constant read goes through: one
+	// `constArrayLiteral` op plus the side-table mark that says which record it materializes
+	// (`Project.immortalConstArraySites`). Nothing is allocated, nothing is refcounted and nothing is
+	// dropped, so the declaration reserves no storage and the READ costs one instruction however often it
+	// runs.
+	//
+	// ⚠ **NO OWNED TEMP, WHICH IS THE WHOLE OF WHY THE READ IS FREE.** An immortal record is never created,
+	// so it owes no `__managed_decref` and a statement-end drop on one would be a write to a read-only page.
+	//
+	// ⚠ **THE IMMUTABLE-GLOBAL MARK IS STILL TAKEN.** Imaging changes where the record LIVES, not what the
+	// language says about the binding: `let` still refuses to be aliased into rebindable storage (W117), and
+	// the mark is what carries that refusal to the escape doors.
+	function emitImageRecordRead(image TopLevelImageRecord, range SourceRange) returns ValueId
+		let result = self.mintValue(maxonTypeTag(image.valueType), nameId: typeNameIdOf(image.valueType))
+		self.brandValue(result, brand: image.brand)
+		// Filed BEFORE the emit, off the count that IS the index the append will land at —
+		// `recordAllocTagSite`'s contract, for its reason.
+		self.artifact.recordImmortalConstArraySite(image.kind)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: image.elementSize, elementCount: image.elementCount, bytes: image.bytes), range: range)
+		self.markImmutableGlobalRead(result)
+		return result
+	end 'emitImageRecordRead'
 
 	// ⭐ **A USE OF A TOP-LEVEL CONSTANT INLINES ITS VALUE, AND THAT IS THE WHOLE STORAGE MODEL.**
 	//
@@ -83512,6 +83604,7 @@ export type Parser
 		return match self.managedReceiverBindingOf(baseTok) 'managed'
 			constant to global gives true
 			none gives false
+			imageRecord gives true
 		end 'managed'
 	end 'methodCallsAt'
 

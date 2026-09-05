@@ -827,9 +827,9 @@ export union TopLevelConstant
 	managedValue(bytes ByteArray, kind ManagedConstKind)
 	// ⭐ **IT EVALUATED TO AN ARRAY LITERAL** (P1.7 slice 2b) — its already-folded `elements` and the one
 	// `element` kind they all share. Its own arm rather than a widened `managedValue` because an array's
-	// value is neither a number nor bytes: it is a LIST, and the record built from it is a HEAP record
-	// with a `.data` slot — so a binding that folds to one is STORED whichever keyword declared it (see
-	// `TopLevelDecl.hasStorage`), where a `managedValue` `let` is inlined at every read.
+	// value is neither a number nor bytes: it is a LIST, and which storage model it takes depends on whether
+	// those elements have a constant image — see `TopLevelDecl.hasStorage` and
+	// `constArrayLiteralIsImageData`.
 	//
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason and now with one more range arm reading this
 	// union. Appending leaves `value to poisoned`, `failed to poisoned`, `pending to evaluating` and
@@ -1548,9 +1548,10 @@ export type TopLevelDecl
 	// path-qualified key the compiler files it under. (v1 needs a `displayTopLevelKey` to strip that
 	// prefix back off at E2012 time; carrying the bare name costs one pointer and needs no stripping.)
 	export var name as ByteArray
-	// `var` or `let` — WHETHER THIS NAME MAY BE WRITTEN, and nothing else. It used to double as "does it
-	// have a slot?", and P1.7 slice 2b separated the two: an array `let` is immutable AND stored, so which
-	// door a USE goes through is `hasStorage` below and this bit is only what the two WRITE sites ask.
+	// `var` or `let` — WHETHER THIS NAME MAY BE WRITTEN, and nothing else. Storage is a separate question
+	// (`hasStorage` below): a record `let` the compiler cannot image is immutable AND stored, an imaged one
+	// is immutable and slotless, so which door a USE goes through is that bit and this one is only what the
+	// two WRITE sites ask.
 	export var mutable as bool
 	// ⭐⭐ **DOES THIS DECLARATION HAVE A `.data` SLOT?** — the ONE criterion deciding which of the two doors
 	// a USE goes through (`constantValueOf` materializes a value, `globalDeclFor` loads a slot), which decls
@@ -1558,17 +1559,19 @@ export type TopLevelDecl
 	// ONE fact rather than four re-derivations that could give a binding a slot the layout never laid down.
 	//
 	// ⚠ **A `var` IS NOT THE WHOLE ANSWER** (P1.7 slice 2b). Every `var` is stored — that is what a `var` IS,
-	// so this starts life equal to `mutable`. But so is an immutable ARRAY: its value is a heap record built
-	// by `__module_init`, and no READ can re-materialize one (a `let` String's read borrows the ONE immortal
-	// `.rdata` record; an array's record is mutable by nature and per-program, so a per-read copy would be a
-	// different array every time). `settleStoredRecordValue` is the ONLY writer that flips it, which is the same
-	// place `outcome` becomes `arrayValue`/`containerValue` — so the two cannot disagree, and an array binding gets a slot
-	// while `let` keeps refusing the write (E2013 at an assignment, E3019 at a receiver-writing method).
-	// A container factory (`var g = ItemArray.create()`) settles through the same one writer for the same
-	// reason — its value is a heap record too.
+	// so this starts life equal to `mutable`. So is a RECORD `let` the compiler cannot lay down as bytes: a
+	// managed-element array literal, a container holding members, a factory's result, a boxed case. Their
+	// value is a heap record `__module_init` builds and no READ can re-materialize one, so the binding gets a
+	// slot while `let` keeps refusing the write (E2013 at an assignment, E3019 at a receiver-writing method).
 	//
-	// ⚠ **A FIELD RATHER THAN A FUNCTION THAT RE-READS `outcome`.** The obvious spelling is
-	// `mutable or outcome is arrayValue or outcome is containerValue`, asked afresh at each of the four readers. A bool written where the
+	// ⭐⭐ **AND AN IMAGED `let` FLIPS IT THE OTHER WAY** (⚖ user ruling: a `let` is image data). A constant
+	// array literal and an empty `Array with T` ARE bytes the compiler can lay down, so each read is one
+	// `.rdata` address and there is no slot, no `__module_init` construction and no cleanup drop.
+	// `settleRecordValue` is the ONLY writer of this bit, and it is the same place `outcome` becomes a record
+	// — so the storage model and the value cannot disagree.
+	//
+	// ⚠ **A FIELD RATHER THAN A FUNCTION THAT RE-READS `outcome`.** The obvious spelling is a test over
+	// `mutable` and the outcome, asked afresh at each of the four readers. A bool written where the
 	// outcome is written says the same thing once, is O(1) at every ask, and — the part that matters — makes
 	// the answer available in the window where the outcome is not yet settled, which the four readers
 	// straddle (see below). MEASURED: it costs no allocations and about 24 bytes per top-level declaration.
@@ -1669,6 +1672,19 @@ function declaredInATypeBody(decl TopLevelDecl) returns bool
 		typeMember gives true
 	end 'declaredIn'
 end 'declaredInATypeBody'
+
+// Does this SLOTLESS binding hold an image-data record? Asked only of a decl resolved through
+// `DeclKind.inlined`, so having no slot is the precondition and the outcome is the whole answer: a RECORD
+// outcome with no slot is an imaged one by `settleRecordValue`'s construction, and a scalar or a managed
+// literal has no shared record to alias at all. One record arm for `resolvedValueOf`'s reason — which
+// shapes may be imaged is decided in one place, not restated here where a stale copy would be a silently
+// missed W117 seed.
+function declHoldsAnImageRecord(decl TopLevelDecl) returns bool
+	return match decl.outcome 'state'
+		pending to managedValue gives false
+		arrayValue to boxedUnionValue gives true
+	end 'state'
+end 'declHoldsAnImageRecord'
 
 export typealias TopLevelDeclArray = Array with TopLevelDecl
 
@@ -2042,7 +2058,37 @@ export union TopLevelConstantLookup
 	// (`Parser.rejectNonGlobalAssignment`: assigning to either is E2013).
 	foundManaged(bytes ByteArray, kind ManagedConstKind)
 	notFound
+	// ⭐⭐ **AN IMAGE-DATA RECORD `let`** — a constant array literal or an empty `Array with T`, whose bytes
+	// the compiler lays down and whose read is one `.rdata` address. It carries the whole description
+	// because the READER has no second door to ask: an imaged binding reserves no slot, so `globalDeclFor`
+	// answers `notFound` for it and this is the only answer there is.
+	//
+	// ⚠ **APPENDED PAST `notFound`, which is where a new arm goes** (`TopLevelConstant.managedValue`'s
+	// rule): the two `found to foundManaged` range arms that ask only whether a constant EXISTS then keep
+	// EXCLUDING this case, so each has to be visited and decided rather than silently widened.
+	foundImageRecord(image TopLevelImageRecord)
 end 'TopLevelConstantLookup'
+
+// ⭐⭐ **EVERYTHING A USE SITE NEEDS TO MATERIALIZE AN IMAGE-DATA `let`** — the record's SHAPE, its payload
+// and the type the value is minted at, resolved together by the index that holds both the instance registry
+// and the outcome. It is one description rather than three parameters because the shape decides which of the
+// other two mean anything: a `constBlob`'s bytes are its payload, an `emptyContainer` has none and carries
+// its element's destructor instead.
+export type TopLevelImageRecord
+	export let kind as ImmortalRecordKind
+	export let elementSize as ElementStride
+	export let elementCount as ParsedInt
+	export let bytes as ByteArray
+	export let valueType as MaxonType
+	// The generic-instance alias the initializer spelled (`Xs.create()`), or EMPTY — `TopLevelGlobalLookup`'s
+	// `brand` and it rides for that field's reason: a read wears the alias it was declared under, and a value
+	// that loses it decays into any brand of its instance.
+	export let brand as ByteArray
+
+	export static function create(kind ImmortalRecordKind, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, valueType MaxonType, brand ByteArray) returns TopLevelImageRecord
+		return Self{kind: kind, elementSize: elementSize, elementCount: elementCount, bytes: bytes, valueType: valueType, brand: brand}
+	end 'create'
+end 'TopLevelImageRecord'
 
 // The outcome of a USE-SITE lookup for a top-level `var` — `TopLevelConstantLookup`'s twin, and
 // deliberately a DIFFERENT type carrying DIFFERENT payload. A constant's use needs its VALUE (it
@@ -2054,11 +2100,12 @@ end 'TopLevelConstantLookup'
 // a use site that re-derived it would be a second answer to "what type is this global?" free to name a
 // different instance than the slot was laid out for.
 //
-// ⚠ **AND THE MUTABILITY, because a STORED binding is no longer necessarily a `var`** (P1.7 slice 2b). An
-// array `let` has a slot — its value is a heap record no read can re-materialize — so "which slot does this
-// name denote?" and "may it be written?" came apart, and this door answers the first. The second is asked by
-// the two sites that WRITE (`Parser.parseTopLevelAssignment`, and the synthetic receiver binding a method
-// call is dispatched on), off this bit; without it an array `let` would silently accept both.
+// ⚠ **AND THE MUTABILITY, because a STORED binding is no longer necessarily a `var`** (P1.7 slice 2b). A
+// record `let` the compiler cannot image has a slot — its value is a heap record no read can re-materialize
+// — so "which slot does this name denote?" and "may it be written?" came apart, and this door answers the
+// first. The second is asked by the two sites that WRITE (`Parser.parseTopLevelAssignment`, and the
+// synthetic receiver binding a method call is dispatched on), off this bit; without it such a `let` would
+// silently accept both.
 export union TopLevelGlobalLookup
 	// `brand` is the generic-instance alias the initializer spelled (`Xs.create()`), or empty.
 	found(label ByteArray, valueType MaxonType, brand ByteArray, mutable bool)
@@ -2070,10 +2117,10 @@ end 'TopLevelGlobalLookup'
 // stored one loads from a slot.
 //
 // ⚠ **IT IS `inlined` vs `stored`, NOT `let` vs `var`** (P1.7 slice 2b). Those two questions were the same
-// question until an array literal reached the top level: an array binding's value is a HEAP RECORD, which
-// no read can re-materialize, so it gets a `.data` slot whichever keyword declared it — and a `let` differs
-// from a `var` only in refusing the WRITE. `TopLevelDecl.hasStorage` is the one criterion, and naming this enum
-// after the storage rather than the keyword is what stops a reader assuming they still coincide.
+// question until an array literal reached the top level, and they diverge in BOTH directions now: a record a
+// read cannot re-materialize gets a `.data` slot whichever keyword declared it, while a `let` whose bytes the
+// compiler can lay down is INLINED and gets none. `TopLevelDecl.hasStorage` is the one criterion, and naming
+// this enum after the storage rather than the keyword is what stops a reader assuming they coincide.
 //
 // An enum, not the bare `mutable bool` the decl carries: at a CALL SITE `wanted: DeclKind.inlined` says
 // what is being asked for, where `wanted: false` would be a magic value the reader has to decode against
@@ -12112,9 +12159,9 @@ export type ProgramSignatures
 	// immutable stored global?" needs every file's declarations folded and every initializer evaluated, and
 	// the sweep runs while files are still arriving. Here, both are done.
 	//
-	// ⚠ **A SCALAR `let` IS NOT A SEED, AND THAT FALLS OUT RATHER THAN BEING EXCLUDED**: `DeclKind.stored`
-	// admits only a binding with a `.data` slot, and an inlined scalar constant has no record to alias in the
-	// first place — the whole rule is about a record two names can reach.
+	// ⚠ **A SCALAR `let` IS NOT A SEED, AND THAT FALLS OUT RATHER THAN BEING EXCLUDED**: the seed test asks
+	// whether the name denotes a RECORD, and an inlined scalar constant has none to alias in the first place
+	// — the whole rule is about a record two names can reach.
 	function closeGlobalAliasReturns()
 		if self.globalAliasReturnsClosed 'alreadySettled'
 			return
@@ -12196,7 +12243,7 @@ export type ProgramSignatures
 	// closure's seed test, asked once per recorded declaration.
 	function returnsAnImmutableGlobalDirectly(info GlobalAliasReturnInfo) returns bool
 		for returned in info.returnedNames 'eachName'
-			if self.namesImmutableStoredGlobal(returned, readerFilePath: info.declFilePath) 'namesAnImmutableGlobal'
+			if self.namesImmutableRecordGlobal(returned, readerFilePath: info.declFilePath) 'namesAnImmutableGlobal'
 				return true
 			end 'namesAnImmutableGlobal'
 		end 'eachName'
@@ -12205,16 +12252,24 @@ export type ProgramSignatures
 	end 'returnsAnImmutableGlobalDirectly'
 
 	// ⭐ **DOES `name`, READ FROM `readerFilePath`, DENOTE A `let`-DECLARED TOP-LEVEL BINDING WITH A RECORD?**
-	// The one place the two halves of that question are joined — the SAME scoped-then-bare probe every other
-	// reader of a top-level name goes through (`declFor`), and the declaration's own `mutable` bit. It answers
-	// about STORAGE rather than about constants, because an inlined `let` materializes a fresh value at each
-	// use and has no shared record for a second name to write through.
-	export function namesImmutableStoredGlobal(name ByteArray, readerFilePath FilePath) returns bool
-		return match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'lookup'
-			found(index) gives not self.declAt(index).mutable
+	// The one place the halves of that question are joined — the SAME scoped-then-bare probe every other
+	// reader of a top-level name goes through (`declFor`), and the declaration's own `mutable` bit.
+	//
+	// ⚠ **IT ASKS ABOUT THE RECORD AND THEREFORE ABOUT BOTH STORAGE MODELS.** The rule W117 rests on is that
+	// two names can reach ONE record, and an IMAGED `let` shares one exactly as a stored one does — its reads
+	// are one `.rdata` address — so the imaging of a binding may not decide whether the rule sees it. A
+	// scalar or managed `let` has no record to alias at all and answers false either way.
+	export function namesImmutableRecordGlobal(name ByteArray, readerFilePath FilePath) returns bool
+		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'stored'
+			found(index) then return not self.declAt(index).mutable
+			notFound then break 'stored'
+		end 'stored'
+
+		return match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.inlined) 'imaged'
+			found(index) gives declHoldsAnImageRecord(self.declAt(index))
 			notFound gives false
-		end 'lookup'
-	end 'namesImmutableStoredGlobal'
+		end 'imaged'
+	end 'namesImmutableRecordGlobal'
 
 	// ⭐⭐ **IS `callee`'s PARAMETER AT `index` PASSED BY REFERENCE?** THE door both ends of the ABI ask, and
 	// the only one — `Parser.bindParameters` for the callee's own parameters and `parseCallArgs` for an
@@ -14194,8 +14249,9 @@ export type ProgramSignatures
 	// That is the same property `decls` is an array for.
 	//
 	// ⚠ **IT RUNS AFTER THE EVALUATION LOOP, AND THAT ORDER IS NOW LOAD-BEARING** (P1.7 slice 2b): which
-	// decls have a slot is `TopLevelDecl.hasStorage`, and `settleStoredRecordValue` is what sets it for an immutable
-	// ARRAY binding. Hoisted above the loop it would label the `var`s and silently skip every array `let`.
+	// decls have a slot is `TopLevelDecl.hasStorage`, and `settleRecordValue` is what decides it for a record
+	// binding — in both directions. Hoisted above the loop it would label the `var`s, silently skip every
+	// slot-bearing record `let`, and mint a label for every IMAGED one.
 	//
 	// ⚠ **A LABEL IS MINTED FOR EVERY STORED DECL, LIVE OR NOT, AND THAT ORDER IS LOAD-BEARING TOO**
 	// (P1.7 slice 3). Dead-global elimination reads liveness off the `globalAddr` ops the parser emitted,
@@ -14334,7 +14390,7 @@ export type ProgramSignatures
 			// because it must live in THIS index's interner: the drop callee the cleanup emits is routed
 			// against `self.typeNames`, and a type adopted into a file's artifact interner would name an id
 			// this side cannot resolve.
-			factoryCall(calls, root) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.factoryValue(calls, root: root, returnType: self.constFactoryCallResultType(factoryCallAt(calls, id: root), name: decl.name)))
+			factoryCall(calls, root) then return self.settleRecordValue(decl, outcome: TopLevelConstant.factoryValue(calls, root: root, returnType: self.constFactoryCallResultType(factoryCallAt(calls, id: root), name: decl.name)))
 		end 'kind'
 	end 'walkConstInitializer'
 
@@ -14403,9 +14459,9 @@ export type ProgramSignatures
 		match value 'kind'
 			scalar(folded) then return self.settleScalarValue(decl, value: folded)
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
-			arrayLiteral(elements, element) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
-			containerCreate(giid, brand, elements) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid, brand: brand, elements: elements))
-			boxedUnionCase(typeName, caseName) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.boxedUnionValue(typeName, caseName: caseName))
+			arrayLiteral(elements, element) then return self.settleRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
+			containerCreate(giid, brand, elements) then return self.settleRecordValue(decl, outcome: TopLevelConstant.containerValue(giid, brand: brand, elements: elements))
+			boxedUnionCase(typeName, caseName) then return self.settleRecordValue(decl, outcome: TopLevelConstant.boxedUnionValue(typeName, caseName: caseName))
 		end 'kind'
 	end 'settleFoldedValue'
 
@@ -14424,24 +14480,87 @@ export type ProgramSignatures
 		return ConstEvalOutcome.notFound
 	end 'settleManagedValue'
 
-	// Settle a decl whose initializer folded to a HEAP RECORD — an array literal (P1.7 slice 2b) or a
-	// container factory call (spec-port `ownership`). It joins `managedTopLevelNames` for
+	// Settle a decl whose initializer folded to a RECORD — an array literal (P1.7 slice 2b), a container
+	// factory call (spec-port `ownership`) or a boxed union case. It joins `managedTopLevelNames` for
 	// `settleManagedValue`'s reason — the name is a METHOD RECEIVER (`counters.get(0)`, `globalArr.push(x)`),
 	// and that set is the allocation-free filter in front of every receiver probe — and answers `notFound`
 	// for the same reason a managed literal does.
 	//
-	// ⭐ **ONE FUNCTION FOR BOTH RECORD KINDS, taking the outcome its caller already built.** What differs
+	// ⭐ **ONE FUNCTION FOR EVERY RECORD KIND, taking the outcome its caller already built.** What differs
 	// between them is only WHICH outcome; the three facts settled here — the outcome, the storage bit and
-	// the receiver-name set — are the same three, and a per-kind copy is how a third record kind would come
+	// the receiver-name set — are the same three, and a per-kind copy is how a fourth record kind would come
 	// to get a slot the layout never laid down (the storage bit) or a receiver probe that skips it.
-	function settleStoredRecordValue(decl TopLevelDecl, outcome TopLevelConstant) returns ConstEvalOutcome
+	//
+	// ⭐⭐ **AN IMAGED RECORD IS THE ONE THAT SETTLES `hasStorage` THE OTHER WAY, AND THE BIT IS WRITTEN
+	// HERE FOR THE OUTCOME'S REASON.** A record whose bytes the compiler can lay down needs no `.data` slot,
+	// no `__module_init` construction and no `__maxon_global_cleanup` drop — all three are downstream of this
+	// one bit (`contributesStorage`) — and every READ of it materializes the image instead, exactly as a
+	// managed `let`'s does. The SHAPE verdict is the caller's; what may not move is that the outcome and the
+	// bit are decided in one act.
+	//
+	// ⛔⛔ **THE KEYWORD IS OVERRULED HERE AND NOT ASKED OF EACH CALLER — a `var` IS NEVER IMAGED.** Its
+	// record is REWRITTEN in place (`push` republishes `buffer@0`/`capacity@16`/`length@8`) and `.rdata` is
+	// read-only on x64 and merely indistinguishable from the heap on wasm, where the same write corrupts the
+	// image with nothing to say so. A caller-side conjunct would be that rule written once per shape, free to
+	// be left off the next one; here it cannot be.
+	function settleRecordValue(decl TopLevelDecl, outcome TopLevelConstant) returns ConstEvalOutcome
 		decl.outcome = outcome
-		// A record binding is STORED whichever keyword declared it — written HERE, beside the outcome it is
-		// derived from, so the two are one decision (see `TopLevelDecl.hasStorage`).
-		decl.hasStorage = true
+		decl.hasStorage = decl.mutable or not self.recordShapeHasAnImage(outcome)
 		self.managedTopLevelNames.insert(decl.name)
 		return ConstEvalOutcome.notFound
-	end 'settleStoredRecordValue'
+	end 'settleRecordValue'
+
+	// ⭐⭐ **WHICH RECORD SHAPES THE COMPILER CAN LAY DOWN AS BYTES — THE ROSTER, IN ONE PLACE.** Every other
+	// reader of the imaging verdict asks `hasStorage`, which is derived from this; a second enumeration of
+	// the shapes would be a roster free to go stale the day one joins, and stale here is a global that still
+	// allocates while the rule that permits it says none do.
+	//
+	// ⛔ A FACTORY's record is whatever the CALL returns, which no image can contain; a BOXED CASE is a
+	// `__mm_alloc`'d box with payload slots and no `capacity@16` to carry the immortality mark.
+	function recordShapeHasAnImage(outcome TopLevelConstant) returns bool
+		return match outcome 'shape'
+			pending to managedValue gives false
+			arrayValue(elements, element) gives self.constArrayLiteralIsImageData(elements, element: element)
+			containerValue(giid, _, elements) gives self.emptyContainerIsImageData(giid, elements: elements)
+			factoryValue to boxedUnionValue gives false
+		end 'shape'
+	end 'recordShapeHasAnImage'
+
+	// ⭐⭐ **CAN AN ARRAY LITERAL'S RECORD BE LAID DOWN AS BYTES?** — the constant-blob half of the ⚖ *a
+	// `let` is image data* ruling. It asks EXACTLY the question `containerRecordOf` asks before it lays a
+	// blob down, so a binding is imaged if and only if the record built for it would have been one blob
+	// anyway. It is a question about the SHAPE alone; the keyword is `settleRecordValue`'s.
+	//
+	// ⛔ **A MANAGED ELEMENT CAN NEVER BE**, which `arrayElementMayBeConstantBlob` is what says: a
+	// `["a", "b"]` element slot holds a loader-chosen heap address, and imaging one needs a data→data
+	// pointer channel this compiler deliberately does not have (`GlobalDataTable.PendingRdataSelfRelReloc`
+	// carries the argument).
+	function constArrayLiteralIsImageData(elements ConstArrayElementArray, element ConstArrayElementKind) returns bool
+		if elements.count() == 0 'empty'
+			return false
+		end 'empty'
+
+		return self.arrayElementMayBeConstantBlob(genericInstanceIdOf(self.constArrayValueType(element, elements: elements)))
+	end 'constArrayLiteralIsImageData'
+
+	// ⭐⭐ **CAN A CONTAINER FACTORY'S RECORD BE LAID DOWN AS BYTES?** — the empty-container half, and the
+	// two conditions are what the record format can express. The keyword is `settleRecordValue`'s here too.
+	//
+	// ⛔ **EMPTY, because a container with MEMBERS would have to be hashed at compile time** — a `Set from
+	// ['a', 'e']` global's record is built by `create` then one insert per member, and nothing here can
+	// reproduce the table those inserts land in.
+	//
+	// ⛔ **AND AN `Array with T`, because the immortality mark lives at `capacity@16`.** Every runtime entry
+	// that must decline to count, free or detach an imaged record reads that one slot
+	// (`BufferOwnership.emitRecordIsImmortal`); a `Map`/`Set`/`Vector` is a declared generic whose box has an
+	// arbitrary field there, so an imaged one would be indistinguishable from an ordinary heap box.
+	function emptyContainerIsImageData(giid GenericInstanceId, elements ConstArrayElementArray) returns bool
+		if elements.count() > 0 'filled'
+			return false
+		end 'filled'
+
+		return self.isArrayInstance(giid)
+	end 'emptyContainerIsImageData'
 
 	// Settle a decl that produced no value: it either OWNS the defect or merely inherited one.
 	function recordFailure(decl TopLevelDecl, error ConstEvalError) returns ConstEvalOutcome
@@ -14637,8 +14756,9 @@ export type ProgramSignatures
 	// ⭐ **THE STORED-BINDING DOOR** — what `name` denotes as a top-level global with a `.data` slot, read
 	// from `readerFilePath`. The twin of `constantValueOf`, and the reason the two are separate: an inlined
 	// binding's use MATERIALIZES its value and a stored one's LOADS from a slot, so a caller that could not
-	// tell them apart would have to guess which code to emit. It is every `var` plus an array `let`
-	// (P1.7 slice 2b) — see `TopLevelDecl.hasStorage` — and the answer carries which of those it found.
+	// tell them apart would have to guess which code to emit. It is every `var` plus every record `let` the
+	// compiler cannot image (P1.7 slice 2b) — see `TopLevelDecl.hasStorage` — and the answer carries which of
+	// those it found.
 	//
 	// It resolves through the IDENTICAL scoped-then-bare probe (`declFor`), which is the whole point
 	// of extending the storage key to vars: this is what makes featA's `counter` and featB's
@@ -14674,8 +14794,9 @@ export type ProgramSignatures
 			// and a use of the literal it was initialized from are the same type by construction.
 			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath), brand: EmptySourceText, mutable: decl.mutable)
 			// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reads as a managed `var` does — a POINTER slot holding the
-			// heap record `__module_init` built. It is the one arm `mutable` can arrive `false` from, and that
-			// bit is the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013.
+			// heap record `__module_init` built. An IMAGED `let` never reaches here (it has no slot to name);
+			// what does is a `var`, or a `let` whose elements are MANAGED, and `mutable` arriving `false` is
+			// the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013 for the latter.
 			arrayValue(elements, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element, elements: elements), brand: EmptySourceText, mutable: decl.mutable)
 			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
 			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
@@ -14776,9 +14897,9 @@ export type ProgramSignatures
 	// a cleanup drop with no slot decrefs one.
 	//
 	// TWO independent reasons a declaration contributes nothing, in the order that makes the second one
-	// askable: an INLINED binding has no slot at all (a `let` scalar materializes its value at every read,
-	// and `dataLabelOf` panics rather than inventing a label for one), and a STORED binding whose label no
-	// `globalAddr` in the program names is dead.
+	// askable: an INLINED binding has no slot at all (a `let` scalar materializes its value at every read and
+	// an IMAGED record's read is one `.rdata` address, and `dataLabelOf` panics rather than inventing a label
+	// for either), and a STORED binding whose label no `globalAddr` in the program names is dead.
 	function contributesStorage(decl TopLevelDecl, live LiveGlobalLabelSet) returns bool
 		if not decl.hasStorage 'inlinedHasNoSlot'
 			return false
@@ -15290,11 +15411,13 @@ export type ProgramSignatures
 			end 'noReachableSlot'
 			match decl.outcome 'state'
 				value to poisoned then continue
-				// ⭐ A MANAGED LITERAL, AN ARRAY LITERAL (P1.7 slice 2b) AND A CONTAINER FACTORY are all managed
-				// globals whichever keyword declared them — the record is built before `main` and released
-				// after, and `let` refuses only the WRITE. All three route through `globalRecordOf`, which is
-				// also what a factory ARGUMENT of the same shape routes through: a container factory IS an
-				// array literal with no elements, and that is a fact about the record rather than a shortcut.
+				// ⭐ A MANAGED LITERAL, AN ARRAY LITERAL (P1.7 slice 2b) AND A CONTAINER FACTORY are managed
+				// globals whenever they still have a SLOT — the record is built before `main` and released
+				// after, and `let` refuses only the WRITE. An IMAGED `let` is filtered out above by
+				// `contributesStorage`, which is what makes "no slot" mean no construction and no drop in one
+				// answer. All three route through `globalRecordOf`, which is also what a factory ARGUMENT of
+				// the same shape routes through: a container factory IS an array literal with no elements,
+				// and that is a fact about the record rather than a shortcut.
 				managedValue to containerValue then entries.push(self.recordGlobalOf(decl))
 				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
 				// CALL and its type is the callee's declared return type — settled when the outcome was.
@@ -15833,22 +15956,30 @@ export type ProgramSignatures
 	// `rdata-global-var-array-cow-preserves-original` is the case that pins the whole of it.
 	//
 	// ⚠ **THE ELEMENT COUNT IS WHAT SEPARATES A LITERAL FROM A FACTORY**, which is this union's own stated
-	// rule ("a container factory IS an array literal with no elements"). An empty `IntArray.create()` global
-	// must stay a growable heap record, so it falls through — an immortal empty blob would be a record that
-	// cannot receive its first `push` without detaching from nothing.
+	// rule ("a container factory IS an array literal with no elements"). An empty container that still has a
+	// SLOT must be a growable heap record — a blob with no elements is a record its first `push` would have
+	// to detach from nothing — so it falls through. The empty container that becomes IMAGE DATA never reaches
+	// this door: it has no slot, and `emptyContainerImageOf` builds its record instead.
 	function containerRecordOf(elements ConstArrayElementArray, giid GenericInstanceId) returns ManagedGlobalRecord
 		if elements.count() == 0 or not self.arrayElementMayBeConstantBlob(giid) 'notAConstantBlob'
 			return ManagedGlobalRecord.containerRecord(self.containerCreateCall(giid), elements: elements)
 		end 'notAConstantBlob'
 
+		let blob = self.constArrayBlobOfElements(elements, giid: giid)
+		return ManagedGlobalRecord.constArrayRecord(blob.stride, elementCount: blob.elementCount, bytes: blob.bytes)
+	end 'containerRecordOf'
+
+	// The `.rdata` blob a constant array literal's elements lay down: their stored values at this instance's
+	// stride. Split out because a literal reaches a blob by two routes — a `var`'s `.data` record above, and
+	// an imaged `let`'s record (`constBlobImageOf`) — and the bytes must be the same bytes either way.
+	function constArrayBlobOfElements(elements ConstArrayElementArray, giid GenericInstanceId) returns ConstArrayBlob
 		var constants = ParsedIntArray.create()
 		for element in elements 'eachElement'
 			constants.push(constArrayElementScalar(element))
 		end 'eachElement'
 
-		let blob = constArrayBlobOf(constants, stride: self.arrayElementSize(giid))
-		return ManagedGlobalRecord.constArrayRecord(blob.stride, elementCount: blob.elementCount, bytes: blob.bytes)
-	end 'containerRecordOf'
+		return constArrayBlobOf(constants, stride: self.arrayElementSize(giid))
+	end 'constArrayBlobOfElements'
 
 	// ⭐ **THE TYPE ONE FOLDED RECORD VALUE DENOTES** — what its `.data` slot is sized as, what its value is
 	// minted at and what routes its drop. ONE derivation, read by the `.data` walk, the init walk and the
@@ -16025,14 +16156,70 @@ export type ProgramSignatures
 			value(payload, tag, typeName) then return TopLevelConstantLookup.found(payload, tag: tag, typeName: typeName)
 			managedValue(bytes, kind) then return TopLevelConstantLookup.foundManaged(bytes, kind: kind)
 			failed to poisoned then return TopLevelConstantLookup.notFound
-			// ⭐ **AN ARRAY BINDING IS NOT A CONSTANT A USE CAN INLINE** (P1.7 slice 2b): its value is a heap
-			// record with a `.data` slot, so a read is a LOAD and the caller's NEXT probe (`globalDeclFor`)
-			// is the one that answers. That makes `notFound` the right answer here rather than merely a
-			// defensive one — it is the same "no CONSTANT of that name is visible" a `var` has always given.
-			arrayValue to boxedUnionValue then return TopLevelConstantLookup.notFound
+			// ⭐ **A RECORD BINDING IS A CONSTANT A USE CAN INLINE EXACTLY WHEN IT WAS IMAGED**, and this door
+			// is only ever asked about a binding with NO STORAGE (`constantDeclFor` filters on
+			// `DeclKind.inlined`) — so reaching here with ANY record outcome IS the imaged case, and the
+			// verdict is `settleRecordValue`'s rather than re-derived. A stored record never arrives: its
+			// caller's NEXT probe (`globalDeclFor`) is the one that answers for it.
+			//
+			// ⚠ **THE FOUR RECORD ARMS ARE ONE ARM, so which shapes may be imaged is written where it is
+			// DECIDED and nowhere else.** A shape that cannot be (a factory's returned record, a boxed case)
+			// reaches this door only as an invariant break, which `imageRecordOf` and `foldedValueOf` name;
+			// splitting them off here to answer `notFound` would be a fifth copy of that roster, silently
+			// stale the day a shape joins.
+			arrayValue to boxedUnionValue then return TopLevelConstantLookup.foundImageRecord(self.imageRecordOf(decl))
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
+
+	// ⭐⭐ **THE IMAGE ONE IMAGED `let` MATERIALIZES AS — built HERE, off the same two answers the `.data`
+	// construction is built off**, so a binding's bytes do not depend on which of the two storage models it
+	// took. Its type is `foldedValueType`'s, exactly as a stored record's slot type is; its payload is the
+	// blob `containerRecordOf` would have laid down.
+	//
+	// The three refusals are invariant breaks rather than reachable cases: only the two record shapes
+	// `settleRecordValue` can settle as imaged reach this door.
+	function imageRecordOf(decl TopLevelDecl) returns TopLevelImageRecord
+		let value = self.foldedValueOf(decl.outcome, name: decl.name)
+		let valueType = self.foldedValueType(value, elementFilePath: decl.declFilePath)
+		match value 'folded'
+			arrayLiteral(elements, _) then return self.constBlobImageOf(elements, giid: genericInstanceIdOf(valueType), valueType: valueType)
+			containerCreate(giid, brand, _) then return self.emptyContainerImageOf(giid, valueType: valueType, brand: brand)
+			scalar to managed then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a scalar or a managed literal, neither of which is a record — `resolvedValueOf` answers both above and never reaches here")
+			boxedUnionCase then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a boxed union case, which `settleFoldedValue` never settles as imaged — a box has no `capacity@16` to carry the immortality mark")
+		end 'folded'
+	end 'imageRecordOf'
+
+	// A constant array literal's image: its elements' stored bytes at this instance's stride, and nothing
+	// else. `element_destroy@40` is trivial by construction — `arrayElementMayBeConstantBlob`, which gated
+	// the imaging, admits no managed element — so the `constBlob` shape carries no destructor at all.
+	function constBlobImageOf(elements ConstArrayElementArray, giid GenericInstanceId, valueType MaxonType) returns TopLevelImageRecord
+		let blob = self.constArrayBlobOfElements(elements, giid: giid)
+		// A literal names no alias — its instance is INFERRED from its elements — which is the same EMPTY
+		// brand `resolvedGlobalOf`'s array-literal arm answers with.
+		return TopLevelImageRecord.create(ImmortalRecordKind.constBlob, elementSize: blob.stride, elementCount: blob.elementCount, bytes: blob.bytes, valueType: valueType, brand: EmptySourceText)
+	end 'constBlobImageOf'
+
+	// An empty container's image: no payload, and the element's DESTRUCTOR, which is the one fact an empty
+	// container has that a blob does not. Nothing is ever read out of the record — its `length@8` is 0 — but
+	// everything derived FROM it inherits `element_destroy@40`, and a clone off it is exactly what a mutable
+	// sink is handed.
+	function emptyContainerImageOf(giid GenericInstanceId, valueType MaxonType, brand ByteArray) returns TopLevelImageRecord
+		return TopLevelImageRecord.create(ImmortalRecordKind.emptyContainer(self.imageElementDestroyOf(giid)), elementSize: self.arrayElementSize(giid), elementCount: 0, bytes: EmptySourceText, valueType: valueType, brand: brand)
+	end 'emptyContainerImageOf'
+
+	// The element drop callee an imaged empty container names, or EMPTY when the element owns nothing. It
+	// reads `columnDestroyStamp` — the one decider of which columns own what — rather than asking
+	// `slotTypeIsManaged` again, so the record this global is imaged as and the record a body's `create()`
+	// of the same instance is born with name one destructor.
+	function imageElementDestroyOf(giid GenericInstanceId) returns ByteArray
+		return match self.columnDestroyStamp(self.containerElementType(giid)) 'stamp'
+			// A trivial column's stamp is the number `TrivialDestructor`; an image record says the same thing
+			// with an EMPTY callee, which is the encoding `LowerMaxonToStd.stampOwnershipWord` reads.
+			inline gives EmptySourceText
+			dropCallee(callee) gives callee
+		end 'stamp'
+	end 'imageElementDestroyOf'
 
 	// **THE RESOLUTION RULE for a bare name that might be a top-level declaration** — and the reason
 	// two files may each declare `let SHARED`, or `var counter`, with a different value.

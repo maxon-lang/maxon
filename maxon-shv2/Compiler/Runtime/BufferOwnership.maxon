@@ -152,6 +152,12 @@ let ImmortalRecordCapacity = -4 as NotOwnedBufferCapacity
 // step is null-guarded.
 let NoOwedAllocation = 0 as ParsedInt
 
+// `buffer@0` when an immortal record names NO blob — a module-level EMPTY `Array with T`, whose `length@8`
+// is 0 so no reader ever strides off the slot. It is the same null a `__managed_create` record is born
+// holding, which is what makes an imaged empty container and an allocated one the same object to every
+// runtime entry that reads them.
+export let NoImmortalBlob = 0 as ByteOffset
+
 // --- ⭐⭐ THE BUFFER RECORD, DECLARED ONCE AND EMBEDDED WHOLE BY THE STRING RECORD ---
 //
 // **The String record and the Array record agree on ALL SIX slots, and `__mm_cow_detach` is what
@@ -197,34 +203,38 @@ export let ManagedRecordBytes = 48 as BytePos
 // offsets above are eight apart because of it, and a String record's seventh slot is the same width.
 export let ManagedRecordSlotBytes = 8 as BytePos
 
-// ⭐⭐ **THE SIX SLOTS OF A RECORD THAT *IS* IMAGE DATA, ASSEMBLED AS BYTES — one home, two producers.**
-// A String literal and a module-level byte-array constant register the identical six words and differ only
-// in what follows: the String appends its `singleByteGraphemes` flag, the array appends nothing.
+// ⭐⭐ **THE SIX SLOTS OF A RECORD THAT *IS* IMAGE DATA, ASSEMBLED AS BYTES — one home, three producers.**
+// A String literal, a module-level constant array and a module-level EMPTY `Array with T` register the
+// identical six words and differ only in what follows: the String appends its `singleByteGraphemes` flag,
+// the two array shapes append nothing.
 //
 // ⭐ **`buffer@0` HOLDS THE BLOB'S RDATA OFFSET, NOT 0, AND THAT IS LOAD-BEARING FOR DEDUP.** The writer
 // OVERWRITES it with the blob's absolute VA, so the value stored here is irrelevant to what the program
 // reads — but not to `registerRdataConstant`, which dedupes BY BYTES: two payloads of equal length and
 // stride have byte-identical records except for this slot, so a placeholder of 0 would collapse them into
 // ONE record naming ONE blob. Seeding the blob's own offset makes records dedup exactly when their payloads
-// do.
+// do. An EMPTY container names no blob at all and passes `NoImmortalBlob`, which is the truth about it: its
+// `length@8` is 0, so nothing ever strides off the slot.
 //
-// ⭐ **`element_destroy@40` IS `TrivialElementDestroy` AND THAT IS THE TRUTH, NOT A SHORTCUT** — for both
-// producers: a String's elements are `Byte`s, and a constant array's element is inline-stored by
-// construction (`SignatureIndex.arrayElementMayBeConstantBlob` admits no managed element), so neither has a
-// per-element destructor to name. It matters because every DERIVED record inherits the slot
-// (`ManagedMemoryRuntime.emitRecordView`, the packed copy, `__managed_clone`), so a 0 written where a real
-// destructor belonged would leak the elements of every copy.
+// ⛔⛔ **`element_destroy@40` IS THE CALLER'S AND MUST BE THE TRUTH.** Every DERIVED record inherits the
+// slot (`ManagedMemoryRuntime.emitRecordView`, the packed copy, `__managed_clone`), so a 0 written where a
+// real destructor belonged silently leaks the elements of every copy — and a copy is exactly what a
+// mutable sink gets, `__managed_retain` answering an immortal record with a private clone. Two of the three
+// producers can only ever pass `TrivialElementDestroy`: a String's elements are `Byte`s, and a constant
+// array's element is inline-stored by construction (`SignatureIndex.arrayElementMayBeConstantBlob` admits
+// no managed element). An empty `Array with T` has a real element type and passes 0 only when the writer is
+// about to relocate the callee's `.text` VA into this slot.
 //
 // Each slot is appended at its named offset and the appender asserts it lands there, so the offsets the
 // runtime loads by and the offsets this writes are one set of constants that cannot drift.
-export function immortalRecordBytes(blobOffset ByteOffset, length ParsedInt, elementSize ParsedInt) returns ByteArray
+export function immortalRecordBytes(blobOffset ByteOffset, length ParsedInt, elementSize ParsedInt, elementDestroy ParsedInt) returns ByteArray
 	var record = ByteArray.create()
 	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as ParsedInt)
 	appendRecordSlot(record, expectedOffset: ManagedRecordLengthOffset, value: length)
 	appendRecordSlot(record, expectedOffset: ManagedRecordCapacityOffset, value: ImmortalRecordCapacity)
 	appendRecordSlot(record, expectedOffset: ManagedRecordElementSizeOffset, value: elementSize)
 	appendRecordSlot(record, expectedOffset: ManagedRecordParentOffset, value: NoOwedAllocation)
-	appendRecordSlot(record, expectedOffset: ManagedRecordElementDestroyOffset, value: TrivialElementDestroy)
+	appendRecordSlot(record, expectedOffset: ManagedRecordElementDestroyOffset, value: elementDestroy)
 
 	if record.count() != ManagedRecordBytes 'sizeDrift'
 		panic("immortalRecordBytes: assembled {record.count()} bytes, not {ManagedRecordBytes} — a slot's width does not match its offset spacing")

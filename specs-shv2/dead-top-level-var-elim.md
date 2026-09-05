@@ -95,11 +95,9 @@ i64 42
 ```
 
 <!-- test: dead-array-let-leaves-no-data-slot -->
-An array global's slot is a POINTER that `__module_init` fills and `__maxon_global_cleanup`
-releases, so dropping it is three pieces at once — the slot, the `__managed_create`/`__managed_push` run
-that builds the record, and the `__managed_decref` that frees it. Dropping any two of the three is a
-null store, a leak or a decref of a slot that no longer exists; the exit code plus the leak gate
-plus this pin are what say all three went together.
+An array `let` is IMAGE DATA: its bytes are laid down in `.rdata` and it reserves no `.data` slot at
+all, so `live` is the only global the section may hold. The pin is a PREFIX compare, and the array is
+declared FIRST, so a slot that came back would be a byte at offset 0 the pin does not have.
 
 ```maxon
 let deadArr = [1, 2, 3, 4, 5]
@@ -123,9 +121,13 @@ all-or-nothing would mean never dropping anything. Here `deadArr` and `liveArr` 
 function: the dead one's build must go while the live one's stays, and `liveArr.get(1)` still
 answering 20 is what proves the surviving record was built correctly rather than merely allocated.
 
+⚠ **BOTH ARRAYS ARE `var`s, AND THAT IS WHAT KEEPS THE CASE ABOUT THIS PASS.** A `let` array is
+IMAGE DATA — no slot, no build, nothing for a prune to reach — so declaring either one `let` would
+leave `probe` as the only slot and the pin would hold whether or not this pass ran at all.
+
 ```maxon
-let deadArr = [1, 2, 3]
-let liveArr = [10, 20, 30]
+var deadArr = [1, 2, 3]
+var liveArr = [10, 20, 30]
 var probe = 4
 
 function main() returns ExitCode

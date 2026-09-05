@@ -140,7 +140,12 @@ let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
 // every function in the module bar the handful declaring a narrowed parameter. Shared for
 // `sharedEmptyGlobalAliasValues`' reason and with its invariant: it is never mutated, because the one
 // operation that would write to it (`recordParamGuard`) REPLACES the field first.
-let sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
+// ⛔ **A `var`, AND THE KEYWORD IS WHAT KEEPS THIS ANCHOR FREE.** A `let` holding an empty container is
+// IMAGE DATA (⚖ user ruling), and an immortal record cannot be co-owned: every field seeded from it — at
+// `create` and at each reset — is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`). That is
+// correct but it is an allocation exactly where this anchor exists to avoid one, and it leaves the
+// copy-on-write test below unable to fire at all.
+var sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
 
 // ⭐⭐ **ONE SOURCE NAME A DEBUGGER CAN BE ASKED ABOUT, AND EVERY SSA VALUE IT EVER OWNED.**
 //

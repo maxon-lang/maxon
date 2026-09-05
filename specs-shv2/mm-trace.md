@@ -184,3 +184,44 @@ mm_alloc ArrayRecord #1 size=48
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 ```
+
+<!-- test: module-let-array-globals-cost-no-allocation-at-all -->
+A module-scope `let` holding an array LITERAL, and one holding an empty container, are both constants: their
+bytes are decided when the program is compiled and nothing about them can change while it runs. So neither
+may cost a memory-manager event, and the golden is EMPTY.
+
+⭐ **NEITHER RESERVES A `.data` SLOT, AND THAT IS THE FACT THE EMPTY GOLDEN PINS.** Each is one `.rdata`
+record every read addresses directly, so there is no slot for `__module_init` to fill and nothing for
+`__maxon_global_cleanup` to release — the same storage model the byte-string sibling above already has. A
+slot would put a `__managed_create` back in `__module_init` and its `__managed_decref` back in the cleanup:
+one allocation and one free per global, per process, whether or not the program ever looks at it, which is
+exactly the six events this golden's emptiness refuses.
+
+**A per-process cost is not a hot path, and that is not why this is pinned.** It is pinned because a global
+the compiler builds at run time is a heap record with a reference count, and a reference count is a word two
+worker threads can step at once. A constant that lives in the image has no such word. The allocation is the
+observable; the shared mutable word is the reason.
+
+Both shapes appear because they reach the image by different routes — a literal's elements are its own bytes,
+an empty container's are the absence of any — and a change that images one and forgets the other leaves a
+global that still allocates while the file that permits it says none do.
+
+<!-- MmTrace -->
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+
+let Literal = [7, 9, 11]
+let Empty = NumArray.create()
+
+function main() returns ExitCode
+	let a = try Literal.get(0) otherwise 0
+	let n = Empty.count()
+	return 0 if a == 7 and n == 0 else 1
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+```

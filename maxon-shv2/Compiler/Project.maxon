@@ -921,9 +921,22 @@ export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
 // `Project.debugStreamNameSites`.
 export typealias DebugStreamNameSiteMap = Map with (OpIndex, ByteArray)
 
-// ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation. See
-// `Project.immortalConstArraySites`.
-export typealias ImmortalConstArraySiteSet = Set with OpIndex
+// ⭐⭐ **WHICH IMAGE-DATA RECORD A MARKED `constArrayLiteral` MATERIALIZES — the two shapes a module-level
+// `let` can be, and the whole of what the lowering cannot read off the op.**
+export union ImmortalRecordKind
+	// The op's own bytes ARE the payload: a record in `.rdata` beside its immortal blob. A byte string and
+	// a constant array literal both land here, and neither can carry a managed element
+	// (`SignatureIndex.arrayElementMayBeConstantBlob`), so `element_destroy@40` is trivial by construction.
+	constBlob
+	// ⭐ An EMPTY `Array with T` — no payload, no blob, and the one shape whose ELEMENT TYPE still matters:
+	// a clone off this record inherits `element_destroy@40` and then receives elements. `elementDestroy` is
+	// the element's drop callee, EMPTY when the element owns nothing.
+	emptyContainer(elementDestroy ByteArray)
+end 'ImmortalRecordKind'
+
+// ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation, each carrying
+// which shape it is. See `Project.immortalConstArraySites`.
+export typealias ImmortalConstArraySiteMap = Map with (OpIndex, ImmortalRecordKind)
 
 // ⭐⭐ **STD** op index ⇒ the compile-time `element_size@24` stamp of the container that call operates on.
 // ⚠ The three maps above are keyed by **MAXON** op indices and are folded by `mergeArtifact`; this one is
@@ -7621,16 +7634,18 @@ export type Project
 	// parser artifact is CACHED across builds and keyed on the file's content, not the build's flags.
 	export var debugStreamNameSites as DebugStreamNameSiteMap
 	// ⭐⭐ **WHICH `constArrayLiteral` OPS MATERIALIZE AN IMMORTAL `.rdata` RECORD INSTEAD OF ALLOCATING
-	// ONE.** A module-level managed constant reserves no storage, so every READ of one re-emits its literal
-	// (`Parser.emitManagedConstant`) — and the record those reads share is image data: no `__mm_alloc`, no
+	// ONE, AND WHICH SHAPE OF ONE.** A module-level `let` the compiler can lay down as bytes reserves no
+	// storage, so every READ of it re-emits its literal (`Parser.emitManagedConstant`,
+	// `Parser.emitImageRecordRead`) — and the record those reads share is image data: no `__mm_alloc`, no
 	// refcount, nothing to drop. An INLINE `b"…"` and a STORED global's initializer emit the identical op and
 	// must keep their private heap record, which a `var` mutates in place, so the two cannot be told apart by
-	// the op and this says which is which.
+	// the op and this says which is which. The VALUE says which record to build, which the op cannot carry
+	// either: an empty container names no blob and carries its element's destructor.
 	//
 	// ⚠ **A SIDE TABLE FOR `allocTagSites`' REASON, and recorded UNCONDITIONALLY for its second one**: a
 	// parser artifact is CACHED across builds and keyed on the file's content, so a table written under a
-	// flag would serve one build's artifact to another. It costs one entry per read of a managed constant.
-	export var immortalConstArraySites as ImmortalConstArraySiteSet
+	// flag would serve one build's artifact to another. It costs one entry per read of an imaged binding.
+	export var immortalConstArraySites as ImmortalConstArraySiteMap
 	// ⭐⭐ **THE COMPILE-TIME `element_size@24` STAMP OF A MANAGED-PRIMITIVE CALL'S CONTAINER (EC15)** —
 	// what lets `inlineManagedPrimitives` emit ONE of `emitStrideDispatch`'s arms instead of forking on a
 	// stride the compiler already knows. `Array with Integer` is 8 at compile time and the pass was emitting a
@@ -7771,7 +7786,7 @@ export type Project
 			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
-			immortalConstArraySites: ImmortalConstArraySiteSet.create(),
+			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			stdOpElementStrides: StdOpElementStrideMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,
