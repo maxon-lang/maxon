@@ -206,6 +206,74 @@ export function registerImmortalEmptyArrayRecord(globalData GlobalDataTable, ele
 	return registerImmortalRecordLabeled(globalData, label: "{EmptyArrayRecordPrefix}{elementSize}_{destroyName}", record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
 end 'registerImmortalEmptyArrayRecord'
 
+// The `.rdata` label prefixes an imaged STRING TABLE's two payloads register under — the element buffer of
+// pointers, and the 48-byte Array record over it. Distinct from `__barr_*` so a reader of the section can
+// tell a table of addresses from a blob of values.
+let StringTableBufferPrefix = "__strtab_buf_"
+let StringTableRecordPrefix = "__strtab_rec_"
+
+// ⭐⭐ **THE THREE LABELS AN IMAGED STRING TABLE IS.** Returned together because the caller has to record one
+// relocation per SLOT, and it cannot re-derive the element labels without registering every payload twice.
+export type ImmortalStringTable
+	export let recordLabel as String
+	export let bufferLabel as String
+	// One immortal String record per element, IN SLOT ORDER — which is the order the relocations must be
+	// recorded in, because a slot's index is its offset.
+	export let elementLabels as StringArray
+
+	export static function create(recordLabel String, bufferLabel String, elementLabels StringArray) returns ImmortalStringTable
+		return Self{recordLabel: recordLabel, bufferLabel: bufferLabel, elementLabels: elementLabels}
+	end 'create'
+end 'ImmortalStringTable'
+
+// ⭐⭐ **REGISTER THE PAYLOADS A MODULE-LEVEL `let` HOLDING AN ARRAY OF STRING LITERALS IS** — one immortal
+// String record per element, the element buffer that names them, and the Array record over that buffer.
+// `registerImmortalByteArrayRecord`'s twin over the one shape whose payload is POINTERS: an element slot
+// cannot hold the element, so it holds the element's address.
+//
+// ⛔ **THE ELEMENTS ARE NOT CLONED, AND THAT IS THE WHOLE SAVING.** A durable store of a constant normally
+// takes a private copy, because the sink may be written through. Neither end can be here: the slot is in
+// `.rdata` and so is the record it names, so the copy would be a fresh heap String per element that nothing
+// could ever observe as distinct.
+//
+// ⚠ **EVERY SEED IS AN rdata OFFSET AND THAT IS LOAD-BEARING FOR DEDUP** — `immortalRecordBytes`'s rule, one
+// tier down. A buffer of zeroes would collapse every same-LENGTH table onto one label under
+// `registerRdataConstant`'s byte dedup, and each collapsed table's relocations would then overwrite the
+// others' slots. Seeded with the targets' own offsets, two buffers are byte-equal exactly when they name the
+// same records in the same order — which is when they ARE the same table.
+//
+// ⚠ **SO THE RECORD MAY TAKE THE BYTE-DEDUPED DOOR THOUGH `element_destroy@40` IS A RELOCATION.** That is
+// the hazard `registerImmortalEmptyArrayRecord` takes a labelled door to avoid, and it does not arise here:
+// the record's `buffer@0` seed makes its bytes injective in the buffer, the buffer's bytes are injective in
+// its elements, and every element is a String — so two byte-identical records cannot name different
+// destructors.
+export function registerImmortalStringTableRecord(globalData GlobalDataTable, texts ByteArrayArray, elementSize ElementStride, debugStream bool) returns ImmortalStringTable
+	if elementSize != (ManagedArrayElementBytes as ElementStride) 'notAPointerSlot'
+		panic("registerImmortalStringTableRecord: a table of addresses is being registered at element stride {elementSize}, not the {ManagedArrayElementBytes}-byte pointer slot a managed element occupies — the buffer this lays down and the stride the record is stamped with would describe different geometry")
+	end 'notAPointerSlot'
+
+	var elementLabels = StringArray.create()
+	for text in texts 'eachElement'
+		elementLabels.push(registerStringLiteralRecord(globalData, bytes: text, debugStream: debugStream))
+	end 'eachElement'
+
+	let bufferLabel = globalData.registerRdataConstant(StringTableBufferPrefix, bytes: stringTableBufferBytes(globalData, elementLabels: elementLabels), kind: RdataPayloadKind.stringTableBuffer)
+	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(bufferLabel), length: elementLabels.count(), elementSize: elementSize as ParsedInt, elementDestroy: RelocatedElementDestroy)
+	let recordLabel = registerImmortalRecord(globalData, prefix: StringTableRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
+	globalData.recordStringBufferFixup(recordLabel, blobLabel: bufferLabel)
+	return ImmortalStringTable.create(recordLabel, bufferLabel: bufferLabel, elementLabels: elementLabels)
+end 'registerImmortalStringTableRecord'
+
+// The element buffer's bytes: one pointer slot per element, seeded with that element's record offset — see
+// the dedup argument at the door above. Every slot is OVERWRITTEN with a real address by the writers.
+function stringTableBufferBytes(globalData GlobalDataTable, elementLabels StringArray) returns ByteArray
+	var buffer = ByteArray.create()
+	for label in elementLabels 'eachSlot'
+		buffer.append(scalarImage(globalData.rdataOffsetOf(label) as ParsedInt, byteCount: ManagedArrayElementBytes as BytePos))
+	end 'eachSlot'
+	return buffer
+end 'stringTableBufferBytes'
+
 // ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** They used to be four
 // file-local `let`s picked against a file-local list, which is how this file's element-size-zero code and
 // `GtRuntime.ProcStoreOverflowExitCode` both came to be 70. The registry is one declaration site whose

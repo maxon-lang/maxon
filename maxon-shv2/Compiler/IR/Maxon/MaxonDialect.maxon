@@ -1655,6 +1655,24 @@ export union MaxonOp
 	// `constArrayLiteral` site turns on (`RuntimeUsage.recordConstArrayLiteralUsage`): a struct box is not a
 	// `__ManagedMemory` and reaches none of it.
 	immortalStructRecord(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	// --- A module-level `let` holding an array of string LITERALS ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `immortalStructRecord`, per the band-append invariant.
+	// `OpCategory.plain` places it beside `constArrayLiteral`'s imaged arm — it takes the address of a
+	// constant and allocates nothing.
+	//
+	// ⭐⭐ **THE ADDRESS OF AN ARRAY RECORD WHOSE ELEMENT BUFFER IS A TABLE OF `.rdata` ADDRESSES.** `texts`
+	// are the elements' decoded bytes IN SLOT ORDER; the lowering registers one immortal String record per
+	// element, the buffer that names them, and the record over it, then answers the record's address.
+	// `elementSize` is the pointer slot a managed element occupies (`ProgramSignatures.arrayElementSize`, the
+	// sole producer of that stamp) and `elementDestroy` is the String drop callee a COPY of the table
+	// inherits.
+	//
+	// ⚠ **IT IS NOT `constArrayLiteral` WITH A DIFFERENT MARK, AND THAT IS WHY IT IS ITS OWN OP.** That one
+	// carries ONE payload and serves an owned heap literal as well, so its imaged sites need a side table to
+	// say which of the two they are; this shape has no heap spelling and its payload is N SEPARATE literals,
+	// which one `bytes` field cannot hold without inventing an encoding for it.
+	immortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1797,6 +1815,11 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		serviceReplyCell gives MaxonCalleeKind.noCallee
 		// An imaged struct record names a CONSTANT, not a function.
 		immortalStructRecord gives MaxonCalleeKind.noCallee
+		// An imaged string table names CONSTANTS. Its `elementDestroy` is a function NAME, but it reaches
+		// `.text` as a relocation the lowering records rather than as a call this op makes — and
+		// `MmRuntime.noteRelocatedFunctionUsage` is what roots it, exactly as it roots an imaged empty
+		// container's.
+		immortalStringTable gives MaxonCalleeKind.noCallee
 	end 'op'
 end 'maxonOpCalleeKind'
 

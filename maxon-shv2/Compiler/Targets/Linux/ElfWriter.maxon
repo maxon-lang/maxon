@@ -167,26 +167,29 @@ function appendElfStringTableName(strtab ByteArray, name ByteArray) returns Byte
 	return offset
 end 'appendElfStringTableName'
 
-// ⭐ **BAKE EACH STRING LITERAL'S `buffer@0`.** A String record's buffer field holds the ABSOLUTE
-// address of its byte blob — a value that cannot exist until `.rodata`'s address is known, so
-// `LowerMaxonToStd` emitted it as 0 and left a `(record, blob)` fixup for the writer. This image is
-// FIXED-BASE and static, so `rodataVAddr + blobOffset` IS the blob's runtime address, patched
-// straight into the `.rodata` IMAGE (not the code) at the record's `buffer@0`.
+// ⭐ **BAKE EVERY `.rodata` SLOT THAT NAMES ANOTHER `.rodata` PAYLOAD** (see `PendingRdataAbsReloc`) — a
+// String record's `buffer@0`, and a slot inside an imaged string table's element buffer.
+//
+// ⭐ **THE IMAGE IS FIXED-BASE AND STATIC, SO NO DYNAMIC RELOCATION EXISTS OR IS NEEDED**:
+// `rodataVAddr + targetOffset` IS the target's runtime address, patched straight into the `.rodata` IMAGE
+// (not the code). A PIE ELF would need an `R_X86_64_RELATIVE` per slot and a `.rela.dyn` to hold them;
+// this writer emits neither, and the same property is what lets `bakeFuncAbs64Relocs` bake `.text`
+// addresses here.
 //
 // It runs on the SAME `.rodata` bytes the writer is about to lay down, BEFORE they are written, so
 // the baked address reaches the file. A wrong or missing address is a SILENT failure, not a crash:
 // `write(1, NULL, len)` returns EFAULT and prints nothing.
 //
-// This is PeWriter's `patchStringBufferFixups` over an absolute VA instead of an `ImageBase`-relative
-// RVA — the same three lines. It is duplicated rather than shared because consolidating would mean
-// editing PeWriter, which is outside this rung's file set; see the report's follow-up note.
-function bakeElfStringBufferAddresses(rdata ByteArray, globalData GlobalDataTable, rodataVAddr MachineWord)
-	for fixup in globalData.stringBufferFixups 'each'
-		let recordOffset = globalData.rdataOffsetOf(fixup.recordLabel)
-		let blobOffset = globalData.rdataOffsetOf(fixup.blobLabel)
-		patchQword(rdata, offset: recordOffset + StringBufferOffset, value: rodataVAddr + (blobOffset as MachineWord))
+// This is PeWriter's `patchRdataAbsRelocs` over an absolute VA instead of an `ImageBase`-relative
+// RVA — the same three lines. It is duplicated rather than shared because the two differ in the base they
+// add, and both read the SLOT and TARGET through the shared `rdataAbsSlotOffset`/`rdataAbsTargetOffset`,
+// which is the half that could silently drift.
+function bakeElfRdataAbsRelocs(rdata ByteArray, globalData GlobalDataTable, rodataVAddr MachineWord)
+	for reloc in globalData.pendingRdataAbsRelocs 'each'
+		let targetOffset = rdataAbsTargetOffset(globalData, reloc: reloc)
+		patchQword(rdata, offset: rdataAbsSlotOffset(globalData, reloc: reloc), value: rodataVAddr + (targetOffset as MachineWord))
 	end 'each'
-end 'bakeElfStringBufferAddresses'
+end 'bakeElfRdataAbsRelocs'
 
 // Patch every arm64 relocation the ELF carries: the ADRP/ADD PIE pairs for section references
 // (`patchArm64SectionRelocations`) and the ones for `.text`→`.text` function addresses
@@ -211,7 +214,7 @@ end 'patchArm64ElfRelocations'
 // descriptor slot — patched with a `.text` VA, not a disp32 in code — is not an `RdataRelocKind`: it rides
 // `GlobalDataTable.pendingRdataRelocs` and is baked by `bakeFuncAbs64Relocs`.) This is duplicated from
 // PeWriter rather than shared because consolidating would mean editing PeWriter, outside this rung's
-// file set — the same reason `bakeElfStringBufferAddresses` duplicates `patchStringBufferFixups`; see
+// file set — the same reason `bakeElfRdataAbsRelocs` duplicates `patchRdataAbsRelocs`; see
 // the report's follow-up note.
 function patchX64SectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textVmAddr MachineWord, rdataVmAddr MachineWord, dataVmAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
@@ -331,7 +334,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		x64 then patchX64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textVAddr, rdataVmAddr: rodataVAddr as MachineWord, dataVmAddr: dataVAddr as MachineWord)
 		wasm32 then panic("writeElf: wasm32 reached the ELF relocation patcher — the entry guard rejects it")
 	end 'relocs'
-	bakeElfStringBufferAddresses(codeResult.rdata, globalData: codeResult.globalData, rodataVAddr: rodataVAddr as MachineWord)
+	bakeElfRdataAbsRelocs(codeResult.rdata, globalData: codeResult.globalData, rodataVAddr: rodataVAddr as MachineWord)
 	// Patch each dense-`match` jump table's `.rodata` slots to `targetBlockVA − tableBaseVA`. The reloc
 	// format is target-neutral, so ONE call serves both the x64 and arm64 ELF paths — the ELF is static
 	// (fixed load address), so a VA delta IS the runtime delta.

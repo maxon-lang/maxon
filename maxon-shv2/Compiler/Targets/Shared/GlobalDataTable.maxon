@@ -150,6 +150,14 @@ export enum RdataPayloadKind
 	// `byteArrayRecord` because the two share no layout: that one is six machine words a runtime reads by
 	// name, this one is whatever the author declared.
 	structRecord
+	// ⭐ The ELEMENT BUFFER of a module-level `let` holding an array of string literals
+	// (`ManagedMemoryRuntime.registerImmortalStringTableRecord`) — one slot per element, each holding the
+	// ADDRESS of that element's own immortal String record once a writer has baked it
+	// (`PendingRdataAbsReloc`). It is the first payload in the image whose every word is a pointer, which is
+	// why it is not a `byteArrayBlob`: that kind's bytes are the elements themselves.
+	//
+	// ⚠ APPENDED AT THE END OF THE ENUM, past the text band, per this enum's own band rule.
+	stringTableBuffer
 end 'RdataPayloadKind'
 
 // The kind column, parallel to `names`/`values` — see `GlobalDataTable.payloadKinds`.
@@ -164,27 +172,42 @@ export typealias RecordBlobLabelMap = Map with (String, String)
 // file's header calls out in v1 and `sortBySizeDescendingStable` was rewritten to kill.
 export typealias RdataOffsetMap = Map with (String, ByteOffset)
 
-// ⭐ A DATA→DATA FIXUP for a String literal's record (P1.2 wave A): the record's `buffer@0` field must
-// hold the ABSOLUTE VA of its byte blob, and no VA exists until the PE writer lays out `.rdata`. So the
-// `LowerMaxonToStd` lowering emits `buffer@0 = 0` and records this `(record, blob)` pair; the writer
-// patches `record`'s first 8 bytes with `ImageBase + rdataRva + blobOffset` once `rdataRva` is known.
-// Both labels are `.rdata` labels this same table minted, so their offsets come from `rdataOffsetOf`.
+// ⭐⭐ **A DATA→DATA ABSOLUTE FIXUP: the slot at `rdataLabel + offsetInLabel` must hold the RUNTIME ADDRESS
+// of `targetLabel`.** No such address exists until a writer lays `.rdata` out, so the producer SEEDS the
+// slot with the target's rdata OFFSET and records this triple; EVERY writer patches the 8 bytes once its
+// section base is known. Both labels are `.rdata` labels this same table minted, so their offsets come from
+// `rdataOffsetOf`.
 //
-// This is the DATA→DATA sibling of `PendingRdataReloc` (the code→text-VA-in-rdata patch that fills a
-// witness-table method slot or a layout descriptor's function slots); like it, this fixup is carried on the
-// data table (not the code relocation list) because it patches the rdata IMAGE, not the `.text` bytes.
-export type StringBufferFixup
-	export let recordLabel as String
-	export let blobLabel as String
+// ⚠ **THE SEED IS THE TARGET'S OFFSET AND NOT 0, BECAUSE `registerRdataConstant` DEDUPES BY BYTES** — see
+// `BufferOwnership.immortalRecordBytes`. A zero placeholder would collapse two payloads that differ only in
+// what they point AT, and each collapsed payload's relocations would then fight over one slot.
+//
+// TWO shapes need it, and the second is why it carries an offset rather than naming `buffer@0`:
+//   * an immortal record's `buffer@0` → its byte blob (a String literal, a module-level byte-array constant);
+//   * a slot INSIDE an element buffer → another image record, which is what a module-level `let` holding an
+//     array of string literals is: a table of ADDRESSES rather than of values.
+//
+// ⚠ **AN ADDRESS COSTS A RELOCATION PER FORMAT, WHERE A DISTANCE COSTS NONE** — see
+// `PendingRdataSelfRelReloc`, which carries the self-relative channel and the reason to prefer it wherever a
+// reader already holds the referring blob's own base. This channel is for the slots whose reader does not:
+// `__managed_get` strides into a buffer and loads a POINTER, with nothing to add it to.
+//
+// It is the DATA→DATA sibling of `PendingRdataReloc` (the data→TEXT patch that fills a witness-table method
+// slot or a layout descriptor's function slots); like it, it is carried on the data table rather than the
+// code relocation list, because it patches the rdata IMAGE and not the `.text` bytes.
+export type PendingRdataAbsReloc
+	export let targetLabel as String
+	export let rdataLabel as String
+	export let offsetInLabel as ByteOffset
 
-	export static function create(recordLabel String, blobLabel String) returns StringBufferFixup
-		return Self{recordLabel: recordLabel, blobLabel: blobLabel}
+	export static function create(targetLabel String, rdataLabel String, offsetInLabel ByteOffset) returns PendingRdataAbsReloc
+		return Self{targetLabel: targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel}
 	end 'create'
-end 'StringBufferFixup'
+end 'PendingRdataAbsReloc'
 
-export typealias StringBufferFixupArray = Array with StringBufferFixup
+export typealias PendingRdataAbsRelocArray = Array with PendingRdataAbsReloc
 
-// ⭐ THE DATA→TEXT SIBLING of `StringBufferFixup`: a slot INSIDE a `.rdata` blob must hold the ABSOLUTE VA
+// ⭐ THE DATA→TEXT SIBLING of `PendingRdataAbsReloc`: a slot INSIDE a `.rdata` blob must hold the ABSOLUTE VA
 // of a `.text` function, and no `.text` VA exists until the writer lays out the code section. THREE slots
 // need it — a WITNESS-TABLE method slot (P1.7a slice 2a, one per interface method per conformance, and by far
 // the most numerous), and a managed-opaque-`T` layout descriptor's `destroyFunc@40` (slice 3b-ii) and
@@ -196,7 +219,7 @@ export typealias StringBufferFixupArray = Array with StringBufferFixup
 // known. `funcName` is a `.text` function this table's writer resolves through the debug-symbol map (as
 // `Arm64FuncAdrpReloc.funcName` resolves to `textOffset`); `rdataLabel` is a `.rdata` label this same table
 // minted (offset via `rdataOffsetOf`). It is carried on the DATA TABLE, not the code-relocation list,
-// because it patches the rdata IMAGE, not the `.text` bytes — the exact reason its String-buffer sibling is.
+// because it patches the rdata IMAGE, not the `.text` bytes — the exact reason `PendingRdataAbsReloc` above is.
 export type PendingRdataReloc
 	export let funcName as ByteArray
 	export let rdataLabel as String
@@ -209,21 +232,27 @@ end 'PendingRdataReloc'
 
 export typealias PendingRdataRelocArray = Array with PendingRdataReloc
 
-// ⭐⭐ **THE DATA→**DATA** SIBLING, AND THE ONE THAT NEEDS NO WRITER AT ALL.** A slot inside a `.rdata` blob
-// must hold the location of ANOTHER `.rdata` blob — today exactly one thing wants that, a witness table's
+// ⭐⭐ **THE DATA→**DATA** SIBLING THAT NEEDS NO WRITER AT ALL.** A slot inside a `.rdata` blob must hold
+// the location of ANOTHER `.rdata` blob — today exactly one thing wants it this way, a witness table's
 // associated slot naming the nested table `__witness_<binding>.<heldAt>` (see
 // `IrInterface.witnessAssociatedSlotOffset`).
 //
-// ⚠ **IT HOLDS A DISTANCE, NOT AN ADDRESS, AND THAT IS WHAT MAKES IT FORMAT-FREE.** The `.text` channel
-// above is format-specific in three incompatible ways — an absolute VA on fixed-base PE/ELF
-// (`bakeFuncAbs64Relocs`), a funcref-TABLE INDEX on wasm (`StdToWasm.bakeFuncTableIndexRelocs`), and a dyld
-// CHAINED-FIXUP REBASE on Mach-O (`MachOWriter.writeMachoRdataRebases`) — so a fourth spelling of "an
-// absolute `.rdata` VA" would have been a fourth entry in each of those three, plus a PE base relocation and
-// an ELF `R_X86_64_RELATIVE` this compiler emits for nothing today. Two labels in ONE section are a
-// different question: their DISTANCE is fixed the moment the image is concatenated, it is the same number
-// under a fixed base and under PIE, and on wasm it is the same number again because the blob is one run of
-// linear memory. So the reader adds the slot to the table address it already holds, and nothing anywhere has
-// to know which format it is being loaded by.
+// ⚠⚠ **IT HOLDS A DISTANCE, NOT AN ADDRESS, AND THAT IS WHAT MAKES IT FORMAT-FREE — SO IT IS THE CHANNEL TO
+// REACH FOR WHENEVER THE READER ALREADY HOLDS THE REFERRING BLOB'S OWN BASE.** Two labels in ONE section
+// have a DISTANCE that is fixed the moment the image is concatenated: the same number under a fixed base and
+// under PIE, and the same number again on wasm because the blob is one run of linear memory. So the reader
+// adds the slot to the address it loaded it through, and nothing anywhere has to know which format it is
+// being loaded by — which is why this bake lives in `rdataImage`, the one place the section is assembled.
+//
+// ⚠ **AN ADDRESS IS THE OTHER ANSWER AND IT COSTS A WRITER ARM PER FORMAT** — `PendingRdataAbsReloc` above.
+// The `.text` channel is format-specific in three incompatible ways (an absolute VA on fixed-base PE/ELF, a
+// funcref-TABLE INDEX on wasm, a dyld CHAINED-FIXUP REBASE on Mach-O), and the absolute data→data channel
+// pays the same toll in the same four writers. It is paid because an image object must be able to NAME
+// another where its reader holds nothing to add a distance to: `__managed_get` strides into an element
+// buffer and loads one word, and that word has to be the element's address on its own.
+//
+// ⇒ **THE TWO ARE A CHOICE, NOT A LADDER.** Prefer this one; take the absolute one when the reader is a
+// runtime that cannot know it is reading image data at all.
 //
 // ⇒ it is baked in `rdataImage`, which is the ONE place the section is assembled and therefore the only
 // place that cannot be forgotten by a writer. `targetLabel` and `rdataLabel` are both labels this table
@@ -352,12 +381,11 @@ export type GlobalDataTable
 	// honest: it walks the payloads and panics if any recorded offset disagrees with the actual image
 	// position. See `registerRdataConstant` for why the copy is worth its guard.
 	var rdataSizeSoFar as ByteOffset
-	// The `(record, blob)` pairs the PE writer patches to bake an immortal record's `buffer@0` — see
-	// StringBufferFixup. Both producers of such a record register one: a String literal, and a module-level
-	// byte-array constant. Empty for a program with neither.
-	export var stringBufferFixups as StringBufferFixupArray
-	// ⭐ **WHICH BLOB EACH RECORD NAMES, keyed by the record's label** — the same `(record, blob)` pair
-	// `stringBufferFixups` above carries, indexed for LOOKUP. Written in the same call, by
+	// The `.rdata` slots every writer patches with another `.rdata` payload's runtime address — see
+	// PendingRdataAbsReloc. Empty for a program holding no image record at all.
+	export var pendingRdataAbsRelocs as PendingRdataAbsRelocArray
+	// ⭐ **WHICH BLOB EACH RECORD NAMES, keyed by the record's label** — the `buffer@0` subset of
+	// `pendingRdataAbsRelocs` above, indexed for LOOKUP. Written in the same call, by
 	// `recordStringBufferFixup`, so the two cannot come to disagree about a pairing.
 	//
 	// ⚠ It is an INDEX and not a second list, for `rdataOffsets`' stated reason: the reader asks per
@@ -426,7 +454,7 @@ export type GlobalDataTable
 	export var debugStreamNames as DebugStreamNameTable
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, pendingRdataAbsRelocs: PendingRdataAbsRelocArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -634,13 +662,21 @@ export type GlobalDataTable
 		end 'differs'
 	end 'requireIdenticalPayload'
 
-	// Record that `recordLabel`'s `buffer@0` must be patched with `blobLabel`'s absolute VA — see
-	// StringBufferFixup. Both are `.rdata` labels this table minted; the writer resolves their offsets
-	// through `rdataOffsetOf`.
+	// Record that `recordLabel`'s `buffer@0` must be patched with `blobLabel`'s absolute address, AND index
+	// the pairing for the readers that ask what a record points at. Two acts in one call because a record
+	// registered without either half is wrong in a different way: without the fixup its `buffer@0` is a small
+	// integer, without the index `stringBlobLabelOfRecord` panics.
 	export function recordStringBufferFixup(recordLabel String, blobLabel String)
-		self.stringBufferFixups.push(StringBufferFixup.create(recordLabel, blobLabel: blobLabel))
+		self.recordRdataAbs64InRdata(blobLabel, rdataLabel: recordLabel, offsetInLabel: ManagedRecordBufferOffset)
 		self.recordBlobLabels.upsert(recordLabel, value: blobLabel)
 	end 'recordStringBufferFixup'
+
+	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `targetLabel`'s runtime address
+	// — see PendingRdataAbsReloc. Both are `.rdata` labels this table minted, and neither offset need be
+	// known yet: every writer resolves them through `rdataOffsetOf` once its section base is fixed.
+	export function recordRdataAbs64InRdata(targetLabel String, rdataLabel String, offsetInLabel ByteOffset)
+		self.pendingRdataAbsRelocs.push(PendingRdataAbsReloc.create(targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
+	end 'recordRdataAbs64InRdata'
 
 	// ⭐ **THE BLOB AN IMMORTAL RECORD NAMES — the question "what does this `.rdata` slot MEAN?" for the
 	// one kind whose bytes are a POINTER rather than the thing pointed at.** Emitted code addresses such a

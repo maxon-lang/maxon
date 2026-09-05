@@ -121,8 +121,8 @@ end 'buildDebugSymbolIndex'
 // String-buffer bake. For each `funcAbs64InRdata` relocation, write the target function's ABSOLUTE `.text` VA
 // (`textBaseVa + funcOffset`) into the `.rdata` IMAGE at `rdataOffsetOf(rdataLabel) + offsetInLabel`.
 // `textBaseVa` is the writer's `.text` base — `ImageBase + textRva` (PE, fixed-base) or `textVAddr` (ELF) — so
-// the SAME loop serves both x64 writers over an absolute VA, exactly as `patchStringBufferFixups`/
-// `bakeElfStringBufferAddresses` share their shape.
+// the SAME loop serves both x64 writers over an absolute VA, exactly as `patchRdataAbsRelocs`/
+// `bakeElfRdataAbsRelocs` share their shape.
 //
 // ⚠ **THREE MECHANISMS RIDE THIS ONE CHANNEL, AND THE MESSAGES BELOW MUST NAME ALL THREE.** A
 // managed-opaque-`T` `Array` descriptor's `destroyFunc@40` (P1.7 slice 3b-ii) and its `copyFunc@32` (slice
@@ -168,6 +168,20 @@ end 'bakeFuncAbs64Relocs'
 export function rdataFuncSlotOffset(globalData GlobalDataTable, reloc PendingRdataReloc) returns ByteOffset
 	return globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel
 end 'rdataFuncSlotOffset'
+
+// ⭐ **WHERE a `PendingRdataAbsReloc`'s 8 bytes LIVE, and where its TARGET lives** — the data→data twin of
+// the two lines above, read by all FOUR fillers for their reason: only the VALUE written is format-specific
+// (an `ImageBase`-relative VA on PE, an absolute VA on ELF, a chained rebase on Mach-O, a linear-memory
+// address on wasm), and spelling the destination four times is the one way they could still drift.
+export function rdataAbsSlotOffset(globalData GlobalDataTable, reloc PendingRdataAbsReloc) returns ByteOffset
+	return globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel
+end 'rdataAbsSlotOffset'
+
+// The `.rdata` offset a `PendingRdataAbsReloc` points AT — the number each writer turns into its own
+// format's address. Named beside the slot it fills so the two halves of one fixup read alike.
+export function rdataAbsTargetOffset(globalData GlobalDataTable, reloc PendingRdataAbsReloc) returns ByteOffset
+	return globalData.rdataOffsetOf(reloc.targetLabel)
+end 'rdataAbsTargetOffset'
 
 // An arm64 function-address ADRP+ADD relocation — the `.text`-function twin of the
 // `.rdata`/`.data` `RdataRelocation` channel. `arm64EmitLeaFuncAddr` emits the
@@ -286,7 +300,7 @@ end 'foldChunkDebugInfo'
 // DIFFERENCE of the two, so the image base cancels). Each slot `i` gets `targetBlockAddr − tableBaseAddr`
 // written as a signed 32-bit little-endian value at `tableBase + i * JumpTableSlotBytes`, exactly the value
 // the runtime `tableBase + entry` reconstructs into the target block's address. Runs on the image BEFORE it
-// is written (like `patchStringBufferFixups`), so the patched bytes reach the file.
+// is written (like `patchRdataAbsRelocs`), so the patched bytes reach the file.
 export function patchJumpTables(rdata ByteArray, relocs JumpTableRelocArray, globalData GlobalDataTable, textAddr MachineWord, rdataAddr MachineWord)
 	for reloc in relocs 'eachTable'
 		let tableBase = globalData.rdataOffsetOf(reloc.tableLabel)

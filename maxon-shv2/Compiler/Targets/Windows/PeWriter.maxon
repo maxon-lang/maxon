@@ -898,23 +898,24 @@ function patchSectionRipRel(code ByteArray, reloc RdataRelocation, sectionRva Rv
 	patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: ((targetRva - ripAtReloc) as MachineWord), what: PatchSite.x64RdataDisp32, targetAddr: targetRva as MachineWord)
 end 'patchSectionRipRel'
 
-// ⭐ **BAKE EACH STRING LITERAL'S `buffer@0`** (P1.2 wave A). A String record's buffer field holds the
-// ABSOLUTE VA of its byte blob — a value that cannot exist until `.rdata`'s RVA is known, so
-// `LowerMaxonToStd` emitted it as 0 and left a `(record, blob)` fixup here. The image is FIXED-BASE
-// (`ImageBase` pinned, DYNAMIC_BASE clear), so `ImageBase + rdataRva + blobOffset` IS the blob's
-// runtime address, patched straight into the `.rdata` IMAGE (not the code) at the record's `buffer@0`.
+// ⭐ **BAKE EVERY `.rdata` SLOT THAT NAMES ANOTHER `.rdata` PAYLOAD** (see `PendingRdataAbsReloc`) — a
+// String record's `buffer@0`, and a slot inside an imaged string table's element buffer. The address cannot
+// exist until `.rdata`'s RVA is known, so the producer left the slot seeded and this fills it.
+//
+// ⭐ **THE IMAGE IS FIXED-BASE (`ImageBase` pinned, DYNAMIC_BASE clear), SO NO BASE RELOCATION EXISTS OR IS
+// NEEDED** — `ImageBase + rdataRva + targetOffset` IS the target's runtime address, and the PE carries no
+// `.reloc` directory for the loader to apply. That is the same property `bakeFuncAbs64Relocs` bakes `.text`
+// addresses under; an ASLR'd image would need both a directory and an entry per slot here.
 //
 // It runs on the SAME `.rdata` bytes the writer is about to lay down, BEFORE they are written, so the
 // baked VA reaches the file. A wrong VA is a silent crash inside `WriteFile`/`__str_eq`, which the
 // print/equality specs catch.
-function patchStringBufferFixups(rdata ByteArray, fixups StringBufferFixupArray, globalData GlobalDataTable, rdataRva Rva)
-	for fixup in fixups 'each'
-		let recordOffset = globalData.rdataOffsetOf(fixup.recordLabel)
-		let blobOffset = globalData.rdataOffsetOf(fixup.blobLabel)
-		let absVa = (ImageBase + rvaAt(rdataRva, offset: blobOffset)) as MachineWord
-		patchQword(rdata, offset: recordOffset + StringBufferOffset, value: absVa)
+function patchRdataAbsRelocs(rdata ByteArray, globalData GlobalDataTable, rdataRva Rva)
+	for reloc in globalData.pendingRdataAbsRelocs 'each'
+		let absVa = (ImageBase + rvaAt(rdataRva, offset: rdataAbsTargetOffset(globalData, reloc: reloc))) as MachineWord
+		patchQword(rdata, offset: rdataAbsSlotOffset(globalData, reloc: reloc), value: absVa)
 	end 'each'
-end 'patchStringBufferFixups'
+end 'patchRdataAbsRelocs'
 
 // --- Section headers ---
 
@@ -1204,8 +1205,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// Patch IAT + rdata relocations in the code image before it is written.
 	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva as Rva, optionalImports: optionalImports, sockets: sockets)
 	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva as Rva, dataRva: dataRva as Rva)
-	// Bake each String literal's `buffer@0` into the `.rdata` IMAGE now that `rdataRva` is fixed.
-	patchStringBufferFixups(codeResult.rdata, fixups: codeResult.globalData.stringBufferFixups, globalData: codeResult.globalData, rdataRva: rdataRva as Rva)
+	// Bake every `.rdata` slot naming another `.rdata` payload into the `.rdata` IMAGE now that `rdataRva` is fixed.
+	patchRdataAbsRelocs(codeResult.rdata, globalData: codeResult.globalData, rdataRva: rdataRva as Rva)
 	// Patch each dense-`match` jump table's `.rdata` slots to `targetBlockRva − tableBaseRva` now that both
 	// sections' RVAs are fixed (the image is fixed-base, so an RVA delta IS the runtime address delta).
 	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textRva, rdataAddr: rdataRva as MachineWord)

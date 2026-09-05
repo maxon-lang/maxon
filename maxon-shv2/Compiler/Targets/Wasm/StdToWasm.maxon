@@ -255,12 +255,12 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	let dataImage = globalData.dataSectionImage()
 	let rdataBase = wasmRdataBase(WasmDataBaseOffset, dataSize: dataImage.count())
 
-	// A String literal's record carries `buffer@0` = the ABSOLUTE address of its byte blob, which
-	// only exists once `rdataBase` is fixed. wasm is fixed-base, so that address is compile-time
-	// computable (`rdataBase + blobOffset`); bake it into the `.rdata` IMAGE now, exactly as the
-	// PE writer patches `.rdata` before writing it (`PeWriter.patchStringBufferFixups`).
+	// An `.rdata` slot naming another `.rdata` payload — a String record's `buffer@0`, an imaged string
+	// table's element slot — holds an ABSOLUTE address that exists only once `rdataBase` is fixed. wasm is
+	// fixed-base, so it is compile-time computable; bake it into the `.rdata` IMAGE now, exactly as the PE
+	// writer patches `.rdata` before writing it (`PeWriter.patchRdataAbsRelocs`).
 	var rdataImage = globalData.rdataImage()
-	applyStringBufferFixups(rdataImage, globalData: globalData, rdataBase: rdataBase)
+	applyRdataAbsRelocs(rdataImage, globalData: globalData, rdataBase: rdataBase)
 	bakeFuncTableIndexRelocs(rdataImage, globalData: globalData, funcNames: funcNames)
 
 	// The WASI imports were added FIRST (above), in the order the `*ImportFuncIdx` constants fix, so every
@@ -328,19 +328,21 @@ function appendWasiImports(builder WasmModuleBuilder)
 	_ = builder.addImportFunc(WasiStderrModuleName, fieldName: WasiGetStderrFieldName, typeIdx: getStreamTypeIdx, debugName: WasiGetStderrDebugName)
 end 'appendWasiImports'
 
-// Bake each String literal's `buffer@0` field into the `.rdata` image: overwrite the record's
-// first 8 bytes with the blob's absolute linear-memory address (`rdataBase + blobOffset`) in the
-// low 4 bytes, the high 4 left zero — the slot is 8 bytes but a wasm address is an i32. The
-// `.data`→`.data` twin of `PeWriter.patchStringBufferFixups`, over an absolute (fixed-base) wasm
-// address rather than an `ImageBase`-relative VA. Deterministic: `stringBufferFixups` is in
-// registration order.
-function applyStringBufferFixups(rdataImage ByteArray, globalData GlobalDataTable, rdataBase Wasm32Index)
-	for fixup in globalData.stringBufferFixups 'each'
-		let recordOffset = globalData.rdataOffsetOf(fixup.recordLabel)
-		let blobAddr = wasmLinearAddress(rdataBase, byteOffset: globalData.rdataOffsetOf(fixup.blobLabel))
-		patchQword(rdataImage, offset: recordOffset + StringBufferOffset, value: blobAddr as MachineWord)
+// Bake every `.rdata` slot naming another `.rdata` payload (see `PendingRdataAbsReloc`) into the `.rdata`
+// image: overwrite the slot's 8 bytes with the target's absolute linear-memory address
+// (`rdataBase + targetOffset`) in the low 4, the high 4 left zero — the slot is 8 bytes but a wasm address
+// is an i32.
+//
+// ⭐ **LINEAR MEMORY HAS NO RELOCATION AND NEEDS NONE.** The module's data segments are laid at fixed
+// offsets this writer chooses, so the address is compile-time computable and the value in the slot is a
+// PLAIN OFFSET — the `.data`→`.data` twin of `PeWriter.patchRdataAbsRelocs` with no base to add.
+// Deterministic: `pendingRdataAbsRelocs` is in registration order.
+function applyRdataAbsRelocs(rdataImage ByteArray, globalData GlobalDataTable, rdataBase Wasm32Index)
+	for reloc in globalData.pendingRdataAbsRelocs 'each'
+		let targetAddr = wasmLinearAddress(rdataBase, byteOffset: rdataAbsTargetOffset(globalData, reloc: reloc))
+		patchQword(rdataImage, offset: rdataAbsSlotOffset(globalData, reloc: reloc), value: targetAddr as MachineWord)
 	end 'each'
-end 'applyStringBufferFixups'
+end 'applyRdataAbsRelocs'
 
 // ⭐ **BAKE EVERY `.rdata` SLOT THAT NAMES A FUNCTION — AS A WASM TABLE INDEX** (P1.7a slice 2b-iv-B). The
 // wasm twin of `bakeFuncAbs64Relocs`, and the whole of what makes witness tables and managed-opaque-`T`
@@ -357,7 +359,7 @@ end 'applyStringBufferFixups'
 // mismatch" rather than fault. That is why a callee with no table index PANICS naming it (a DCE-root gap,
 // exactly as `bakeFuncAbs64Relocs`'s missing-debug-symbol arm does) instead of being passed over.
 //
-// It runs beside `applyStringBufferFixups` for that function's reason — both patch the `.rdata` IMAGE before
+// It runs beside `applyRdataAbsRelocs` for that function's reason — both patch the `.rdata` IMAGE before
 // it becomes a data segment — and MUST precede `addDataSegment(rdataBase, rdataImage)`. Empty for every
 // program that conforms nothing to an interface and holds no managed-opaque-`T` array, so those stay
 // byte-identical.

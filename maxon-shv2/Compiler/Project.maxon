@@ -921,8 +921,8 @@ export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
 // `Project.debugStreamNameSites`.
 export typealias DebugStreamNameSiteMap = Map with (OpIndex, ByteArray)
 
-// ⭐⭐ **WHICH IMAGE-DATA RECORD A MARKED `constArrayLiteral` MATERIALIZES — the two shapes a module-level
-// `let` can be, and the whole of what the lowering cannot read off the op.**
+// ⭐⭐ **WHICH IMAGE-DATA RECORD A MODULE-LEVEL `let` IS — the three shapes, and the whole of what a
+// materializing site cannot read off its own op.**
 export union ImmortalRecordKind
 	// The op's own bytes ARE the payload: a record in `.rdata` beside its immortal blob. A byte string and
 	// a constant array literal both land here, and neither can carry a managed element
@@ -932,10 +932,24 @@ export union ImmortalRecordKind
 	// a clone off this record inherits `element_destroy@40` and then receives elements. `elementDestroy` is
 	// the element's drop callee, EMPTY when the element owns nothing.
 	emptyContainer(elementDestroy ByteArray)
+	// ⭐⭐ **AN ARRAY OF STRING LITERALS — the one shape that is a TABLE OF ADDRESSES rather than of values.**
+	// Its element buffer holds one pointer per element, each aimed at that element's own immortal `.rdata`
+	// String record by a `GlobalDataTable.PendingRdataAbsReloc`; `texts` are the elements' decoded bytes, in
+	// slot order, and each becomes such a record. `elementDestroy` is the String drop callee, carried for
+	// `emptyContainer`'s reason — a clone off this record inherits `element_destroy@40` and may then receive
+	// heap elements.
+	//
+	// ⚠ **IT NEVER APPEARS IN `ImmortalConstArraySiteMap` BELOW, BECAUSE IT IS A DIFFERENT OP.** A
+	// `constArrayLiteral` carries ONE payload and serves an owned heap literal as well, so it needs the side
+	// table to say which of the two a site is; a string table has no heap spelling and its payload is N
+	// separate literals, so `Parser.emitImageRecordRead` emits `MaxonOp.immortalStringTable` for it and
+	// `LowerMaxonToStd.lowerConstArrayLiteral` panics if this shape reaches the mark.
+	stringTable(texts ByteArrayArray, elementDestroy ByteArray)
 end 'ImmortalRecordKind'
 
 // ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation, each carrying
-// which shape it is. See `Project.immortalConstArraySites`.
+// which shape it is — `constBlob` or `emptyContainer`, never `stringTable`. See
+// `Project.immortalConstArraySites`.
 export typealias ImmortalConstArraySiteMap = Map with (OpIndex, ImmortalRecordKind)
 
 // ⭐⭐ **STD** op index ⇒ the compile-time `element_size@24` stamp of the container that call operates on.

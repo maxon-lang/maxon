@@ -16,12 +16,13 @@
 // failure, not a wrong address.
 //
 // ⭐ THE rdata REBASES (M2b for String buffers; P1.7a slice 2b-iv-C for function pointers).
-// Unlike PeWriter's fixed-base image (`patchStringBufferFixups` bakes `ImageBase + rdataRva
+// Unlike PeWriter's fixed-base image (`patchRdataAbsRelocs` bakes `ImageBase + rdataRva
 // + blobOffset`), macOS arm64 is always ASLR/PIE: there is no fixed base to bake. So an
 // absolute pointer in rdata becomes a dyld rebase — the slot stores the target's OFFSET
-// from the image base and dyld re-adds the slid base at load. Two mechanisms need it:
-// a String LITERAL's `buffer@0` (the address of its byte blob), and a `funcAbs64InRdata`
-// slot (a WITNESS-TABLE method slot, or a managed-opaque-`T` descriptor's
+// from the image base and dyld re-adds the slid base at load. Two channels need it: a
+// `PendingRdataAbsReloc` slot, whose target is another `.rdata` payload (a String record's
+// `buffer@0` → its blob, an imaged string table's element slot → that element's record), and a
+// `funcAbs64InRdata` slot (a WITNESS-TABLE method slot, or a managed-opaque-`T` descriptor's
 // `destroyFunc@40`/`copyFunc@32`) whose target is a `.text` function. Both are threaded by
 // the ONE `writeMachoRdataRebases` — see there for why merging them is a correctness
 // requirement and not a tidy-up — with `buildMachoDataPageStarts` naming each page's head.
@@ -384,17 +385,18 @@ function buildGot() returns ByteArray
 	return got
 end 'buildGot'
 
-// --- String-literal buffer PIE rebases ---
+// --- Data-to-data PIE rebases ---
 
 // macOS arm64 forces MH_PIE, so dyld slides the image at launch and there is no fixed base to
-// bake an absolute pointer against. A String LITERAL's record carries `buffer@0`, the address
-// of its byte blob; on x64 `PeWriter.patchStringBufferFixups` bakes that as
-// `ImageBase + rdataRva + blobOffset`, which is impossible here. Instead each `buffer@0` slot
-// becomes a DYLD_CHAINED_PTR_64_OFFSET *rebase*: the slot holds the blob's OFFSET from the image
-// base, and dyld re-adds the runtime base as it walks the chain. The records live in the writable
-// __DATA __const section (moved there from read-only __TEXT for exactly this), so their pages carry
-// fixup chains. This is v1's `writeMachoFuncAbs64Rebases` machinery — the SAME pointer format —
-// sourced from the String buffer fixups rather than the funcAbs64 layout-descriptor slots.
+// bake an absolute pointer against. Every `PendingRdataAbsReloc` slot — a String record's `buffer@0`,
+// a slot inside an imaged string table's element buffer — holds the address of another `.rdata`
+// payload; on x64 `PeWriter.patchRdataAbsRelocs` bakes that as `ImageBase + rdataRva + targetOffset`,
+// which is impossible here. Instead each slot becomes a DYLD_CHAINED_PTR_64_OFFSET *rebase*: the slot
+// holds the target's OFFSET from the image base, and dyld re-adds the runtime base as it walks the
+// chain. The records live in the writable __DATA __const section (moved there from read-only __TEXT
+// for exactly this), so their pages carry fixup chains. This is v1's `writeMachoFuncAbs64Rebases`
+// machinery — the SAME pointer format — sourced from the data-to-data fixups rather than the
+// funcAbs64 layout-descriptor slots.
 
 // Insertion-sort the parallel (offset, target) arrays by ascending slot offset, so consecutive
 // slots can be threaded into per-page chains and the page_start table can name the first slot on
@@ -450,7 +452,7 @@ end 'sortMachoRebases'
 // left holding a raw chain entry — and a witness slot that is never rebased is a CALL THROUGH A GARBAGE
 // POINTER with no diagnostic anywhere. Sorting the union is what makes the chain total over the page.
 //
-// The same literal used more than once records the SAME `(record, blob)` pair each time, so the fixup list
+// The same literal used more than once records the SAME `(slot, target)` pair each time, so the fixup list
 // holds duplicates. They are collapsed after sorting — threading one slot twice would give the first copy a
 // `next` of 0 (delta to itself), ending the chain and dropping every later rebase on the page. A duplicate
 // offset carrying a DIFFERENT target is not a duplicate at all but two mechanisms claiming one slot, so it
@@ -458,10 +460,10 @@ end 'sortMachoRebases'
 function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, debugSymbols DebugSymbolArray, constImageOffset MachineWord, textImageOffset MachineWord) returns ByteOffsetArray
 	var offsets = ByteOffsetArray.create()
 	var targets = ByteOffsetArray.create()
-	for fixup in globalData.stringBufferFixups 'collectStringBuffers'
-		offsets.push(globalData.rdataOffsetOf(fixup.recordLabel) + StringBufferOffset)
-		targets.push(constImageOffset + (globalData.rdataOffsetOf(fixup.blobLabel) as MachineWord))
-	end 'collectStringBuffers'
+	for reloc in globalData.pendingRdataAbsRelocs 'collectDataSlots'
+		offsets.push(rdataAbsSlotOffset(globalData, reloc: reloc))
+		targets.push(constImageOffset + (rdataAbsTargetOffset(globalData, reloc: reloc) as MachineWord))
+	end 'collectDataSlots'
 
 	// The PIE counterpart of the fixed-base `bakeFuncAbs64Relocs`: same slots, same resolution through the
 	// debug-symbol index, and the same LOUD failure when a target function is in no symbol — a DCE-root gap

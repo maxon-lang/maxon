@@ -1076,6 +1076,18 @@ function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
 	end 'e'
 end 'constArrayElementScalar'
 
+// The TEXT one folded element lays down as its own immortal `.rdata` String record — the address half's twin
+// of the scalar door above, for the one managed element an image can hold. Every other arm is unreachable:
+// only a `string`-kinded literal is admitted as a string table (`constArrayLiteralIsImageData`), and the
+// kind is settled from these very elements.
+function constArrayElementText(element ConstArrayElement) returns ByteArray
+	return match element 'e'
+		string(bytes) gives bytes
+		integer panic("constArrayElementText: an integer element lays down as a VALUE in a constant blob, not as a String record — `arrayLiteralImageOf` routes on the element kind and sends it to `constBlobImageOf`")
+		character to enumCase panic("constArrayElementText: a Character or enum-case element cannot reach a string table — a Character comes only from a SET literal, and an enum case is a scalar the constant blob holds inline")
+	end 'e'
+end 'constArrayElementText'
+
 // WHICH managed literal a top-level `let` folded to — the ONE fact a use site needs beyond the bytes,
 // because the two kinds materialize through different record shapes: a String literal is a wholly
 // immortal `.rdata` record, while a byte string is an owned `Array with Byte` record over an immortal
@@ -5770,7 +5782,7 @@ end 'throwingClauseTypeName'
 // `sizeof`: the STORAGE width of a managed element is the pointer — a `String` element's slot is 8, where
 // its `sizeof` is the whole record (`StringRuntime.StringRecordBytes`, 56 since W157) — and the drop walk /
 // accessors move exactly that pointer.
-let ManagedArrayElementBytes = 8 as ByteOffset
+module let ManagedArrayElementBytes = 8 as ByteOffset
 
 // ⭐ **A `bool` ELEMENT IS ONE BIT** — the width `Array with bool` packs at, and the only element whose
 // packed width is not read off a declared range (`bool` is a TAG, not a ranged alias, so it has no `low`/
@@ -14806,14 +14818,23 @@ export type ProgramSignatures
 	// blob down, so a binding is imaged if and only if the record built for it would have been one blob
 	// anyway. It is a question about the SHAPE alone; the keyword is `settleRecordValue`'s.
 	//
-	// ⛔ **A MANAGED ELEMENT CAN NEVER BE**, which `arrayElementMayBeConstantBlob` is what says: a
-	// `["a", "b"]` element slot holds a loader-chosen heap address, and imaging one needs a data→data
-	// pointer channel this compiler deliberately does not have (`GlobalDataTable.PendingRdataSelfRelReloc`
-	// carries the argument).
+	// ⭐⭐ **A STRING ELEMENT IS THE ONE MANAGED ELEMENT THAT CAN BE, AND IT IS A DIFFERENT RECORD.** Its slot
+	// holds an ADDRESS rather than a value, so the image needs a table of pointers into itself — which is
+	// `GlobalDataTable.PendingRdataAbsReloc`, one relocation per slot, and `stringTableImageOf` is the shape
+	// that uses it. Every other managed element still cannot be: its record is built by RUNNING CODE (a
+	// `Map`'s inserts, a struct's construction), so there are no bytes to lay down at all.
+	//
+	// ⛔ A STRING element therefore takes the `arrayElementMayBeConstantBlob` door's opposite answer and is
+	// admitted anyway; the two arms are kept apart rather than widening that predicate, because a constant
+	// BLOB is exactly what a string table is not.
 	function constArrayLiteralIsImageData(elements ConstArrayElementArray, element ConstArrayElementKind) returns bool
 		if elements.count() == 0 'empty'
 			return false
 		end 'empty'
+
+		if element == ConstArrayElementKind.string 'aTableOfAddresses'
+			return true
+		end 'aTableOfAddresses'
 
 		return self.arrayElementMayBeConstantBlob(genericInstanceIdOf(self.constArrayValueType(element, elements: elements)))
 	end 'constArrayLiteralIsImageData'
@@ -16461,7 +16482,7 @@ export type ProgramSignatures
 		let value = self.foldedValueOf(decl.outcome, name: decl.name)
 		let valueType = self.foldedValueType(value, elementFilePath: decl.declFilePath)
 		match value 'folded'
-			arrayLiteral(elements, _) then return self.constBlobImageOf(elements, giid: genericInstanceIdOf(valueType), valueType: valueType)
+			arrayLiteral(elements, element) then return self.arrayLiteralImageOf(elements, element: element, giid: genericInstanceIdOf(valueType), valueType: valueType)
 			containerCreate(giid, brand, _) then return self.emptyContainerImageOf(giid, valueType: valueType, brand: brand)
 			scalar to managed then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a scalar or a managed literal, neither of which is a record — `resolvedValueOf` answers both above and never reaches here")
 			boxedUnionCase then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a boxed union case, which `settleFoldedValue` never settles as imaged — a box has no `capacity@16` to carry the immortality mark")
@@ -16479,6 +16500,37 @@ export type ProgramSignatures
 			mapLiteral to arrayLiteral then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root is a container literal — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
 		end 'node'
 	end 'imageStructLookup'
+
+	// ⭐ **WHICH OF THE TWO ARRAY-LITERAL IMAGES THIS ONE IS — the split `constArrayLiteralIsImageData` made,
+	// read back off the same element kind so the gate and the builder cannot disagree about a literal.** A
+	// string element makes a table of ADDRESSES; every other admitted element makes a blob of VALUES.
+	function arrayLiteralImageOf(elements ConstArrayElementArray, element ConstArrayElementKind, giid GenericInstanceId, valueType MaxonType) returns TopLevelImageRecord
+		if element == ConstArrayElementKind.string 'aTableOfAddresses'
+			return self.stringTableImageOf(elements, giid: giid, valueType: valueType)
+		end 'aTableOfAddresses'
+
+		return self.constBlobImageOf(elements, giid: giid, valueType: valueType)
+	end 'arrayLiteralImageOf'
+
+	// ⭐⭐ **AN ARRAY OF STRING LITERALS: the elements' TEXTS, in slot order, and the drop callee a copy of the
+	// table would inherit.** The record itself is built at the lowering, which is the only tier that can —
+	// each element becomes an immortal `.rdata` String record, and a slot holds that record's address, which
+	// is a number no front-end pass knows.
+	//
+	// ⛔ **`element_destroy@40` IS A REAL DESTRUCTOR AND MUST BE**, exactly as an imaged empty container's is:
+	// nothing walks the imaged record's own elements (`__managed_decref` declines an immortal record whole),
+	// but a CLONE inherits the slot and is what a mutable sink is handed. A 0 there leaks the clone's
+	// elements silently.
+	function stringTableImageOf(elements ConstArrayElementArray, giid GenericInstanceId, valueType MaxonType) returns TopLevelImageRecord
+		var texts = ByteArrayArray.create()
+		for element in elements 'eachElement'
+			texts.push(constArrayElementText(element))
+		end 'eachElement'
+
+		// A literal names no alias — its instance is INFERRED from its elements — which is the EMPTY brand
+		// `constBlobImageOf` answers with for that reason.
+		return TopLevelImageRecord.create(ImmortalRecordKind.stringTable(texts, elementDestroy: self.imageElementDestroyOf(giid)), elementSize: self.arrayElementSize(giid), elementCount: elements.count(), bytes: EmptySourceText, valueType: valueType, brand: EmptySourceText)
+	end 'stringTableImageOf'
 
 	// A constant array literal's image: its elements' stored bytes at this instance's stride, and nothing
 	// else. `element_destroy@40` is trivial by construction — `arrayElementMayBeConstantBlob`, which gated

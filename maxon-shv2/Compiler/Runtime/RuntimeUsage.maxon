@@ -627,6 +627,10 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		// It is a `lea` at a `.rdata` payload — no allocation, no `__ManagedMemory`, no element walk — so
 		// crediting it with the array runtime would install a floor the op cannot reach.
 		immortalStructRecord then break 'op'
+		// ⭐ **AN IMAGED STRING TABLE RECORDS WHAT `constArrayLiteral` RECORDS, AND THAT IS THE DIFFERENCE FROM
+		// THE ARM ABOVE.** Its record IS a `__ManagedMemory`, so every accessor a read of the table reaches is a
+		// buffer-runtime entry — and a copy of it, which a mutable sink is handed, allocates.
+		immortalStringTable then recordConstArrayLiteralUsage(usage)
 	end 'op'
 end 'classifyRuntimeCall'
 

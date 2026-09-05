@@ -275,3 +275,45 @@ end 'main'
 ```
 ```mm-trace
 ```
+
+<!-- test: module-let-string-array-costs-no-allocation -->
+A module-scope `let` holding an array of string LITERALS is a constant twice over: the array never changes,
+and neither does any element. So it must cost nothing, and the golden is EMPTY.
+
+⭐ **THIS IS THE SHAPE THAT NEEDS A POINTER BETWEEN TWO IMAGE OBJECTS, WHICH IS WHY IT IS PINNED APART FROM
+THE ARRAYS ABOVE.** A byte string's element bytes live in its own blob and a scalar array's live inline, so
+each is ONE object and the only address it needs is its own. An array of strings is a table of ADDRESSES:
+the element buffer has to name the `.rdata` String records, and naming one image object from inside another
+is a relocation the writers did not have. `GlobalDataTable`'s data-to-data channel deliberately carries a
+DISTANCE rather than an address, because a distance is the same number in every container format; an address
+is a base relocation on PE, an `R_X86_64_RELATIVE` on ELF, a chained rebase on Mach-O and nothing at all on
+wasm.
+
+Measured before this global reached the image — **four** allocations for two headings:
+
+    mm_alloc ArrayRecord #1 size=48
+    mm_alloc StringRecord #2 size=68
+    mm_alloc ElementBuffer #3 size=32
+    mm_alloc StringRecord #4 size=65
+
+⚠ **Two of those four are the surprise, and they are the reason a reader should not assume "the literals
+were already immortal, so only the array cost anything".** `"## Deferred"` has an immortal `.rdata` record
+of its own — and storing it into the array `__str_clone`d it into a fresh heap String anyway, because a
+durable store of a constant takes a private copy (`reference-identity.a-durable-store-of-a-constant-copies-it`).
+Imaging the table removes the copies with it: the slots address the literals' own records, and a constant
+addressed from a constant needs no copy because neither can be written.
+<!-- MmTrace -->
+```maxon
+let Headings = ["## Deferred", "## Notes"]
+
+function main() returns ExitCode
+	let first = try Headings.get(0) otherwise ""
+	let second = try Headings.get(1) otherwise ""
+	return (first.byteLength() + second.byteLength() + Headings.count()) as ExitCode
+end 'main'
+```
+```exitcode
+21
+```
+```mm-trace
+```

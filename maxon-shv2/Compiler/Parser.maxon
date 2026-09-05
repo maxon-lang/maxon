@@ -1784,7 +1784,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		serviceSpawn to serviceSend gives AsyncCalleeLookup.none
 		// ⭐ A REPLY CELL mints a promise, and this is the road `awaitedPromiseFacts` finds it by (SV2).
 		serviceReplyCell(result, messageName) gives serviceReplyIfEqual(result, messageName: messageName, promise: promise)
-		immortalStructRecord gives AsyncCalleeLookup.none
+		immortalStructRecord to immortalStringTable gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -3867,7 +3867,7 @@ function nascentOpBranchesTo(op MaxonOp, target BlockId) returns bool
 		call to compare gives false
 		globalAddr to constArrayLiteral gives false
 		witnessDispatch to serviceReplyCell gives false
-		immortalStructRecord gives false
+		immortalStructRecord to immortalStringTable gives false
 	end 'k'
 end 'nascentOpBranchesTo'
 
@@ -31547,7 +31547,7 @@ export type Parser
 			call to stringLiteral gives DiscardedCallee.notACall
 			tryCall(result, _, callee, _, _, _, _, _, _) gives DiscardedCallee.named(callee, result: result)
 			throwError to serviceReplyCell gives DiscardedCallee.notACall
-			immortalStructRecord gives DiscardedCallee.notACall
+			immortalStructRecord to immortalStringTable gives DiscardedCallee.notACall
 		end 'producer'
 	end 'tryCallAt'
 
@@ -35591,7 +35591,7 @@ export type Parser
 			// No service op reinterprets a call's result — a spawn's result is a mailbox pointer it produced
 			// itself, a send produces nothing, and a reply cell produces a promise of its own.
 			serviceSpawn to serviceReplyCell gives false
-			immortalStructRecord gives false
+			immortalStructRecord to immortalStringTable gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -35619,7 +35619,7 @@ export type Parser
 			// A `spawn` defines a mailbox pointer, a send defines nothing and a reply cell defines a promise;
 			// none is a direct call whose result a `try` or a discarded-result probe could be about.
 			serviceSpawn to serviceReplyCell gives DiscardedCallee.notACall
-			immortalStructRecord gives DiscardedCallee.notACall
+			immortalStructRecord to immortalStringTable gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
 
@@ -35700,7 +35700,7 @@ export type Parser
 			// A reply CELL is never the last op of a send expression — the `serviceSend` above it is — so this
 			// arm is the structural backstop, and it answers as every other non-call op does.
 			serviceReplyCell gives try self.rejectTryTarget(tryTok)
-			immortalStructRecord gives try self.rejectTryTarget(tryTok)
+			immortalStructRecord to immortalStringTable gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -43030,7 +43030,7 @@ export type Parser
 			witnessDispatch to errorFlagEncode then return false
 			// No service op is a throwing call whose result a `for … in` iterates.
 			serviceSpawn to serviceReplyCell then return false
-			immortalStructRecord then return false
+			immortalStructRecord to immortalStringTable then return false
 		end 'op'
 	end 'sourceCameFromAnIterationThrowingCall'
 
@@ -74274,13 +74274,23 @@ export type Parser
 	function emitImageRecordRead(image TopLevelImageRecord, range SourceRange) returns ValueId
 		let result = self.mintValue(maxonTypeTag(image.valueType), nameId: typeNameIdOf(image.valueType))
 		self.brandValue(result, brand: image.brand)
-		// Filed BEFORE the emit, off the count that IS the index the append will land at —
-		// `recordAllocTagSite`'s contract, for its reason.
-		self.artifact.recordImmortalConstArraySite(image.kind)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: image.elementSize, elementCount: image.elementCount, bytes: image.bytes), range: range)
+		match image.kind 'shape'
+			// A blob of VALUES: one payload, so the record rides `constArrayLiteral` with the side-table mark
+			// that tells the lowering this site is imaged. Filed BEFORE the emit, off the count that IS the
+			// index the append will land at — `recordAllocTagSite`'s contract, for its reason.
+			constBlob to emptyContainer then self.emitImagedConstArrayLiteral(result, image: image, range: range)
+			// A table of ADDRESSES: N payloads, and no heap spelling to be told apart from — its own op.
+			stringTable(texts, elementDestroy) then self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStringTable(result, texts: texts, elementSize: image.elementSize, elementDestroy: elementDestroy), range: range)
+		end 'shape'
 		self.markImmutableGlobalRead(result)
 		return result
 	end 'emitImageRecordRead'
+
+	// The mark and the op of an imaged constant-blob read, in the one order the mark's contract allows.
+	function emitImagedConstArrayLiteral(result ValueId, image TopLevelImageRecord, range SourceRange)
+		self.artifact.recordImmortalConstArraySite(image.kind)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: image.elementSize, elementCount: image.elementCount, bytes: image.bytes), range: range)
+	end 'emitImagedConstArrayLiteral'
 
 	// ⭐⭐ **A USE OF AN IMAGE-DATA STRUCT `let` IS ONE `.rdata` ADDRESS TOO** — `emitImageRecordRead`'s twin
 	// over the shape whose mark cannot live in the record. It needs no side table: the op it emits exists
