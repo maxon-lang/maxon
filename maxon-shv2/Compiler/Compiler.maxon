@@ -1236,6 +1236,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// runtime to link against it. See `ParallelBoundaryRuntime`'s header.
 	installParallelBoundaryRuntime(pipeline.stdModule, usage: usage)
 
+	// The deliberate access violation (`__Builtins.forceSegfault`), on its own bit beside the checkpoint above
+	// and for the identical reason — its body is a store and a return, and it exists so the FAULT HANDLER has
+	// a test that can reach it. See `FaultProbeRuntime`.
+	installFaultProbeRuntime(pipeline.stdModule, usage: usage)
+
 	// The CPU-parallel QUERIES, beside the checkpoint they share a bootstrap section header with — and, like
 	// it, each on its OWN bit, so a program that asks only how many worker Ms ran carries neither the machine
 	// query's entry point nor the Win32 import band that entry point turns on, and no `.data` word but the

@@ -1123,10 +1123,17 @@ end 'main'
 error E3057: <fragment>:15:13: throwing division requires try: wrap it as `try (a / b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error
 ```
 
-<!-- disabled-test: force-segfault -->
-<!-- MEASURED 2026-09-04: `E3004: call to undefined function '__Builtins.forceSegfault'`. The intrinsic does not
-     exist in shv2, so neither this case nor its `force-segfault-macos` twin can run. -->
+<!-- test: force-segfault -->
 <!-- targets: x64-windows -->
+⭐⭐ **THE ONLY CASE THAT CAN REACH THE FAULT HANDLER ON PURPOSE.** Every other route into
+`mrt_fault_thunk` is a compiler BUG, so before `__Builtins.forceSegfault()` existed the whole thunk was code
+no suite could exercise: green everywhere, and unmeasured. The intrinsic lowers to
+`maxon_force_segfault` — a real function whose body stores through address 0 — and the handler's
+EXCEPTION_ACCESS_VIOLATION arm turns the trap into this line, this backtrace and exit 1.
+
+⚠ **THE ENTRY POINT IS A FUNCTION AND NOT A STORE INLINED AT THE CALL SITE, BECAUSE THE FRAME LIST IS WHAT
+THIS ASSERTS.** Inlined, frame 0 would be `main` and the case would stop saying that the walk crosses a frame
+boundary at all. Both compilers emit the same symbol for the same reason.
 ### Deliberate access violation produces a clean panic with backtrace
 ```maxon
 function main() returns ExitCode
@@ -1146,9 +1153,12 @@ Stack trace:
 ```
 
 <!-- disabled-test: force-segfault-macos -->
-<!-- MEASURED 2026-09-04 alongside `force-segfault`: `__Builtins.forceSegfault` does not exist in shv2. ⚠ The
-     marker below restricts this case to arm64-macOS, so it does NOT run on an x64-windows host and its absence
-     from a FAIL list is not a pass — it is disabled on its sibling's measurement. -->
+<!-- MEASURED 2026-09-04. `__Builtins.forceSegfault` EXISTS now and its x64-windows sibling above is enabled;
+     what this one still waits on is a fault HANDLER on its own lane. NEITHER arm64 backend has one — the file
+     header above says why they have needed none (AArch64 `SDIV` does not trap), so there is no thunk here to
+     add an EXCEPTION_ACCESS_VIOLATION arm to and a `SIGSEGV` handler plus a frame walk is the rung. ⚠ The
+     marker below restricts this case to arm64-macOS, so it does NOT run on an x64-windows host: its absence
+     from a FAIL list is not a pass, and this note could not have been measured on this host either way. -->
 <!-- targets: arm64-macos -->
 ### Deliberate access violation produces a clean panic (arm64-macOS)
 ```maxon

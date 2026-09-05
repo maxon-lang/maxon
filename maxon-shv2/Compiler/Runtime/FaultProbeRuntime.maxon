@@ -1,0 +1,77 @@
+// Runtime/FaultProbeRuntime.maxon — the deliberate access violation, `__Builtins.forceSegfault()`.
+//
+// ⭐⭐ **A PROGRAM THAT FAULTS ON PURPOSE IS THE ONLY WAY TO TEST THE FAULT HANDLER, AND THAT IS THE WHOLE
+// JUSTIFICATION FOR AN INTRINSIC WHOSE BODY IS UNDEFINED BEHAVIOUR.** The emitted runtime installs a fault
+// handler — a VEH plus a last-resort UEF on Windows, a `SIGSEGV` handler on macOS — whose job is to turn a
+// hardware trap into `panic: nil pointer or invalid memory access`, a symbolized backtrace and exit 1. Every
+// other path to that handler is a compiler BUG, so without this entry the handler is code no test can reach:
+// green on every suite, and unmeasured.
+//
+// ⚠ **IT IS A REAL FUNCTION AND NOT A STORE INLINED AT THE CALL SITE, AND THE BACKTRACE IS WHY.** What the
+// case asserts is the FRAME LIST — `in maxon_force_segfault`, `in main`, `in mrt_start` — which is the
+// handler walking a stack it did not build. Inlined, the top frame would be `main` and the test would stop
+// asserting that the walk crosses a frame boundary at all. The bootstrap emits the identical symbol for the
+// identical reason (`X86CodeEmitter.Runtime.cs`, `ARM64CodeEmitter.Runtime.cs`).
+//
+// ⚠ **THE BODY IS A STORE, WHERE THE BOOTSTRAP'S IS A LOAD, AND THE DIFFERENCE IS ABOUT THIS TIER RATHER
+// THAN ABOUT THE FAULT.** Both fault on address 0. The bootstrap emits machine code directly, so nothing can
+// remove its `mov rax,[rax]`; shv2 emits Std IR through the whole optimizer, and a load whose result nobody
+// reads is exactly what dead-code elimination is for. A store is EFFECTFUL by its `StdOpMeta` (`isStore`), so
+// no pass may drop it, and the fault it takes is the same one. It is a MACHINE-WORD store — `emitStoreField`'s
+// width, the one every runtime body here writes with — because the width decides nothing: any write through
+// address 0 traps.
+//
+// ⭐ **ITS OWN `__` BAND AND ITS OWN USAGE BIT — `ParallelBoundaryRuntime`'s reason exactly.** The body
+// declares nothing: no heap, no scheduler, no leak gate. Folding it into any existing family would install
+// that family's whole runtime for a program whose only concession to it is one faulting store.
+
+// The `__fault_` prefix this family shares. One entry point today; the prefix exists so "does this program
+// probe the fault handler?" is a family test from the start rather than a name compare to be widened later.
+let FaultProbeCallPrefix = b"__fault_"
+
+// ⭐ **THE ONE ENTRY POINT.** Named for the machine event it provokes, which is also the frame name the
+// backtrace prints and the name the bootstrap's own emitter uses — a case that pins the frame list pins this
+// spelling, on both compilers.
+export let ForceSegfaultName = b"maxon_force_segfault"
+
+// The address it writes to, and the byte it writes. Named because a bare `0` here would read as an
+// arithmetic zero rather than as THE null pointer, which is the entire content of this function.
+let NullAddress = 0 as ParsedInt
+let FaultProbeStoredByte = 0 as ParsedInt
+let NullStoreOffset = 0 as ByteOffset
+
+// ⭐ **DOES THIS CALLEE PROBE THE FAULT HANDLER?** The `__fault_`-only test, the exact twin of
+// `isParallelBoundaryRuntimeCallee` and narrow in the same way.
+//
+// ⚠ **THE ENTRY POINT DOES NOT WEAR THE PREFIX, AND THAT IS FORCED BY THE BACKTRACE.** `maxon_force_segfault`
+// is the frame name both compilers print, so it cannot be renamed to fit a family test — the test names it
+// outright instead. The prefix stands for a second entry that has no such constraint.
+export function isFaultProbeRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(ForceSegfaultName) or bytesStartWith(callee, prefix: FaultProbeCallPrefix)
+end 'isFaultProbeRuntimeCallee'
+
+// Install the probe into the lowered Std module, on its own `usesFaultProbe` bit. Appended AFTER the
+// pipeline, like every other runtime install, and already-lowered Std so it still flows through the whole
+// backend.
+export function installFaultProbeRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesFaultProbe 'noProbe'
+		return
+	end 'noProbe'
+	buildForceSegfault(module)
+end 'installFaultProbeRuntime'
+
+// `maxon_force_segfault()` — store a zero byte through a null pointer, then return. The return is
+// UNREACHABLE and is emitted anyway, because a block without a terminator is not a block; nothing executes
+// it, since the store above it never completes.
+function buildForceSegfault(module StdModule)
+	var func = IrFunction.createFromStd(ForceSegfaultName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var ids = ValueMinter.create(0)
+	let nullPointer = emitConst(module, block: entry, value: NullAddress, ids: ids)
+	let zero = emitConst(module, block: entry, value: FaultProbeStoredByte, ids: ids)
+	emitStoreField(module, block: entry, record: nullPointer, offset: NullStoreOffset, value: zero)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildForceSegfault'

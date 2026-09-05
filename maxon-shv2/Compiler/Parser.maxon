@@ -5489,6 +5489,19 @@ let BuiltinsParallelBoundaryName = b"__Builtins.parallelBoundary"
 // contract, and the two only happen to agree.
 let ParallelBoundaryArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.forceSegfault()` — THE DELIBERATE ACCESS VIOLATION, AND THE ONLY INTRINSIC WHOSE POINT IS
+// TO CRASH.** The emitted runtime carries a fault handler that turns a hardware trap into
+// `panic: nil pointer or invalid memory access`, a symbolized backtrace and exit 1; every other route to that
+// handler is a compiler BUG, so without this door the handler is code no test can reach. The bootstrap
+// declares the identical name and shape (`2-Parser.cs:12585`). See `FaultProbeRuntime` for why the entry
+// point is a real function rather than a store inlined here — the case asserts the FRAME LIST.
+let BuiltinsForceSegfaultName = b"__Builtins.forceSegfault"
+
+// `__Builtins.forceSegfault` takes NOTHING and returns void — there is no knob on a crash. Its own constant
+// rather than a borrowed `ParallelBoundaryArity` for `CurrentProcessIdArity`'s reason: the number is a fact
+// about THIS intrinsic's contract, and the two only happen to agree.
+let ForceSegfaultArity = 0 as ParamCount
+
 // ⭐⭐ **THE OTHER TWO MEMBERS OF THE CPU-PARALLEL FAMILY — THE QUERIES, WHERE THE MARKER ABOVE IS A
 // STATEMENT.** The bootstrap groups all three under one section header (`2-Parser.cs:12280`, *"CPU-parallel
 // intrinsics"*) and declares these two with exactly this shape: no arguments, an `int` answer. Their one
@@ -78288,6 +78301,13 @@ export type Parser
 			if callee.equals(BuiltinsParallelBoundaryName) 'parallelBoundary'
 				return try self.emitVoidZeroArgIntrinsic(args, builtinName: BuiltinsParallelBoundaryName, runtimeName: ParallelBoundaryName, arity: ParallelBoundaryArity, calleeTok: anchor, resultUsed: resultUsed)
 			end 'parallelBoundary'
+
+			// ⭐ **THE DELIBERATE FAULT — the checkpoint's CALL CONTRACT and the opposite outcome.** It takes
+			// nothing, answers nothing, and does not return: the store in `maxon_force_segfault` traps. See
+			// `BuiltinsForceSegfaultName` and `FaultProbeRuntime`.
+			if callee.equals(BuiltinsForceSegfaultName) 'forceSegfault'
+				return try self.emitVoidZeroArgIntrinsic(args, builtinName: BuiltinsForceSegfaultName, runtimeName: ForceSegfaultName, arity: ForceSegfaultArity, calleeTok: anchor, resultUsed: resultUsed)
+			end 'forceSegfault'
 
 			// ⭐ **THE THIRD ARM THAT HANDS OVER THE PROCESSOR, and the one with no declaration above it.**
 			// `sleep` and `yield` are stdlib's floor; this one is the whole surface, because

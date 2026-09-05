@@ -10,7 +10,7 @@
 //       in mrt_start
 //
 // The two causes are ONE trap and two NTSTATUS codes, so which of the two lines above's first
-// words appear is a classification the handler makes (`IntegerFaultKind`); `i64.min / -1` reads
+// words appear is a classification the handler makes (`HardwareFaultKind`); `i64.min / -1` reads
 // `panic: integer overflow` and is otherwise identical.
 //
 // The mechanism is the CPU's, not the compiler's: no divisor is ever tested. `idiv`
@@ -108,13 +108,24 @@ typealias ExceptionCode = int(0 to u32.max)
 let ExcCodeIntDivideByZero = 0xC0000094  // EXCEPTION_INT_DIVIDE_BY_ZERO — a zero divisor.
 let ExcCodeIntOverflow = 0xC0000095  // EXCEPTION_INT_OVERFLOW — an unrepresentable quotient.
 
-// The two integer faults an `idiv` raises. The vocabulary the CLASSIFICATION and the DIAGNOSTIC
-// share: what the OS hands over differs per platform (an NTSTATUS here, a POSIX `si_code` on Linux),
-// but what gets printed must not, so the mapping to words is asked once, of `faultPanicLinePrefix`.
-enum IntegerFaultKind
+// EXCEPTION_ACCESS_VIOLATION — a read or write through an address the process does not own. Unlike the
+// two above it is raised by no ONE instruction: any memory operand can take it, which is why the handler
+// converts it on the CODE alone and reads nothing else out of the record.
+let ExcCodeAccessViolation = 0xC0000005
+
+// The hardware faults this handler converts. The vocabulary the CLASSIFICATION and the DIAGNOSTIC share:
+// what the OS hands over differs per platform (an NTSTATUS here, a POSIX `si_code` on Linux), but what gets
+// printed must not, so the mapping to words is asked once, of `faultPanicLinePrefix`.
+//
+// ⚠ **THE FIRST TWO ARE ONE INSTRUCTION'S AND THE THIRD IS EVERY INSTRUCTION'S**, which is why this is not
+// `IntegerFaultKind` any more: `idiv` raises the same `#DE` for a zero divisor and for an unrepresentable
+// quotient and the OS tells them apart by code, while an access violation is what a bad address does
+// wherever it is dereferenced.
+enum HardwareFaultKind
 	divideByZero
 	overflow
-end 'IntegerFaultKind'
+	accessViolation
+end 'HardwareFaultKind'
 
 // The tag that closes a fault panic line and opens its addresses. Written once because the RUNTIME
 // emits it and `SpecTestRunner.stripFaultRipSuffix` recognizes exactly it — a second spelling here
@@ -126,10 +137,11 @@ let FaultRipTag = b" at rip=0x"
 // the chosen string's address) and by the Linux handler (which cannot classify at all, and says so at
 // its own definition). The words are the bootstrap's — `__gt_panic_msg_div_zero` and
 // `__gt_panic_msg_int_overflow` — so a fault reads the same whichever compiler built the program.
-function faultPanicLinePrefix(kind IntegerFaultKind) returns ByteArray
+function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
 	let message = match kind 'kind'
 		divideByZero gives b"panic: integer divide by zero"
 		overflow gives b"panic: integer overflow"
+		accessViolation gives b"panic: nil pointer or invalid memory access"
 	end 'kind'
 
 	var line = ByteArray.create()
@@ -873,7 +885,7 @@ end 'buildFaultBacktraceChunk'
 // ⚠ THE COMPARAND TRAVELS THROUGH A REGISTER. x64's group-1 immediate is SIGN-extended, so
 // `cmp rax, 0xC0000094` would compare against 0xFFFFFFFFC0000094 and never match the zero-extended
 // DWORD the caller just loaded. Both codes have bit 31 set, so this is not a quirk of one of them.
-function emitFaultCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Register, excCode ExceptionCode, kind IntegerFaultKind, prefixSlot StackSize, classified BlockId)
+function emitFaultCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Register, excCode ExceptionCode, kind HardwareFaultKind, prefixSlot StackSize, classified BlockId)
 	let next = asm.newLabel()
 
 	encodeMovRegImm32(asm.code, dest: scratch, value: excCode as MachineWord)
@@ -891,12 +903,16 @@ end 'emitFaultCodeArm'
 // applies its default disposition. Win64 ABI: the EXCEPTION_POINTERS in RCX, a LONG back
 // in EAX.
 //
-// It converts the two integer `#DE` codes and NOTHING ELSE. Every other code returns
-// EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler that swallowed
-// faults it was not asked about would turn every unrelated crash into this one's
-// diagnostic. (v1 additionally converts access violation and stack overflow; those arrive
-// with their specs, at their milestones — the classification is one `cmp` per code, not a
-// new mechanism.)
+// It converts the two integer `#DE` codes and the ACCESS VIOLATION, and NOTHING ELSE. Every
+// other code returns EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler
+// that swallowed faults it was not asked about would turn every unrelated crash into this
+// one's diagnostic. (STACK OVERFLOW is still not converted — v1 does, and it is the same one
+// `cmp` per code, but it also needs a guard page the handler can run on, which none of the
+// three here do.)
+//
+// ⚠ **THE ACCESS-VIOLATION ARM IS WHAT MAKES THIS HANDLER TESTABLE AT ALL.** Every other route
+// to it is a compiler BUG, so until `__Builtins.forceSegfault()` existed the whole thunk was
+// code no spec case could reach on purpose. `FaultProbeRuntime` is that door.
 //
 // Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
 function buildFaultThunkChunk() returns FunctionCodeChunk
@@ -917,8 +933,9 @@ function buildFaultThunkChunk() returns FunctionCodeChunk
 	// arm means this is not our fault, and the OS keeps it.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: ExcRecOffExceptionCode, wide: false)
-	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntDivideByZero, kind: IntegerFaultKind.divideByZero, prefixSlot: SlotPanicPrefix, classified: classified)
-	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntOverflow, kind: IntegerFaultKind.overflow, prefixSlot: SlotPanicPrefix, classified: classified)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntDivideByZero, kind: HardwareFaultKind.divideByZero, prefixSlot: SlotPanicPrefix, classified: classified)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntOverflow, kind: HardwareFaultKind.overflow, prefixSlot: SlotPanicPrefix, classified: classified)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeAccessViolation, kind: HardwareFaultKind.accessViolation, prefixSlot: SlotPanicPrefix, classified: classified)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
 
 	asm.placeLabel(classified)
@@ -1122,7 +1139,7 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 
 	// The panic line — through the SAME prefix builder the Windows thunk picks from, so the two OSes
 	// cannot drift on the wording and the harness's strip-from-` at rip=0x` leaves an identical line.
-	emitPrintString(asm, bytes: faultPanicLinePrefix(IntegerFaultKind.divideByZero))
+	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.divideByZero))
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
 
 	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).

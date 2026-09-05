@@ -528,6 +528,11 @@ export enum ReservedCalleeReason
 	// — a witness-table reloc needs a real `.text` symbol — and no file declares it, so it is compiler-owned
 	// for a reason the name's SHAPE cannot show.
 	synthesizedConformanceImpl
+	// The FAULT PROBE (`maxon_force_segfault`). It wears no prefix either, and for a reason of its own: the
+	// name is the FRAME a backtrace prints, so it is a user-visible string both compilers spell the same way
+	// and it cannot be renamed to fit a shape test. No file declares it — `FaultProbeRuntime` builds it at the
+	// Std tier, after the merge that fills `funcSignatures`.
+	faultProbeEntry
 end 'ReservedCalleeReason'
 
 export function reservedCalleeReasonOf(callee ByteArray) returns ReservedCalleeReason
@@ -538,6 +543,10 @@ export function reservedCalleeReasonOf(callee ByteArray) returns ReservedCalleeR
 	if isBuiltinConformanceImplName(callee) 'aSynthesizedImpl'
 		return ReservedCalleeReason.synthesizedConformanceImpl
 	end 'aSynthesizedImpl'
+
+	if isFaultProbeRuntimeCallee(callee) 'theFaultProbe'
+		return ReservedCalleeReason.faultProbeEntry
+	end 'theFaultProbe'
 
 	return ReservedCalleeReason.notReserved
 end 'reservedCalleeReasonOf'
