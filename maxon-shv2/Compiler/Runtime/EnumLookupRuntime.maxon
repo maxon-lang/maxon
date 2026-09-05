@@ -188,6 +188,14 @@ export function noteEnumLookupUsage(usage RuntimeUsage, project Project)
 			buildsABox = layout.isBoxed()
 		end 'generalReferenced'
 
+		// ⚠ **`fromRawValue` NEEDS `__str_eq` FOR EXACTLY THE BACKINGS WHOSE RAW VALUE IS BYTES** — a
+		// character or String one, where the search is a byte compare against an rdata record of what the
+		// author wrote. MEASURED without this: `resolveCallFixups: call to unknown function '__str_eq'`, a
+		// backend panic on a program with a `Planet.fromRawValue("Mars")` in it.
+		if enumRawValueIsBytes(layout.backing) and usage.neededEnumLookups.contains(enumFromRawValueSymbol(layout.name)) 'rawValueComparesBytes'
+			usage.usesStrEq = true
+		end 'rawValueComparesBytes'
+
 		for i in 0 upto perCaseSymbolScanBound(layout) 'eachCase'
 			if not usage.neededEnumLookups.contains(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(i))) 'caseNotReferenced'
 				continue
@@ -228,7 +236,7 @@ export function installEnumLookupHelpers(module StdModule, project Project, need
 
 	for (_, layout) in project.enumTypes 'each'
 		if needed.contains(enumFromRawValueSymbol(layout.name)) 'fromRawValueReferenced'
-			synthesizeEnumFromRawValue(module, layout: layout)
+			synthesizeEnumFromRawValue(module, layout: layout, project: project)
 		end 'fromRawValueReferenced'
 
 		if needed.contains(enumFromNameSymbol(layout.name)) 'fromNameReferenced'
@@ -250,27 +258,28 @@ end 'installEnumLookupHelpers'
 //   hit_i:              the ok return of case `i`'s tag
 //   the final else:     the error return — `noSuchRawValue`
 //
-// ⚠ **IT COMPARES AGAINST THE *TAG*, WHICH IS THE RAW VALUE ONLY FOR THE TWO BACKINGS THAT REACH HERE.** An
-// `integer`-backed case's tag IS its declared raw value, and an unnumbered enum's tag is the declaration index
-// its raw value is defined to be — for both, one column answers both questions. Every OTHER backing lacks that
-// property (a string or function backing's tag is only an index; a float or character raw value is not an i64
-// argument at all), and `Parser.requireFromRawValueBacking` refuses them at the call site rather than letting
-// a helper be built that would compare the wrong column. The panic below is that refusal's backstop, and its
-// `match` is what keeps a newly declared backing from reaching here unclassified — which is why the set is
-// stated as a rule rather than counted.
+// ⭐⭐ **WHAT IT COMPARES AGAINST DEPENDS ON THE BACKING, AND THERE ARE EXACTLY TWO ANSWERS.**
+//
+//   * **A NUMBER.** An `integer`-backed case's tag IS its declared raw value; an unnumbered enum's tag is the
+//     declaration index its raw value is defined to be; and a `float`-backed case's tag is the raw value's
+//     IEEE-754 BIT PATTERN, which is what the call site hands this helper (`Parser.parseEnumFromRawValue`
+//     converts). For all three, one i64 compare against the tag column answers.
+//   * **BYTES.** A `character` or `string` backing's tag is a codepoint or a declaration index, and the raw
+//     value the author wrote rides `caseRawValues` — so the test is `__str_eq` against an rdata record of
+//     those bytes, exactly as `fromName` tests a case NAME. A `Character` and a `String` are one byte record
+//     at this tier, so one comparison serves both.
+//
+// The RETURNED value is the tag either way, which is the runtime representation of a case for every backing
+// (`EnumLayout.tagOfIndex`) — the same value a written `Color.red` emits.
+//
+// ⚠ A FUNCTION backing is still refused at the call site: a code address has no literal spelling to look one
+// up BY. The `match` below is what keeps a newly declared backing from reaching here unclassified.
 //
 // A branch chain rather than the branchless sum the parser-tier accessors use: this one has to DISTINGUISH
 // "no case matched" from "case 0 matched", which a sum of products cannot express — an unmatched lookup and a
 // case whose tag is 0 both total zero.
-function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout)
-	match layout.backing 'backing'
-		integer then break 'backing'
-		unresolved then break 'backing'
-		float to functionRef then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is {enumBackingNoun(layout.backing, structName: layout.backingStructName)}-backed, whose tag column is not its raw values — `Parser.requireFromRawValueBacking` refuses `fromRawValue` on such a declaration, so no call to this helper can exist for it")
-		// The STRUCT backing does not reach the refusal above either: `Parser.parseEnumLiteral` never claims
-		// the member for it, so the call is an unknown case (E3034) and no helper is ever asked for.
-		structRecord then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is struct-backed, which declares no `{String.from(EnumFromRawValueMemberName)}` member at all — the call is reported as an unknown enum case, so no call to this helper can exist for it")
-	end 'backing'
+function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout, project Project)
+	let comparesBytes = enumRawValueIsBytes(layout.backing)
 
 	let func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
@@ -283,11 +292,8 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout)
 	for i in 0 upto layout.caseCount() 'eachCase'
 		var hit = module.addBlock(func, label: b"hit")
 		let nextTest = module.addBlock(func, label: b"casetest")
-		let tag = emitConst(module, block: cur, value: layout.tagOfIndex(i), ids: ids)
-		let isThisCase = emitCmp(module, block: cur, a: raw, b: tag, pred: StdCmpPred.eq, ids: ids)
-		module.setTerminator(cur, op: StdOp.condBranch(isThisCase, thenBlockId: hit.id, elseBlockId: nextTest.id))
-		// The tag constant is defined in `cur`, which dominates `hit` — the one edge into it.
-		emitOkReturn(module, block: hit, value: tag, ids: ids)
+		emitRawValueTestBranch(module, block: cur, raw: raw, layout: layout, caseIndex: i, comparesBytes: comparesBytes, globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
+		emitOkReturn(module, block: hit, value: emitConst(module, block: hit, value: layout.tagOfIndex(i), ids: ids), ids: ids)
 		cur = nextTest
 	end 'eachCase'
 
@@ -295,6 +301,32 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout)
 
 	module.functions.push(func)
 end 'synthesizeEnumFromRawValue'
+
+// One case's test — a number against the tag column, or bytes against an rdata record of the raw value the
+// author wrote. Both end in the same `condBranch`, so the chain above knows nothing about which it emitted.
+function emitRawValueTestBranch(module StdModule, block IrBlock, raw ValueId, layout EnumLayout, caseIndex CaseIndex, comparesBytes bool, globalData GlobalDataTable, hit IrBlock, miss IrBlock, ids ValueMinter)
+	if not comparesBytes 'aNumber'
+		let tag = emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids)
+		module.setTerminator(block, op: StdOp.condBranch(emitCmp(module, block: block, a: raw, b: tag, pred: StdCmpPred.eq, ids: ids), thenBlockId: hit.id, elseBlockId: miss.id))
+		return
+	end 'aNumber'
+
+	emitNameTestBranch(module, block: block, name: raw, caseName: layout.rawValueAt(caseIndex).toByteArray(), globalData: globalData, hit: hit, miss: miss, ids: ids)
+end 'emitRawValueTestBranch'
+
+// Is this backing's raw value BYTES rather than a number? The one question `synthesizeEnumFromRawValue` and
+// `Parser.parseEnumFromRawValue` must answer identically — the helper compares what the call site passes.
+export function enumRawValueIsBytes(backing EnumBacking) returns bool
+	return match backing 'b'
+		character gives true
+		string gives true
+		integer gives false
+		unresolved gives false
+		float gives false
+		functionRef gives false
+		structRecord gives false
+	end 'b'
+end 'enumRawValueIsBytes'
 
 // ⭐⭐ **`__enum_from_name_<Enum>(name) -> (value, flag)` — THE LOOKUP BY CASE NAME.** One `__str_eq`
 // against each case's name, in declaration order; the first hit returns that case's VALUE, and falling off

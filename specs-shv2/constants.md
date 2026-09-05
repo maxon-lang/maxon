@@ -1286,8 +1286,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromRawValue-float-backed -->
-<!-- MEASURED 2026-09-04: `E2015 — `fromRawValue` on a float-backed enum`, for `fromRawValue-char-backed`'s reason. -->
+<!-- test: fromRawValue-float-backed -->
 ```maxon
 enum Weights
 	light = 1.5
@@ -1307,9 +1306,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromRawValue-string-backed -->
-<!-- MEASURED 2026-09-04: `E2015 — `fromRawValue` on a String-backed enum`, for `fromRawValue-char-backed`'s
-     reason. -->
+<!-- test: fromRawValue-string-backed -->
 ```maxon
 enum Planet
 	earth = "Earth"
@@ -1328,10 +1325,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromRawValue-char-backed -->
-<!-- MEASURED 2026-09-04: `E2015 — `fromRawValue` on a char-backed enum`. The lookup searches the case TAGS, which
-     carry the declared raw values only for an int-backed or unnumbered enum, so a char/float/String backing has
-     nothing to search. The raw values have to be kept beside the tags. -->
+<!-- test: fromRawValue-char-backed -->
 ```maxon
 enum Grade
 	excellent = 'A'
@@ -1405,9 +1399,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: error.fromRawValue-invalid-literal -->
-<!-- MEASURED 2026-09-04: shv2 COMPILES a `fromRawValue(999)` whose literal names no case; the bootstrap folds the
-     argument and refuses E3034. shv2 has no compile-time raw-value fold at this door. -->
+<!-- test: error.fromRawValue-invalid-literal -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -1420,7 +1412,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/constants/error.fromRawValue-invalid-literal.test:8:26: no enum case with raw value '999': 'HttpStatus'
+error E3034: <fragment>:8:21: no enum case with raw value '999': 'HttpStatus'
 ```
 
 <!-- test: error.fromRawValue-type-mismatch -->

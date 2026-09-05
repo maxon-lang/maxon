@@ -448,6 +448,9 @@ export union ParseError implements Error
 	// **E3097** — `==`/`!=` against an enum or union value's `.name`/`.ordinal`/`.rawValue`. See
 	// `Parser.requireNotAnEnumAccessorComparison` for why the accessor is the wrong thing to compare.
 	enumAccessorComparison(member String, op String, line LineNumber, column ColumnNumber)
+	// **E3034** — a `fromRawValue` whose CONSTANT argument matches no case's raw value. Folded at the call
+	// site rather than left to the helper's run-time throw, which both references also do.
+	enumNoSuchRawValue(value String, enumName String, line LineNumber, column ColumnNumber)
 	// **E3086** — a struct literal left one or more fields with no value from any of the THREE sources the
 	// language offers (`/specs/field-initialization.md`): the literal itself, a declared default, or a
 	// `self.<field> = …` in a static factory. The message names all three, because which one an author
@@ -5190,6 +5193,21 @@ function nascentSlotPlaceholderType(tag ValueTypeTag) returns NascentSlotPlaceho
 		void gives NascentSlotPlaceholder.ownsHeap
 	end 'kind'
 end 'nascentSlotPlaceholderType'
+
+// ⭐ **THE TYPE `fromRawValue` TAKES, PER BACKING.** The argument is the raw value the author wrote, so its
+// domain is the declaration's — and the diagnostic that refuses a wrong one names this rather than a fixed
+// `int`. A `functionRef` backing never reaches here: `requireFromRawValueBacking` refuses it first.
+function enumRawValueArgumentTag(backing EnumBacking) returns ValueTypeTag
+	return match backing 'b'
+		integer gives ValueTypeTag.integer
+		unresolved gives ValueTypeTag.integer
+		float gives ValueTypeTag.float
+		character gives ValueTypeTag.character
+		string gives ValueTypeTag.string
+		functionRef gives ValueTypeTag.function
+		structRecord gives ValueTypeTag.structRef
+	end 'b'
+end 'enumRawValueArgumentTag'
 
 // Does an enum's declared backing produce values of `tag`? Only the two BYTE-RECORD backings answer true,
 // and that is the whole of the question `enumCaseAtItsBacking` asks: an `integer` backing needs no coercion
@@ -57251,16 +57269,71 @@ export type Parser
 		let raw = try self.parseValueExpression(func)
 		try self.consume(TokenKind.rightParen)
 
-		// The argument's domain is the backing's, and past the guard above that domain is `int`. The sentence
-		// and the anchor are the reference's (`constants.md`'s `error.fromRawValue-type-mismatch` pins
-		// `type mismatch: 'expected int, got String'`), reached through the shared renderer so this position
-		// and the payload one cannot come to word one rejection two ways.
-		if not tagIsIntegral(self.tagOf(raw)) 'notANumber'
-			throw ParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column)
-		end 'notANumber'
+		// ⭐ **THE ARGUMENT'S DOMAIN IS THE BACKING'S**, so the sentence names the type the declaration
+		// actually takes — `expected float, got int` on a float-backed enum, where a fixed `int` would have
+		// named a type the program does not contain. The renderer is the shared one, so this position and the
+		// payload one cannot come to word one rejection two ways.
+		let expected = enumRawValueArgumentTag(layout.backing)
+		if not self.rawValueArgumentSuits(raw, expected: expected) 'wrongDomain'
+			throw ParseError.typeMismatchExpectedGot(typeTagName(expected), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column)
+		end 'wrongDomain'
 
-		return self.emitRuntimeCall(enumFromRawValueSymbol(layout.name), args: singletonArgs(raw), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		// ⭐⭐ **A LITERAL THAT NAMES NO CASE IS REFUSED HERE, NOT LEFT TO THE RUN-TIME THROW.** Both
+		// references fold a constant argument against the case list, and `/specs/constants.md`'s
+		// `error.fromRawValue-invalid-literal` pins the verdict. The call still stands: `try` binds to one,
+		// and a resolved literal simply makes the helper's throw unreachable.
+		try self.requireFoldedRawValueNamesACase(layout, raw: raw, memberTok: memberTok)
+
+		return self.emitRuntimeCall(enumFromRawValueSymbol(layout.name), args: singletonArgs(self.rawValueSearchKey(raw, backing: layout.backing, range: range)), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
 	end 'parseEnumFromRawValue'
+
+	// Does the written argument suit the backing's domain? A `named` value is admitted wherever an integer is
+	// — a ranged alias IS an int, and every other door in this file reads it that way.
+	function rawValueArgumentSuits(raw ValueId, expected ValueTypeTag) returns bool
+		let got = self.tagOf(raw)
+		if expected == ValueTypeTag.integer 'aNumber'
+			return tagIsIntegral(got)
+		end 'aNumber'
+
+		return got == expected
+	end 'rawValueArgumentSuits'
+
+	// ⭐ **WHAT THE HELPER ACTUALLY SEARCHES BY, which is the tag column's own currency.** A float's tag is
+	// its IEEE-754 BIT PATTERN, so the argument is reinterpreted here rather than in the helper — the same
+	// handoff `emitEnumRawValue` makes in the other direction. Every other backing passes its value through:
+	// an integer is already the tag, and a byte record is compared as bytes.
+	function rawValueSearchKey(raw ValueId, backing EnumBacking, range SourceRange) returns ValueId
+		if backing != EnumBacking.float 'notAFloatBacking'
+			return raw
+		end 'notAFloatBacking'
+
+		return self.emitUnaryOp(raw, op: MaxonUnaryOp.floatToBits, resultTag: ValueTypeTag.integer, range: range)
+	end 'rawValueSearchKey'
+
+	// ⭐ **THE COMPILE-TIME LOOKUP, for an argument the parser can already see.** Only a NUMBER folds: a
+	// byte-record argument is a record this tier holds no value for, so a `Grade.fromRawValue('Z')` is left
+	// to the helper's own throw — the honest answer rather than a fold that reads a pointer as a codepoint.
+	function requireFoldedRawValueNamesACase(layout EnumLayout, raw ValueId, memberTok Token) throws ParseError
+		if enumRawValueIsBytes(layout.backing) or not self.constIsKnown(raw) 'nothingToFold'
+			return
+		end 'nothingToFold'
+
+		let value = self.constOf(raw)
+		for i in 0 upto layout.caseCount() 'eachCase'
+			if layout.tagOfIndex(i) == value 'namesThisCase'
+				return
+			end 'namesThisCase'
+		end 'eachCase'
+
+		throw ParseError.enumNoSuchRawValue(self.foldedRawValueSpelling(raw, backing: layout.backing), enumName: String.from(layout.name), line: memberTok.line, column: memberTok.column)
+	end 'requireFoldedRawValueNamesACase'
+
+	// The number as the author wrote it — a float backing's constant is an IEEE-754 bit pattern, and quoting
+	// those bits at someone who wrote `2.5` would name a number their program does not contain. Through the
+	// shared renderer, so a folded constant is spelled the same way here as in every other diagnostic.
+	function foldedRawValueSpelling(raw ValueId, backing EnumBacking) returns String
+		return scalarConstantText(self.constOf(raw), isFloat: backing == EnumBacking.float)
+	end 'foldedRawValueSpelling'
 
 	// ⭐ **WHICH BACKINGS `fromRawValue` IS BUILT FOR, AND WHY THE OTHER THREE ARE A REFUSAL RATHER THAN A
 	// SILENT WRONG ANSWER.** The helper searches the layout's TAG column, which is the raw-value column only
@@ -57282,7 +57355,8 @@ export type Parser
 		match layout.backing 'backing'
 			integer then break 'backing'
 			unresolved then break 'backing'
-			float to functionRef then throw ParseError.unsupported("`{String.from(EnumFromRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}`, which is {enumBackingNoun(layout.backing, structName: layout.backingStructName)}-backed — shv2's lookup searches the case TAGS, which carry the declared raw values only for an int-backed or unnumbered enum", line: memberTok.line, column: memberTok.column)
+			float to string then break 'backing'
+			functionRef then throw ParseError.unsupported("`{String.from(EnumFromRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}`, which is {enumBackingNoun(layout.backing, structName: layout.backingStructName)}-backed — a code address has no literal spelling a program could look one up BY, which is why the reference refuses this backing here too", line: memberTok.line, column: memberTok.column)
 			structRecord then panic("requireFromRawValueBacking: `{layout.kindWord()} {String.from(layout.name)}` is struct-backed and reached the `{String.from(EnumFromRawValueMemberName)}` guard — `parseEnumLiteral` does not CLAIM the member for that backing, so such a call is an unknown case (E3034) and never arrives here")
 		end 'backing'
 	end 'requireFromRawValueBacking'

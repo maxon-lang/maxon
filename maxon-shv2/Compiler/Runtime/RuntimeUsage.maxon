@@ -1041,10 +1041,11 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// `__enum_from_name_<Enum>`, `__enum_from_name_<Union>#<case>`). One symbol set, because one installer
 	// builds all three shapes and its `needed` test is by name.
 	//
-	// ⚠ **THE SYMBOL IS RECORDED HERE AND ITS TRANSITIVE NEEDS ARE NOT** — `fromRawValue` has none (its body
-	// compares i64 constants and calls nothing, the `__ucd_` table loads' company), while `fromName`'s depend
-	// on the DECLARATION's shape, which this scan holds no layout to ask. `EnumLookupRuntime.noteEnumLookupUsage`
-	// declares them, off the same layout walk the installer builds from.
+	// ⚠ **THE SYMBOL IS RECORDED HERE AND ITS TRANSITIVE NEEDS ARE NOT** — BOTH members' needs depend on the
+	// DECLARATION's shape, which this scan holds no layout to ask: `fromName` always compares bytes and may
+	// build a box, and `fromRawValue` compares bytes for exactly the backings whose raw value IS bytes.
+	// `EnumLookupRuntime.noteEnumLookupUsage` declares them, off the same layout walk the installer builds
+	// from.
 	if isEnumLookupRuntimeCallee(callee) 'enumlookup'
 		usage.neededEnumLookups.insert(callee)
 	end 'enumlookup'
