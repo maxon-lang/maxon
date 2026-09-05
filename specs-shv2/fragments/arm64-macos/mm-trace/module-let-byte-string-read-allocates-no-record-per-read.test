@@ -1,0 +1,195 @@
+// Test: module-let-byte-string-read-allocates-no-record-per-read
+let Keyword = b"critsplit"
+
+function main() returns ExitCode
+	let a = try Keyword.get(0) otherwise 0
+	let b = try Keyword.get(1) otherwise 0
+	let c = try Keyword.get(2) otherwise 0
+	return 0 if a + b + c == 318 else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __ds_base@32 = i64 0
+  __ds_buf_size@40 = i64 0
+  __ds_buf_mask@48 = i64 0
+  __ds_start_ts@56 = i64 0
+  __ds_lock@64 = i64 0
+  __mm_alloc_id@72 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __barr_rec_1
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
+    arm64.cmp x2, 8
+    arm64.b.ne __im_stride#20
+  __im_word#18:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.b.ls __im_slow#17
+  __im_load#22:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.b __im_loaded#21
+  __im_stride#20:
+    arm64.cmp x2, 1
+    arm64.b.ne __im_slow#17
+  __im_byte#19:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.b.ls __im_slow#17
+  __im_load#23:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded#21:
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_cont#16
+  __im_empty#24:
+    arm64.cmp x2, 0
+    arm64.b.ne __im_cont#16
+  __im_slow#17:
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x3, x9
+  __im_cont#16:
+    arm64.cmp x3, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x19, 0
+    arm64.b trycont#3
+  tryok#1:
+    arm64.movRegReg x19, x2
+  trycont#3:
+    arm64.leaRdata x0, __barr_rec_1
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
+    arm64.cmp x2, 8
+    arm64.b.ne __im_stride#29
+  __im_word#27:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 1
+    arm64.b.ls __im_slow#26
+  __im_load#31:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 8
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.b __im_loaded#30
+  __im_stride#29:
+    arm64.cmp x2, 1
+    arm64.b.ne __im_slow#26
+  __im_byte#28:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 1
+    arm64.b.ls __im_slow#26
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 1
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded#30:
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_cont#25
+  __im_empty#33:
+    arm64.cmp x2, 0
+    arm64.b.ne __im_cont#25
+  __im_slow#26:
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x3, x9
+  __im_cont#25:
+    arm64.cmp x3, 0
+    arm64.b.eq tryok#4
+  tryerr#5:
+    arm64.movImm x20, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.movRegReg x20, x2
+  trycont#6:
+    arm64.leaRdata x0, __barr_rec_1
+    arm64.movImm x1, 2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
+    arm64.cmp x2, 8
+    arm64.b.ne __im_stride#38
+  __im_word#36:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 2
+    arm64.b.ls __im_slow#35
+  __im_load#40:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 16
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.b __im_loaded#39
+  __im_stride#38:
+    arm64.cmp x2, 1
+    arm64.b.ne __im_slow#35
+  __im_byte#37:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 2
+    arm64.b.ls __im_slow#35
+  __im_load#41:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 2
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+  __im_loaded#39:
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_cont#34
+  __im_empty#42:
+    arm64.cmp x2, 0
+    arm64.b.ne __im_cont#34
+  __im_slow#35:
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x3, x9
+  __im_cont#34:
+    arm64.cmp x3, 0
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.movImm x0, 0
+    arm64.b trycont#9
+  tryok#7:
+    arm64.movRegReg x0, x2
+  trycont#9:
+    arm64.add x1, x19, x20
+    arm64.add x0, x1, x0
+    arm64.cmp x0, 318
+    arm64.b.ne ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 1
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at module-let-byte-string-read-allocates-no-record-per-read.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
