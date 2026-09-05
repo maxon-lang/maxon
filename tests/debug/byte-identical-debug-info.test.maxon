@@ -1,6 +1,7 @@
 // byte-identical-debug-info.test.maxon — the debug-info sidecar is METADATA, and the executable does not
-// know whether it was written. This file also carries the SHARED HALF every other sidecar case in this
-// directory reaches for: staging a fixture, spawning either driver, and reading back what one printed.
+// know whether it was written. This file also carries the SHARED HALF every other case in this directory
+// reaches for: the two binaries the corpus spawns, staging a fixture, running a driver at it, and reading
+// back what one printed.
 //
 // `maxon build` writes `<output>.mxdbg` beside the binary by default; `--no-debug-info` opts out. The
 // whole design rests on the sidecar changing NOTHING about the emitted code — that is what lets a spec
@@ -8,13 +9,16 @@
 // binary they shipped rather than a different one built for the purpose. A property nothing measures is
 // a claim, and this is the one command that measures it.
 //
-// ⭐⭐ **ONE STAGED SOURCE PATH, BUILT TWICE, TO TWO OUTPUTS.** Getting that backwards produces a false
-// red or a false green, and both directions are MEASURED facts about this compiler:
-//   • the OUTPUT path does not reach the image — the same source built to two different `-o` paths is
-//     byte-identical, so the two outputs here cost the comparison nothing;
-//   • the SOURCE path DOES reach the image — two identical programs under different file names differ by
-//     607 bytes, so a comparison that staged two copies would report a difference the flag never caused.
-// ⇒ The two runs differ by `--no-debug-info` and by nothing else.
+// ⭐⭐ **ONE STAGED SOURCE PATH AND ONE OUTPUT PATH, BUILT TWICE.** Both paths reach the emitted image, so
+// either one left to vary reports a difference the flag never caused — and both directions are MEASURED:
+//   • the SOURCE path reaches the image through the spans it carries — two identical programs under
+//     different file names differ by 607 bytes;
+//   • the OUTPUT BASENAME reaches it on Mach-O as the ad-hoc code signature's CodeDirectory identifier
+//     (`MachOWriter.writeMachO`), whose LENGTH moves the `__LINKEDIT` sizes in the load commands, so two
+//     outputs differ within the first kilobyte.
+// ⇒ Both builds are handed the same `-o`, and `retainImage` keeps the first image between them —
+//   and clears the first sidecar, so the opt-out's ABSENCE assertion rests on the flag rather than on the
+//   driver's stale-artifact cleanup, which is a separate behaviour nothing here measures.
 //
 // ⛔ **THE SIDECAR IS ASSERTED PRESENT ON ONE SIDE AND ABSENT ON THE OTHER, AND THE ABSENCE IS THE HALF
 // NOTHING ELSE WOULD NOTICE.** A default build that stopped writing the sidecar and an opt-out that wrote
@@ -23,8 +27,8 @@
 //
 // ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE, whatever its visibility** (E3006,
 // MEASURED here: a private `stagedProgram` in this file collided with `monitor-agreement`'s private one).
-// So this corpus gets ONE staging half, exported from this file, and every name in it is spelled for the
-// sidecar rather than generically.
+// So the corpus gets ONE shared half, exported from this file, and a case file beside it declares only
+// what that case alone uses.
 //
 // ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
 // missing compiler, an unspellable path, a spawn that never happened. None of those is the driver
@@ -41,20 +45,31 @@
 
 // Where the corpus lives and where a runnable copy is built, both relative to the checkout root. Staging
 // goes to gitignored `temp/`: a live `.maxon` under `tests/` is one `maxon fmt` over the checkout rewrites.
-let SidecarFixturesDirName = "tests/debug/fixtures"
+let FixturesDirName = "tests/debug/fixtures"
 export let SpansFixtureName = "spans"
 export let LocalsFixtureName = "locals"
-let SidecarStagingRootDirName = "temp/debug"
+export let TraceFixtureName = "trace"
+let StagingRootDirName = "temp/debug"
 
 // The stored-name mapping, `tests/README.md` rule 1: `<name>.fixture -> <name>`.
-let SidecarStoredSuffix = ".fixture"
-export let SidecarProgramFileName = "main.maxon"
+let StoredFixtureSuffix = ".fixture"
+export let StagedProgramFileName = "main.maxon"
 
-// The command line one build is run from: `build <staged>/main.maxon -o <staged>/out-<label>[.exe]`.
+// The two binaries this directory spawns, relative to the checkout root and without their host suffix.
+// The first is the compiler under test AND the DebugStream consumer under test; the second is the
+// REFERENCE — the decoder `monitor-agreement` compares against, and the second reader of a sidecar the
+// dump cases build. Every case reaches each of them through these, which is what keeps one path to each.
+export let TestedCompilerStem = "maxon-shv2/.maxon/maxon-shv2"
+export let BootstrapCompilerStem = "bin/maxon"
+
+// The command line one build is run from: `build <staged>/main.maxon -o <staged>/out[.exe]`.
 // `-o` is what keeps the build out of the tree lock, so two case files can compile at once.
-let SidecarBuildCommand = "build"
-let SidecarOutputOption = "-o"
-let SidecarOutputStem = "out-"
+export let BuildCommandName = "build"
+let OutputOption = "-o"
+let OutputFileStem = "out"
+
+// Where `retainImage` parks a build's image: a name no build writes, inside the case's staging tree.
+let RetainedImageFileName = "retained-image"
 
 // How a declaration is recognized in the staged fixture source.
 export let FunctionDeclarationPrefix = "function "
@@ -68,31 +83,31 @@ export let DumpInfoOptionName = "--dump-info"
 // The folds every reader in this directory applies to a captured stream: CR dropped, so a Windows
 // console's line endings do not decide what a row says or where one ends; tabs folded to spaces, so a
 // column written with either separates two words.
-export let SidecarLineFeed = "\n"
-let SidecarCarriageReturn = "\r"
-let SidecarSpace = " "
-let SidecarTab = "\t"
+export let LineFeed = "\n"
+let CarriageReturn = "\r"
+let Space = " "
+let Tab = "\t"
 
 // The flag that suppresses the sidecar, and the suffix it is written under. The sidecar's name is the
-// WHOLE output name plus the suffix (`out-default.exe.mxdbg`) — the reference driver appends to the output
+// WHOLE output name plus the suffix (`out.exe.mxdbg`) — the reference driver appends to the output
 // path with its extension still on.
 let NoDebugInfoFlag = "--no-debug-info"
 let SidecarSuffix = ".mxdbg"
 
-// The two builds, named for what each one asks for. A label is also its output stem, so a failure report
-// names a file a reader can go and look at.
+// The two builds, named for what each one asks for. A label names a run in a failure report and reaches
+// nothing the child does — see `builtExecutable` for why it may not reach the output path.
 let SidecarBuildLabel = "default"
 let NoSidecarBuildLabel = "no-debug-info"
 
-// The separator this file's own paths are spelled with, folded into the host's by `sidecarStagingDir`.
-let SidecarPathSeparator = "/"
+// The separator this file's own paths are spelled with, folded into the host's by `stagingDir`.
+let PathSeparator = "/"
 
 // How the dump writes its numbers, and the ASCII runs their digits come from. Spelled as numbers rather
 // than as character literals: a character-literal RECEIVER makes the bootstrap's resolver lose the
 // declarations that follow it, and this corpus is compiled by BOTH compilers.
 export let HexPrefix = "0x"
 let HexBase = 16
-export let SidecarDecimalBase = 10
+export let DecimalBase = 10
 let HexLetterValue = 10
 let KeyedValueSeparator = "="
 let AsciiDigitZero = 48
@@ -110,33 +125,35 @@ typealias HexDigitValue = int(0 to 15)
 
 // A list of paths one directory walk produced. Stdlib's own `FilePathArray` is a member of `Directory` and
 // has no file-scope spelling.
-typealias SidecarPathArray = Array with FilePath
+typealias PathArray = Array with FilePath
 
 // ============================================================================================
 // THE CONTRACT
 // ============================================================================================
 
 test 'the executable is byte-identical with the debug-info sidecar and without it'
-	let staged = stagedSidecarProgram("byte-identical-debug-info", fixture: SpansFixtureName)
+	let staged = stagedProgram("byte-identical-debug-info", fixture: SpansFixtureName)
 	let noArguments = StringArray.create()
 
-	let sidecarRun = spawnSidecarBuild(staged, label: SidecarBuildLabel, extraArguments: noArguments)
+	let sidecarRun = spawnBuild(staged, label: SidecarBuildLabel, extraArguments: noArguments)
 	try Expect.equal(sidecarRun.exitCode() as AssertedInt, expected: 0, message: "the default build of the staged program failed, so neither half of this case can be measured. It wrote to stderr: {sidecarRun.stderr}")
 
-	let sidecar = sidecarPathFor(staged, label: SidecarBuildLabel)
-	try Expect.isTrue(File.exists(sidecar), message: "`{SidecarBuildCommand}` exited 0 and wrote no `{SidecarSuffix}` sidecar to {sidecar.toString()}. The sidecar is written BY DEFAULT — `{NoDebugInfoFlag}` is the opt-out — so a build that has to be ASKED for one leaves every ordinary binary undebuggable, which is the state a user gets without knowing it.")
+	// One path, asked about twice: present after the default build, absent after the opt-out.
+	let sidecar = sidecarPathFor(staged)
+	try Expect.isTrue(File.exists(sidecar), message: "`{BuildCommandName}` exited 0 and wrote no `{SidecarSuffix}` sidecar to {sidecar.toString()}. The sidecar is written BY DEFAULT — `{NoDebugInfoFlag}` is the opt-out — so a build that has to be ASKED for one leaves every ordinary binary undebuggable, which is the state a user gets without knowing it.")
+
+	let retained = retainImage(staged)
 
 	var optOutArguments = StringArray.create()
 	optOutArguments.push(NoDebugInfoFlag)
-	let noSidecarRun = spawnSidecarBuild(staged, label: NoSidecarBuildLabel, extraArguments: optOutArguments)
-	try Expect.equal(noSidecarRun.exitCode() as AssertedInt, expected: 0, message: "`{SidecarBuildCommand} … {NoDebugInfoFlag}` did not compile the staged program. The flag is the documented opt-out, so a driver that does not accept it leaves no way to build without the sidecar at all. It wrote to stderr: {noSidecarRun.stderr}")
+	let noSidecarRun = spawnBuild(staged, label: NoSidecarBuildLabel, extraArguments: optOutArguments)
+	try Expect.equal(noSidecarRun.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} … {NoDebugInfoFlag}` did not compile the staged program. The flag is the documented opt-out, so a driver that does not accept it leaves no way to build without the sidecar at all. It wrote to stderr: {noSidecarRun.stderr}")
 
-	let suppressed = sidecarPathFor(staged, label: NoSidecarBuildLabel)
-	try Expect.isFalse(File.exists(suppressed), message: "`{NoDebugInfoFlag}` still wrote {suppressed.toString()}. An opt-out that writes the file anyway is the half of this contract the byte comparison below is blind to — the two images would still be equal.")
+	try Expect.isFalse(File.exists(sidecar), message: "`{NoDebugInfoFlag}` still wrote {sidecar.toString()}. An opt-out that writes the file anyway is the half of this contract the byte comparison below is blind to — the two images would still be equal.")
 
-	// ⭐ THE HEADLINE. Both builds read ONE staged source path, so the flag is the only difference between
-	// them; a difference in the image means the sidecar is not metadata after all.
-	try requireIdenticalBytes(builtSidecarExecutable(staged, label: SidecarBuildLabel), second: builtSidecarExecutable(staged, label: NoSidecarBuildLabel))
+	// ⭐ THE HEADLINE. Both builds read ONE staged source path and wrote ONE output path, so the flag is the
+	// only difference between them; a difference in the image means the sidecar is not metadata after all.
+	try requireIdenticalBytes(retained, second: builtExecutable(staged))
 end 'the executable is byte-identical with the debug-info sidecar and without it'
 
 // ============================================================================================
@@ -152,40 +169,40 @@ end 'the executable is byte-identical with the debug-info sidecar and without it
 // same program still need two trees, and one case may need a fixture another has no use for. It carries no
 // default because a default is resolved in the CALLER's file under the bootstrap, so one naming a constant
 // private to this file compiles under one compiler and not the other.
-export function stagedSidecarProgram(caseLabel String, fixture String) returns FilePath
-	let staged = sidecarStagingDir("{SidecarStagingRootDirName}{SidecarPathSeparator}{caseLabel}")
+export function stagedProgram(caseLabel String, fixture String) returns FilePath
+	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
 	clearStagedFiles(staged)
 
-	let stored = sidecarFixtureDir("{SidecarFixturesDirName}{SidecarPathSeparator}{fixture}").join("{SidecarProgramFileName}{SidecarStoredSuffix}")
-	let body = try File.readText(stored) otherwise panic("debug-sidecar tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
-	try File.writeText(staged.join("{SidecarProgramFileName}"), content: body) otherwise panic("debug-sidecar tests: the gate could not run — could not stage {SidecarProgramFileName} into {staged.toString()}.")
+	let stored = fixtureDir("{FixturesDirName}{PathSeparator}{fixture}").join("{StagedProgramFileName}{StoredFixtureSuffix}")
+	let body = try File.readText(stored) otherwise panic("debug tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
+	try File.writeText(staged.join("{StagedProgramFileName}"), content: body) otherwise panic("debug tests: the gate could not run — could not stage {StagedProgramFileName} into {staged.toString()}.")
 
 	return staged
-end 'stagedSidecarProgram'
+end 'stagedProgram'
 
-// Compile the staged program to `out-<label>`, with whatever extra flag this build is asking about.
-export function spawnSidecarBuild(staged FilePath, label String, extraArguments StringArray) returns CollectedOutput
+// Compile the staged program, with whatever extra flag this build is asking about.
+export function spawnBuild(staged FilePath, label String, extraArguments StringArray) returns CollectedOutput
 	var arguments = StringArray.create()
-	arguments.push(SidecarBuildCommand)
-	arguments.push(staged.join("{SidecarProgramFileName}").toString())
-	arguments.push(SidecarOutputOption)
-	arguments.push(builtSidecarExecutable(staged, label: label).toString())
+	arguments.push(BuildCommandName)
+	arguments.push(staged.join("{StagedProgramFileName}").toString())
+	arguments.push(OutputOption)
+	arguments.push(builtExecutable(staged).toString())
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)
 	end 'eachExtra'
 
-	return spawnSidecarCompiler(arguments, staged: staged, what: "the '{label}' build")
-end 'spawnSidecarBuild'
+	return spawnCompiler(arguments, staged: staged, what: "the '{label}' build")
+end 'spawnBuild'
 
 // One child compiler, run in the staging tree. A binary that is not there and a spawn that never happened
 // both stop a case running at all, so both panic naming what was being asked for.
 //
 // `binaryStem` is what makes the REFERENCE driver reachable: a sidecar this compiler wrote must print the
 // same under `BootstrapCompilerStem`, and one spawn cannot ask that of two binaries.
-export function spawnSidecarCompiler(arguments StringArray, staged FilePath, what String, binaryStem String = TestedCompilerStem) returns CollectedOutput
-	let binary = sidecarBinaryPath(binaryStem)
+export function spawnCompiler(arguments StringArray, staged FilePath, what String, binaryStem String = TestedCompilerStem) returns CollectedOutput
+	let binary = hostBinaryPath(binaryStem)
 	if not File.exists(binary) 'noBinary'
-		panic("debug-sidecar tests: the gate could not run — {what} needs a compiler at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{binaryStem}` first.")
+		panic("debug tests: the gate could not run — {what} needs a compiler at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{binaryStem}` first.")
 	end 'noBinary'
 
 	var config = Configuration.create(Executable.path(binary))
@@ -193,20 +210,39 @@ export function spawnSidecarCompiler(arguments StringArray, staged FilePath, wha
 	config.workingDirectory = staged
 
 	return try config.run() otherwise (e) 'spawnFailed'
-		panic("debug-sidecar tests: the gate could not run — could not spawn {what} ({e.displayReason()}).")
+		panic("debug tests: the gate could not run — could not spawn {what} ({e.displayReason()}).")
 	end 'spawnFailed'
-end 'spawnSidecarCompiler'
+end 'spawnCompiler'
 
-// Where a labelled build's executable lands. The host suffix is spelled INTO the `-o` argument rather than
-// left for the compiler to append, so the path handed to the child and the path read back are one spelling.
-export function builtSidecarExecutable(staged FilePath, label String) returns FilePath
-	return staged.join("{SidecarOutputStem}{label}{sidecarHostExeSuffix()}")
-end 'builtSidecarExecutable'
+// Where a build's executable lands: ONE path per staging directory, never one per run, because the output
+// basename reaches the emitted image — see this file's header. The host suffix is spelled INTO the `-o`
+// argument rather than left for the compiler to append, so the path handed to the child and the path read
+// back are one spelling.
+export function builtExecutable(staged FilePath) returns FilePath
+	return staged.join("{OutputFileStem}{executableSuffix()}")
+end 'builtExecutable'
+
+// The image a build just wrote, moved aside so the next build can be handed the same output path. Its
+// sidecar goes with it: one output path makes the first build's `.mxdbg` indistinguishable from the
+// second's, and the opt-out's ABSENCE assertion must rest on the flag alone.
+function retainImage(staged FilePath) returns FilePath
+	let built = builtExecutable(staged)
+	let retained = staged.join("{RetainedImageFileName}")
+	try File.writeBinary(retained, content: fileBytes(built)) otherwise panic("debug tests: the gate could not run — could not retain {built.toString()} as {retained.toString()}.")
+	try File.delete(built) otherwise panic("debug tests: the gate could not run — could not clear {built.toString()}, so the next build cannot be given that path.")
+
+	// Unconditional: the caller has already asserted the sidecar is there, so a delete that fails is that
+	// invariant broken, and a guard here would turn it into silence.
+	let sidecar = sidecarPathFor(staged)
+	try File.delete(sidecar) otherwise panic("debug tests: the gate could not run — could not clear {sidecar.toString()}, so the opt-out build's absence assertion could not be about the opt-out build.")
+
+	return retained
+end 'retainImage'
 
 // `<driver> debug --dump-info <exe> [section...]`, under whichever driver `binaryStem` names. The
 // sections ride as trailing arguments because that is what the command line takes — naming none prints
 // the whole sidecar, which is the default this corpus must not let move.
-export function spawnSidecarDumpInfo(executable FilePath, staged FilePath, sections StringArray, binaryStem String) returns CollectedOutput
+export function spawnDumpInfo(executable FilePath, staged FilePath, sections StringArray, binaryStem String) returns CollectedOutput
 	var arguments = StringArray.create()
 	arguments.push(DebugSubcommandName)
 	arguments.push(DumpInfoOptionName)
@@ -215,20 +251,32 @@ export function spawnSidecarDumpInfo(executable FilePath, staged FilePath, secti
 		arguments.push(section)
 	end 'eachSection'
 
-	return spawnSidecarCompiler(arguments, staged: staged, what: "`{binaryStem} {DebugSubcommandName} {DumpInfoOptionName}`", binaryStem: binaryStem)
-end 'spawnSidecarDumpInfo'
+	return spawnCompiler(arguments, staged: staged, what: "`{binaryStem} {DebugSubcommandName} {DumpInfoOptionName}`", binaryStem: binaryStem)
+end 'spawnDumpInfo'
 
 // ============================================================================================
 // READING A CAPTURED STREAM — the folds every case in this directory shares
 // ============================================================================================
 
 export function withoutCarriageReturns(raw String) returns String
-	return raw.replace(SidecarCarriageReturn, with: "")
+	return raw.replace(CarriageReturn, with: "")
 end 'withoutCarriageReturns'
 
-export function sidecarOutputLines(raw String) returns StringArray
-	return withoutCarriageReturns(raw).split(SidecarLineFeed)
-end 'sidecarOutputLines'
+export function outputLines(raw String) returns StringArray
+	return withoutCarriageReturns(raw).split(LineFeed)
+end 'outputLines'
+
+// A list of rows as the text a failure report shows, so a disagreement reads as a listing rather than as
+// an array identity. EMPTY for an empty list, which is what lets a roster assertion be an `isEmpty` over
+// the very text a reader has to act on.
+export function renderedRows(rows StringArray) returns String
+	var rendered = ""
+	for row in rows 'eachRow'
+		rendered.append("{LineFeed}  {row}")
+	end 'eachRow'
+
+	return rendered
+end 'renderedRows'
 
 // ============================================================================================
 // NUMBERS THE DUMP PRINTS
@@ -262,7 +310,7 @@ export function keyedDecimalValue(token String) returns SidecarNumber
 			break
 		end 'pastTheDigits'
 
-		value = value * SidecarDecimalBase + hexDigitValue(c)
+		value = value * DecimalBase + hexDigitValue(c)
 	end 'eachCharacter'
 
 	return value
@@ -276,7 +324,7 @@ end 'isHexDigit'
 
 // A hex digit's value. The caller has already classified `c`, so the conversion cannot fail.
 export function hexDigitValue(c Character) returns HexDigitValue
-	let code = try c.asciiValue() otherwise panic("debug-sidecar tests: hexDigitValue is reached only past an isHexDigit test")
+	let code = try c.asciiValue() otherwise panic("debug tests: hexDigitValue is reached only past a digit test")
 	if code <= AsciiDigitNine 'aDecimalDigit'
 		return code - AsciiDigitZero
 	end 'aDecimalDigit'
@@ -295,10 +343,10 @@ end 'hexDigitValue'
 // The staged program's lines, CR folded. Read on demand rather than held: every case that wants them
 // has already paid for a spawned compile.
 export function stagedSourceLines(staged FilePath) returns StringArray
-	let path = staged.join("{SidecarProgramFileName}")
-	let body = try File.readText(path) otherwise panic("debug-sidecar tests: the gate could not run — could not read the staged program at {path.toString()}, which this process wrote moments ago.")
+	let path = staged.join("{StagedProgramFileName}")
+	let body = try File.readText(path) otherwise panic("debug tests: the gate could not run — could not read the staged program at {path.toString()}, which this process wrote moments ago.")
 
-	return sidecarOutputLines(body)
+	return outputLines(body)
 end 'stagedSourceLines'
 
 // The functions the staged program DECLARES, in source order. Derived from the source rather than listed
@@ -319,7 +367,7 @@ end 'declaredFunctionNames'
 
 // The name in a `function NAME(…)` line.
 function declaredNameIn(line String) returns String
-	let open = try line.findFirst(DeclarationNameEnd) otherwise panic("debug-sidecar tests: the gate could not run — the staged fixture line '{line}' opens a declaration and spells no '{DeclarationNameEnd}'.")
+	let open = try line.findFirst(DeclarationNameEnd) otherwise panic("debug tests: the gate could not run — the staged fixture line '{line}' opens a declaration and spells no '{DeclarationNameEnd}'.")
 
 	return line.slice(line.startIndex(), endIndex: open).replace(FunctionDeclarationPrefix, with: "").trim()
 end 'declaredNameIn'
@@ -327,7 +375,7 @@ end 'declaredNameIn'
 // A row's words, with the runs of spacing the dump lays its columns out with dropped.
 export function whitespaceTokens(row String) returns StringArray
 	var tokens = StringArray.create()
-	for piece in row.replace(SidecarTab, with: SidecarSpace).split(SidecarSpace) 'eachPiece'
+	for piece in row.replace(Tab, with: Space).split(Space) 'eachPiece'
 		if not piece.isEmpty() 'aWord'
 			tokens.push(piece)
 		end 'aWord'
@@ -337,19 +385,19 @@ export function whitespaceTokens(row String) returns StringArray
 end 'whitespaceTokens'
 
 // Where that build's sidecar lands: the whole output name with the suffix appended.
-function sidecarPathFor(staged FilePath, label String) returns FilePath
-	return staged.join("{SidecarOutputStem}{label}{sidecarHostExeSuffix()}{SidecarSuffix}")
+function sidecarPathFor(staged FilePath) returns FilePath
+	return staged.join("{OutputFileStem}{executableSuffix()}{SidecarSuffix}")
 end 'sidecarPathFor'
 
 // One of this directory's two binaries, absolute and with the suffix this host can spawn.
-function sidecarBinaryPath(stem String) returns FilePath
-	let spelled = "{stem}{sidecarHostExeSuffix()}"
-	let relative = try FilePath.from(spelled) otherwise panic("debug-sidecar tests: the gate could not run — '{spelled}' is not a spellable path")
+function hostBinaryPath(stem String) returns FilePath
+	let spelled = "{stem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
 
 	return relative.resolve(Directory.currentPath())
-end 'sidecarBinaryPath'
+end 'hostBinaryPath'
 
-function sidecarHostExeSuffix() returns String
+function executableSuffix() returns String
 	#if os(Windows)
 		let suffix = ".exe"
 	#else
@@ -357,7 +405,7 @@ function sidecarHostExeSuffix() returns String
 	#endif
 
 	return suffix
-end 'sidecarHostExeSuffix'
+end 'executableSuffix'
 
 // ============================================================================================
 // COMPARING THE TWO IMAGES
@@ -365,9 +413,14 @@ end 'sidecarHostExeSuffix'
 
 // Two emitted executables, byte for byte. The count is asked first and asked to be non-zero: two empty
 // files are identical, and a pair of builds that wrote nothing must not read as agreement.
+//
+// ⭐ **NO WRITER STAMPS A BUILD TIME INTO THE IMAGE** — the PE writer zeroes every `TimeDateStamp`, and
+// neither the Mach-O nor the ELF writer reads a clock at all. That is what makes raw identity the right
+// instrument here, rather than a comparison that has to mask known noise: masking hides whatever else
+// drifted into the bytes it covers.
 function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailure
-	let firstBytes = sidecarFileBytes(first)
-	let secondBytes = sidecarFileBytes(second)
+	let firstBytes = fileBytes(first)
+	let secondBytes = fileBytes(second)
 	let firstCount = firstBytes.count()
 	let secondCount = secondBytes.count()
 	try Expect.notEqual(firstCount, expected: 0, message: "{first.toString()} is empty. A build that wrote nothing has nothing to compare, and two of them would agree.")
@@ -376,7 +429,7 @@ function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailu
 	var offset = 0
 	var identical = true
 	for octet in firstBytes 'eachByte'
-		let other = try secondBytes.get(offset) otherwise panic("debug-sidecar tests: the gate could not run — offset {offset} is inside {first.toString()} and outside {second.toString()} after their lengths were found equal.")
+		let other = try secondBytes.get(offset) otherwise panic("debug tests: the gate could not run — offset {offset} is inside {first.toString()} and outside {second.toString()} after their lengths were found equal.")
 		if octet != other 'differs'
 			identical = false
 			break
@@ -390,13 +443,13 @@ end 'requireIdenticalBytes'
 
 // One emitted executable's bytes. Its absence is asked here rather than read as an empty file: a build
 // that exited 0 and wrote nothing is a claim the caller's exit-code assertion cannot see.
-function sidecarFileBytes(path FilePath) returns ByteArray
+function fileBytes(path FilePath) returns ByteArray
 	if not File.exists(path) 'notWritten'
-		panic("debug-sidecar tests: the gate could not run — there is no executable at {path.toString()}, so there is nothing to compare. The build that should have written it is the one whose exit code the case asserts first.")
+		panic("debug tests: the gate could not run — there is no executable at {path.toString()}, so there is nothing to compare. The build that should have written it is the one whose exit code the case asserts first.")
 	end 'notWritten'
 
-	return try File.readBinary(path) otherwise panic("debug-sidecar tests: the gate could not run — could not read {path.toString()}.")
-end 'sidecarFileBytes'
+	return try File.readBinary(path) otherwise panic("debug tests: the gate could not run — could not read {path.toString()}.")
+end 'fileBytes'
 
 // ============================================================================================
 // DIRECTORIES
@@ -405,44 +458,44 @@ end 'sidecarFileBytes'
 // Delete every file under a staging directory, leaving the directories. Enough for a re-run: a case stages
 // the same shape every time, and the previous run's products must not survive into a comparison.
 function clearStagedFiles(dir FilePath)
-	for entry in sidecarListing(dir) 'eachEntry'
+	for entry in listing(dir) 'eachEntry'
 		if Directory.isDirectory(entry) 'aDirectory'
 			clearStagedFiles(entry)
 			continue
 		end 'aDirectory'
 
-		try File.delete(entry) otherwise panic("debug-sidecar tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
+		try File.delete(entry) otherwise panic("debug tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
 	end 'eachEntry'
 end 'clearStagedFiles'
 
 // A directory this corpus's paths name, refused loudly when it is not there: every such refusal is the
 // working-directory contract in the header not being met.
-function sidecarFixtureDir(spelled String) returns FilePath
-	let path = try FilePath.from(spelled) otherwise panic("debug-sidecar tests: the gate could not run — '{spelled}' is not a spellable path")
+function fixtureDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
 	if not Directory.isDirectory(path) 'notThere'
-		panic("debug-sidecar tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
+		panic("debug tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
 	end 'notThere'
 
 	return path
-end 'sidecarFixtureDir'
+end 'fixtureDir'
 
 // A directory this run writes into, created ancestor by ancestor so a fresh checkout without `temp/` is not
 // a failure, and absolute because it is handed to a child process as its working directory.
-function sidecarStagingDir(spelled String) returns FilePath
+function stagingDir(spelled String) returns FilePath
 	var prefix = ""
-	for component in spelled.split(SidecarPathSeparator) 'eachComponent'
-		prefix = component if prefix.isEmpty() else "{prefix}{SidecarPathSeparator}{component}"
-		let ancestor = try FilePath.from(prefix) otherwise panic("debug-sidecar tests: the gate could not run — '{prefix}' is not a spellable path")
+	for component in spelled.split(PathSeparator) 'eachComponent'
+		prefix = component if prefix.isEmpty() else "{prefix}{PathSeparator}{component}"
+		let ancestor = try FilePath.from(prefix) otherwise panic("debug tests: the gate could not run — '{prefix}' is not a spellable path")
 		if not Directory.create(ancestor) 'couldNotCreate'
-			panic("debug-sidecar tests: the gate could not run — could not create '{prefix}'. It is where a case's runnable copy is built; nothing can be staged without it.")
+			panic("debug tests: the gate could not run — could not create '{prefix}'. It is where a case's runnable copy is built; nothing can be staged without it.")
 		end 'couldNotCreate'
 	end 'eachComponent'
 
-	let path = try FilePath.from(spelled) otherwise panic("debug-sidecar tests: the gate could not run — '{spelled}' is not a spellable path")
+	let path = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
 	return path.resolve(Directory.currentPath())
-end 'sidecarStagingDir'
+end 'stagingDir'
 
 // What one directory holds.
-function sidecarListing(dir FilePath) returns SidecarPathArray
-	return try Directory.list(dir) otherwise panic("debug-sidecar tests: the gate could not run — could not list {dir.toString()}")
-end 'sidecarListing'
+function listing(dir FilePath) returns PathArray
+	return try Directory.list(dir) otherwise panic("debug tests: the gate could not run — could not list {dir.toString()}")
+end 'listing'

@@ -62,14 +62,14 @@ typealias LineTally = int(0 to u64.max)
 // ============================================================================================
 
 test 'dump-info prints the sections it was named and refuses a name that is not one'
-	let staged = stagedSidecarProgram(SectionsCaseLabel, fixture: LocalsFixtureName)
+	let staged = stagedProgram(SectionsCaseLabel, fixture: LocalsFixtureName)
 	let executable = builtSectionsFixture(staged)
 
 	// ⭐ ONE SECTION. `header` is the section with a fixed, countable size, so "only what was asked for"
 	// is a number here rather than a judgement about which rows belong to what.
 	var headerOnly = StringArray.create()
 	headerOnly.push(HeaderSectionName)
-	let headerRun = spawnSidecarDumpInfo(executable, staged: staged, sections: headerOnly, binaryStem: TestedCompilerStem)
+	let headerRun = spawnDumpInfo(executable, staged: staged, sections: headerOnly, binaryStem: TestedCompilerStem)
 	try Expect.equal(headerRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {HeaderSectionName}` exited {headerRun.exitCode()}. It wrote to stderr: {headerRun.stderr}")
 
 	let headerDump = withoutCarriageReturns(headerRun.stdout)
@@ -82,7 +82,7 @@ test 'dump-info prints the sections it was named and refuses a name that is not 
 	var headerAndTypes = StringArray.create()
 	headerAndTypes.push(HeaderSectionName)
 	headerAndTypes.push(TypesSectionName)
-	let pairRun = spawnSidecarDumpInfo(executable, staged: staged, sections: headerAndTypes, binaryStem: TestedCompilerStem)
+	let pairRun = spawnDumpInfo(executable, staged: staged, sections: headerAndTypes, binaryStem: TestedCompilerStem)
 	try Expect.equal(pairRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {HeaderSectionName} {TypesSectionName}` exited {pairRun.exitCode()}. It wrote to stderr: {pairRun.stderr}")
 
 	let pairDump = withoutCarriageReturns(pairRun.stdout)
@@ -93,8 +93,8 @@ test 'dump-info prints the sections it was named and refuses a name that is not 
 	// ⭐ THE REFUSAL, against the reference driver's own sentence over the very same binary.
 	var badSection = StringArray.create()
 	badSection.push(NotASectionName)
-	let refusedRun = spawnSidecarDumpInfo(executable, staged: staged, sections: badSection, binaryStem: TestedCompilerStem)
-	let referenceRun = spawnSidecarDumpInfo(executable, staged: staged, sections: badSection, binaryStem: BootstrapCompilerStem)
+	let refusedRun = spawnDumpInfo(executable, staged: staged, sections: badSection, binaryStem: TestedCompilerStem)
+	let referenceRun = spawnDumpInfo(executable, staged: staged, sections: badSection, binaryStem: BootstrapCompilerStem)
 
 	try Expect.equal(referenceRun.exitCode() as AssertedInt, expected: 1, message: "the REFERENCE driver `{BootstrapCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe> {NotASectionName}` exited {referenceRun.exitCode()} rather than 1, so this case has no expectation to compare against and could not be measured. It wrote to stderr: {referenceRun.stderr}")
 	let referenceRefusal = withoutCarriageReturns(referenceRun.stderr).trim()
@@ -109,7 +109,7 @@ test 'dump-info prints the sections it was named and refuses a name that is not 
 	// NAMING NONE prints everything, which is the documented default and the shape every other case in
 	// this corpus reads.
 	let noSections = StringArray.create()
-	let wholeRun = spawnSidecarDumpInfo(executable, staged: staged, sections: noSections, binaryStem: TestedCompilerStem)
+	let wholeRun = spawnDumpInfo(executable, staged: staged, sections: noSections, binaryStem: TestedCompilerStem)
 	try Expect.equal(wholeRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe>` with no section named exited {wholeRun.exitCode()}. It wrote to stderr: {wholeRun.stderr}")
 
 	let wholeDump = withoutCarriageReturns(wholeRun.stdout)
@@ -125,12 +125,12 @@ end 'dump-info prints the sections it was named and refuses a name that is not o
 // subject, so it panics rather than failing an assertion.
 function builtSectionsFixture(staged FilePath) returns FilePath
 	let noArguments = StringArray.create()
-	let build = spawnSidecarBuild(staged, label: SectionsBuildLabel, extraArguments: noArguments)
+	let build = spawnBuild(staged, label: SectionsBuildLabel, extraArguments: noArguments)
 	if build.exitCode() != 0 'didNotBuild'
 		panic("dump-info-sections.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
 	end 'didNotBuild'
 
-	let executable = builtSidecarExecutable(staged, label: SectionsBuildLabel)
+	let executable = builtExecutable(staged)
 	if not File.exists(executable) 'wroteNothing'
 		panic("dump-info-sections.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
 	end 'wroteNothing'
@@ -162,7 +162,7 @@ end 'requireSectionsAbsent'
 // trailing newline must not read as a fourth line of a three-line head.
 function printedLineTally(dump String) returns LineTally
 	var tally = 0
-	for line in sidecarOutputLines(dump) 'eachLine'
+	for line in outputLines(dump) 'eachLine'
 		if not line.trim().isEmpty() 'aPrintedLine'
 			tally = tally + 1
 		end 'aPrintedLine'

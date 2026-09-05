@@ -41,7 +41,7 @@ let DumpCaseLabel = "sidecar-dump"
 let DumpBuildLabel = "dumped"
 
 // The one read-only surface this file reaches for that the shared half does not carry: every other case
-// here goes through `spawnSidecarDumpInfo`, and only this one symbolizes.
+// here goes through `spawnDumpInfo`, and only this one symbolizes.
 let SymbolizeOption = "--symbolize"
 
 // The two keyed lines of the dump's head. A value is whatever follows the key on that line, trimmed — the
@@ -76,21 +76,21 @@ typealias FixtureLineNumber = int(0 to u64.max)
 // ============================================================================================
 
 test 'the sidecar names this build, this source and every function the fixture declares'
-	let staged = stagedSidecarProgram(DumpCaseLabel, fixture: SpansFixtureName)
+	let staged = stagedProgram(DumpCaseLabel, fixture: SpansFixtureName)
 	let noArguments = StringArray.create()
 
-	let build = spawnSidecarBuild(staged, label: DumpBuildLabel, extraArguments: noArguments)
+	let build = spawnBuild(staged, label: DumpBuildLabel, extraArguments: noArguments)
 	if build.exitCode() != 0 'didNotBuild'
 		panic("sidecar-dump.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
 	end 'didNotBuild'
 
-	let executable = builtSidecarExecutable(staged, label: DumpBuildLabel)
+	let executable = builtExecutable(staged)
 	if not File.exists(executable) 'wroteNothing'
 		panic("sidecar-dump.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
 	end 'wroteNothing'
 
 	let noSections = StringArray.create()
-	let dumpRun = spawnSidecarDumpInfo(executable, staged: staged, sections: noSections, binaryStem: TestedCompilerStem)
+	let dumpRun = spawnDumpInfo(executable, staged: staged, sections: noSections, binaryStem: TestedCompilerStem)
 	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
 
 	let dump = withoutCarriageReturns(dumpRun.stdout)
@@ -107,7 +107,7 @@ test 'the sidecar names this build, this source and every function the fixture d
 
 	// The fixture's own source file, listed as a file this sidecar knows about.
 	let listedSources = dumpSectionRows(dump, heading: DumpFilesHeading)
-	try Expect.isTrue(anyRowNames(listedSources, name: SidecarProgramFileName), message: "the dump's `{DumpFilesHeading}…)` section does not list `{SidecarProgramFileName}`, the only source this program was built from. Line rows that point at no file resolve to nothing. The section held: {renderedRows(listedSources)}")
+	try Expect.isTrue(anyRowNames(listedSources, name: StagedProgramFileName), message: "the dump's `{DumpFilesHeading}…)` section does not list `{StagedProgramFileName}`, the only source this program was built from. Line rows that point at no file resolve to nothing. The section held: {renderedRows(listedSources)}")
 
 	// Every function the FIXTURE declares — read out of the staged source, so a fixture that grows a
 	// function grows this roster with it — listed with a code range that is not empty.
@@ -143,17 +143,17 @@ test 'the sidecar names this build, this source and every function the fixture d
 	symbolizeArguments.push(SymbolizeOption)
 	symbolizeArguments.push(executable.toString())
 	symbolizeArguments.push(probeOffset)
-	let symbolizeRun = spawnSidecarCompiler(symbolizeArguments, staged: staged, what: "the symbolize lookup")
+	let symbolizeRun = spawnCompiler(symbolizeArguments, staged: staged, what: "the symbolize lookup")
 	try Expect.equal(symbolizeRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
 
 	let symbolized = withoutCarriageReturns(symbolizeRun.stdout)
-	try Expect.contains(symbolized, needle: SidecarProgramFileName, message: "`{SymbolizeOption}` resolved {probeOffset} — a row of this binary's own line table, inside `{probeName}` — without naming `{SidecarProgramFileName}`. The offset came out of the sidecar being asked, so an answer naming another file, or none, is the two tables disagreeing.")
+	try Expect.contains(symbolized, needle: StagedProgramFileName, message: "`{SymbolizeOption}` resolved {probeOffset} — a row of this binary's own line table, inside `{probeName}` — without naming `{StagedProgramFileName}`. The offset came out of the sidecar being asked, so an answer naming another file, or none, is the two tables disagreeing.")
 
-	let resolvedLine = lineNumberAfter(symbolized, marker: SidecarProgramFileName)
+	let resolvedLine = lineNumberAfter(symbolized, marker: StagedProgramFileName)
 	let bodyStart = sourceLineStartingWith(staged, prefix: "{FunctionDeclarationPrefix}{probeName}{DeclarationNameEnd}", what: "the declaration of `{probeName}`")
 	let bodyEnd = sourceLineStartingWith(staged, prefix: "{FunctionEndPrefix}{probeName}{FunctionEndSuffix}", what: "the `{FunctionEndPrefix}{probeName}{FunctionEndSuffix}` closing `{probeName}`")
-	try Expect.atLeast(resolvedLine as AssertedInt, than: bodyStart as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {SidecarProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
-	try Expect.atMost(resolvedLine as AssertedInt, than: bodyEnd as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {SidecarProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
+	try Expect.atLeast(resolvedLine as AssertedInt, than: bodyStart as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
+	try Expect.atMost(resolvedLine as AssertedInt, than: bodyEnd as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
 end 'the sidecar names this build, this source and every function the fixture declares'
 
 // ============================================================================================
@@ -188,7 +188,7 @@ end 'hostTargetTriple'
 // The value of the first `<key> …` line, trimmed. EMPTY when no line carries the key, which the caller
 // compares against what it expected and reports — a helper does not get to decide what an absent key means.
 function keyedDumpValue(dump String, key String) returns String
-	for rawLine in dump.split(SidecarLineFeed) 'eachLine'
+	for rawLine in dump.split(LineFeed) 'eachLine'
 		let line = rawLine.trim()
 		if not line.startsWith(key) 'notThisLine'
 			continue
@@ -211,7 +211,7 @@ function dumpSectionRows(dump String, heading String) returns StringArray
 	var rows = StringArray.create()
 	var inSection = false
 
-	for rawLine in dump.split(SidecarLineFeed) 'eachLine'
+	for rawLine in dump.split(LineFeed) 'eachLine'
 		let line = rawLine.trim()
 		if line.startsWith(heading) 'opensThisSection'
 			inSection = true
@@ -330,7 +330,7 @@ function lineNumberAfter(text String, marker String) returns FixtureLineNumber
 	var seenADigit = false
 	for c in text.slice(cursor, endIndex: text.endIndex()) 'eachCharacter'
 		if Ascii.isDigit(c) 'aDigit'
-			value = value * SidecarDecimalBase + hexDigitValue(c)
+			value = value * DecimalBase + hexDigitValue(c)
 			seenADigit = true
 			continue
 		end 'aDigit'
@@ -364,18 +364,6 @@ end 'sourceLineStartingWith'
 // ============================================================================================
 // TEXT
 // ============================================================================================
-
-// A list of rows as the text a failure report shows, so a disagreement reads as a listing rather than as
-// an array identity. EMPTY for an empty list, which is what makes the two roster assertions an `isEmpty`
-// over the very text a reader has to act on.
-function renderedRows(rows StringArray) returns String
-	var rendered = ""
-	for row in rows 'eachRow'
-		rendered.append("{SidecarLineFeed}  {row}")
-	end 'eachRow'
-
-	return rendered
-end 'renderedRows'
 
 // Whether a build-id carries any digit that is not zero. An unfilled field reads as zeros, and a sidecar
 // with an all-zero identity describes every build of every binary equally well.

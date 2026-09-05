@@ -101,12 +101,12 @@ typealias NonZeroExtent = int(1 to u64.max)
 // ============================================================================================
 
 test 'the type table describes the fixture own types and both drivers print it identically'
-	let staged = stagedSidecarProgram(TypesCaseLabel, fixture: LocalsFixtureName)
+	let staged = stagedProgram(TypesCaseLabel, fixture: LocalsFixtureName)
 	let executable = builtTypesFixture(staged)
 
 	var sections = StringArray.create()
 	sections.push(TypesSectionName)
-	let dumpRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: TestedCompilerStem)
+	let dumpRun = spawnDumpInfo(executable, staged: staged, sections: sections, binaryStem: TestedCompilerStem)
 	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {TypesSectionName}` exited {dumpRun.exitCode()}. It wrote to stderr: {dumpRun.stderr}")
 
 	let dump = withoutCarriageReturns(dumpRun.stdout)
@@ -120,7 +120,7 @@ test 'the type table describes the fixture own types and both drivers print it i
 	try requireEnumDescribed(rows, staged: staged, dump: dump)
 
 	// ⭐ ONE BINARY, TWO READERS. The reference driver over this compiler's own output.
-	let referenceRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: BootstrapCompilerStem)
+	let referenceRun = spawnDumpInfo(executable, staged: staged, sections: sections, binaryStem: BootstrapCompilerStem)
 	try Expect.equal(referenceRun.exitCode() as AssertedInt, expected: 0, message: "the REFERENCE driver `{BootstrapCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe> {TypesSectionName}` exited {referenceRun.exitCode()} over a binary this compiler built, so the two dumps cannot be compared. It wrote to stderr: {referenceRun.stderr}")
 	let referenceDump = withoutCarriageReturns(referenceRun.stdout)
 	try Expect.equal(dump, expected: referenceDump, message: "the two drivers print DIFFERENT type tables out of ONE sidecar. The record layout is the format's, not a driver's: a reader that disagrees with the writer about an intra-record offset reads every later column as garbage, and the disagreement shows up first as a rendering difference like this one.")
@@ -212,12 +212,12 @@ end 'requireEnumRow'
 
 function builtTypesFixture(staged FilePath) returns FilePath
 	let noArguments = StringArray.create()
-	let build = spawnSidecarBuild(staged, label: TypesBuildLabel, extraArguments: noArguments)
+	let build = spawnBuild(staged, label: TypesBuildLabel, extraArguments: noArguments)
 	if build.exitCode() != 0 'didNotBuild'
 		panic("dump-info-types.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
 	end 'didNotBuild'
 
-	let executable = builtSidecarExecutable(staged, label: TypesBuildLabel)
+	let executable = builtExecutable(staged)
 	if not File.exists(executable) 'wroteNothing'
 		panic("dump-info-types.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
 	end 'wroteNothing'
@@ -236,7 +236,7 @@ end 'builtTypesFixture'
 function typeSectionRows(dump String) returns StringArray
 	var rows = StringArray.create()
 	var inSection = false
-	for rawLine in sidecarOutputLines(dump) 'eachLine'
+	for rawLine in outputLines(dump) 'eachLine'
 		let line = rawLine.trim()
 		if line.startsWith(TypesHeading) 'opensTheSection'
 			inSection = true
@@ -271,7 +271,7 @@ let HeadingCloser = "):"
 // How many types the section heading claims. 0 when there is no heading at all, which is the same
 // failure the caller reports.
 function typeTallyIn(dump String) returns SidecarNumber
-	for rawLine in sidecarOutputLines(dump) 'eachLine'
+	for rawLine in outputLines(dump) 'eachLine'
 		let line = rawLine.trim()
 		if line.startsWith(TypesHeading) 'theHeading'
 			return parenthesizedTally(line)
@@ -298,7 +298,7 @@ function parenthesizedTally(line String) returns SidecarNumber
 			break
 		end 'pastTheDigits'
 
-		value = value * SidecarDecimalBase + hexDigitValue(c)
+		value = value * DecimalBase + hexDigitValue(c)
 	end 'eachCharacter'
 
 	return value
@@ -470,7 +470,7 @@ function decimalColumn(line String, at ColumnIndex) returns SidecarNumber
 			break
 		end 'pastTheDigits'
 
-		value = value * SidecarDecimalBase + hexDigitValue(c)
+		value = value * DecimalBase + hexDigitValue(c)
 	end 'eachCharacter'
 
 	return value

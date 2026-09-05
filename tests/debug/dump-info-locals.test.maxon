@@ -85,12 +85,12 @@ typealias RowTally = int(0 to u64.max)
 // ============================================================================================
 
 test 'every declared binding has one local record and every location is one of three honest forms'
-	let staged = stagedSidecarProgram(LocalsCaseLabel, fixture: LocalsFixtureName)
+	let staged = stagedProgram(LocalsCaseLabel, fixture: LocalsFixtureName)
 	let executable = builtLocalsFixture(staged)
 
 	var sections = StringArray.create()
 	sections.push(FunctionsSectionName)
-	let dumpRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: TestedCompilerStem)
+	let dumpRun = spawnDumpInfo(executable, staged: staged, sections: sections, binaryStem: TestedCompilerStem)
 	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {FunctionsSectionName}` exited {dumpRun.exitCode()}. It wrote to stderr: {dumpRun.stderr}")
 
 	let dump = withoutCarriageReturns(dumpRun.stdout)
@@ -108,7 +108,7 @@ test 'every declared binding has one local record and every location is one of t
 	try requireNoStackSlotsIn(rows, functionName: RegisterResidentFunctionName, dump: dump)
 
 	// ⭐ ONE BINARY, TWO READERS.
-	let referenceRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: BootstrapCompilerStem)
+	let referenceRun = spawnDumpInfo(executable, staged: staged, sections: sections, binaryStem: BootstrapCompilerStem)
 	try Expect.equal(referenceRun.exitCode() as AssertedInt, expected: 0, message: "the REFERENCE driver `{BootstrapCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe> {FunctionsSectionName}` exited {referenceRun.exitCode()} over a binary this compiler built, so the two dumps cannot be compared. It wrote to stderr: {referenceRun.stderr}")
 	let referenceDump = withoutCarriageReturns(referenceRun.stdout)
 	try Expect.equal(dump, expected: referenceDump, message: "the two drivers print DIFFERENT local rows out of ONE sidecar. A local record's fields sit at fixed offsets inside a fixed stride, so a reader that disagrees with the writer about either reads a name, a location and a type id that belong to no record at all.")
@@ -127,10 +127,10 @@ function requireLocalsOf(rows StringArray, staged FilePath, functionName String,
 
 	for binding in declared 'eachBinding'
 		let tally = rowTallyNamed(nested, name: binding)
-		try Expect.equal(tally as AssertedInt, expected: 1, message: "`{functionName}.{binding}` has {tally} local record(s) where every DECLARED binding has exactly one. Zero is a value a user cannot ask about at all; more than one offers the same name at two locations with no way to choose between them. The rows under `{functionName}` were: {renderedLocalRows(nested)}")
+		try Expect.equal(tally as AssertedInt, expected: 1, message: "`{functionName}.{binding}` has {tally} local record(s) where every DECLARED binding has exactly one. Zero is a value a user cannot ask about at all; more than one offers the same name at two locations with no way to choose between them. The rows under `{functionName}` were: {renderedRows(nested)}")
 	end 'eachBinding'
 
-	try Expect.equal(nested.count() as AssertedInt, expected: declared.count() as AssertedInt, message: "`{functionName}` carries {nested.count()} local record(s) where the staged fixture declares {declared.count()}. A record naming something the source does not bind is a name a user will look for and not find in their own program. The rows under `{functionName}` were: {renderedLocalRows(nested)}")
+	try Expect.equal(nested.count() as AssertedInt, expected: declared.count() as AssertedInt, message: "`{functionName}` carries {nested.count()} local record(s) where the staged fixture declares {declared.count()}. A record naming something the source does not bind is a name a user will look for and not find in their own program. The rows under `{functionName}` were: {renderedRows(nested)}")
 
 	// Every location is one of the three the format can state, and every row names a type. A row whose
 	// type id missed renders as the empty name, which reads as a column the dump forgot rather than as
@@ -162,12 +162,12 @@ end 'requireNoStackSlotsIn'
 
 function builtLocalsFixture(staged FilePath) returns FilePath
 	let noArguments = StringArray.create()
-	let build = spawnSidecarBuild(staged, label: LocalsBuildLabel, extraArguments: noArguments)
+	let build = spawnBuild(staged, label: LocalsBuildLabel, extraArguments: noArguments)
 	if build.exitCode() != 0 'didNotBuild'
 		panic("dump-info-locals.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
 	end 'didNotBuild'
 
-	let executable = builtSidecarExecutable(staged, label: LocalsBuildLabel)
+	let executable = builtExecutable(staged)
 	if not File.exists(executable) 'wroteNothing'
 		panic("dump-info-locals.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
 	end 'wroteNothing'
@@ -185,7 +185,7 @@ end 'builtLocalsFixture'
 function functionSectionRows(dump String) returns StringArray
 	var rows = StringArray.create()
 	var inSection = false
-	for rawLine in sidecarOutputLines(dump) 'eachLine'
+	for rawLine in outputLines(dump) 'eachLine'
 		let line = rawLine.trim()
 		if line.startsWith(FunctionsHeading) 'opensTheSection'
 			inSection = true
@@ -331,16 +331,6 @@ function framePointerRegister() returns String
 
 	return name
 end 'framePointerRegister'
-
-// A function's local rows as the text a failure report shows, so a disagreement reads as a listing.
-function renderedLocalRows(rows StringArray) returns String
-	var rendered = ""
-	for row in rows 'eachRow'
-		rendered.append("{SidecarLineFeed}  {row}")
-	end 'eachRow'
-
-	return rendered
-end 'renderedLocalRows'
 
 // ============================================================================================
 // READING THE STAGED FIXTURE

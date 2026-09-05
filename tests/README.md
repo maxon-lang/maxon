@@ -67,9 +67,10 @@ tests/
     <contract>.test.maxon        ONE contract per file - see its README section
     fixtures/<program>/main.maxon.fixture   stored name only - see rule 1
   debug/
-    monitor-agreement.test.maxon            the DebugStream consumers, compared to each other
     byte-identical-debug-info.test.maxon    the sidecar is metadata: ONE source, two builds, one image
-                                            - AND the staging/spawning/reading half every case below shares
+                                            - AND the shared half EVERY case here uses: the two compiler
+                                              stems, the staging, the spawning, the stream folds
+    monitor-agreement.test.maxon            the DebugStream consumers, compared to each other
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
     dump-info-sections.test.maxon           --dump-info prints the sections it was named, and refuses others
     dump-info-types.test.maxon              the TYPE table describes the program's own types
@@ -198,35 +199,64 @@ control so two runs that both failed to build cannot read as agreement.
 
 ## `debug/` — what a binary can be asked about after it is built
 
-Three cases over two subjects that share one shape: stage a fixture, build it with the compiler under
-test, and ask a second tool what the binary says about itself. The staging and spawning half is
-exported ONCE from `byte-identical-debug-info.test.maxon` and shared, because every free function in a
-directory shares one namespace whatever its visibility (E3006, measured here).
+Six cases over two subjects that share one shape: stage a fixture, build it with the compiler under
+test, and ask a second tool what the binary says about itself. The whole shared half —
+`TestedCompilerStem` and `BootstrapCompilerStem`, the staging, the spawning, and the folds every reader
+applies to a captured stream — is exported ONCE from `byte-identical-debug-info.test.maxon`, and a case
+file beside it declares only what that case alone uses.
 
-### The `.mxdbg` sidecar — `byte-identical-debug-info` and `sidecar-dump`
+⚠ **THE COMPILER ENFORCES HALF OF THAT AND NO MORE.** Every free FUNCTION in a directory shares one
+namespace whatever its visibility (E3006, measured here), so a second copy of a helper will not compile.
+A file-private `let` does NOT collide — two case files may each declare `TypesSectionName` and both are
+accepted — so duplicated CONSTANTS are the half nothing catches for you, and a name renamed to dodge a
+collision is the shape that duplication takes here.
 
-`maxon build` writes `<output>.mxdbg` beside the binary BY DEFAULT and `--no-debug-info` opts out. The
-whole design rests on the sidecar changing nothing about the emitted code, so the first case builds ONE
-staged source path twice, to two outputs, differing only by the flag, and compares the two images byte
-for byte — plus asserts the sidecar present on one side and ABSENT on the other, which is the half a
-byte comparison alone is blind to.
+### The `.mxdbg` sidecar — five cases
 
-A sidecar that is merely PRESENT proves nothing, so the second case reads it back: `debug --dump-info`
-must name this host's target, a build-id that is not all zeros, the fixture's own source file, and every
-function the fixture DECLARES — read out of the staged source, so a fixture that grows a function grows
-the roster — each with a non-empty code range. Then `--symbolize`, handed an offset the dump itself
-published inside one of those functions, must answer that file and a line inside that function's body.
-That last one is the JOIN: a function table and a line table can each be internally consistent and still
-disagree, and only asking one about the other can see it.
+`maxon build` writes `<output>.mxdbg` beside the binary BY DEFAULT and `--no-debug-info` opts out.
 
-⭐ **WHAT IS PINNED IS RELATIONSHIPS, NEVER NUMBERS.** Code offsets, the row count and the shape of a
-prologue all move with codegen, and a case that pinned them would go red for every unrelated change and
-teach its reader to re-bless it.
+**`byte-identical-debug-info`** — the whole design rests on the sidecar changing nothing about the
+emitted code, so it builds ONE staged source path twice, to ONE output path — the basename reaches the
+Mach-O image, so the first build's image is kept aside rather than given a second name — differing only
+by the flag, and compares the two images byte for byte, plus asserts the sidecar present on one side and
+ABSENT on the other, which is the half a byte comparison alone is blind to.
+
+**`sidecar-dump`** — a sidecar that is merely PRESENT proves nothing, so this one reads it back:
+`debug --dump-info` must name this host's target, a build-id that is not all zeros, the fixture's own
+source file, and every function the fixture DECLARES, each with a non-empty code range. Then
+`--symbolize`, handed an offset the dump itself published inside one of those functions, must answer that
+file and a line inside that function's body. That last one is the JOIN: a function table and a line table
+can each be internally consistent and still disagree, and only asking one about the other can see it.
+
+**`dump-info-sections`** — the sections ride as trailing arguments and naming none prints the whole
+sidecar, which is the only shape `sidecar-dump` exercises. So this one asks for sections by name and
+requires the others ABSENT, and requires a name that is not a section to be REFUSED — a misspelling that
+silently prints everything and exits 0 is a wrong answer a user has no way to notice.
+
+**`dump-info-types`** — the type table is what makes a local's type ID resolve to anything, so this one
+asks the table about the fixture's OWN declarations: the struct listed as a struct carrying exactly the
+fields it declares in order, every field offset inside the record's own size, and each enum case row's
+offset column carrying the RAW TAG rather than the ordinal (the fixture declares the two out of step on
+purpose, because a fixture whose two orders coincide cannot tell them apart).
+
+**`dump-info-locals`** — every binding a function declares has EXACTLY ONE local record, and every
+location is one of three honest forms: a frame-pointer-relative slot, a register, or `<optimized out>`.
+The third form is the point — the failure being caught is a value the compiler cannot locate being mapped
+onto a plausible-looking slot number. The fixture carries a register-resident function asked for the
+negative (NOT ONE stack slot, because it has no spill slots) beside a spilling one, so neither can stand
+in for the other.
+
+⭐ **WHAT IS PINNED IS RELATIONSHIPS, NEVER NUMBERS.** Code offsets, row counts, struct sizes, a type's
+position in the table and the shape of a prologue all move with codegen and with the stdlib a program
+pulls in; a case that pinned them would go red for every unrelated change and teach its reader to
+re-bless it. Every roster these cases check is read OUT OF THE STAGED SOURCE, so a fixture that grows a
+function or a binding grows what is demanded of the sidecar.
 
 ⛔ **THE DUMP'S SHAPE IS THE REFERENCE DRIVER'S**, because one sidecar printed two ways by two drivers is
-the drift rule 6 exists to prevent. It is checkable by hand in the other direction too:
-`bin/maxon.exe debug --dump-info <an shv2-built exe>` prints the same rows shv2 does (the two
-drivers differ only in their line terminators).
+the drift rule 6 exists to prevent. The last three cases each spawn `bin/maxon` on the very executable
+shv2 built and take ITS answer as the expectation — the whole `types` and `functions` dumps as text, and
+the refusal sentence for a name that is not a section — with line endings folded first. It is checkable
+by hand too: `bin/maxon.exe debug --dump-info <an shv2-built exe>` prints the same rows shv2 does.
 
 ### `monitor-agreement` — the two DebugStream ring consumers, compared to each other
 

@@ -33,12 +33,15 @@ let StagingRootDirName = "temp/parallel-compile"
 // The binary under test, relative to the checkout root, without its host suffix.
 let TestedCompilerStem = "maxon-shv2/.maxon/maxon-shv2"
 
-// The command line one build is run from: `build <staged>/main.maxon -o <staged>/out-<label>[.exe]`.
+// The command line one build is run from: `build <staged>/main.maxon -o <staged>/out[.exe]`.
 // `-o` is what keeps the build out of the tree lock, so two case files can compile at once.
 let BuildCommandName = "build"
 let OutputOption = "-o"
-let OutputStem = "out-"
+let OutputFileStem = "out"
 let StagedProgramFileName = "main.maxon"
+
+// Where `retainImage` parks a build's image: a name no build writes, inside the case's own staging tree.
+let RetainedImageFileName = "retained-image"
 
 // The flag that raises the codegen category to DEBUG — see the header for why it is not `compiler:debug`.
 export let CodegenDebugLogFlag = "--log=codegen:debug"
@@ -137,7 +140,9 @@ export function stagedProgram(fixtureName String, caseLabel String) returns File
 	return staged
 end 'stagedProgram'
 
-// Compile the staged program to `out-<label>`, pinned to one processor or left to the machine.
+// Compile the staged program, pinned to one processor or left to the machine. `label` names the run in
+// this file's failure reports and reaches nothing the child does — see `builtExecutable` for why it may
+// not reach the output path.
 //
 // Everything that would stop the build running at all panics rather than failing an assertion: a missing
 // binary or a spawn that never happened is the gate being broken, never the allocator answering wrongly.
@@ -151,7 +156,7 @@ export function spawnBuild(staged FilePath, label String, extraArguments StringA
 	arguments.push(BuildCommandName)
 	arguments.push(staged.join("{StagedProgramFileName}").toString())
 	arguments.push(OutputOption)
-	arguments.push(builtExecutable(staged, label: label).toString())
+	arguments.push(builtExecutable(staged).toString())
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)
 	end 'eachExtra'
@@ -168,11 +173,29 @@ export function spawnBuild(staged FilePath, label String, extraArguments StringA
 	end 'spawnFailed'
 end 'spawnBuild'
 
-// Where a labelled build's executable lands. The host suffix is spelled INTO the `-o` argument rather than
-// left for the compiler to append, so the path handed to the child and the path read back are one spelling.
-export function builtExecutable(staged FilePath, label String) returns FilePath
-	return staged.join("{OutputStem}{label}{executableSuffix()}")
+// Where a build's executable lands: ONE path per staging directory, never one per run.
+//
+// ⚠ **THE OUTPUT BASENAME REACHES THE EMITTED IMAGE.** On Mach-O it is the ad-hoc code signature's
+// CodeDirectory identifier (`MachOWriter.writeMachO`), and its LENGTH moves the __LINKEDIT sizes in the
+// load commands, so two builds written to two names differ within the first kilobyte for a reason that
+// is not the worker count. The output path is therefore a confound this corpus CONTROLS: a case that
+// compares two builds gives both the same path and keeps the first with `retainImage`.
+//
+// The host suffix is spelled INTO the `-o` argument rather than left for the compiler to append, so the
+// path handed to the child and the path read back are one spelling.
+export function builtExecutable(staged FilePath) returns FilePath
+	return staged.join("{OutputFileStem}{executableSuffix()}")
 end 'builtExecutable'
+
+// The image a build just wrote, moved aside so the next build can be handed the same output path.
+export function retainImage(staged FilePath) returns FilePath
+	let built = builtExecutable(staged)
+	let retained = staged.join("{RetainedImageFileName}")
+	try File.writeBinary(retained, content: fileBytes(built)) otherwise panic("parallel-compile.test: the gate could not run — could not retain {built.toString()} as {retained.toString()}.")
+	try File.delete(built) otherwise panic("parallel-compile.test: the gate could not run — could not clear {built.toString()}, so the next build cannot be given that path.")
+
+	return retained
+end 'retainImage'
 
 // The binary under test, absolute and with the suffix this host can spawn.
 function testedCompilerPath() returns FilePath
@@ -255,6 +278,11 @@ end 'normalizedStderr'
 
 // Two emitted executables, byte for byte. The count is asked first and asked to be non-zero: two empty
 // files are identical, and a pair of builds that wrote nothing must not read as agreement.
+//
+// ⭐ **NO WRITER STAMPS A BUILD TIME INTO THE IMAGE** — the PE writer zeroes every `TimeDateStamp`, and
+// neither the Mach-O nor the ELF writer reads a clock at all. That is what makes raw identity the right
+// instrument here, rather than a comparison that has to mask known noise: masking hides whatever else
+// drifted into the bytes it covers.
 export function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailure
 	let firstBytes = fileBytes(first)
 	let secondBytes = fileBytes(second)
