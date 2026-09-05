@@ -650,14 +650,42 @@ Spawn four `async Subprocess.run(...)` calls that each sleep ~1 second
 second ping for ~1050ms total). With the local-queue length crossing
 the work-stealing threshold (≥2), idle worker Ps lift the extra GTs
 off P[0]'s queue and run their subprocess waits on their own OS
-threads. Sequential dispatch would take ~4200ms (4×1050ms back-to-back);
-the measured parallel time is ~2000-2200ms. The 3500ms threshold
-catches a regression to sequential while tolerating cold-start jitter.
-The 8000ms test timeout gives generous headroom for the harness
-itself, well above the parallel-execution wall clock.
+threads.
+
+⭐ **THE ASSERTION IS A RATIO AGAINST A BASELINE MEASURED IN THE SAME
+RUN, AND THAT IS WHAT MAKES IT MEAN ANYTHING ON A BUSY MACHINE.** Four
+overlapped waits cost about what one costs; four sequential waits cost
+four. So the subject — *did these overlap* — is the quotient, and any
+absolute millisecond bound is a claim about the HOST rather than about
+the scheduler. MEASURED here, idle: parallel 1083/1075/1323ms against a
+single of 1273/1056/1055ms, i.e. a ratio of 0.85 to 1.25 where
+sequential dispatch would read 4.0. The `× 2` threshold sits between
+them with room on both sides, and a loaded machine inflates the two
+sides together instead of tripping the gate.
+
+The solo baseline runs through the same `async`/`await` pair as the
+four, so it prices the promise machinery too and the quotient isolates
+the overlap alone. The 8000ms test timeout covers both phases.
 ```maxon
 typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
+
+// One spelling, because the solo baseline must run the SAME work the four ran —
+// a second copy is a place for the two to drift apart, and the ratio is only a
+// measurement of overlap while they do not.
+function pingArgs() returns StringArray
+	var argv = StringArray.create()
+	#if os(Windows)
+	argv.push("/c")
+	argv.push("ping")
+	argv.push("127.0.0.1")
+	argv.push("-n")
+	argv.push("2")
+	#else
+	argv.push("1")
+	#endif
+	return argv
+end 'pingArgs'
 
 function main() returns ExitCode
 	#if os(Windows)
@@ -671,17 +699,7 @@ function main() returns ExitCode
 	let start = Clock.nowMs()
 	var i = 0
 	while i < count 'spawn'
-		var argv = StringArray.create()
-		#if os(Windows)
-		argv.push("/c")
-		argv.push("ping")
-		argv.push("127.0.0.1")
-		argv.push("-n")
-		argv.push("2")
-		#else
-		argv.push("1")
-		#endif
-		promises.push(async Subprocess.run(exe, arguments: argv))
+		promises.push(async Subprocess.run(exe, arguments: pingArgs()))
 		i = i + 1
 	end 'spawn'
 	for p in promises 'drain'
@@ -692,10 +710,20 @@ function main() returns ExitCode
 	end 'drain'
 	let elapsed = Clock.elapsedMs(start)
 
-	// Sequential: ~4200ms. Parallel: ~2000-2200ms. 3500ms catches a
-	// regression to sequential dispatch (e.g. if subprocess_wait_internal
-	// stops yielding to the scheduler or work-stealing breaks).
-	if elapsed >= 3500 'check-parallel'
+	// The baseline, priced in this same run and through the same async/await
+	// pair, so the quotient below isolates the overlap from everything else
+	// the machine is doing.
+	let soloStart = Clock.nowMs()
+	let solo = try await (async Subprocess.run(exe, arguments: pingArgs())) otherwise return 5
+	if not solo.succeeded() 'check-solo'
+		return 6
+	end 'check-solo'
+	let single = Clock.elapsedMs(soloStart)
+
+	// Four overlapped cost about one; four in sequence cost four. Half way
+	// between is the widest bound that still refuses sequential dispatch,
+	// and it scales with the host instead of asserting one.
+	if elapsed >= single * 2 'check-parallel'
 		return 4
 	end 'check-parallel'
 	return 0

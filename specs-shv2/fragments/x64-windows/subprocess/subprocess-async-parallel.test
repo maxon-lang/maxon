@@ -2,6 +2,23 @@
 typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
 
+// One spelling, because the solo baseline must run the SAME work the four ran —
+// a second copy is a place for the two to drift apart, and the ratio is only a
+// measurement of overlap while they do not.
+function pingArgs() returns StringArray
+	var argv = StringArray.create()
+	#if os(Windows)
+	argv.push("/c")
+	argv.push("ping")
+	argv.push("127.0.0.1")
+	argv.push("-n")
+	argv.push("2")
+	#else
+	argv.push("1")
+	#endif
+	return argv
+end 'pingArgs'
+
 function main() returns ExitCode
 	#if os(Windows)
 	let exe = Executable.name("cmd")
@@ -14,17 +31,7 @@ function main() returns ExitCode
 	let start = Clock.nowMs()
 	var i = 0
 	while i < count 'spawn'
-		var argv = StringArray.create()
-		#if os(Windows)
-		argv.push("/c")
-		argv.push("ping")
-		argv.push("127.0.0.1")
-		argv.push("-n")
-		argv.push("2")
-		#else
-		argv.push("1")
-		#endif
-		promises.push(async Subprocess.run(exe, arguments: argv))
+		promises.push(async Subprocess.run(exe, arguments: pingArgs()))
 		i = i + 1
 	end 'spawn'
 	for p in promises 'drain'
@@ -35,10 +42,20 @@ function main() returns ExitCode
 	end 'drain'
 	let elapsed = Clock.elapsedMs(start)
 
-	// Sequential: ~4200ms. Parallel: ~2000-2200ms. 3500ms catches a
-	// regression to sequential dispatch (e.g. if subprocess_wait_internal
-	// stops yielding to the scheduler or work-stealing breaks).
-	if elapsed >= 3500 'check-parallel'
+	// The baseline, priced in this same run and through the same async/await
+	// pair, so the quotient below isolates the overlap from everything else
+	// the machine is doing.
+	let soloStart = Clock.nowMs()
+	let solo = try await (async Subprocess.run(exe, arguments: pingArgs())) otherwise return 5
+	if not solo.succeeded() 'check-solo'
+		return 6
+	end 'check-solo'
+	let single = Clock.elapsedMs(soloStart)
+
+	// Four overlapped cost about one; four in sequence cost four. Half way
+	// between is the widest bound that still refuses sequential dispatch,
+	// and it scales with the host instead of asserting one.
+	if elapsed >= single * 2 'check-parallel'
 		return 4
 	end 'check-parallel'
 	return 0
@@ -90,6 +107,48 @@ data {
   __slab_state@320 = i64 0
 }
 
+func @pingArgs {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_29]  ; "/c"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_30]  ; "ping"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "127.0.0.1"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "-n"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_33]  ; "2"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -99,8 +158,8 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 40
-    x64.leaRegRdata rbx, [rip + __str_rec_29]  ; "cmd"
+    x64.prologue 56
+    x64.leaRegRdata rbx, [rip + __str_rec_34]  ; "cmd"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -115,44 +174,15 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.callDirect Clock.nowMs
-    x64.storeSlotReg slot0, r8
+    x64.storeSlotReg slot1, r8
     x64.movRegImm32 r13, 0
   whilehdr:
     x64.cmpRegImm32 r13, 4
     x64.jcc greaterEqual, whileexit
   spawn:
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __str_decref]
-    x64.callDirect __managed_create
+    x64.callDirect pingArgs
     x64.movRegReg r14, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_30]  ; "/c"
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_push
-    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "ping"
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_push
-    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "127.0.0.1"
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_push
-    x64.leaRegRdata rcx, [rip + __str_rec_33]  ; "-n"
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_push
-    x64.leaRegRdata rcx, [rip + __str_rec_34]  ; "2"
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_push
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, r14
     x64.callDirect __mm_incref
     x64.leaRegFunc rcx, [rip + Subprocess.run]
     x64.callDirect __gt_spawn
@@ -167,8 +197,6 @@ func @main {
     x64.movRegReg rdx, r15
     x64.callDirect __managed_push
     x64.leaRegRegImm32 r13, r13, 1
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_decref
     x64.jmp whilehdr
   whileexit:
     x64.movRegImm32 r13, 0
@@ -187,8 +215,8 @@ func @main {
     x64.callDirect __gt_try_await
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
+    x64.jcc equal, tryok#8
+  tryerr#9:
     x64.movRegImm32 r13, 2
     x64.movRegReg rcx, r10
     x64.callDirect __destruct_SubprocessError
@@ -197,7 +225,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -205,7 +233,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#8:
     x64.movRegReg rcx, r14
     x64.callDirect CollectedOutput.succeeded
     x64.xorRegImm32 r8, r8, 1
@@ -220,7 +248,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -235,18 +263,39 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr
   forexit:
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot1
     x64.callDirect Clock.elapsedMs
-    x64.cmpRegImm32 r8, 3500
-    x64.jcc less, ifcont#13
-  check-parallel:
-    x64.movRegImm32 r13, 4
+    x64.storeSlotReg slot0, r8
+    x64.callDirect Clock.nowMs
+    x64.movRegReg r13, r8
+    x64.callDirect pingArgs
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegFunc rcx, [rip + Subprocess.run]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 200], r12
+    x64.storeBaseDispReg.word64 [r15 + 208], r14
+    x64.leaRegFunc rax, [rip + __gt_release_Subprocess.run]
+    x64.storeBaseDispReg.word64 [r15 + 176], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_try_await
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#12
+  tryerr#13:
+    x64.movRegImm32 r13, 5
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -254,14 +303,63 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#13:
-    x64.movRegImm32 r13, 0
+  tryok#12:
+    x64.movRegReg rcx, r14
+    x64.callDirect CollectedOutput.succeeded
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#15
+  check-solo:
+    x64.movRegImm32 r13, 6
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_CollectedOutput
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
-    x64.epilogue 40
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#15:
+    x64.movRegReg rcx, r13
+    x64.callDirect Clock.elapsedMs
+    x64.imulRegRegImm32 rax, r8, 2
+    x64.loadRegSlot rcx, slot0
+    x64.cmpRegReg rcx, rax
+    x64.jcc less, ifcont#17
+  check-parallel:
+    x64.movRegImm32 r13, 4
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r13
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#17:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r13
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
