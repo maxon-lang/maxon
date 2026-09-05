@@ -12891,6 +12891,12 @@ function literalInitInterfaceName(form LiteralInitForm) returns ByteArray
 	end 'f'
 end 'literalInitInterfaceName'
 
+// The panic a negative run-time count earns, and the two blocks `emitNegativeShiftCountGuard` splits the
+// shift across. The text is the runnable oracle's, verbatim.
+let NegativeShiftCountPanicText = "negative shift count"
+let NegativeShiftPanicBlockLabel = b"shiftneg"
+let GuardedShiftBlockLabel = b"shiftok"
+
 export type Parser
 	var tokens as TokenArray
 	var pos as TokenIndex
@@ -49918,7 +49924,7 @@ export type Parser
 			// for it (Go's) is deliberately not the hardware's. It gets its own emitter, which
 			// owns the rule, the diagnostic, AND the runtime guard. See `emitShift`.
 			if shiftOperator(op) 'isShift'
-				left = try self.emitShift(leftValue, count: rightValue, op: op, opTok: opTok, countStart: rhsStart, countEnd: rhsEnd)
+				left = try self.emitShift(func, lhs: leftValue, count: rightValue, op: op, opTok: opTok, countStart: rhsStart, countEnd: rhsEnd)
 				continue
 			end 'isShift'
 
@@ -49956,7 +49962,7 @@ export type Parser
 	//   lie inside the counts the instruction takes as written, the saturation is dead code and the
 	//   shift is emitted bare. It is the same instruction a folded in-range count gets below, because
 	//   it is the same fact — only who established it differs.
-	function emitShift(lhs ValueId, count ValueId, op MaxonBinOp, opTok Token, countStart TokenIndex, countEnd TokenIndex) returns ValueId throws ParseError
+	function emitShift(func IrFunction, lhs ValueId, count ValueId, op MaxonBinOp, opTok Token, countStart TokenIndex, countEnd TokenIndex) returns ValueId throws ParseError
 		// The SHIFT's OWN operand rule, asked BEFORE anything is emitted. `emitBinOp` would ask it
 		// too, but by then the guard's ops are already in the IR — and the FIRST of them is an
 		// `and`, so `4 shr flag` would be rejected as a bad `and` rather than as a bad `shr`
@@ -49995,7 +50001,7 @@ export type Parser
 				return try self.emitBinOp(lhs, rhs: count, op: shiftOp, opTok: opTok)
 			end 'proven'
 
-			return try self.emitGuardedShift(lhs, count: count, op: shiftOp, opTok: opTok)
+			return try self.emitGuardedShift(func, lhs: lhs, count: count, op: shiftOp, opTok: opTok)
 		end 'dynamic'
 
 		let folded = self.constOf(count)
@@ -50150,19 +50156,19 @@ export type Parser
 	// and untouched, and so is every `x shr n` whose `n` denotes an alias inside the counts the
 	// instruction takes as written (`emitShift`, via `shiftCountIsProvenUnguarded`).
 	//
-	// ⚠ TODO — Go PANICS on a negative count at run time ("if the shift count is negative at run
-	// time, a run-time panic occurs"), and shv2 still does not — but ⚠ **NOT FOR THE REASON THIS
-	// NOTE USED TO GIVE, WHICH WAS THAT THERE IS NO PANIC RUNTIME.** There is one: `mrt_panic` prints
-	// a located message and a symbolized backtrace on both x64 lanes (A1j) and both arm64 lanes (A3n),
-	// and the P1.9 range guard already reaches it through `StdOp.osPanic`. What is missing is only the
-	// GUARD — a compare and a branch to a panic block at this site, with a message this function bakes
-	// — which is a rung of its own and not a blocked one. Until it lands, a negative count is NOT a
-	// wrong answer: the mask above reads it as out-of-range, so `x shl -1` is 0 and `x shr -1` is the
-	// sign. That is defined, deterministic, and NOT the masked `x shl 63` this rule exists to kill —
-	// it is simply not yet the panic Go requires. `specs-shv2/bitwise-operators.md` carries the case
-	// as a `disabled-test:`, to be enabled by the rung that lands the guard.
-	function emitGuardedShift(lhs ValueId, count ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
+	// ⭐⭐ **A NEGATIVE COUNT PANICS, WHICH THE SATURATION BELOW DOES NOT SAY.** Go: *"if the shift count
+	// is negative at run time, a run-time panic occurs"*, and the runnable oracle does exactly that
+	// (MEASURED: `panic at a.maxon:4: negative shift count`, exit 1). The mask below reads a negative count
+	// as out-of-range and saturates it, which is defined and deterministic and NOT the masked `x shl 63`
+	// this rule exists to kill — but it is an ANSWER where the language promises an abort.
+	//
+	// ⚠ **THE GUARD IS `count < 0` AND NOT "out of range", WHICH IS A NARROWER TEST THAN THE MASK'S.** A
+	// count of 64 or more is LEGAL and shifts every bit out — measured on the oracle, `4 shl 70` exits 0 —
+	// so the two questions have different answers and the saturation goes on serving the second.
+	function emitGuardedShift(func IrFunction, lhs ValueId, count ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
 		let range = SourceRange.ofToken(opTok)
+
+		try self.emitNegativeShiftCountGuard(func, count: count, opTok: opTok)
 
 		let outOfRangeBits = self.emitLiteral(-ShiftCountBits, valueType: MaxonType.integer, range: range)
 		let bitsAboveCount = try self.emitBinOp(count, rhs: outOfRangeBits, op: MaxonBinOp.bitAnd, opTok: opTok)
@@ -50190,6 +50196,33 @@ export type Parser
 		let keep = self.emitUnaryOp(mask, op: MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
 		return try self.emitBinOp(raw, rhs: keep, op: MaxonBinOp.bitAnd, opTok: opTok)
 	end 'emitGuardedShift'
+
+	// ⭐ **THE COMPARE, THE TWO-WAY BRANCH AND THE PANIC BLOCK — the shape `InsertRangeChecks` builds one
+	// tier down, built here because the MESSAGE is this operator's.** Nothing crosses the join, so there is
+	// no phi to mint: the panic block never merges (it ends on `mrt_panic`, which exits the process, behind
+	// a dead return that keeps the block well-formed), and every value the continuation reads was defined in
+	// the block that branched to it.
+	//
+	// ⚠ **IT IS EMITTED BEFORE THE SATURATION, NOT AFTER, and the order is the point**: past this branch the
+	// count is known non-negative, so the mask below is doing only the job it can still do — clamping a
+	// count of 64 or more, which is legal.
+	function emitNegativeShiftCountGuard(func IrFunction, count ValueId, opTok Token) throws ParseError
+		let range = SourceRange.ofToken(opTok)
+		let floor = self.emitLiteral(MinShiftCount, valueType: MaxonType.integer, range: range)
+		let isNegative = try self.emitCompare(count, rhs: floor, op: MaxonCmpOp.lt, opTok: opTok)
+
+		// `var`, not `let`: the panic op is emitted INTO it, and a `let` binding cannot be forwarded to a
+		// mutating parameter (E3019) — `emitShortCircuit`'s entry block for its reason.
+		var panicBlock = self.newBlock(func, label: NegativeShiftPanicBlockLabel, line: opTok.line)
+		let shiftBlock = self.newBlock(func, label: GuardedShiftBlockLabel, line: opTok.line)
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.condBranch(isNegative, thenBlockId: panicBlock.id, elseBlockId: shiftBlock.id), range: range)
+
+		self.currentBlock = panicBlock
+		self.artifact.emitOp(panicBlock, op: MaxonOp.panicAbort(panicMessageLine(self.filePath, line: opTok.line, text: NegativeShiftCountPanicText)), range: range)
+		self.emitDeadReturn(func, anchor: opTok)
+
+		self.currentBlock = shiftBlock
+	end 'emitNegativeShiftCountGuard'
 
 	// WHERE E2054 POINTS: the first token of the count as WRITTEN. `x shl SHIFT` points at `SHIFT`,
 	// where the programmer would look, and not at the `let` that gave it its value. Redundant

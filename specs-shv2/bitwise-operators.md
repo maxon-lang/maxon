@@ -533,24 +533,21 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: shift-by-negative-runtime-count-panics -->
-<!-- MEASURED 2026-09-04: exit 0 where the case pins 1. `emitGuardedShift` SATURATES a negative count instead of
-     raising, so the answer is defined and the DIAGNOSTIC is what is missing. Go, and the bootstrap, panic. -->
-⚠ BLOCKED ON THE SHIFT GUARD RAISING. Go: "if the shift count is negative at run time, a run-time
-panic occurs". The bootstrap does exactly that (`specs/bitwise-operators.md` pins it). **maxon-shv2
-does not yet**: `emitGuardedShift` saturates the count instead, so the answer is defined and the
-DIAGNOSTIC is what is missing.
+<!-- test: shift-by-negative-runtime-count-panics -->
+Go: *"if the shift count is negative at run time, a run-time panic occurs"*. A COMPILE-TIME negative count is
+E2054 (`shl-count-negative`, above); a run-time one reaches
+`Parser.emitNegativeShiftCountGuard` — a compare, a two-way branch and a panic block, emitted AHEAD of the
+out-of-range saturation. Byte-identical to the runnable oracle, message and backtrace and exit code.
+
+⚠ **THE GUARD IS `count < 0`, WHICH IS NARROWER THAN THE SATURATION'S "out of range".** A count of 64 or
+more is LEGAL and shifts every bit out — measured on both compilers, `4 shl 70` exits 0 — so the mask goes
+on serving that case and only this one aborts.
 
 ⚠ Its old companion — `OPEN.md` #2, `a / 0` escaping as a raw `0xC0000094` hardware trap — is
 **CLOSED**, and by a different mechanism than a panic: A1 made division fallible in the TYPE system
 (E3103 for a constant zero divisor, a thrown `DivisionByZero` for a possibly-zero one), so there is no
 trap left to route. The two were never one blocker; only the retired `OPEN.md` entry made them look
 like one.
-
-Meanwhile the answer here is 0, not a masked `4 shl 63`: the guard reads a negative count as
-out-of-range, exactly as it reads 64. So this is a MISSING DIAGNOSTIC, not a wrong answer.
-
-**Enable this test in the rung that lands the panic runtime.**
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -565,6 +562,10 @@ end 'main'
 ```
 ```stderr
 panic at shift-by-negative-runtime-count-panics.test:5: negative shift count
+Stack trace:
+  in shiftLeft
+  in main
+  in mrt_start
 ```
 ```exitcode
 1
@@ -1512,17 +1513,18 @@ of -1 masks to **63** in the hardware, so an elision that checked only the upper
 `1 shl -1` into `1 shl 63` — the MAXIMUM left shift — and `u64.max shr -1` into **1**. Both are 0
 here, which is what maxon-shv2's saturation reads an out-of-range count as.
 
-⚠ **THIS CASE EXISTS ONLY IN `specs-shv2`, AND ITS ABSENCE FROM `specs` IS A MEASUREMENT, NOT AN
-OVERSIGHT.** The bootstrap raises Go's runtime panic on a negative count — *"panic at …: negative
-shift count"*, exit 1 — before any of these comparisons runs, which is the divergence
-`shift-by-negative-runtime-count-panics` above already carries (enabled in `specs`, disabled here).
-The two compilers therefore CANNOT share one expectation for a negative runtime count, and the
-bootstrap's half is pinned there.
+⭐⭐ **THE SHIFT PANIC HAS LANDED, AND THIS CASE MOVED WITH IT — the move its own prose predicted.** It
+used to pin the SATURATED answers (`1 shl -1` is 0, `u64.max shr -1` is 0) because shv2 had no run-time
+panic; now the first negative shift aborts, so what the case pins is the ABORT, in `shlBy` — the callee, not
+`main`, which is what says the guard rides the shift and not the call site.
 
-⚠ **WHEN THE SHIFT PANIC LANDS IN maxon-shv2, THIS CASE MOVES WITH IT.** Its expectation becomes
-that same panic, and it is enabled alongside `shift-by-negative-runtime-count-panics`. Until then it
-is the only enabled case in either suite that can see the lower bound at all — an elision that drops
-it is a silent wrong answer nothing else here would catch.
+⚠ **AND IT STILL SEES THE LOWER BOUND, WHICH IS THE WHOLE REASON IT EXISTS.** `int(-1 to 5)` is small in
+every direction but one, and an elision that checked only the upper bound would hand `1 shl -1` straight to
+the hardware — which masks it to `1 shl 63`, the MAXIMUM left shift, and returns 42 with every comparison
+below satisfied. The panic is now what an elision would silently remove.
+
+⚠ The two compilers agree here to the byte, which they could not before: this case's absence from `specs`
+was the divergence, and there is none left to record.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias Word = int(0 to u64.max)
@@ -1565,8 +1567,15 @@ function main() returns ExitCode
 	return 42
 end 'main'
 ```
+```stderr
+panic at a-count-whose-alias-reaches-below-zero-keeps-the-guard.test:7: negative shift count
+Stack trace:
+  in shlBy
+  in main
+  in mrt_start
+```
 ```exitcode
-42
+1
 ```
 
 <!-- test: a-merged-count-is-not-proven-around-a-loop -->

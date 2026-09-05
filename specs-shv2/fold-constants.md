@@ -228,16 +228,15 @@ count where an unmasked fold and a masked instruction would first part company.
 The right shifts are the sign-filling direction, where saturation is a CLAMP of the count rather than
 a zeroed result: `-8 shr 70` is the sign, `-1`.
 
-⭐⭐ **THE NEGATIVE COUNTS ARE THE TWO CHECKS THAT DISCRIMINATE, AND WITHOUT THEM THIS CASE PROVES
-NOTHING ABOUT THE WINDOW.** MEASURED 2026-08-28: with `FoldConstants.evaluateIntBinOp`'s
-`shiftCountIsUnguarded` gate removed, every POSITIVE count here stays green — `evalShift` saturates
-to the same answer the emitted cascade computes, so folding one would have been correct. What the
-gate actually stands in front of is a count the folder refuses to answer for at all: a negative
-literal reaches this pass as a single `const` once `inlineLeaves` has substituted it for the
-parameter, and `evalShift` PANICS on one (`negative count -1 — a negative count is E2054 and must
-never reach the folder`), taking the whole compiler down. shv2 does not yet panic at RUN time for a
-negative count — the emitted cascade reads it as out of range, so `1 shl -1` is 0 and `-8 shr -1` is
-the sign — and those are the answers the last two checks pin.
+⭐⭐ **THE NEGATIVE COUNT IS THE CHECK THAT DISCRIMINATES, AND IT LIVES IN THE SIBLING CASE BELOW.**
+MEASURED 2026-08-28: with `FoldConstants.evaluateIntBinOp`'s `shiftCountIsUnguarded` gate removed, every
+POSITIVE count here stays green — `evalShift` saturates to the same answer the emitted cascade computes, so
+folding one would have been correct. What the gate actually stands in front of is a count the folder refuses
+to answer for at all: a negative literal reaches this pass as a single `const` once `inlineLeaves` has
+substituted it for the parameter, and `evalShift` PANICS on one (`negative count -1 — a negative count is
+E2054 and must never reach the folder`), taking the whole compiler down. That check cannot share a case with
+these, because a negative count now ABORTS THE PROGRAM — see
+`a-negative-count-is-not-folded-and-panics-at-run-time`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
@@ -268,17 +267,43 @@ function main() returns ExitCode
 	if shiftRight(-8, n: 70) != -1 'signFillingPastTheWindow'
 		return 6
 	end 'signFillingPastTheWindow'
-	if shiftLeft(1, n: -1) != 0 'negativeCountZeroFilling'
-		return 7
-	end 'negativeCountZeroFilling'
-	if shiftRight(-8, n: -1) != -1 'negativeCountSignFilling'
-		return 8
-	end 'negativeCountSignFilling'
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-negative-count-is-not-folded-and-panics-at-run-time -->
+⭐⭐ **THE OTHER HALF OF `shiftCountIsUnguarded`'s GATE, AND THE DISCRIMINATION IS THAT THIS PROGRAM
+COMPILES AT ALL.** A negative literal reaches `FoldConstants` as a single `const` once `inlineLeaves` has
+substituted it for the parameter, and `evalShift` PANICS on one rather than inventing an answer — so a
+folder that took this shift would take the COMPILER down, at compile time, with `negative count -1 — a
+negative count is E2054 and must never reach the folder`. A clean compile is therefore the evidence the gate
+held; the run-time abort below is the language's own rule (`emitNegativeShiftCountGuard`) arriving after it.
+
+⚠ The two facts are independent and both are needed: the fold gate says the compiler survives, and the
+panic says the program does not.
+```maxon
+typealias Word = int(i64.min to i64.max)
+
+function shiftLeft(v Word, n Word) returns Word
+	return v shl n
+end 'shiftLeft'
+
+function main() returns ExitCode
+	return shiftLeft(1, n: -1) as ExitCode
+end 'main'
+```
+```stderr
+panic at a-negative-count-is-not-folded-and-panics-at-run-time.test:5: negative shift count
+Stack trace:
+  in shiftLeft
+  in main
+  in mrt_start
+```
+```exitcode
+1
 ```
 
 <!-- test: a-division-by-a-constant-zero-is-not-folded -->
