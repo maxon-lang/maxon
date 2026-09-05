@@ -422,6 +422,12 @@ let DeclShapeReturnsFreshRecord = 109 as HashDigest
 // that could not tell the two apart would serve the old answer.
 let DeclShapeFreshReturnForward = 113 as HashDigest
 
+// ⭐ A static factory whose whole body is `return Self{p: p, …}` over its own parameters (W197) — the four
+// above's sibling, and its own tag for their reason one fact over: a callee that gains or loses the property
+// changes whether a top-level `let X = T.create(…)` FOLDS to a construction and is therefore imaged, so a
+// caller's parse memo must move with it.
+let DeclShapeConstructsFromParams = 114 as HashDigest
+
 // ⭐ A declared RETURN TYPE's pre-erasure SPELLING (A2j / A2m) — the `DeclaredSurface` word `mixDeclaration`
 // folds in beside the return type. It is the one declaration fact `mixReturnType` structurally cannot carry:
 // `__ManagedMemory` resolves to the SAME `genericInstance` a `ByteArray` does, so an edit between the two
@@ -2095,6 +2101,17 @@ export union TopLevelConstantLookup
 	// rule): the two `found to foundManaged` range arms that ask only whether a constant EXISTS then keep
 	// EXCLUDING this case, so each has to be visited and decided rather than silently widened.
 	foundImageRecord(image TopLevelImageRecord)
+	// ⭐⭐ **AN IMAGE-DATA `let` HOLDING A CONSTRUCTED STRUCT** — a box of scalars whose every field was
+	// decided at compile time, so the whole record is `bytes` and a read is one `.rdata` address. It is a
+	// SEPARATE arm from `foundImageRecord` because the two describe different things: that one carries a
+	// `__ManagedMemory`-shaped record's stride, count and element destructor, none of which a user struct
+	// has — its box is its fields and nothing else.
+	//
+	// ⚠ APPENDED PAST `foundImageRecord`, which is where a new arm goes.
+	// ⚠ **THE TYPE CROSSES AS A NAME, NOT AS AN INTERNED ID** — `found`'s rule, and it is the difference
+	// between a value the reading file can mint and a panic: every `structRef` id is minted from the FILE's
+	// own interner, and an id minted here names something else there.
+	foundImageStruct(bytes ByteArray, typeName ByteArray)
 end 'TopLevelConstantLookup'
 
 // ⭐⭐ **EVERYTHING A USE SITE NEEDS TO MATERIALIZE AN IMAGE-DATA `let`** — the record's SHAPE, its payload
@@ -3160,6 +3177,40 @@ end 'payloadValueTypeOf'
 // not cosmetic: `typeTagName(function)` is the bare word `function`, so a function type nested inside another
 // printed as `fn(function) returns int` on BOTH sides of a mismatch — a diagnostic saying a type does not
 // match itself. Its id names the alias exactly as a `named` type's does.
+// The bytes a RESOLVED struct construction lays down: a zero box of the declared size with each slot's
+// scalar written at its own offset and width. The rest stays zero, which is what `__mm_alloc` gives a heap
+// box — so an imaged record and a built one are byte-for-byte the same record.
+function structBoxImageOf(built GlobalInitCall) returns ByteArray
+	match built 'built'
+		construct(sizeBytes, fields) then return structBoxImageBytes(sizeBytes, fields: fields)
+		call then panic("structBoxImageOf: `globalStructConstruct` answered a `call` — it has one return statement and it is a `construct`")
+		mapLiteral to arrayLiteral then panic("structBoxImageOf: `globalStructConstruct` answered a container literal — it has one return statement and it is a `construct`")
+	end 'built'
+end 'structBoxImageOf'
+
+function structBoxImageBytes(sizeBytes ByteOffset, fields GlobalStructFieldArray) returns ByteArray
+	var image = ByteArray.create()
+	image.growFilled(sizeBytes as ElementIndex, value: 0)
+	for field in fields 'eachSlot'
+		match field.value 'produced'
+			scalar(payload) then writeImageSlot(image, offset: field.offset, value: payload, byteCount: stdTypeStorageBytes(maxonTypeToStdType(field.storageType)))
+			record to call then panic("structBoxImageBytes: a slot is produced by running code, in a record `constStructIsImageData` admitted as bytes — that predicate is the one thing that decides imaging and it takes only folded scalars")
+		end 'produced'
+	end 'eachSlot'
+
+	return image
+end 'structBoxImageBytes'
+
+// One slot, at the width the STORE would move. Narrow deliberately: a `bool` field is a byte and a negative
+// value in a narrow slot must not sign-extend across its neighbours.
+function writeImageSlot(image ByteArray, offset ByteOffset, value ParsedInt, byteCount BytePos)
+	var at = offset
+	for b in scalarImage(value, byteCount: byteCount) 'eachByte'
+		try image.set(at as ElementIndex, value: b) otherwise panic("writeImageSlot: a {byteCount}-byte slot at offset {offset} runs past a {image.count()}-byte box — the size and the offsets both come from the one `StructLayout`")
+		at = at + 1
+	end 'eachByte'
+end 'writeImageSlot'
+
 export function maxonTypeName(t MaxonType, typeNames TypeNameInterner) returns String
 	let tag = maxonTypeTag(t)
 	// ⭐ **AN EXISTENTIAL RENDERS AS ITS INTERFACE'S NAME, AND THAT MAKES THE RENDERING ORDER-INDEPENDENT.**
@@ -4443,6 +4494,14 @@ export enum SweptBodyFact
 	// fresh record it did not build still hands its caller the sole reference: it bound the value to nothing,
 	// so no statement stands between the callee's hand-off and its own.
 	returnsAFreshRecordIfCalleeDoes
+	// ⭐⭐ W197: the body is ONE statement, `return <Name>{p0: p0, p1: p1, …}`, naming this declaration's own
+	// parameters in declaration order and nothing else. A call to it is therefore the CONSTRUCTION it
+	// performs, which is what lets a top-level `let X = T.create(7)` be described as bytes rather than as a
+	// call — see `Parser.noteConstructsFromParams` for why the shape is exactly that and nothing wider.
+	//
+	// ⚠ APPENDED AT THE END, per the band-append invariant this file's unions state: a mid-enum insert is
+	// silently swallowed by a range arm.
+	constructsSelfFromItsParameters
 end 'SweptBodyFact'
 
 export type SweptBodyFactEntry
@@ -9094,6 +9153,16 @@ typealias FunctionDeclSiteMap = Map with (ByteArray, FunctionDeclSite)
 //
 // ⚠ **A PARAMETER THE SWEEP COULD NOT READ IS `MaxonType.unresolved`** (`Parser.sweptParamTypeAt`), and a
 // declaration carrying one is UNSCOREABLE rather than matching. See `overloadReturnTypeFor`.
+// ⭐ **THE ANSWER `ProgramSignatures.constFactoryConstructionOf` GIVES — a factory the const evaluator may
+// rewrite into a construction, with the two facts that rewriting needs, or nothing (W197).** One union
+// rather than two accessors because the layout and the parameter names are only meaningful together: the
+// fold maps argument `k` onto the field named after parameter `k`, so a caller holding one of them holds
+// half a mapping.
+export union ConstFactoryConstruction
+	folds(layout StructLayout, paramNames ByteArrayArray)
+	unfoldable
+end 'ConstFactoryConstruction'
+
 export type OverloadedDecl
 	export let paramNames as ByteArrayArray
 	export let paramTypes as MaxonTypeArray
@@ -9864,6 +9933,15 @@ export type ProgramSignatures
 	// `funcAlwaysThrowingDeclarationCounts`' twin, one registry over and for exactly its reason. Here the
 	// tally is what stops one overload's provable freshness answering for a sibling's unread returns.
 	var funcFreshReturningDeclarationCounts as FunctionDeclarationCountMap
+	// ⭐⭐ The static factories that are nothing but the construction they perform (W197) — see
+	// `SweptBodyFact.constructsSelfFromItsParameters`. `functionConstructsFromParams(callee)` is what the
+	// const evaluator asks before rewriting a top-level `T.create(…)` into the `construct` node it stands
+	// for. Empty for a program whose factories do anything else.
+	var funcConstructsFromParams as DeclaredBodyFactNameSet
+	// How many declarations of a name PROVED it, against `funcDeclarationCounts`' how many there were —
+	// `funcFreshReturningDeclarationCounts`' twin, one registry over and for exactly its reason: an overload
+	// set whose members disagree must not have one member's foldability answer for a sibling's.
+	var funcConstructingDeclarationCounts as FunctionDeclarationCountMap
 	// ⭐ Function name -> its per-parameter DEFAULTS (BATCH2 slice 4). `defaultsOf(callee)` is the door
 	// `Parser.emitCall` asks before deciding an under-supplied call is an arity error. Filled by
 	// `recordParamDefaults` from each file's scanned signatures; last-wins on a duplicate name (E3006
@@ -10340,7 +10418,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -11269,6 +11347,7 @@ export type ProgramSignatures
 				leavesByThrowing then self.recordSweptBodyFact(factKey, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts, shape: DeclShapeAlwaysThrows)
 				returnsAFreshRecord then self.recordSweptBodyFact(factKey, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts, shape: DeclShapeReturnsFreshRecord)
 				returnsAFreshRecordIfCalleeDoes then self.recordFreshReturnForward(factKey, forwardCallee: entry.forwardCallee)
+				constructsSelfFromItsParameters then self.recordSweptBodyFact(factKey, marked: self.funcConstructsFromParams, counts: self.funcConstructingDeclarationCounts, shape: DeclShapeConstructsFromParams)
 			end 'which'
 		end 'eachProvedBodyFact'
 
@@ -12765,6 +12844,17 @@ export type ProgramSignatures
 		self.closeFreshReturnForwards()
 		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts)
 	end 'returnsFreshValue'
+
+	// ⭐⭐ **IS A CALL TO THIS NAME THE CONSTRUCTION IT PERFORMS? — the door the const evaluator asks before
+	// folding a top-level `T.create(…)` into a `ConstFactoryCall.construct` (W197).**
+	//
+	// ⚠ It answers for the DECLARATION, so an overload set whose members disagree answers false — the collide
+	// test rides inside the answer for `functionNeverReturns`' stated reason: nothing is refused here, so a
+	// name whose declarations disagree has to answer "it is an ordinary call", which is what the tier did
+	// before this fact existed.
+	export function functionConstructsFromParams(callee ByteArray) returns bool
+		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.funcConstructsFromParams, counts: self.funcConstructingDeclarationCounts)
+	end 'functionConstructsFromParams'
 
 	// One forwarding `return`'s dependency, appended to its declaration's list. The hash rides for
 	// `recordSweptBodyFact`'s reason: a body that starts forwarding somewhere else is a different program.
@@ -14619,16 +14709,69 @@ export type ProgramSignatures
 	// the shapes would be a roster free to go stale the day one joins, and stale here is a global that still
 	// allocates while the rule that permits it says none do.
 	//
-	// ⛔ A FACTORY's record is whatever the CALL returns, which no image can contain; a BOXED CASE is a
-	// `__mm_alloc`'d box with payload slots and no `capacity@16` to carry the immortality mark.
+	// ⛔ A BOXED CASE is a `__mm_alloc`'d box with payload slots, and the shape of the payload is the case's
+	// rather than the union's — so there is no one offset an image could stamp a mark at.
 	function recordShapeHasAnImage(outcome TopLevelConstant) returns bool
 		return match outcome 'shape'
 			pending to managedValue gives false
 			arrayValue(elements, element) gives self.constArrayLiteralIsImageData(elements, element: element)
 			containerValue(giid, _, elements) gives self.emptyContainerIsImageData(giid, elements: elements)
-			factoryValue to boxedUnionValue gives false
+			factoryValue(calls, root, _) gives self.constStructIsImageData(calls, root: root)
+			boxedUnionValue gives false
 		end 'shape'
 	end 'recordShapeHasAnImage'
+
+	// ⭐⭐ **CAN A CONSTRUCTED STRUCT'S BOX BE LAID DOWN AS BYTES? — the third shape of the ⚖ *a `let` is image
+	// data* ruling, and the first whose mark cannot live in the record.**
+	//
+	// A `T.create(7)` initializer reaches this only once the const evaluator has folded it into the
+	// construction it stands for (`Parser.constFactoryNode`); an entry still spelling a `call` is an
+	// instruction and answers false, exactly as it did before that fold existed.
+	//
+	// ⛔⛔ **EVERY SLOT MUST BE A FOLDED SCALAR, AND THAT BOUND IS THE POINTER CHANNEL AND NOT TIDINESS.** A
+	// managed field holds an ADDRESS, and the address of one `.rdata` payload written into another is a
+	// data→data relocation this compiler deliberately does not have (`constArrayLiteralIsImageData`'s own
+	// bound, one shape over). A slot filled by a nested node or by a synthesized default helper is worse
+	// again: its value is produced by RUNNING CODE, so there are no bytes to lay down at all.
+	//
+	// ⚠ **THE MARK FOR THIS SHAPE IS NOT `capacity@16`.** A user struct's offset 16 is whatever field the
+	// author declared there, so the immortality mark lives in the synthetic allocation header the record is
+	// registered behind (`MmRuntime.immortalBoxHeaderBytes`) — which is what makes a record of ARBITRARY
+	// shape markable at all, and why this shape could not be imaged before that header existed.
+	function constStructIsImageData(calls ConstFactoryCallArray, root InitializerCallId) returns bool
+		match factoryCallAt(calls, id: root) 'node'
+			construct(_, fields) then return everyConstFieldIsAFoldedScalar(fields)
+			call then return false
+			mapLiteral to arrayLiteral then return false
+		end 'node'
+	end 'constStructIsImageData'
+
+	// ⭐ **DOES THIS CONSTRUCTION LAY DOWN AS BYTES?** Read by the imaging verdict above and by the const
+	// evaluator, which folds a factory call into a construction ONLY when the answer is yes — see
+	// `Parser.constFactoryConstruction` for why a fold that buys no image must not happen at all.
+	export function everyConstFieldIsAFoldedScalar(fields ConstFactoryArgumentValueArray) returns bool
+		for field in fields 'eachSlot'
+			let laysDownAsBytes = match field 'value'
+				folded(value) gives constFoldedIsAScalar(value)
+				call gives false
+			end 'value'
+
+			if not laysDownAsBytes 'notBytes'
+				return false
+			end 'notBytes'
+		end 'eachSlot'
+
+		return true
+	end 'everyConstFieldIsAFoldedScalar'
+
+	// A folded value the image can hold is a NUMBER and nothing else: a String or a container is an address,
+	// and a boxed case is a box.
+	function constFoldedIsAScalar(value ConstFoldedValue) returns bool
+		return match value 'kind'
+			scalar gives true
+			managed to boxedUnionCase gives false
+		end 'kind'
+	end 'constFoldedIsAScalar'
 
 	// ⭐⭐ **CAN AN ARRAY LITERAL'S RECORD BE LAID DOWN AS BYTES?** — the constant-blob half of the ⚖ *a
 	// `let` is image data* ruling. It asks EXACTLY the question `containerRecordOf` asks before it lays a
@@ -16272,7 +16415,9 @@ export type ProgramSignatures
 			// reaches this door only as an invariant break, which `imageRecordOf` and `foldedValueOf` name;
 			// splitting them off here to answer `notFound` would be a fifth copy of that roster, silently
 			// stale the day a shape joins.
-			arrayValue to boxedUnionValue then return TopLevelConstantLookup.foundImageRecord(self.imageRecordOf(decl))
+			arrayValue to containerValue then return TopLevelConstantLookup.foundImageRecord(self.imageRecordOf(decl))
+			factoryValue(calls, root, _) then return self.imageStructLookup(calls, root: root, decl: decl)
+			boxedUnionValue then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is a boxed union case with no storage — `recordShapeHasAnImage` never images one, so a use site cannot reach this door")
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -16294,6 +16439,18 @@ export type ProgramSignatures
 			boxedUnionCase then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a boxed union case, which `settleFoldedValue` never settles as imaged — a box has no `capacity@16` to carry the immortality mark")
 		end 'folded'
 	end 'imageRecordOf'
+
+	// ⭐⭐ **THE BOX A CONSTRUCTED STRUCT `let` IS, AS BYTES — resolved through `globalStructConstruct`, the
+	// very routine `__module_init` builds the same record from.** One derivation, so an imaged binding and a
+	// stored one lay down the same fields at the same offsets at the same widths; the two storage models
+	// differ in WHERE the box lives and in nothing else.
+	function imageStructLookup(calls ConstFactoryCallArray, root InitializerCallId, decl TopLevelDecl) returns TopLevelConstantLookup
+		match factoryCallAt(calls, id: root) 'node'
+			construct(typeName, fields) then return TopLevelConstantLookup.foundImageStruct(structBoxImageOf(self.globalStructConstruct(typeName, fields: fields, calls: calls, declName: decl.name, elementFilePath: decl.declFilePath)), typeName: typeName)
+			call then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root is a `call` — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
+			mapLiteral to arrayLiteral then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root is a container literal — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
+		end 'node'
+	end 'imageStructLookup'
 
 	// A constant array literal's image: its elements' stored bytes at this instance's stride, and nothing
 	// else. `element_destroy@40` is trivial by construction — `arrayElementMayBeConstantBlob`, which gated
@@ -17848,6 +18005,49 @@ export type ProgramSignatures
 	// a nicety: `indexOfField`/`offsetOfField`/`sizeBytes` are pure arithmetic over the name column
 	// and need no interner at all, so making every caller adopt a whole layout to ask "which slot?"
 	// would allocate a copy per field access to answer a question about integers.
+	// ⭐⭐ **WHAT A FOLDABLE FACTORY BUILDS AND THE PARAMETERS ITS FIELDS ARE NAMED AFTER — the two facts a
+	// call has to be rewritten into the construction it stands for (W197), settled together because the
+	// MAPPING between them is the whole of the fold.** The layout is the callee's declared RETURN type
+	// resolved to a declared `type`; the names are its own source-aligned parameter list.
+	//
+	// ⚠ **AN OVERLOAD SET IS `unfoldable`, and that is not a limitation of the lookup.** The body fact is
+	// published per DECLARATION and keyed by NAME, so with two members under one key there is no way to tell
+	// which one the sweep proved — and `functionConstructsFromParams`' own collide test already answers false
+	// there. This refuses a second time rather than trusting that, because what it would hand back is a
+	// parameter list, and the wrong member's list is a silently wrong field mapping.
+	export function constFactoryConstructionOf(callee ByteArray) returns ConstFactoryConstruction
+		let overloads = self.overloadedDeclsOf(callee)
+		if overloads.count() != 1 'notExactlyOneDeclaration'
+			return ConstFactoryConstruction.unfoldable
+		end 'notExactlyOneDeclaration'
+
+		let decl = try overloads.get(0) otherwise panic("ProgramSignatures.constFactoryConstructionOf: overloads.get(0) OOB on an array whose count was just compared to 1")
+		match self.declaredFactoryStruct(decl.returnType) 'declared'
+			declared(layout) then return ConstFactoryConstruction.folds(layout, paramNames: decl.paramNames)
+			undeclared then return ConstFactoryConstruction.unfoldable
+		end 'declared'
+	end 'constFactoryConstructionOf'
+
+	// The declared `type` a factory's return type names, or `undeclared` for anything else. `structRef` is
+	// the only tag that can answer: `RecordedReturnTypeRule.declaredStruct` has already rewritten every
+	// `returns Self` into one, so a return type still spelling a bare `named` is a type this index cannot
+	// resolve and not a struct it can lay out.
+	function declaredFactoryStruct(declared MaxonReturnType) returns DeclaredStruct
+		return match declared 'returns'
+			void gives DeclaredStruct.undeclared
+			value(valueType) gives self.declaredStructOfValueType(valueType)
+		end 'returns'
+	end 'declaredFactoryStruct'
+
+	function declaredStructOfValueType(valueType MaxonType) returns DeclaredStruct
+		if maxonTypeTag(valueType) != ValueTypeTag.structRef 'notADeclaredStruct'
+			return DeclaredStruct.undeclared
+		end 'notADeclaredStruct'
+
+		let name = try self.typeNames.nameOf(typeNameIdOf(valueType)) otherwise return DeclaredStruct.undeclared
+		return self.structInAnyFile(name)
+	end 'declaredStructOfValueType'
+
 	export function structInAnyFile(name ByteArray) returns DeclaredStruct
 		let layout = try self.structTypes.get(name) otherwise return DeclaredStruct.undeclared
 		return DeclaredStruct.declared(layout)

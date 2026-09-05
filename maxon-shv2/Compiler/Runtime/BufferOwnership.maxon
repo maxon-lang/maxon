@@ -242,6 +242,81 @@ export function immortalRecordBytes(blobOffset ByteOffset, length ParsedInt, ele
 	return record
 end 'immortalRecordBytes'
 
+// ⭐⭐ **WHICH KIND OF RECORD AN IMMORTAL `.rdata` PAYLOAD HOLDS.** The two are distinguished because the
+// joint invariant below binds only one of them: a `__ManagedMemory`-shaped record is judged BOTH by its
+// `capacity@16` and by its header sentinel, while a user struct has no capacity slot and the header is its
+// only mark — offset 16 there is whatever field the author declared.
+export union ImmortalRecordShape
+	managedRecord
+	userStruct
+end 'ImmortalRecordShape'
+
+// ⭐⭐⭐ **THE `.rdata` PAYLOAD AN IMMORTAL RECORD IS REGISTERED AS — the synthetic allocation header it is
+// addressed through, followed by the record. ONE DOOR, and the one place the JOINT INVARIANT is enforced.**
+//
+// ⛔⛔ **A CAPACITY-BEARING IMAGE RECORD CARRIES BOTH MARKS OR IT IS REFUSED HERE.** The runtime asks
+// "is this image data?" two ways, of two populations: `emitRecordIsImmortal` reads `capacity@16` and
+// `MmRuntime.emitBoxIsImmortal` reads the header. A record answering one and not the other is skipped by
+// the readers of the mark it has and COUNTED by the readers of the mark it lacks — which is a leak or a
+// double free, exactly as this file's header says of a skip added on one side only. The pairing is
+// therefore a panic at the minting door and not a comment: it is `buildStringRecordBytes`'s offset-assert
+// discipline applied to an agreement between two mechanisms.
+//
+// The header and the record are ONE payload so that `appendRdataPayload`'s registration-order packing
+// cannot put anything between them, and the LABEL names the record rather than the header
+// (`GlobalDataTable.rdataLabelOffsets`), so a read stays a bare `lea` with no displacement to add.
+// Alignment holds by construction: `MmRuntime.HeaderBytes` and the DebugStream prefix word are both
+// multiples of `GlobalDataTable.RdataPayloadAlignment`, so the record inside the payload lands aligned too.
+function immortalRecordPayload(record ByteArray, shape ImmortalRecordShape, debugStream bool) returns ByteArray
+	let capacityBearing = match shape 'shape'
+		managedRecord gives true
+		userStruct gives false
+	end 'shape'
+
+	if capacityBearing and not recordCarriesImmortalCapacity(record) 'markSplit'
+		panic("immortalRecordPayload: a {record.count()}-byte managed record is being given the immortal HEADER without ImmortalRecordCapacity at capacity@16 — the two marks are read by different runtime entries, so a record carrying one of them is skipped by half the readers and counted by the other half")
+	end 'markSplit'
+
+	var payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as ParsedInt)
+	payload.append(record)
+	return payload
+end 'immortalRecordPayload'
+
+// Does `record` carry `ImmortalRecordCapacity` at `capacity@16`? Compared as the BYTES `immortalRecordBytes`
+// wrote, through the same `scalarImage`, so the check cannot disagree with the writer about encoding.
+function recordCarriesImmortalCapacity(record ByteArray) returns bool
+	if record.count() < ManagedRecordBytes 'noCapacitySlot'
+		return false
+	end 'noCapacitySlot'
+
+	let sentinel = scalarImage(ImmortalRecordCapacity as ParsedInt, byteCount: ManagedRecordSlotBytes)
+	var offset = ManagedRecordCapacityOffset
+	for expected in sentinel 'eachByte'
+		let actual = try record.get(offset) otherwise panic("recordCarriesImmortalCapacity: a {record.count()}-byte record has no byte at {offset} — the length check above admits only records long enough to hold capacity@16")
+		if actual != expected 'differs'
+			return false
+		end 'differs'
+
+		offset = offset + 1
+	end 'eachByte'
+
+	return true
+end 'recordCarriesImmortalCapacity'
+
+// ⭐ **REGISTER AN IMMORTAL RECORD UNDER A MINTED, BYTE-DEDUPED LABEL** — `registerRdataConstant` with the
+// header in front and the label aimed at the record. The door a String literal and a byte-array constant
+// come through, where two producers of identical bytes must reach ONE object.
+export function registerImmortalRecord(globalData GlobalDataTable, prefix String, record ByteArray, kind RdataPayloadKind, shape ImmortalRecordShape, debugStream bool) returns String
+	return globalData.registerRdataConstant(prefix, bytes: immortalRecordPayload(record, shape: shape, debugStream: debugStream), kind: kind, labelAt: immortalBoxHeaderSize(debugStream))
+end 'registerImmortalRecord'
+
+// ⭐ **REGISTER AN IMMORTAL RECORD UNDER AN EXACT, STRUCTURAL LABEL** — the twin above's labelled door, for
+// a record whose bytes do not distinguish it from another (an empty `Array with T`, whose
+// `element_destroy@40` is a relocation rather than payload).
+export function registerImmortalRecordLabeled(globalData GlobalDataTable, label String, record ByteArray, kind RdataPayloadKind, shape ImmortalRecordShape, debugStream bool) returns String
+	return globalData.registerRdataConstantLabeled(label, bytes: immortalRecordPayload(record, shape: shape, debugStream: debugStream), kind: kind, labelAt: immortalBoxHeaderSize(debugStream))
+end 'registerImmortalRecordLabeled'
+
 // Append one machine-word slot at `expectedOffset`, refusing to write it anywhere else. Exported because a
 // String record's seventh slot rides the same rule.
 export function appendRecordSlot(record ByteArray, expectedOffset ByteOffset, value ParsedInt)

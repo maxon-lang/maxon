@@ -1464,6 +1464,7 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		// A REPLY CELL takes no operand at all — it mints a fresh GT struct out of the slab — so no value of
 		// this frame's can escape through it.
 		serviceReplyCell then break 'op'
+		immortalStructRecord then break 'op'
 	end 'op'
 	return false
 end 'opEscapesValue'
@@ -1538,6 +1539,7 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		// Every service op is a BODY op — a spawn and a reply cell each define a value, and a send is a
 		// statement of its own.
 		serviceSpawn to serviceReplyCell then break 'term'
+		immortalStructRecord then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesValue'
@@ -1881,6 +1883,7 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		// request box, so a handler writing one writes a value this frame has given up. A `serviceSpawn`'s
 		// state is a factory's own fresh box and was never a parameter of anybody.
 		serviceSpawn to serviceReplyCell then break 'op'
+		immortalStructRecord then break 'op'
 	end 'op'
 end 'collectCallParamEdgesAt'
 
@@ -2137,6 +2140,7 @@ function opConsumesAPromise(op MaxonOp) returns bool
 		// A SERVICE's green thread is not a promise and neither op reclaims one — a Promise may not be sent at
 		// all (`Parser.moveIntoGreenThread` refuses it), which is what keeps this answer true.
 		serviceSpawn to serviceReplyCell gives false
+		immortalStructRecord gives false
 	end 'op'
 end 'opConsumesAPromise'
 
@@ -2191,6 +2195,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				// mints a reply CELL beside itself. What is still true is that the cell op only DEFINES the
 				// promise; the `await`/`tryAwait` op above is the site, exactly as it is for an `async` spawn.
 				serviceSpawn to serviceReplyCell then break 'op'
+				immortalStructRecord then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -2409,6 +2414,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		// both fall through to the re-arm test below, exactly as a `call` does), and a send reads a mailbox
 		// and a box, never a promise handle.
 		serviceSpawn to serviceReplyCell then break 'op'
+		immortalStructRecord then break 'op'
 	end 'op'
 	return rearmRoleIfDefines(op, promise: promise)
 end 'classifyOpForPromise'
@@ -2487,6 +2493,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		errorFlagEncode then break 'term'
 		// Every service op is a BODY op, so none is the terminator whose successors this walks.
 		serviceSpawn to serviceReplyCell then break 'term'
+		immortalStructRecord then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -2653,6 +2660,9 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// `serviceSend`, so this arm never fires alone. It names its own entry anyway, because a
 					// refusal that named a neighbour's would be a wrong attribution rather than a missing one.
 					serviceReplyCell then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "an awaited message send", entry: GtCellAllocName, blameTargetErrorsHere: blameTargetErrorsHere)
+					// An imaged struct record is `.rdata` and a `lea` — it reaches no runtime entry, so every target
+					// carries it.
+					immortalStructRecord then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -3635,6 +3645,7 @@ function reportIfNonYielding(project Project, op MaxonOp, opIndex OpIndex, func 
 		// green thread is scheduled independently and CPU-bound work is exactly what one is for; a message
 		// handler that never parks is the normal case, not a defect.
 		serviceSpawn to serviceReplyCell then return
+		immortalStructRecord then return
 	end 'op'
 end 'reportIfNonYielding'
 
@@ -4212,6 +4223,7 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 		// nothing about whether this frame can — which is the exact opposite of `asyncCall`, whose coroutine
 		// runs on this frame's own thread and therefore contributes its edge.
 		serviceSpawn to serviceReplyCell gives false
+		immortalStructRecord gives false
 	end 'op'
 end 'opYields'
 
@@ -4447,6 +4459,7 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 		// Starting a service and delivering a message are both effects no return type expresses — a send has
 		// no result at all, so its whole reason for existing is the effect.
 		serviceSpawn to serviceReplyCell gives true
+		immortalStructRecord gives false
 	end 'op'
 end 'opShowsAnEffect'
 
@@ -5493,6 +5506,7 @@ function closureEscapeReason(op MaxonOp) returns String
 		// structurally, and a `break` here would send a program that somehow reached it to that function's
 		// disagreement panic instead of to a sentence.
 		serviceSpawn to serviceReplyCell then return "cannot hand a closure that captures to a service: a message MOVES its arguments to another green thread, and a capturing closure's environment is a box this one would still hold. {CapturingClosureEscapeSuffix}"
+		immortalStructRecord then break 'op'
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a
@@ -6384,6 +6398,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 			errorFlagEncode then break 'op'
 			// No service op is a `ret`, so none hands anything back through the return registers.
 			serviceSpawn to serviceReplyCell then break 'op'
+			immortalStructRecord then break 'op'
 		end 'op'
 	end 'eachOp'
 end 'checkReturnsAgainstInterface'

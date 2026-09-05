@@ -194,6 +194,11 @@ export type RuntimeUsage
 	// build `__mm_retain`; a program that never co-owns a borrowed aggregate keeps it out. Set alongside
 	// `usesHeap` (a retain is on a `__mm_alloc`'d box).
 	export var usesRetain as bool
+	// ⭐⭐ Does the program hand a plain box to a DURABLE SINK (`Parser.coOwnConcreteRecordForSink`)? — the
+	// bit behind `__mm_own`, and its OWN rather than `usesRetain`'s for that bit's stated reason: the two
+	// have independent callers, and folding either into the other would install an unreachable copy of the
+	// unused one.
+	export var usesMmOwn as bool
 	// ⭐ The program declares at least one MANAGED top-level `var` (P1.7 slice 2a), so it carries
 	// `__module_init` + `__maxon_global_cleanup` and every entry stub calls them around `main`. Set NOT by
 	// this Maxon-module scan but by `installManagedGlobalInit`, which is where the decision is made — the
@@ -532,7 +537,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesFaultProbe: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesDebugStream: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesFaultProbe: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesDebugStream: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -618,6 +623,10 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		// call op for this walk to see. It is rule 2 of this file's header (a synthesized body's calls are
 		// DECLARED, never discovered), one tier up: here the body is the LOWERING's rather than an installer's.
 		serviceSpawn to serviceReplyCell then recordGtUsage(usage)
+		// ⛔ **AN IMAGED STRUCT RECORD RECORDS NOTHING, AND DELIBERATELY NOT WHAT `constArrayLiteral` RECORDS.**
+		// It is a `lea` at a `.rdata` payload — no allocation, no `__ManagedMemory`, no element walk — so
+		// crediting it with the array runtime would install a floor the op cannot reach.
+		immortalStructRecord then break 'op'
 	end 'op'
 end 'classifyRuntimeCall'
 
@@ -963,6 +972,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesRetain = true
 		usage.usesHeap = true
 	end 'retain'
+	// A `__mm_own` the PARSER emitted (a plain box co-owned into storage that outlives the statement). Its
+	// COPY arm `__mm_alloc`s and blits, neither of which this Maxon-module scan can see inside a synthesized
+	// Std body — so both are DECLARED here, exactly as `__str_decref`'s heap use is.
+	if callee.equals(MmOwnName) 'own'
+		usage.usesMmOwn = true
+		usage.usesStrCopy = true
+		usage.usesHeap = true
+	end 'own'
 	// Any `__managed_*` call carries the whole managed-memory runtime, and the heap under it: `__managed_create`/`__managed_grow`
 	// `__mm_alloc` the record and the element buffer, `__managed_decref` `__mm_free`s them — none of which this
 	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference

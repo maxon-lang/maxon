@@ -448,7 +448,7 @@ end 'synthesizeEnumFromNameCase'
 // of the compare are records of one shaping.
 function emitNameTestBranch(module StdModule, block IrBlock, name ValueId, caseName ByteArray, globalData GlobalDataTable, hit IrBlock, miss IrBlock, ids ValueMinter)
 	let literal = ids.mint()
-	module.appendOp(block, op: StdOp.rdataAddr(literal, label: registerStringLiteralRecord(globalData, bytes: caseName).toByteArray()))
+	module.appendOp(block, op: StdOp.rdataAddr(literal, label: registerStringLiteralRecord(globalData, bytes: caseName, debugStream: module.debugStream).toByteArray()))
 	let isThisCase = ids.mint()
 	module.appendOp(block, op: StdOp.call(isThisCase, callee: StrEqName, args: twoArgs(name, second: literal)))
 	module.setTerminator(block, op: StdOp.condBranch(isThisCase, thenBlockId: hit.id, elseBlockId: miss.id))

@@ -1629,6 +1629,23 @@ export union MaxonOp
 	// say so: the message is credited to `UnusedExportCheck` by the `serviceSend` beside this op, and the
 	// name here may be `<T>.shutdown` — the compiler's pill, which no file declares.
 	serviceReplyCell(result ValueId, messageName ByteArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	// --- W197: a module-level `let` holding a constructed struct of scalars ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `serviceReplyCell`, per the band-append invariant: a
+	// mid-union insert is silently swallowed by any range arm. `OpCategory.plain` places it beside
+	// `stringLiteral` — it takes the address of a constant and allocates nothing.
+	//
+	// ⭐⭐ **THE ADDRESS OF A STRUCT BOX THAT LIVES IN THE IMAGE.** `bytes` is the whole box — every field at
+	// its declared offset, decided when the program was compiled — and the lowering registers it in `.rdata`
+	// behind the synthetic allocation header that marks it immortal, then answers its address. Nothing is
+	// allocated, nothing is counted and nothing is dropped, so a read costs one `lea` however often it runs.
+	//
+	// ⚠ **IT IS NOT `constArrayLiteral` WITH A DIFFERENT MARK, AND THAT IS WHY IT IS ITS OWN OP.** That one
+	// serves an OWNED heap literal as well as an imaged record, so it needs a side table to say which of the
+	// two a site is; this shape has no heap spelling. It also must not be credited with the ARRAY runtime a
+	// `constArrayLiteral` site turns on (`RuntimeUsage.recordConstArrayLiteralUsage`): a struct box is not a
+	// `__ManagedMemory` and reaches none of it.
+	immortalStructRecord(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1769,6 +1786,8 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` emitted
 		// beside it is what credits the export, and this op's name may be the compiler's own `<T>.shutdown`.
 		serviceReplyCell gives MaxonCalleeKind.noCallee
+		// An imaged struct record names a CONSTANT, not a function.
+		immortalStructRecord gives MaxonCalleeKind.noCallee
 	end 'op'
 end 'maxonOpCalleeKind'
 

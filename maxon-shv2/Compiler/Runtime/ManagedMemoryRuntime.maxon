@@ -159,10 +159,10 @@ let ByteArrayRecordPrefix = "__barr_rec_"
 // emitManagedConstant`) — so the reads reach one record only because their payload, length and stride are
 // identical and the table pools them. Two DISTINCT declarations whose three agree therefore share it too,
 // exactly as two identical String literals do.
-export function registerImmortalByteArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray) returns String
+export function registerImmortalByteArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, debugStream bool) returns String
 	let blobLabel = registerByteArrayLiteralBlob(globalData, bytes: bytes)
 	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(blobLabel), length: elementCount, elementSize: elementSize as ParsedInt, elementDestroy: TrivialElementDestroy)
-	let recordLabel = globalData.registerRdataConstant(ByteArrayRecordPrefix, bytes: recordBytes, kind: RdataPayloadKind.byteArrayRecord)
+	let recordLabel = registerImmortalRecord(globalData, prefix: ByteArrayRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
 	globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
 	return recordLabel
 end 'registerImmortalByteArrayRecord'
@@ -198,12 +198,12 @@ let RelocatedElementDestroy = 0 as ParsedInt
 // It is also what ROOTS the destructor: `MmRuntime.noteRelocatedFunctionUsage` installs every callee named
 // by an `.rdata` relocation, and this record is that callee's only compile-time reference once the global's
 // `__module_init` construction is gone.
-export function registerImmortalEmptyArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementDestroy ByteArray) returns String
+export function registerImmortalEmptyArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementDestroy ByteArray, debugStream bool) returns String
 	let trivial = elementDestroy.isEmpty()
 	let destroyName = TrivialElementDestroyLabelSegment if trivial else String.from(elementDestroy)
 	let destroySlot = TrivialElementDestroy if trivial else RelocatedElementDestroy
 	let recordBytes = immortalRecordBytes(NoImmortalBlob, length: 0, elementSize: elementSize as ParsedInt, elementDestroy: destroySlot)
-	return globalData.registerRdataConstantLabeled("{EmptyArrayRecordPrefix}{elementSize}_{destroyName}", bytes: recordBytes, kind: RdataPayloadKind.byteArrayRecord)
+	return registerImmortalRecordLabeled(globalData, label: "{EmptyArrayRecordPrefix}{elementSize}_{destroyName}", record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
 end 'registerImmortalEmptyArrayRecord'
 
 // ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** They used to be four

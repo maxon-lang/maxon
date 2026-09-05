@@ -604,9 +604,9 @@ end 'registerStringBlob'
 
 // Register a literal's record, seeded with its blob's offset (see `buildStringRecordBytes` for why the
 // offset, not 0). `blobLabel` must already be registered — its offset is read back here.
-function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength BytePos, singleByteGraphemes bool) returns String
+function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength BytePos, singleByteGraphemes bool, debugStream bool) returns String
 	let blobOffset = globalData.rdataOffsetOf(blobLabel)
-	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes), kind: RdataPayloadKind.stringRecord)
+	return registerImmortalRecord(globalData, prefix: StringRecordPrefix, record: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes), kind: RdataPayloadKind.stringRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
 end 'registerStringRecord'
 
 // ⭐ **THE WHOLE OF "MAKE THESE BYTES AN IMMORTAL `.rdata` String", AS ONE CALL — blob, record, and the
@@ -620,9 +620,9 @@ end 'registerStringRecord'
 // `EnumLookupRuntime.synthesizeEnumFromName`, which needs one constant String per case NAME inside a body it
 // builds after the pipeline. The string a literal produces and the string that helper compares against are
 // then one shaping — which is the whole point, because they are compared with each other by `__str_eq`.
-export function registerStringLiteralRecord(globalData GlobalDataTable, bytes ByteArray) returns String
+export function registerStringLiteralRecord(globalData GlobalDataTable, bytes ByteArray, debugStream bool) returns String
 	let blobLabel = registerStringBlob(globalData, bytes: bytes)
-	let recordLabel = registerStringRecord(globalData, blobLabel: blobLabel, byteLength: bytes.count(), singleByteGraphemes: bytesAreSingleByteGraphemes(bytes))
+	let recordLabel = registerStringRecord(globalData, blobLabel: blobLabel, byteLength: bytes.count(), singleByteGraphemes: bytesAreSingleByteGraphemes(bytes), debugStream: debugStream)
 	globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
 	return recordLabel
 end 'registerStringLiteralRecord'

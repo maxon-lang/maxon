@@ -115,6 +115,121 @@ function boxPrefixBytes(debugStream bool) returns ParsedInt
 	return (HeaderBytes + DebugStreamPackedIdBytes) if debugStream else HeaderBytes
 end 'boxPrefixBytes'
 
+// ⭐⭐ **THE REFCOUNT AN IMAGE RECORD'S SYNTHETIC HEADER CARRIES — the mark that says "this box was never
+// allocated", for a record of ANY SHAPE.**
+//
+// `BufferOwnership.emitRecordIsImmortal` can only mark a `__ManagedMemory`-shaped record, because it reads
+// `capacity@16` — a slot a user struct does not have, where offset 16 is whatever the author declared. The
+// mark for an arbitrary record therefore has to live OUTSIDE it, and the allocation header every managed
+// box is addressed through is the one thing every record shape shares.
+//
+// ⚠ **THE VALUE IS THE BOOTSTRAP'S** (`RuntimeEmitter.MmImmortalRefcount`), and sharing it is the point: the
+// two compilers' images are read by the same eyes and compared with the same hexdumps, and a second
+// spelling of "never counted" would make one of them illegible. 2^62 is positive, far from 0, far from
+// wrapping and unreachable by a real count — a program cannot hold 2^62 owners of one box — so no
+// arithmetic on a live refcount arrives at it and no pointer-shaped guard mistakes it for an address.
+let MmImmortalRefcount = 4611686018427387904 as ParsedInt  // 0x4000_0000_0000_0000 = 2^62
+
+// A header field is one machine word: the three offsets above are eight apart because of it, and the
+// DebugStream prefix word below them is the same width.
+let HeaderSlotBytes = 8 as BytePos
+
+// `destructor@0` for a record that has none, and the packed id of a box that was never allocated — both
+// zero, and named apart because they answer different questions in the two slots they fill.
+let NoDestructor = 0 as ParsedInt
+let NoAllocationId = 0 as ParsedInt
+
+// ⭐⭐ **THE SYNTHETIC ALLOCATION HEADER AN IMAGE RECORD IS REGISTERED BEHIND** — the bytes that sit in
+// `.rdata` immediately before the record, so that `ptr - HeaderBytes` reaches a header saying "immortal"
+// rather than whatever payload the section packer happened to place there.
+//
+// ⚠ **THE SIZE COMES FROM `boxPrefixBytes`, THE VERY FUNCTION `__mm_alloc` SIZES ITS OWN PREFIX WITH.** A
+// `--debugstream` build carries the packed-id word BELOW the three fields, so the prefix is 32 there and 24
+// otherwise; a header minted at a literal 24 would leave a traced build reading an image record's id out of
+// the `.rdata` payload in front of it.
+//
+// ⭐⭐ **`size@8` IS THE RECORD'S OWN BYTE COUNT, AND ITS ONE READER IS `__mm_own`'s COPY ARM.** A durable
+// sink handed an image record must be given a PRIVATE box instead, and the extent of that copy has to come
+// from somewhere a runtime can read; the header is the only thing every record shape shares.
+//
+// ⛔ **IT IS ALSO WHAT A MISSED IMMORTALITY TEST WOULD USE, AND NO VALUE MAKES THAT ARM SAFE**: `__mm_free`
+// would hand `__slab_free` an `.rdata` address whatever this word said. So the field is TRUE, and the
+// guarantee is the test at the release door (`emitRefcountCheckToLastOwner`) — `__mm_free`'s own header
+// states why the test cannot live there instead.
+//
+// The packed-id word a traced build carries is zero: an image record has no allocation id because it was
+// never allocated, and nothing reads it — every mm-trace event is emitted past a test that has already sent
+// an immortal record home.
+//
+// Each slot is appended at its named offset and the appender refuses to write it anywhere else, so the
+// offsets the runtime loads by and the offsets this writes are one set of constants that cannot drift —
+// `BufferOwnership.appendRecordSlot`'s discipline, applied to the header the record is addressed through.
+export function immortalBoxHeaderBytes(debugStream bool, recordBytes ParsedInt) returns ByteArray
+	var header = ByteArray.create()
+	if debugStream 'tracedBuild'
+		header.append(scalarImage(NoAllocationId, byteCount: HeaderSlotBytes))
+	end 'tracedBuild'
+
+	let base = header.count() as ByteOffset
+	appendHeaderSlot(header, base: base, expectedOffset: HeaderDestructorOffset, value: NoDestructor)
+	appendHeaderSlot(header, base: base, expectedOffset: HeaderSizeOffset, value: recordBytes)
+	appendHeaderSlot(header, base: base, expectedOffset: HeaderRefcountOffset, value: MmImmortalRefcount)
+
+	if header.count() != boxPrefixBytes(debugStream) 'sizeDrift'
+		panic("immortalBoxHeaderBytes: assembled {header.count()} bytes, not the {boxPrefixBytes(debugStream)} `__mm_alloc` prepends — an image record addressed through a header of the wrong width reads its neighbour's bytes")
+	end 'sizeDrift'
+	return header
+end 'immortalBoxHeaderBytes'
+
+// Where inside an image record's `.rdata` payload the record itself begins — the bytes the header above
+// spends, and therefore where the payload's LABEL points. Derived from `boxPrefixBytes`, the same number
+// `immortalBoxHeaderBytes` asserts its own length against, so an address and the bytes at it cannot drift.
+export function immortalBoxHeaderSize(debugStream bool) returns ByteOffset
+	return boxPrefixBytes(debugStream) as ByteOffset
+end 'immortalBoxHeaderSize'
+
+// Append one header word at `expectedOffset` from the header BASE, refusing to write it anywhere else.
+function appendHeaderSlot(header ByteArray, base ByteOffset, expectedOffset ByteOffset, value ParsedInt)
+	if (header.count() as ByteOffset) - base != expectedOffset 'offsetDrift'
+		panic("appendHeaderSlot: a header field is being written at offset {(header.count() as ByteOffset) - base} but its constant says {expectedOffset} — the header layout the runtime reads and this writes have drifted")
+	end 'offsetDrift'
+
+	header.append(scalarImage(value, byteCount: HeaderSlotBytes))
+end 'appendHeaderSlot'
+
+// ⭐⭐ **IS THIS BOX IMAGE DATA? — `refcount == MmImmortalRefcount`, asked at the header.**
+//
+// ⛔⛔ **IT IS NOT `BufferOwnership.emitRecordIsImmortal` AND THE TWO ARE NEVER INTERCHANGEABLE.** That one
+// asks a RECORD question at `capacity@16` and is safe only on a `__ManagedMemory`-shaped record; this asks a
+// BOX question at the header and is safe only on a pointer `__mm_alloc` returned or an image record
+// registered behind `immortalBoxHeaderBytes`. Asking either of the other's subject is a WRONG LOAD: on a
+// user struct `capacity@16` is whatever field the author declared there, and on an interior pointer the
+// header word is the previous element's data.
+//
+// The two coexist because they answer for different populations, and the joint invariant that keeps them
+// from disagreeing is `BufferOwnership.immortalRecordPayload`'s: a capacity-bearing image record carries
+// BOTH marks or the payload is refused at the minting door.
+//
+// ⚠ **NOT `export`ED, and E3092 is what says so**: every release and acquire path that must ask it is built
+// in this file, so an export would advertise a second door to a load that is only safe on a box.
+function emitBoxIsImmortal(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+	let refcount = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
+	let sentinel = emitConst(module, block: block, value: MmImmortalRefcount, ids: ids)
+	return emitCmp(module, block: block, a: refcount, b: sentinel, pred: StdCmpPred.eq, ids: ids)
+end 'emitBoxIsImmortal'
+
+// ⭐ **SEND AN IMAGE RECORD HOME BEFORE THE COUNT — the ONE HOME of that routing, and of which way round
+// its `condBranch` goes.** Four doors ask it: the shared release path (`emitRefcountCheckToLastOwner`) and
+// the three entries that touch a header on their own (`__mm_incref`, `__mm_retain`, `__mm_sole_box`).
+//
+// ⚠ Written once for `emitRefuseNonOwnedFillTarget`'s stated reason: swap the two edges in one copy and
+// that door stops guarding while its three twins keep working, so nothing goes red — and what goes wrong
+// then is a refcount read-modify-write on a read-only page.
+function emitRouteAwayFromImmortalBox(module StdModule, block IrBlock, ptr ValueId, immortal IrBlock, counted IrBlock, ids ValueMinter)
+	let isImmortal = emitBoxIsImmortal(module, block: block, ptr: ptr, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: counted.id))
+end 'emitRouteAwayFromImmortalBox'
+
 // ⛔⛔ **THE SIZE-CLASSED FREE LISTS STOOD HERE AND WENT WITH THE CUTOVER (S4).** They were a
 // 16-byte-granular bucket table (`__mm_free_lists`, its 128 KB array committed lazily by
 // `__mm_free_lists_base`, threaded LIFO through each dead box's own payload) and they existed for one
@@ -221,6 +336,10 @@ let MmRawLiveCountLabel = b"__mm_raw_live_count"
 
 export let MmIncrefName = b"__mm_incref"
 export let MmRetainName = b"__mm_retain"
+
+// ⭐⭐ **`__mm_own(box) -> box` — the co-own a DURABLE SINK owes a plain box: `__mm_retain` for a heap one
+// and a private COPY for an image record.** See `buildMmOwn` for the defect the plain incref was.
+export let MmOwnName = b"__mm_own"
 export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
@@ -672,6 +791,9 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesRetain 'retain'
 		buildMmRetain(module)
 	end 'retain'
+	if usage.usesMmOwn 'own'
+		buildMmOwn(module)
+	end 'own'
 	if usage.usesMmIsNull 'isNull'
 		buildMmIsNull(module)
 	end 'isNull'
@@ -1783,17 +1905,27 @@ end 'emitMmFreeEvent'
 // `emitAdjustRefcount`, which carries the argument. It was atomic between G2 and EC10, and the half it
 // guarded is the LOUD one: a lost increment frees a box an owner still holds.
 //
+// ⭐ **AN IMAGE RECORD LEAVES AT THE TOP, UNCOUNTED.** Its header is in `.rdata`, so the read-modify-write
+// below would be a write into a read-only page; and there is nothing to count — the record outlives every
+// owner. The paired release is `emitRefcountCheckToLastOwner`'s own immortal arm, which is what keeps the
+// skip from being a leak.
+//
 // There is no overflow check: the count is `owners - 1` in an i64, and a program cannot hold 2^63 views.
 function buildMmIncref(module StdModule)
 	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	let immortal = module.addBlock(func, label: b"immortal")
+	var counted = module.addBlock(func, label: b"counted")
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	let priorCount = emitAdjustRefcount(module, block: entry, ptr: ptr, delta: OneMore, ids: ids)
-	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, priorCount: priorCount, ids: ids)
+	emitRouteAwayFromImmortalBox(module, block: entry, ptr: ptr, immortal: immortal, counted: counted, ids: ids)
+	module.setTerminator(immortal, op: StdOp.retVoid)
+
+	let priorCount = emitAdjustRefcount(module, block: counted, ptr: ptr, delta: OneMore, ids: ids)
+	var out = emitMmIncrefEvent(module, func: func, block: counted, ptr: ptr, priorCount: priorCount, ids: ids)
 	module.setTerminator(out, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1812,20 +1944,74 @@ end 'buildMmIncref'
 //
 // ⚠⚠ **PLAIN AS OF EC10** — the same read-modify-write `buildMmIncref` and `__mm_decref` take, through the
 // one `emitAdjustRefcount`, which carries the argument. See `emitRefcountCheckToLastOwner`.
+//
+// ⭐ **AN IMAGE RECORD IS HANDED STRAIGHT BACK, UNCOUNTED**, for `buildMmIncref`'s reasons. The pointer is
+// the same either way, so the two arms differ only in whether the header was touched.
 function buildMmRetain(module StdModule)
 	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	let immortal = module.addBlock(func, label: b"immortal")
+	var counted = module.addBlock(func, label: b"counted")
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	let priorCount = emitAdjustRefcount(module, block: entry, ptr: ptr, delta: OneMore, ids: ids)
-	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, priorCount: priorCount, ids: ids)
+	emitRouteAwayFromImmortalBox(module, block: entry, ptr: ptr, immortal: immortal, counted: counted, ids: ids)
+	module.setTerminator(immortal, op: StdOp.ret(ptr))
+
+	let priorCount = emitAdjustRefcount(module, block: counted, ptr: ptr, delta: OneMore, ids: ids)
+	var out = emitMmIncrefEvent(module, func: func, block: counted, ptr: ptr, priorCount: priorCount, ids: ids)
 	module.setTerminator(out, op: StdOp.ret(ptr))
 
 	module.functions.push(func)
 end 'buildMmRetain'
+
+// ⭐⭐⭐ **`__mm_own(box) -> box` — TAKE OWNERSHIP OF A PLAIN BOX A DURABLE SINK IS ABOUT TO HOLD, COPYING IT
+// WHEN IT IS IMAGE DATA.**
+//
+// ⛔⛔ **THE PLAIN `__mm_incref` IS BALANCED FOR REFCOUNTING AND WRONG FOR WRITABILITY, AND THAT IS THE
+// DEFECT THIS EXISTS TO CLOSE.** An imaged struct's box lives in `.rdata` and its incref does nothing, so
+// the sink comes to own a READ-ONLY record and the first field write through it faults on x64 and silently
+// corrupts the image on wasm, which has no read-only section. MEASURED, two routes: a struct field
+// (`Holder.create(Seed)` then `h.m.next = 9`) and a container feed (`xs.push(Seed)` then a write through the
+// element) — an access violation each. It is `ManagedMemoryRuntime.__managed_retain`'s fork, over the shape
+// whose provenance is in the HEADER rather than in `capacity@16`.
+//
+// ⚠ **THE FORK IS AT RUN TIME BECAUSE PROVENANCE IS NOT A COMPILE-TIME FACT** — a merge phi may join an
+// imaged record with a heap one, which is the reading `LiteralArgPromotion`'s header already records for the
+// String half of the same question.
+//
+// ⚠ **A BYTE BLIT IS THE WHOLE CLONE**, because every field of an imaged struct is a scalar by construction
+// (`ProgramSignatures.constStructIsImageData` admits nothing else) — so the copy owns no slot a second owner
+// could be wrong about, and `destructor@0` is trivial for the same reason.
+function buildMmOwn(module StdModule)
+	var func = IrFunction.createFromStd(MmOwnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var copy = module.addBlock(func, label: b"copy")
+	var counted = module.addBlock(func, label: b"counted")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitRouteAwayFromImmortalBox(module, block: entry, ptr: box, immortal: copy, counted: counted, ids: ids)
+
+	let header = emitHeaderBase(module, block: copy, ptr: box, ids: ids)
+	let size = emitLoadField(module, block: copy, record: header, offset: HeaderSizeOffset, ids: ids)
+	let trivial = emitConst(module, block: copy, value: TrivialDestructor, ids: ids)
+	let fresh = ids.mint()
+	emitMmAllocCall(module, block: copy, result: fresh, size: size, destructor: trivial, tag: mmTagIndex(MmTag.Untagged), ids: ids)
+	module.appendOp(copy, op: StdOp.call(ids.mint(), callee: StrCopyName, args: threeArgs(fresh, second: box, third: size)))
+	module.setTerminator(copy, op: StdOp.ret(fresh))
+
+	let priorCount = emitAdjustRefcount(module, block: counted, ptr: box, delta: OneMore, ids: ids)
+	var out = emitMmIncrefEvent(module, func: func, block: counted, ptr: box, priorCount: priorCount, ids: ids)
+	module.setTerminator(out, op: StdOp.ret(box))
+
+	module.functions.push(func)
+end 'buildMmOwn'
 
 // ⭐⭐ **`__mm_sole_box(box)` — PROVE THIS BOX HAS ONE OWNER, OR ABORT.** The leaf of the soleness walk:
 // `emitIsSharedAllocation` owns what the count means (`owners - 1`, so sole is 0), so this reads literally
@@ -1833,22 +2019,26 @@ end 'buildMmRetain'
 // every compile-time gate and about to be handed to a second green thread, where a plain refcount has no
 // second party to lose a race to.
 //
-// ⚠ **IT MUST NOT BE HANDED AN IMMORTAL RECORD.** A `.rdata` literal's header is image data whose count
-// word nothing maintains; `__managed_sole` asks `emitRecordIsImmortal` FIRST and returns, exactly as
-// `__managed_decref` does. Every other caller reaches it with an `__mm_alloc` box.
+// ⭐ **AN IMAGE RECORD IS SOLE BY CONSTRUCTION AND EXITS AT THE TOP.** Its header carries
+// `MmImmortalRefcount`, which is neither 0 nor a count anything maintains, so `emitIsSharedAllocation`
+// would read it as "somebody else holds it" and abort a transfer that is in fact always safe: the record
+// is read-only and never freed, so a second green thread holding it can neither race nor outlive it.
 function buildMmSoleBox(module StdModule)
 	var func = IrFunction.createFromStd(MmSoleBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var counted = module.addBlock(func, label: b"counted")
 	var shared = module.addBlock(func, label: b"shared")
 	let sole = module.addBlock(func, label: b"sole")
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	let hasSecondOwner = emitIsSharedAllocation(module, block: entry, ptr: box, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(hasSecondOwner, thenBlockId: shared.id, elseBlockId: sole.id))
+	emitRouteAwayFromImmortalBox(module, block: entry, ptr: box, immortal: sole, counted: counted, ids: ids)
+
+	let hasSecondOwner = emitIsSharedAllocation(module, block: counted, ptr: box, ids: ids)
+	module.setTerminator(counted, op: StdOp.condBranch(hasSecondOwner, thenBlockId: shared.id, elseBlockId: sole.id))
 
 	emitRuntimeAbort(module, func: func, block: shared, abort: RuntimeAbort.transferredRecordNotSole, ids: ids)
 
@@ -1966,6 +2156,10 @@ end 'emitLoadRefcount'
 // increfs a cheaper instruction (`lock add` rather than `lock xadd`; `lowerAtomicRmw` states that saving).
 // That trade is simply gone: the load's result feeds the add whether or not the caller wants it, so the two
 // increfs pay nothing for answering it on an untraced build.
+// ⛔ **THE CALLER MUST HAVE CLEARED `emitBoxIsImmortal` FIRST.** The store below is what makes an image
+// record's header fatal: it lives in `.rdata`, so this is a write into a read-only page — a fault on x64
+// and a SILENT corruption on wasm, which has no read-only section. Every one of this function's callers
+// routes through `emitRouteAwayFromImmortalBox` before reaching it.
 function emitAdjustRefcount(module StdModule, block IrBlock, ptr ValueId, delta ParsedInt, ids ValueMinter) returns ValueId
 	let header = emitHeaderBase(module, block: block, ptr: ptr, ids: ids)
 	let prior = emitLoadField(module, block: block, record: header, offset: HeaderRefcountOffset, ids: ids)
@@ -2045,11 +2239,27 @@ end 'emitIsSharedAllocation'
 // before the branch also means the caller's `lastOwner` block is untouched by this function, which every
 // one of its nine callers relies on: they append their own reclaim ops into it.
 //
+// ⭐⭐ **THE IMMORTALITY TEST IS HERE, AHEAD OF THE READ-MODIFY-WRITE, AND THAT PLACEMENT IS WHAT MAKES IT
+// COVER NINE CALLERS AT ONE COST.** An image record's box lives in `.rdata`, so `emitAdjustRefcount`'s STORE
+// is a write into a read-only page; the test has to precede it, and this function is the one place every
+// release path passes through — `__mm_decref`, `__str_decref`, `__managed_decref`, `__managed_cursor_decref`,
+// both list drops, the file/dir/socket box drops, every `__destruct_<T>` field cascade and every union
+// destructor. It asks `emitBoxIsImmortal` (the HEADER question) rather than `emitRecordIsImmortal` (the
+// `capacity@16` question), because the records reaching here are of every shape, and only the header is a
+// slot every shape has.
+//
+// ⛔ **IT DOES NOT BELONG INSIDE `__mm_free`.** A synthetic header makes an image record look WELL-FORMED
+// there: `__mm_free` would compute an allocation base and hand the slab an address it never handed out. The
+// release door is where the box is still deciding whether to die, so that is where it must be turned back.
+//
 // ⚠ `func` is needed only because the event SPLITS `entry` into new blocks; with `--debugstream` off it
 // is unread and not one op is emitted.
 export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
-	let priorCount = emitAdjustRefcount(module, block: entry, ptr: record, delta: OneFewer, ids: ids)
-	var cur = emitMmDecrefEvent(module, func: func, block: entry, ptr: record, priorCount: priorCount, ids: ids)
+	var counted = module.addBlock(func, label: b"counted")
+	emitRouteAwayFromImmortalBox(module, block: entry, ptr: record, immortal: lower, counted: counted, ids: ids)
+
+	let priorCount = emitAdjustRefcount(module, block: counted, ptr: record, delta: OneFewer, ids: ids)
+	var cur = emitMmDecrefEvent(module, func: func, block: counted, ptr: record, priorCount: priorCount, ids: ids)
 
 	// `0 means ONE owner` is `emitIsSharedAllocation`'s convention, asked here of the count as it stood
 	// BEFORE this decrement rather than of the word — the word no longer holds it. A prior of 0 means this
@@ -2059,11 +2269,9 @@ export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, 
 	let wasShared = emitCmp(module, block: cur, a: priorCount, b: noOwnerLeft, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(wasShared, thenBlockId: lower.id, elseBlockId: lastOwner.id))
 
-	// ⚠ **`lower` HOLDS NO OPS NOW, AND THE PARAMETER STAYS ANYWAY.** The decrement it used to carry has
-	// moved above the branch, so the not-last-owner arm has nothing left to do but return. Its NINE callers
-	// across seven runtime files each create and pass the block, so folding it into a `lastOwner`-only
-	// signature is a change to files this rung does not own; it is named as a follow-up in G2's report
-	// rather than done half-way here.
+	// ⚠ **`lower` HOLDS NO OPS AND IS THE EXIT FOR BOTH SURVIVING ARMS** — a box another owner still holds,
+	// and an image record that has no count to lower. Neither has anything to do but return, and giving the
+	// immortal arm a block of its own would be a second `retVoid` under a different name.
 	module.setTerminator(lower, op: StdOp.retVoid)
 end 'emitRefcountCheckToLastOwner'
 
@@ -2170,6 +2378,13 @@ end 'emitBoxAllocationBase'
 // the OS whole. Skipping it would mean branching on the box's size on the path of every free in the
 // language to save work on the rarest one; a box past `SlabMaxSmallSize` is at least 32 KiB, so the fill is
 // also a rounding error against the `VirtualFree`/`munmap` that follows it.
+//
+// ⛔⛔ **THE IMMORTALITY TEST IS NOT HERE AND MUST NEVER BE MOVED HERE.** A synthetic header makes an image
+// record look WELL-FORMED to this function: it would read a `size@8`, poison that range and hand
+// `__slab_free` an `.rdata` address the allocator never returned — a failure that looks plausible rather
+// than obvious. By the time control reaches a free the box has already been judged dead, so the judgement
+// is what has to be right; the test therefore sits at the top of the release door
+// (`emitRefcountCheckToLastOwner`), where a record is still deciding whether to die.
 //
 // ⭐ THE DESTRUCTOR CASCADE ALSO LANDS HERE AT P1.2 (still deferred): the header carries the destructor
 // (`__mm_alloc` stored it at `HeaderDestructorOffset`); loading it and calling it through `callIndirect`

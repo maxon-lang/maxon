@@ -225,3 +225,53 @@ end 'main'
 ```
 ```mm-trace
 ```
+
+<!-- test: module-let-scalar-struct-costs-no-allocation -->
+A module-scope `let` holding a struct of scalars is a constant like any other: every field is decided when
+the program is compiled, nothing about it can change while the program runs, and so it must cost no
+memory-manager event. The golden is EMPTY.
+
+⭐ **THIS SHAPE CANNOT BE MARKED THE WAY THE ARRAYS ABOVE ARE, AND THAT IS WHY IT IS PINNED SEPARATELY.**
+An `Array`'s immortality is a sentinel in its own `capacity@16`, so `emitRecordIsImmortal` reads a slot the
+record already has. A user struct has no such slot — offset 16 is whatever the author declared there, and a
+test that read it would be comparing a field against a sentinel. The mark for a record of arbitrary shape
+has to live OUTSIDE the record, in the allocation header every managed box is addressed through, which for
+image data costs bytes in `.rdata` and nothing at run time because there is no allocator on that path.
+
+Measured, before the record moved into the image, for the single global below:
+
+    mm_alloc Minter #1 size=8
+    mm_decref Minter #1 rc=0
+    mm_free Minter #1
+
+Eight bytes and a free, per process, for a value that never changes and that most programs holding it will
+never read.
+
+⚠ **The field is declared `var` deliberately, and reaching it for a write is already refused.** A mutable
+field on an immortal record is the shape that would write to a read-only page — and `var mine = Seed;
+mine.next = 9` does not compile: **E2015**, *"an aggregate has no owning COPY in shv2, so the write would
+reach the global's own record"*. That refusal predates imaging and is what makes a `var` field on this
+record safe to place in `.rdata` rather than merely lucky.
+<!-- MmTrace -->
+```maxon
+typealias Count = int(0 to 1000)
+
+type Minter
+	export var next as Count
+
+	static function create(next Count) returns Self
+		return Self{next: next}
+	end 'create'
+end 'Minter'
+
+let Seed = Minter.create(7)
+
+function main() returns ExitCode
+	return (Seed.next + 9) as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+```mm-trace
+```

@@ -144,6 +144,12 @@ export enum RdataPayloadKind
 	// byte blob rather than text, so it renders as a bare label — the `byteArrayBlob` answer for the record
 	// over it.
 	byteArrayRecord
+	// The BOX a module-level `let` holding a constructed struct of scalars IS
+	// (`LowerMaxonToStd.lowerImmortalStructRecord`) — its declared fields at their declared offsets, behind
+	// the synthetic allocation header that marks it immortal. It is its own kind rather than a
+	// `byteArrayRecord` because the two share no layout: that one is six machine words a runtime reads by
+	// name, this one is whatever the author declared.
+	structRecord
 end 'RdataPayloadKind'
 
 // The kind column, parallel to `names`/`values` — see `GlobalDataTable.payloadKinds`.
@@ -330,6 +336,16 @@ export type GlobalDataTable
 	// REORDERED by size to kill padding, these are laid out in registration order and their offsets
 	// are known the moment they are appended.
 	export var rdataOffsets as RdataOffsetMap
+	// ⭐⭐ **WHERE INSIDE ITS PAYLOAD EACH LABEL POINTS — 0 for every payload but an IMMORTAL RECORD, whose
+	// payload opens with the synthetic allocation header it is addressed through
+	// (`MmRuntime.immortalBoxHeaderBytes`).** The header and the record are ONE payload so the section
+	// packer cannot separate them, and the label names the RECORD so a read is still a bare `lea` with no
+	// displacement to add.
+	//
+	// ⚠ `rdataOffsets` above stays the payload's own START, which is what `rdataImage`'s drift assert
+	// compares against; `rdataOffsetOf` — what every writer and relocation resolves through — adds this.
+	// A label absent here points at its payload's first byte.
+	export var rdataLabelOffsets as RdataOffsetMap
 	// The running total bytes registered so far — the offset the NEXT `.rdata` payload lands at,
 	// maintained beside every push rather than re-summed. It is a SECOND copy of a fact `values`
 	// already holds (the concatenated length), so `rdataImage`'s drift assert is what keeps the two
@@ -410,7 +426,7 @@ export type GlobalDataTable
 	export var debugStreamNames as DebugStreamNameTable
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -440,15 +456,39 @@ export type GlobalDataTable
 	// payload — that is what dedup means — and the kind describes the payload, not the request. (A producer
 	// that must keep its own slot regardless of content has the labelled door below instead, which is how the
 	// float islands stopped being handed a `__str_blob_` label.)
-	export function registerRdataConstant(prefix String, bytes ByteArray, kind RdataPayloadKind) returns String
-		return try self.valueDedup.get(bytes) otherwise 'fresh'
-			let label = "{prefix}{self.nextStringId}"
-			self.nextStringId = self.nextStringId + 1
-			self.appendRdataPayload(label, bytes: bytes, kind: kind)
-			self.valueDedup.upsert(bytes, value: label)
-			return label
-		end 'fresh'
+	//
+	// ⛔⛔ **`labelAt` IS NOT DISCARDED, BECAUSE IT IS THE ONE THING A POOL HIT CANNOT BE WRONG ABOUT.** It
+	// says where inside the payload the label points, so a hit whose incumbent disagrees would hand this
+	// caller an address 24 or 32 bytes from the record it asked for and every field read would be off by a
+	// header. The bytes cannot rule it out: an immortal record's payload opens with a header, and nothing
+	// stops a byte-string blob from containing those same bytes. A disagreeing hit therefore takes a slot of
+	// its own rather than the pool's — the same answer the float islands got from the labelled door, for the
+	// same reason, and it costs one payload in a case a program has to go out of its way to construct.
+	export function registerRdataConstant(prefix String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset = 0) returns String
+		if let pooled = try self.valueDedup.get(bytes) 'poolHit'
+			if self.labelOffsetOf(pooled) == labelAt 'sameShape'
+				return pooled
+			end 'sameShape'
+
+			// A byte coincidence between two SHAPES. This registration takes a slot of its own and the pool
+			// keeps its incumbent, so neither producer is ever handed the other's address and a third
+			// registration of the incumbent's shape still hits the pool.
+			return self.mintRdataConstant(prefix, bytes: bytes, kind: kind, labelAt: labelAt)
+		end 'poolHit'
+
+		let label = self.mintRdataConstant(prefix, bytes: bytes, kind: kind, labelAt: labelAt)
+		self.valueDedup.upsert(bytes, value: label)
+		return label
 	end 'registerRdataConstant'
+
+	// Mint the next synthetic label and append its payload — the fresh half of the door above, WITHOUT the
+	// pool join, which only the first registrant of a shape makes.
+	function mintRdataConstant(prefix String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset) returns String
+		let label = "{prefix}{self.nextStringId}"
+		self.nextStringId = self.nextStringId + 1
+		self.appendRdataPayload(label, bytes: bytes, kind: kind, labelAt: labelAt)
+		return label
+	end 'mintRdataConstant'
 
 	// Append one FRESH `.rdata` payload under `label`: assign its offset (the running total), advance the
 	// total by this payload's length, and index it by name. The ONE writer of a new rdata slot's offset/name
@@ -464,9 +504,14 @@ export type GlobalDataTable
 	// aligned too. The invariant is therefore local and checkable in one line — *every stored payload's
 	// length is a multiple of 8* — rather than a property each producer has to preserve and one of them
 	// silently did not. See `RdataPayloadAlignment` for the defect that shape produced.
-	function appendRdataPayload(label String, bytes ByteArray, kind RdataPayloadKind)
+	function appendRdataPayload(label String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset)
+		if labelAt > bytes.count() 'labelPastPayload'
+			panic("GlobalDataTable.appendRdataPayload: '{label}' would be addressed at offset {labelAt} of a {bytes.count()}-byte payload — a label names a point WITHIN what it registers, and an EMPTY payload (a `b\"\"` blob) has only its start")
+		end 'labelPastPayload'
+
 		let payload = rdataStoredPayload(bytes)
 		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
+		self.rdataLabelOffsets.upsert(label, value: labelAt)
 		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count()
 		self.nameIndex.upsert(label, value: self.names.count())
 		self.names.push(label)
@@ -486,7 +531,7 @@ export type GlobalDataTable
 		self.nextStringId = self.nextStringId + 1
 		var bytes = ByteArray.create()
 		bytes.growFilled(slotCount * JumpTableSlotBytes, value: 0)
-		self.appendRdataPayload(label, bytes: bytes, kind: RdataPayloadKind.jumpTable)
+		self.appendRdataPayload(label, bytes: bytes, kind: RdataPayloadKind.jumpTable, labelAt: 0)
 		return label
 	end 'registerJumpTable'
 
@@ -544,13 +589,13 @@ export type GlobalDataTable
 	// be handed back as the dedup answer to a later `registerRdataConstant`. The offset/name bookkeeping is
 	// the shared `appendRdataPayload` — `registerRdataConstant`'s fresh path minus the dedup join, so
 	// `rdataImage`'s drift assert covers it too.
-	export function registerRdataConstantLabeled(label String, bytes ByteArray, kind RdataPayloadKind) returns String
+	export function registerRdataConstantLabeled(label String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset = 0) returns String
 		if self.rdataOffsets.contains(label) 'alreadyRegistered'
 			self.requireIdenticalPayload(label, bytes: bytes)
 			return label
 		end 'alreadyRegistered'
 
-		self.appendRdataPayload(label, bytes: bytes, kind: kind)
+		self.appendRdataPayload(label, bytes: bytes, kind: kind, labelAt: labelAt)
 		return label
 	end 'registerRdataConstantLabeled'
 
@@ -687,8 +732,15 @@ export type GlobalDataTable
 	// asks through, and the exact mirror of `dataSectionOffsetOf`. A miss is an invariant break,
 	// not a case: every label reaching here came from a `movsdRegRip` this table minted.
 	export function rdataOffsetOf(label String) returns ByteOffset
-		return try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataOffsetOf: no .rdata constant is labelled '{label}' — every label a `movsdRegRip` carries is one registerRdataConstant minted")
+		let start = try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataOffsetOf: no .rdata constant is labelled '{label}' — every label a `movsdRegRip` carries is one registerRdataConstant minted")
+		return start + self.labelOffsetOf(label)
 	end 'rdataOffsetOf'
+
+	// How far into its payload `label` points — see `rdataLabelOffsets`. A label with no entry names the
+	// payload's first byte, which is every payload but an immortal record's.
+	function labelOffsetOf(label String) returns ByteOffset
+		return try self.rdataLabelOffsets.get(label) otherwise 0
+	end 'labelOffsetOf'
 
 	// ⭐ **THE ONE `label` → COLUMN INDEX STEP**, so the three readers below cannot come to disagree about
 	// what a missing name means. Like `rdataOffsetOf`, a miss is an invariant break rather than a case:

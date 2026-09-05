@@ -44,6 +44,11 @@
 // very scalar the op carries and needs no name round-trip. See `MaxonToStdLowering.witnessSlotsOf`.
 typealias WitnessSlotListMemo = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
 
+// The `.rdata` label prefix a module-level constructed-struct `let`'s box registers under — distinct from
+// `__str_rec_` and `__barr_rec_` so a reader of the section can tell a user struct from the two
+// `__ManagedMemory`-shaped records beside it.
+let ImmortalStructRecordPrefix = "__struct_rec_"
+
 export function maxonTypeToStdType(ref MaxonType) returns StdType
 	// The two arms TypeResolution was supposed to eliminate. They are a PIPELINE-ORDERING bug
 	// (that pass did not run, or left a residue) rather than a user error, and they are checked
@@ -900,6 +905,12 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 		// No service op carries a program literal: a `spawn`'s bytes are a TYPE NAME the lowering turns into
 		// two symbols, and a send's and a reply cell's are callee names no `.rdata` blob holds.
 		serviceSpawn to serviceReplyCell then break 'op'
+		// ⚠ An imaged struct record is registered by its own LOWERING and not here, because what it registers is
+		// not a blob: it is the whole payload — the synthetic allocation header and the box — and the LABEL it
+		// mints points inside it. A pre-registration would have to mint the same payload twice or hand this
+		// walk the header geometry, and the dedup that pools two identical records already makes one object of
+		// them whichever pass asks first.
+		immortalStructRecord then break 'op'
 	end 'op'
 end 'registerIfProgramLiteral'
 
@@ -1581,8 +1592,24 @@ type MaxonToStdLowering
 			serviceSpawn then self.lowerServiceSpawn(hlOp, dstBlock: dstBlock)
 			serviceSend then self.lowerServiceSend(hlOp, dstBlock: dstBlock)
 			serviceReplyCell then self.lowerServiceReplyCell(hlOp, dstBlock: dstBlock)
+			// W197: a module-level `let` holding a constructed struct of scalars — its box IS the image.
+			immortalStructRecord(result, bytes) then self.lowerImmortalStructRecord(result, bytes: bytes, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
+
+	// ⭐⭐ **A CONSTRUCTED STRUCT `let`'s BOX, IN `.rdata`, ADDRESSED BY ONE `lea`.** The payload is the
+	// synthetic allocation header (`MmRuntime.immortalBoxHeaderBytes`, whose refcount says "never counted")
+	// followed by the box itself, and the label names the BOX — so the address this answers is a pointer to
+	// the first field, exactly as `__mm_alloc` would have returned.
+	//
+	// ⭐ **BYTE-DEDUPED, WHICH IS WHAT MAKES EVERY READ OF ONE DECLARATION REACH ONE OBJECT.** A storage-less
+	// `let` re-materializes at each read (`Parser.emitImageStructRead`), so the reads share a record only
+	// because the table pools them — `registerImmortalByteArrayRecord`'s property, over a shape whose bytes
+	// are its fields.
+	function lowerImmortalStructRecord(result ValueId, bytes ByteArray, dstBlock IrBlock)
+		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: bytes, kind: RdataPayloadKind.structRecord, shape: ImmortalRecordShape.userStruct, debugStream: self.debugStream)
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
+	end 'lowerImmortalStructRecord'
 
 	// Lower a block terminator. A `literal` here is a parser bug (a literal is
 	// never a block terminator).
@@ -1616,6 +1643,7 @@ type MaxonToStdLowering
 			witnessDispatch to witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
 			panicAbortValue then panic("lowerMaxonToStd: a `panicAbortValue` op appeared as a block terminator (parser bug — like `panicAbort` it is a body op followed by a dead return terminator)")
 			errorFlagEncode then panic("lowerMaxonToStd: an `errorFlagEncode` op appeared as a block terminator (parser bug — it DEFINES the flag a routed throw's edge carries, so it is a value-producing body op emitted ahead of that edge's branch)")
+			immortalStructRecord then panic("lowerMaxonToStd: an `immortalStructRecord` op appeared as a block terminator (parser bug — an imaged struct record is a value-producing body op, never a terminator)")
 			serviceSpawn to serviceReplyCell then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, a send is a statement and a reply cell is a value the send that follows it reads; all three are body ops, never terminators)")
 		end 'lower'
 	end 'lowerTerminator'
@@ -1645,7 +1673,7 @@ type MaxonToStdLowering
 	// (`ripRelDisp32`). The two differ only in the section they measure from — which is exactly what
 	// the relocation kind discriminates.
 	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: registerStringLiteralRecord(self.globalData, bytes: bytes).toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: registerStringLiteralRecord(self.globalData, bytes: bytes, debugStream: self.debugStream).toByteArray()))
 	end 'lowerStringLiteral'
 
 	// ⭐ **A CONSTANT ARRAY LITERAL OVER AN IMMORTAL `.rdata` BLOB** — the Array analogue of
@@ -1681,7 +1709,7 @@ type MaxonToStdLowering
 		// at all and carries its element's destructor — two records the op cannot tell apart.
 		if let kind = try self.immortalConstArraySites.get(self.currentMaxonOpIndex) 'imageData'
 			let label = match kind 'shape'
-				constBlob gives registerImmortalByteArrayRecord(self.globalData, elementSize: elementSize, elementCount: elementCount, bytes: bytes)
+				constBlob gives registerImmortalByteArrayRecord(self.globalData, elementSize: elementSize, elementCount: elementCount, bytes: bytes, debugStream: self.debugStream)
 				emptyContainer(elementDestroy) gives self.ensureImmortalEmptyArrayRecord(elementSize, elementDestroy: elementDestroy)
 			end 'shape'
 			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
@@ -1733,7 +1761,7 @@ type MaxonToStdLowering
 	// `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names, so recording
 	// one here is what keeps the symbol the writer resolves against in the program at all.
 	function ensureImmortalEmptyArrayRecord(elementSize ElementStride, elementDestroy ByteArray) returns String
-		let label = registerImmortalEmptyArrayRecord(self.globalData, elementSize: elementSize, elementDestroy: elementDestroy)
+		let label = registerImmortalEmptyArrayRecord(self.globalData, elementSize: elementSize, elementDestroy: elementDestroy, debugStream: self.debugStream)
 		if self.emittedImmortalEmptyArrays.contains(label) 'alreadyStamped'
 			return label
 		end 'alreadyStamped'

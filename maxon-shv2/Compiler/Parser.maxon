@@ -1778,6 +1778,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		serviceSpawn to serviceSend gives AsyncCalleeLookup.none
 		// ⭐ A REPLY CELL mints a promise, and this is the road `awaitedPromiseFacts` finds it by (SV2).
 		serviceReplyCell(result, messageName) gives serviceReplyIfEqual(result, messageName: messageName, promise: promise)
+		immortalStructRecord gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -3848,6 +3849,7 @@ function nascentOpBranchesTo(op MaxonOp, target BlockId) returns bool
 		call to compare gives false
 		globalAddr to constArrayLiteral gives false
 		witnessDispatch to serviceReplyCell gives false
+		immortalStructRecord gives false
 	end 'k'
 end 'nascentOpBranchesTo'
 
@@ -10149,6 +10151,10 @@ union ManagedReceiverBinding
 	// record at the receiver exactly as the `constant` arm does, and is immutable for that arm's reason:
 	// `.rdata` is not writable, so `Live.push(1)` is E3019 and the synthetic `VarInfo` is what says so.
 	imageRecord(image TopLevelImageRecord)
+	// ⭐ An IMAGE-DATA `let` holding a constructed STRUCT — its box is `.rdata` too, so it is immutable for
+	// the arm above's reason, and it differs in carrying its bytes and its type NAME rather than a record
+	// description: a user struct has no stride, count or element destructor to describe.
+	imageStruct(bytes ByteArray, typeName ByteArray)
 end 'ManagedReceiverBinding'
 
 // ⭐ **DID A TOP-LEVEL MANAGED RECEIVER ANSWER THIS CALL?** — `dispatchOnManagedTopLevelReceiver`'s two
@@ -16259,6 +16265,10 @@ export type Parser
 		var atStatementStart = false
 		var lastTopLevelStatement = bodyStart
 		var sawATopLevelStatement = false
+		// ⭐ W197's column: how many statements the body has at all. The construction fact is about a body that
+		// is NOTHING BUT its `return`, and "the last statement is a return" cannot say that — a body whose
+		// first statement mutates a parameter and whose second returns `Self{…}` matches it exactly.
+		var topLevelStatements = 0
 		var sawTheFunctionsOwnEnd = false
 
 		var q = bodyStart
@@ -16286,6 +16296,7 @@ export type Parser
 				if blockDepth == 0 and atStatementStart 'aTopLevelStatementOpensHere'
 					lastTopLevelStatement = q
 					sawATopLevelStatement = true
+					topLevelStatements = topLevelStatements + 1
 				end 'aTopLevelStatementOpensHere'
 				atStatementStart = false
 			end 'aRealToken'
@@ -16520,6 +16531,21 @@ export type Parser
 			end 'someReturnHandedTheCalleesBack'
 		end 'returnsAFreshRecord'
 
+		// ⭐⭐ **W197: THE BODY IS THE CONSTRUCTION IT PERFORMS.** Five conditions, and every one of them is what
+		// makes a CALL to this declaration substitutable by that construction:
+		//
+		//   • the walk reached the declaration's OWN `end`, so the statement below really is the whole body —
+		//     the condition the three rules above open with, for their reason;
+		//   • the body has exactly ONE top-level statement, so nothing runs before or after the construction;
+		//   • that statement is a `return`, and `noteConstructsFromParams` proves the returned expression is a
+		//     record literal writing each of this declaration's parameters into the field of its own name;
+		//   • it declares no `throws`, so the call the fold removes has no error edge a caller was reading;
+		//   • it takes NO RECEIVER. `Self{…}` is a static factory's shape, and an instance method's parameter
+		//     list carries a receiver this scan's name list does not distinguish from a declared parameter.
+		if sawTheFunctionsOwnEnd and not declaresThrows and not takesReceiver and topLevelStatements == 1 and self.kindAt(lastTopLevelStatement) == TokenKind.return and self.noteConstructsFromParams((lastTopLevelStatement + 1) as TokenIndex, paramNames: paramNames) 'constructsFromItsParameters'
+			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.constructsSelfFromItsParameters))
+		end 'constructsFromItsParameters'
+
 		if any 'consumes'
 			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds), takesReceiver: takesReceiver))
 		end 'consumes'
@@ -16657,6 +16683,90 @@ export type Parser
 		forwards.push(freshReturnForwardKey(self.tokenAt(valueStart).value, funcName: funcName, takesReceiver: takesReceiver))
 		return true
 	end 'noteFreshReturnShape'
+
+	// ⭐⭐⭐ **DOES THIS `return` HAND BACK A RECORD BUILT OUT OF THIS DECLARATION'S OWN PARAMETERS, AND NOTHING
+	// ELSE? — W197's whole substitution proof.** Exactly one shape is recognised:
+	//
+	//   `return <Name>{ p0: p0, p1: p1, … }` — the declaration's parameters, in declaration order, each
+	//   written into the field of its own name, with the matching `}` the last token on the line.
+	//
+	// ⭐⭐ **WHY THAT SHAPE AND NOTHING WIDER.** A caller's arguments are then the record's fields by a mapping
+	// the tokens carry, so `T.create(7)` and `T{p0: 7}` describe the same bytes — which is what lets a
+	// top-level `let` be IMAGED rather than built by `__module_init`. Admit a field whose value is an
+	// EXPRESSION and the mapping needs an evaluator; admit a field named differently from its parameter and it
+	// needs a second column to carry the correspondence; admit a body with a second statement and the
+	// construction is no longer the whole of what the call does. Each is a real feature and none is this one.
+	//
+	// ⚠ **THE PARAMETER ORDER IS PART OF THE PROOF, not a convenience.** Reading field `k` against parameter
+	// `k` is what makes the fact a bare bit rather than a published mapping — and a factory that permutes its
+	// parameters into the fields simply states nothing, which is this family's rule: every ambiguity resolves
+	// toward recording NOTHING, and the cost of a missed `true` is a global built before `main` exactly as it
+	// was.
+	//
+	// ⚠ **EVERY PARAMETER MUST APPEAR AND NO OTHER FIELD MAY**, so a slot the literal fills from something
+	// other than an argument is out of reach. A field the literal OMITS is not: it takes its declared default,
+	// which the consumer resolves through the same `applyConstFieldDefaults` a written literal's does.
+	function noteConstructsFromParams(valueStart TokenIndex, paramNames ByteArrayArray) returns bool
+		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'
+			return false
+		end 'notANameAtAll'
+
+		let openBrace = (valueStart + 1) as TokenIndex
+		if self.kindAt(openBrace) != TokenKind.leftBrace 'notARecordLiteral'
+			return false
+		end 'notARecordLiteral'
+
+		if not self.recordLiteralEndsTheLine(openBrace) 'somethingFollowsTheLiteral'
+			return false
+		end 'somethingFollowsTheLiteral'
+
+		var matched = 0
+		var q = (openBrace + 1) as TokenIndex
+		while self.kindAt(q) != TokenKind.rightBrace 'eachField'
+			// A malformed body runs the scan to the file's `eof`; answering false there is the safe direction,
+			// exactly as `groupEndsTheLine`'s own unclosed-literal arm is.
+			if self.kindAt(q) == TokenKind.eof 'unclosedLiteral'
+				return false
+			end 'unclosedLiteral'
+
+			if tokenKindIsSkippedLayout(self.kindAt(q)) or self.kindAt(q) == TokenKind.comma 'betweenFields'
+				q = q + 1
+				continue
+			end 'betweenFields'
+
+			if matched >= paramNames.count() 'moreFieldsThanParameters'
+				return false
+			end 'moreFieldsThanParameters'
+
+			let wanted = try paramNames.get(matched) otherwise panic("noteConstructsFromParams: paramNames.get OOB at {matched} below a count just compared against")
+			if not self.tokenIsTheName(q, wanted: wanted) 'fieldIsNotTheParameter'
+				return false
+			end 'fieldIsNotTheParameter'
+
+			if self.kindAt((q + 1) as TokenIndex) != TokenKind.colon 'notAFieldPair'
+				return false
+			end 'notAFieldPair'
+
+			if not self.tokenIsTheName((q + 2) as TokenIndex, wanted: wanted) 'valueIsNotTheParameter'
+				return false
+			end 'valueIsNotTheParameter'
+
+			matched = matched + 1
+			q = q + 3
+		end 'eachField'
+
+		return matched == paramNames.count()
+	end 'noteConstructsFromParams'
+
+	// Is the token at `at` the identifier `wanted`? The pair test the walk above asks six times, so a field
+	// name and the value beside it are compared one way.
+	function tokenIsTheName(at TokenIndex, wanted ByteArray) returns bool
+		if self.kindAt(at) != TokenKind.identifier 'notAnIdentifier'
+			return false
+		end 'notAnIdentifier'
+
+		return self.tokenAt(at).value.equals(wanted)
+	end 'tokenIsTheName'
 
 	// The registration key a bare `name(…)` forward names. Inside a METHOD it is the enclosing type's member —
 	// an implicit-self call resolves there — and in a free function it is the bare name. Both are the key the
@@ -31390,6 +31500,7 @@ export type Parser
 			call to stringLiteral gives DiscardedCallee.notACall
 			tryCall(result, _, callee, _, _, _, _, _, _) gives DiscardedCallee.named(callee, result: result)
 			throwError to serviceReplyCell gives DiscardedCallee.notACall
+			immortalStructRecord gives DiscardedCallee.notACall
 		end 'producer'
 	end 'tryCallAt'
 
@@ -34164,6 +34275,7 @@ export type Parser
 			// a scalar one is the same mistake and gets the same diagnostic.
 			found to foundManaged then throw assignToImmutableError(nameTok)
 			foundImageRecord then throw assignToImmutableError(nameTok)
+			foundImageStruct then throw assignToImmutableError(nameTok)
 			notFound then throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'constant'
 	end 'rejectNonGlobalAssignment'
@@ -35432,6 +35544,7 @@ export type Parser
 			// No service op reinterprets a call's result — a spawn's result is a mailbox pointer it produced
 			// itself, a send produces nothing, and a reply cell produces a promise of its own.
 			serviceSpawn to serviceReplyCell gives false
+			immortalStructRecord gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -35459,6 +35572,7 @@ export type Parser
 			// A `spawn` defines a mailbox pointer, a send defines nothing and a reply cell defines a promise;
 			// none is a direct call whose result a `try` or a discarded-result probe could be about.
 			serviceSpawn to serviceReplyCell gives DiscardedCallee.notACall
+			immortalStructRecord gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
 
@@ -35539,6 +35653,7 @@ export type Parser
 			// A reply CELL is never the last op of a send expression — the `serviceSend` above it is — so this
 			// arm is the structural backstop, and it answers as every other non-call op does.
 			serviceReplyCell gives try self.rejectTryTarget(tryTok)
+			immortalStructRecord gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -39826,9 +39941,25 @@ export type Parser
 			return self.emitRetainCall(value, range: range)
 		end 'bufferRecord'
 
+		if self.tagOf(value) == ValueTypeTag.structRef 'plainStructBox'
+			return self.emitOwnBoxForSink(value, range: range)
+		end 'plainStructBox'
+
 		self.emitIncref(value, range: range)
 		return value
 	end 'coOwnConcreteRecordForSink'
+
+	// ⭐⭐ **THE RETURNING `__mm_own` A STRUCT BOX OWES A DURABLE SINK — and the callee is chosen HERE rather
+	// than in `retainCalleeForValue` because a CLONE is right only where the sink outlives the statement.**
+	// A borrowed aggregate co-owned into a `var` (`var q = p`) must keep ALIASING — `q.x = 100` shows through
+	// to the caller — so that door keeps `__mm_retain`, which hands the same box back. Routing both through
+	// one selector would make the aliasing one clone too.
+	//
+	// The result is a distinct ValueId either way, which the sink needs for `emitRetainCall`'s reason.
+	function emitOwnBoxForSink(value ValueId, range SourceRange) returns ValueId
+		self.markValueCoOwnsHeap(value)
+		return self.emitRuntimeCall(MmOwnName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+	end 'emitOwnBoxForSink'
 
 	// ⭐⭐ **THE REFERENCE A REBIND FROM AN IMMUTABLE SOURCE OWES — the assignment door's half of the
 	// 2026-08-04 alias ruling** (`rebindSourceIsAnImmutableAlias` carries the rule; this is what it costs
@@ -42803,6 +42934,7 @@ export type Parser
 			witnessDispatch to errorFlagEncode then return false
 			// No service op is a throwing call whose result a `for … in` iterates.
 			serviceSpawn to serviceReplyCell then return false
+			immortalStructRecord then return false
 		end 'op'
 	end 'sourceCameFromAnIterationThrowingCall'
 
@@ -57049,6 +57181,7 @@ export type Parser
 		let isConstant = match self.signatures.constantValueOf(name, readerFilePath: self.filePath) 'constant'
 			found to foundManaged gives true
 			foundImageRecord gives true
+			foundImageStruct gives true
 			notFound gives false
 		end 'constant'
 
@@ -59391,6 +59524,7 @@ export type Parser
 			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed))
 			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok), reader: self.moduleSlotReaderOf(tok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed))
 			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), varType: image.valueType, mutable: false, resultUsed: resultUsed))
+			imageStruct(bytes, typeName) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(tok)), varType: self.imageStructType(typeName), mutable: false, resultUsed: resultUsed))
 			none then return ManagedTopLevelDispatch.notAManagedReceiver
 		end 'binding'
 	end 'dispatchOnManagedTopLevelReceiver'
@@ -60296,6 +60430,7 @@ export type Parser
 			found then break 'constant'
 			foundManaged(bytes, kind) then return ManagedReceiverBinding.constant(bytes, kind: kind)
 			foundImageRecord(image) then return ManagedReceiverBinding.imageRecord(image)
+			foundImageStruct(bytes, typeName) then return ManagedReceiverBinding.imageStruct(bytes, typeName: typeName)
 			notFound then break 'constant'
 		end 'constant'
 
@@ -71104,6 +71239,7 @@ export type Parser
 				// is rooted at.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
+				imageStruct(bytes, typeName) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(nameTok)), valueType: self.imageStructType(typeName), mutable: false)
 				none to imageRecord then break 'binding'
 			end 'binding'
 
@@ -71126,6 +71262,7 @@ export type Parser
 				// arm that could only refuse.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
+				imageStruct(bytes, typeName) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(baseTok)), valueType: self.imageStructType(typeName), mutable: false)
 				none to imageRecord then break 'binding'
 			end 'binding'
 		end 'managedTopLevelBase'
@@ -71137,12 +71274,21 @@ export type Parser
 	// line and the synthetic binding is built once — `VarInfo.createValueBinding` is the same constructor
 	// `dispatchOnManagedReceiver` uses, and the two must not come to describe one global differently.
 	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws ParseError
-		let binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok), reader: self.moduleSlotReaderOf(baseTok, mutable: mutable)))
-		let base = try self.requireStructBase(binding, baseTok: baseTok)
-		// No `baseBindingOf` here, and it would be a no-op if there were: `createValueBinding` cannot mint a
-		// self-field alias, so a global base always holds its own value.
-		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding)
+		return try self.resolveValueFieldChain(baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok), reader: self.moduleSlotReaderOf(baseTok, mutable: mutable)), valueType: valueType, mutable: mutable)
 	end 'resolveGlobalFieldChain'
+
+	// ⭐ **THE CHAIN ITSELF, FROM A BASE THIS FRAME ALREADY HOLDS** — a `.data` slot's occupant above, and an
+	// IMAGE-DATA struct's `.rdata` address at the two arms that materialize one. The two differ only in where
+	// the pointer came from, and `mutable` is what parts what may be done through it: an imaged base passes
+	// `false`, so a write through it is refused by the very rule a stored `let`'s is.
+	//
+	// No `baseBindingOf` here, and it would be a no-op if there were: `createValueBinding` cannot mint a
+	// self-field alias, so such a base always holds its own value.
+	function resolveValueFieldChain(baseTok Token, value ValueId, valueType MaxonType, mutable bool) returns FieldChainStep throws ParseError
+		let binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: value)
+		let base = try self.requireStructBase(binding, baseTok: baseTok)
+		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding)
+	end 'resolveValueFieldChain'
 
 	// ⭐ **RESOLVE A FIELD-ACCESS CHAIN ON A CAPTURED STRUCT BASE (P1.5-A2b-2).** `level.rawValue` inside a
 	// closure that captures the enclosing struct `level`. The box is READ OUT OF THE ENV (`emitCaptureRead` —
@@ -73746,6 +73892,7 @@ export type Parser
 			found(payload, tag, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
+			foundImageStruct(bytes, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(tok)))
 			notFound then break 'constant'
 		end 'constant'
 
@@ -73836,6 +73983,28 @@ export type Parser
 		self.markImmutableGlobalRead(result)
 		return result
 	end 'emitImageRecordRead'
+
+	// ⭐⭐ **A USE OF AN IMAGE-DATA STRUCT `let` IS ONE `.rdata` ADDRESS TOO** — `emitImageRecordRead`'s twin
+	// over the shape whose mark cannot live in the record. It needs no side table: the op it emits exists
+	// only for image data, where `constArrayLiteral` serves an owned heap literal as well and has to be told
+	// which of the two this site is.
+	//
+	// ⚠ **NO OWNED TEMP AND NO DROP**, for the twin's reason: an immortal record is never created, so a
+	// statement-end drop on one would be a write to a read-only page. The W117 immutable-global mark is still
+	// taken — imaging changes where the record lives, not what `let` means.
+	// The type an imaged struct's value is minted at, in THIS file's interner — the one place the crossing
+	// from the index's `typeName` bytes to a `MaxonType` happens, so the value's tag and the layout the
+	// chain resolves against cannot come from two interners.
+	function imageStructType(typeName ByteArray) returns MaxonType
+		return MaxonType.structRef(self.artifact.typeNames.intern(typeName))
+	end 'imageStructType'
+
+	function emitImageStructRead(bytes ByteArray, typeName ByteArray, range SourceRange) returns ValueId
+		let result = self.mintValue(ValueTypeTag.structRef, nameId: typeNameIdOf(self.imageStructType(typeName)))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, bytes: bytes), range: range)
+		self.markImmutableGlobalRead(result)
+		return result
+	end 'emitImageStructRead'
 
 	// ⭐ **A USE OF A TOP-LEVEL CONSTANT INLINES ITS VALUE, AND THAT IS THE WHOLE STORAGE MODEL.**
 	//
@@ -76034,10 +76203,109 @@ export type Parser
 		// The slot this call is about to occupy. Read BEFORE the push and AFTER the arguments, which is what
 		// makes it this call's own index: every nested call the walk above found has already appended itself.
 		let id = calls.count()
-		calls.push(ConstFactoryCall.call(callee.name, args: args))
+		calls.push(try self.constFactoryNode(callee, args: args, calls: calls))
 
 		return id
 	end 'evalConstFactoryCallInto'
+
+	// ⭐⭐⭐ **A FACTORY THAT IS NOTHING BUT ITS OWN `Self{…}` IS FOLDED INTO THAT CONSTRUCTION (W197)** — the
+	// arena entry a top-level `T.create(7)` becomes, which is `T{p: 7}`'s entry and not a call.
+	//
+	// ⭐⭐ **WHY IT MATTERS THAT THEY BECOME THE SAME NODE.** A `call` entry is an instruction: `__module_init`
+	// runs the factory before `main`, which allocates a box and stores into it. A `construct` entry is a
+	// DESCRIPTION — a size and one value per declared field — so when every value is a folded scalar the
+	// whole record is decided at compile time and the binding can be IMAGE DATA (`recordShapeHasAnImage`)
+	// instead of a slot filled at startup. The fold is what puts the overwhelmingly common spelling of a
+	// constant record, `T.create(…)`, on the same footing as the one only the type's own body may write.
+	//
+	// ⚠ **EVERY UNCERTAINTY ANSWERS "IT IS AN ORDINARY CALL"**, which is the same direction the sweep fact
+	// itself resolves in and costs exactly what the tier cost before: a global built by `__module_init`. A
+	// value that does not fit its field, an argument naming no parameter and a field left with no value are
+	// each REFUSALS the real parse will raise against the factory's own body, at the token the author wrote —
+	// so raising them here would move the blame to the initializer, which mentions neither.
+	function constFactoryNode(callee ConstInitializerCallee, args ConstFactoryArgumentArray, calls ConstFactoryCallArray) returns ConstFactoryCall throws ConstEvalError
+		if not self.signatures.functionConstructsFromParams(callee.name) 'notAFoldableFactory'
+			return ConstFactoryCall.call(callee.name, args: args)
+		end 'notAFoldableFactory'
+
+		match self.signatures.constFactoryConstructionOf(callee.name) 'known'
+			unfoldable then return ConstFactoryCall.call(callee.name, args: args)
+			folds(layout, paramNames) then return try self.constFactoryConstruction(callee, args: args, calls: calls, layout: layout, paramNames: paramNames)
+		end 'known'
+	end 'constFactoryNode'
+
+	// The construction itself: each argument into the field named after the parameter it fills, then the
+	// declared defaults, then the completeness check — `evalConstStructConstructionInto`'s three steps in its
+	// order, over an argument list instead of a token walk.
+	//
+	// ⚠ **NOTHING HERE RESTATES A FIELD ROSTER, A SLOTTING RULE OR A FIT RULE**, which is that walk's
+	// discipline: `requireConstFieldValueFits`, `applyConstFieldDefaults` and `requireAllFieldsInitialized` are
+	// the same three deciders, so a record this door describes is a record that door would describe.
+	function constFactoryConstruction(callee ConstInitializerCallee, args ConstFactoryArgumentArray, calls ConstFactoryCallArray, layout StructLayout, paramNames ByteArrayArray) returns ConstFactoryCall throws ConstEvalError
+		var fields = ConstFactoryArgumentValueArray.create()
+		var filled = BoolArray.create()
+		for _ in 0 upto layout.fieldCount() 'initSlots'
+			fields.push(ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(0, tag: ValueTypeTag.integer))))
+			filled.push(false)
+		end 'initSlots'
+
+		for i in 0 upto args.count() 'eachArgument'
+			let arg = try args.get(i) otherwise panic("constFactoryConstruction: args.get OOB at {i} below count {args.count()}")
+			let slot = parameterSlotOf(arg, position: i, paramNames: paramNames)
+			if slot >= paramNames.count() 'noSuchParameter'
+				return ConstFactoryCall.call(callee.name, args: args)
+			end 'noSuchParameter'
+
+			let fieldName = try paramNames.get(slot) otherwise panic("constFactoryConstruction: paramNames.get OOB at {slot} below a count just compared against")
+			let index = layout.indexOfField(fieldName)
+			if index >= layout.fieldCount() 'noSuchField'
+				return ConstFactoryCall.call(callee.name, args: args)
+			end 'noSuchField'
+
+			let fitted = try self.requireConstFieldValueFits(calls, layout: layout, index: index, value: arg.value, fieldTok: callee.anchor) otherwise 'doesNotFitTheField'
+				return ConstFactoryCall.call(callee.name, args: args)
+			end 'doesNotFitTheField'
+			try fields.set(index, value: fitted) otherwise panic("constFactoryConstruction: fields.set OOB at {index} — the columns are sized to the layout's field count")
+			try filled.set(index, value: true) otherwise panic("constFactoryConstruction: filled.set OOB at {index} — the columns are sized to the layout's field count")
+		end 'eachArgument'
+
+		try self.applyConstFieldDefaults(calls, layout: layout, fields: fields, filled: filled, anchor: callee.anchor)
+		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: callee.anchor) otherwise 'aSlotNothingDecided'
+			return ConstFactoryCall.call(callee.name, args: args)
+		end 'aSlotNothingDecided'
+
+		// ⛔⛔ **A FOLD THAT BUYS NO IMAGE MUST NOT HAPPEN, AND THIS IS WHAT KEEPS THE REWRITE FROM CHANGING
+		// WHAT A PROGRAM MEANS.** The two nodes are not interchangeable outside the imaged case: a `construct`
+		// is built INLINE by `__module_init` from a layout, so it inherits that node's own rules — among them
+		// the refusal of a construction with an interface-typed field
+		// (`ProgramSignatures.existentialFieldOfConstConstruction`, a measured access violation) — while a
+		// `call` runs the factory, which has none of them. Folding unconditionally would refuse programs that
+		// compile today and would move where several diagnostics are blamed. Bounded to the case the fold
+		// exists for, the rewrite is invisible except that the global stops being built at all.
+		if not self.signatures.everyConstFieldIsAFoldedScalar(fields) 'notARecordAnImageCanHold'
+			return ConstFactoryCall.call(callee.name, args: args)
+		end 'notARecordAnImageCanHold'
+
+		return ConstFactoryCall.construct(layout.name, fields: fields)
+	end 'constFactoryConstruction'
+
+	// Which declared parameter an argument fills: its POSITION when it was written bare, and the position of
+	// its label otherwise. A label naming no parameter answers the count, which the caller reads as "leave it
+	// a call" — the arity and label refusals are `emitCall`'s and are raised where the author wrote them.
+	function parameterSlotOf(arg ConstFactoryArgument, position ParamCount, paramNames ByteArrayArray) returns ParamCount
+		if arg.label.isEmpty() 'positional'
+			return position
+		end 'positional'
+
+		for i in 0 upto paramNames.count() 'eachParameter'
+			let declared = try paramNames.get(i) otherwise panic("parameterSlotOf: paramNames.get OOB at {i} below count {paramNames.count()}")
+			if declared.equals(arg.label) 'thisOne'
+				return i
+			end 'thisOne'
+		end 'eachParameter'
+
+		return paramNames.count()
+	end 'parameterSlotOf'
 
 	// ⭐⭐ **READ THE NAME A TOP-LEVEL CALL IS MADE THROUGH, IN EITHER SPELLING** — the one reader, so the
 	// registry key, the diagnostic spelling and the blame anchor are derived together and cannot drift.
@@ -84951,7 +85219,7 @@ export type Parser
 		return match self.managedReceiverBindingOf(baseTok) 'managed'
 			constant to global gives true
 			none gives false
-			imageRecord gives true
+			imageRecord to imageStruct gives true
 		end 'managed'
 	end 'methodCallsAt'
 
