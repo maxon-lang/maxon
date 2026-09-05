@@ -1437,6 +1437,10 @@ type MaxonToStdLowering
 		self.installParametricWitnessChecks(project)
 		self.installWitnessSlotAdapters(project)
 
+		// ⭐ **THE WALK IS OVER, SO THE CURSOR IS ANSWERABLE FOR.** Below the two installs above, which
+		// append after the per-function walk and are the first things a leaked cursor would stamp.
+		requireNoLeakedSpanCursor(project, module: self.stdModule)
+
 		return self.stdModule
 	end 'lower'
 
@@ -5223,3 +5227,38 @@ type MaxonToStdLowering
 		end 'asBody'
 	end 'emitTerminatorOrBody'
 end 'MaxonToStdLowering'
+
+// ⭐⭐ **THE LEAKED-CURSOR DETECTOR, ASKED WHERE ITS CONDITION IS TRUE.**
+//
+// The span cursor is set by the lowering walk and cleared when that walk ends. Left set, everything
+// appended afterwards — the runtime installers most of all — would be stamped with the last user statement,
+// and the result is a line table that looks full, loads cleanly and points a debugger at a source line for
+// code that source never wrote.
+//
+// A compiler-emitted function has an EMPTY `sourceFilePath`, so "every op of such a function carries no
+// span" is exactly the condition a leaked cursor breaks.
+//
+// ⛔⛔ **IT RUNS IMMEDIATELY AFTER `lowerMaxonToStd` AND MUST NOT BE MOVED BELOW `inlineLeaves`, WHICH
+// FALSIFIES ITS CONDITION HONESTLY.** `InlineLeaves.copyBlockOps` stamps each cloned op with the CALLEE's
+// span on purpose — that is what lets a debugger step into an inlined body — so an author's leaf inlined
+// into a synthesized `<T>.__loop` leaves that compiler-emitted function holding real, correct spans. Asked
+// at the end of the whole pipeline this check read those as a leak and PANICKED on any service with an
+// inlinable handler. Nothing is given up by asking earlier: a leaked cursor is a fact about the lowering
+// walk, and the lowering walk is above this line.
+function requireNoLeakedSpanCursor(project Project, module StdModule)
+	if not project.debugInfo 'notCapturing'
+		return
+	end 'notCapturing'
+
+	for func in module.functions 'eachFunction'
+		if not func.sourceFilePath.isEmpty() 'writtenByAnAuthor'
+			continue
+		end 'writtenByAnAuthor'
+
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			if module.spans.at(opIdx) != NoSpanId 'stampedWithAStatement'
+				panic("debug info: op {opIdx} of the compiler-emitted function '{String.from(func.name)}' carries a source span — the lowering walk left its cursor set, so the emitted runtime is being attributed to whatever statement ran last")
+			end 'stampedWithAStatement'
+		end 'eachOp'
+	end 'eachFunction'
+end 'requireNoLeakedSpanCursor'

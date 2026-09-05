@@ -290,6 +290,10 @@ export type Scope
 	// Name-keyed, so it always hits the INNERMOST binding — which is exactly right for
 	// a source-level assignment. The parser's phi machinery deliberately does NOT come
 	// through here; it writes `boundValue` on the binding it holds (see the header).
+	//
+	// ⚠ Every caller records the rebind for the debug-info sidecar first
+	// (`Parser.recordDebugRebind`), which is checked rather than assumed: the record's tail is compared
+	// against `boundValue` at the next rebind and again when the function's roster is published.
 	export function setValue(name ByteArray, value ValueId)
 		var info = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
 		info.boundValue = value

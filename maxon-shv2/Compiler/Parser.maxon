@@ -12739,6 +12739,20 @@ export type Parser
 	// `structRef` tag, so telling a `BoxA` argument from a `BoxB` one needs the name — OPEN #54
 	// Slice B). See IrFunction.valueNameIds.
 	var valueTags as ValueTypeTagArray
+	// ⭐ **THIS FUNCTION'S SOURCE BINDINGS, FOR THE DEBUG-INFO SIDECAR** (see `IrFunction.debugLocals`) —
+	// one record per declared `let` / `var` / parameter, in declaration order, each accumulating every SSA
+	// value its name has owned. Handed to the `IrFunction` at the function's `end`, because a binding
+	// leaves SCOPE at its own block's.
+	var debugLocals as DebugLocalDeclArray
+	// The `VarInfo`s those records belong to, index-parallel with `debugLocals` and written by the one
+	// door that appends to either (`trackDebugLocal`) — which is what makes "the two fell out of step"
+	// unrepresentable rather than asserted. Held so the publication tripwire can compare each record's
+	// tail against the value its binding actually ended up holding.
+	var debugBindings as VarInfoArray
+	// Whether this build writes a `.mxdbg` sidecar (`Project.debugInfo`). It gates every push above: a
+	// build that records no binding pays nothing for the roster, which is half of what keeps the emitted
+	// image byte-identical with the sidecar and without it.
+	var capturesDebugLocals as bool
 	var valueNameIds as TypeNameIdArray
 	// THE PARSER'S CONSTANT FOLDER — two more columns in lockstep with `valueTags`, holding the
 	// integer behind every SSA value the compiler KNOWS. It exists for the shift rule, which is
@@ -14107,7 +14121,7 @@ export type Parser
 		return renamed
 	end 'shadowRenamedTokens'
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool) returns Parser
 		return Self{
 			tokens: shadowRenamedTokens(tokens, signatures: signatures, isStdlibSource: isStdlibSource),
 			pos: 0,
@@ -14136,6 +14150,9 @@ export type Parser
 			blockKeywordNames: sharedEmptyBlockKeywordNames,
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
 			valueTags: ValueTypeTagArray.create(),
+			debugLocals: DebugLocalDeclArray.create(),
+			debugBindings: VarInfoArray.create(),
+			capturesDebugLocals: capturesDebugLocals,
 			valueWitnessIds: ValueIdArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
 			valueConsts: ParsedIntArray.create(),
@@ -26304,6 +26321,8 @@ export type Parser
 		// at the shared empty rather than allocating (see `sharedEmptyIterationLocks`).
 		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
+		self.debugLocals = DebugLocalDeclArray.create()
+		self.debugBindings = VarInfoArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstDomains = ConstPayloadDomainArray.create()
@@ -26572,6 +26591,7 @@ export type Parser
 		end 'anOptionalLabel'
 
 		self.publishExistentialInstances(func)
+		self.publishDebugLocals(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false)
 		self.commitRangeChecks(name)
@@ -27907,6 +27927,8 @@ export type Parser
 		self.matches = MatchContextArray.create()
 		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
+		self.debugLocals = DebugLocalDeclArray.create()
+		self.debugBindings = VarInfoArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstDomains = ConstPayloadDomainArray.create()
@@ -28077,6 +28099,7 @@ export type Parser
 		// parameterized existential cannot have a default: `E3121`/`E2010` aside, a default is an EXPRESSION and
 		// there is no literal of an interface type to write.
 		self.publishExistentialInstances(helper)
+		self.publishDebugLocals(helper)
 		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
@@ -28247,12 +28270,13 @@ export type Parser
 			// `paramDeclaredNames` column (`paramDeclaredNamesOf`), read off the same token.
 			let paramBrand = self.declaredBrand(self.spelledTypeNameAt(try paramTypeStarts.get(i) otherwise panic("bindParameters: paramTypeStarts.get OOB at {i} — a parameter's columns are built in lockstep")), resolved: paramType)
 			self.brandValue(i as ValueId, brand: paramBrand)
-			let binding = try self.declareParameterOrCellBinding(paramName, paramType: paramType, paramIsMutable: paramIsMutable, paramIsByRef: paramIsByRef, paramValue: paramValue, brandId: self.brandIdOf(i as ValueId)) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
+			var binding = try self.declareParameterOrCellBinding(paramName, paramType: paramType, paramIsMutable: paramIsMutable, paramIsByRef: paramIsByRef, paramValue: paramValue, brandId: self.brandIdOf(i as ValueId)) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
 			// ⭐ **E3012 CANDIDATE: A DECLARED PARAMETER MUST BE READ** (`reportUnusedBindings`). Two names are
 			// not candidates and neither is a policy choice: `__self` is the RECEIVER the parser itself pushed,
 			// which no source token declares and a bare field read never mentions, so every instance method
 			// would report it; and `_` is the language's discard, which says in as many words that the author
 			// wants the slot and not the name.
+			self.trackDebugLocal(binding)
 			if not paramName.equals(SelfParamName) and not paramName.equals(DiscardBindingName) 'checkedForUse'
 				self.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange, kind: UnusedBindingKind.parameter))
 			end 'checkedForUse'
@@ -30281,6 +30305,7 @@ export type Parser
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
 		var binding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(boundValue), mutable: mutable, value: boundValue, brandId: self.brandIdOf(boundValue)) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		self.trackDebugLocal(binding)
 		// ⭐ E3070: the initializer's outstanding element borrows become THIS binding's, activated HERE — see
 		// `attachPendingBorrows` for why the binding and not the accessor is the activation point.
 		self.attachPendingBorrows(func, borrower: binding, boundValue: boundValue, liveUntil: self.pos)
@@ -31664,6 +31689,7 @@ export type Parser
 		let declared = self.typeOf(boundValue)
 		let cell = try self.fillFreshCell(boundValue, declared: declared, rhsWasBareLocal: rhsWasBareLocal, range: range)
 		var binding = try self.scope.declareCellBinding(nameTok.value, varType: declared, mutable: true, cell: cell, isParameter: false, brandId: self.brandIdOf(boundValue)) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		self.trackDebugLocal(binding)
 		self.attachPendingBorrows(func, borrower: binding, boundValue: boundValue, liveUntil: self.pos)
 
 		// `sole` — a fresh `__mm_alloc` three lines up whose pointer nothing else has been handed. The BOX is
@@ -31775,6 +31801,7 @@ export type Parser
 		// is not re-enrolled, and the revive clears the bit — one box, still exactly one drop, now owed by
 		// this binding instead of the source's.
 		if oldValue == value and not binding.movedFrom 'selfAssign'
+			self.recordDebugRebindByName(nameTok.value, value: value)
 			self.scope.setValue(nameTok.value, value: value)
 			return
 		end 'selfAssign'
@@ -31819,6 +31846,7 @@ export type Parser
 			end 'dropOldThread'
 
 			let alreadyInSet = self.bindingIsOwned(binding) or binding.movedFrom
+			self.recordDebugRebindByName(nameTok.value, value: value)
 			self.scope.setValue(nameTok.value, value: value)
 			if newIsPromise 'revivePromise'
 				// The binding owns the fresh thread — revive it for reads and its scope-exit drop, and enrol
@@ -31916,6 +31944,7 @@ export type Parser
 			self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
 		end 'dropOld'
 
+		self.recordDebugRebindByName(nameTok.value, value: newValue)
 		self.scope.setValue(nameTok.value, value: newValue)
 
 		// A WRITE REVIVES the binding: it owns `newValue` now, so a later read of it is legal again. Both
@@ -32789,6 +32818,86 @@ export type Parser
 	// the parser's field still points at the map that body filled (a closure's body SWAPS the field, and swaps
 	// it back, so the enclosing function's publish must happen after the swap has been undone — which the end of
 	// its body is).
+
+	// ⛔ **THE TRIPWIRE.** A tracked binding's recorded tail IS its current value: a tail that has stopped
+	// being one is a write to `boundValue` that skipped `recordDebugRebind`, and the record would then name
+	// a location the value is not at where the debugger stops — a confident wrong answer with nothing to
+	// notice it by.
+	function requireDebugRecordIsCurrent(record DebugLocalDecl, current ValueId)
+		let last = try record.valueIds.get(record.valueIds.count() - 1) otherwise panic("requireDebugRecordIsCurrent: '{String.from(record.name)}' has an empty value list, where every record is created holding the value its declaration produced")
+		if last != current 'aWriteBypassedTheDoor'
+			panic("debug info: '{String.from(record.name)}' holds value {current} where the last one recorded for it is {last} — a site assigned `boundValue` without calling `recordDebugRebind` first, so this name's record is missing the value it holds")
+		end 'aWriteBypassedTheDoor'
+	end 'requireDebugRecordIsCurrent'
+
+	// ⭐ **ENROL ONE SOURCE BINDING IN THE DEBUG-INFO ROSTER.** A `let`, a `var` and a parameter are the
+	// names a user asks a debugger about by the spelling their own source wrote; a `for` variable, a
+	// match-arm payload and every compiler-minted stand-in are not, and a record for one of those would be
+	// a name the reader will look for in their program and not find.
+	//
+	// The two names excluded here are the two the language itself owns: `__self` is the receiver the parser
+	// pushed, which no source token declares, and `_` is the discard, which says in as many words that the
+	// author wanted the slot and not the name.
+	function trackDebugLocal(binding VarInfo)
+		if not self.capturesDebugLocals or binding.name.equals(SelfParamName) or binding.name.equals(DiscardBindingName) 'notARecordedName'
+			return
+		end 'notARecordedName'
+
+		self.debugLocals.push(DebugLocalDecl.create(binding.name, declaredType: binding.varType, firstValue: binding.boundValue, heldInACell: binding.isCellBinding))
+		self.debugBindings.push(binding)
+		binding.debugLocalSlot = self.debugLocals.count() as DebugLocalSlot
+	end 'trackDebugLocal'
+
+	// ⭐⭐ **RECORD A REBIND, AND EVERY SITE THAT WRITES `boundValue` CALLS THIS FIRST.** A name owns a
+	// SEQUENCE of values — the merge phis, the loop-header phis, the snapshot rewind and the source-level
+	// assignment each mint another — and a record holding only the declaration's value names a location
+	// the value is not at by the time a debugger stops there.
+	//
+	// ⛔ **AND IT CATCHES A SITE THAT DID NOT CALL IT.** A tracked binding's recorded tail IS its current
+	// value, so a tail that has stopped being one is a write this never saw. Checked here and again at
+	// `publishDebugLocals`, so a bypass is caught whether or not another rebind follows it.
+	//
+	// ⚠ **IT TAKES THE BINDING'S TWO SCALARS RATHER THAN THE BINDING.** A parameter of `VarInfo` type here
+	// would make this a function that WRITES through a parameter as far as the whole-program summary is
+	// concerned, and a phi site cannot hand `pv.binding` to such a function at all (E3019) — every one of
+	// them holds its `LoopPhiVar` through a list it does not own.
+	function recordDebugRebind(slot DebugLocalSlot, current ValueId, value ValueId)
+		if slot == NoDebugLocalSlot 'notRecorded'
+			return
+		end 'notRecorded'
+
+		var record = try self.debugLocals.get(slot - 1) otherwise panic("recordDebugRebind: debug-local slot {slot} is past the {self.debugLocals.count()} this function has recorded")
+		requireDebugRecordIsCurrent(record, current: current)
+		record.valueIds.push(value)
+	end 'recordDebugRebind'
+
+	// The same, for the three source-level assignment sites, which hold the name rather than the binding.
+	function recordDebugRebindByName(name ByteArray, value ValueId)
+		if not self.capturesDebugLocals 'notCapturing'
+			return
+		end 'notCapturing'
+
+		let binding = self.scope.getInfo(name)
+		self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: value)
+	end 'recordDebugRebindByName'
+
+	// ⭐ **THE FUNCTION'S BINDINGS, HANDED OVER ONCE AT ITS `end`** — `publishExistentialInstances`' twin,
+	// and late for its own reason: a binding leaves SCOPE at its block's `end` while its record must reach
+	// the function's, so the roster is the parser's own `VarInfo` list rather than the scope's.
+	function publishDebugLocals(func IrFunction)
+		if self.debugLocals.count() == 0 'nothingRecorded'
+			return
+		end 'nothingRecorded'
+
+		for i in 0 upto self.debugLocals.count() 'eachRecord'
+			let record = try self.debugLocals.get(i) otherwise panic("publishDebugLocals: debugLocals.get OOB at {i} despite the upto bound")
+			let binding = try self.debugBindings.get(i) otherwise panic("publishDebugLocals: debugBindings.get OOB at {i} — the two columns are appended by one door")
+			requireDebugRecordIsCurrent(record, current: binding.boundValue)
+		end 'eachRecord'
+
+		func.debugLocals = self.debugLocals
+	end 'publishDebugLocals'
+
 	function publishExistentialInstances(func IrFunction)
 		func.valueExistentialInstances = self.valueExistentialInstance
 		// ⭐ **W117's per-value marks travel to SemanticCheck the same way, at the same moment, for the same
@@ -40668,9 +40777,11 @@ export type Parser
 			let a = try valsA.get(k) otherwise panic("mergeAtContinuation: valsA.get OOB at {k}")
 			let b = try valsB.get(k) otherwise panic("mergeAtContinuation: valsB.get OOB at {k}")
 			if a == b 'same'
+				self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: a)
 				binding.boundValue = a
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(cont, binding: binding)
+				self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: phiId)
 				binding.boundValue = phiId
 				self.pushMergedEdgeValue(edgeArgsA, binding: binding, value: a)
 				self.pushMergedEdgeValue(edgeArgsB, binding: binding, value: b)
@@ -40707,7 +40818,9 @@ export type Parser
 		self.assertSnapshotAligned(bindings, snapshot: snapshot, site: "restoreBindings")
 		for k in 0 upto bindings.count() 'each'
 			var binding = try bindings.get(k) otherwise panic("restoreBindings: bindings.get OOB at {k}")
-			binding.boundValue = try snapshot.get(k) otherwise panic("restoreBindings: snapshot.get OOB at {k}")
+			let saved = try snapshot.get(k) otherwise panic("restoreBindings: snapshot.get OOB at {k}")
+			self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: saved)
+			binding.boundValue = saved
 		end 'each'
 	end 'restoreBindings'
 
@@ -40913,6 +41026,7 @@ export type Parser
 	function installCarriedPhis(phiVars LoopPhiVarArray)
 		for k in 0 upto phiVars.count() 'install'
 			var phiVar = try phiVars.get(k) otherwise panic("installCarriedPhis: phiVars.get OOB at {k}")
+			self.recordDebugRebind(phiVar.binding.debugLocalSlot, current: phiVar.binding.boundValue, value: phiVar.phiId)
 			phiVar.binding.boundValue = phiVar.phiId
 		end 'install'
 	end 'installCarriedPhis'
@@ -41527,7 +41641,9 @@ export type Parser
 		self.currentBlock = step
 		for k in 0 upto ctx.phiVars.count() 'mkStepPhi'
 			var pv = try ctx.phiVars.get(k) otherwise panic("parseForStatement: phiVars.get OOB at {k}")
-			pv.binding.boundValue = self.mintPhiForBinding(step, binding: pv.binding)
+			let stepPhiId = self.mintPhiForBinding(step, binding: pv.binding)
+			self.recordDebugRebind(pv.binding.debugLocalSlot, current: pv.binding.boundValue, value: stepPhiId)
+			pv.binding.boundValue = stepPhiId
 		end 'mkStepPhi'
 		// ⭐ **WHAT ONE STEP IS.** A range and an array advance by ONE (an ordinal); a String advances to the
 		// END OF THE CLUSTER the body just saw, because its index is a BYTE position and a cluster is
@@ -41695,13 +41811,15 @@ export type Parser
 		// edge must carry what the binding held on the way OUT of the loop.
 		var loopVals = ValueIdArray.create()
 		for k in 0 upto phiVars.count() 'exitEdge'
-			var pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
+			let pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
 			self.pushMergedEdgeValue(loopVals, binding: pv.binding, value: pv.binding.boundValue)
 		end 'exitEdge'
 
 		for k in 0 upto phiVars.count() 'mkJoinPhi'
 			var pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
-			pv.binding.boundValue = self.mintPhiForBinding(join, binding: pv.binding)
+			let joinPhiId = self.mintPhiForBinding(join, binding: pv.binding)
+			self.recordDebugRebind(pv.binding.debugLocalSlot, current: pv.binding.boundValue, value: joinPhiId)
+			pv.binding.boundValue = joinPhiId
 		end 'mkJoinPhi'
 
 		self.recordBranchEdge(exit, targetId: join.id, argIds: loopVals)
@@ -43945,6 +44063,7 @@ export type Parser
 		if not ctx.hasBreak 'noBreak'
 			for k in 0 upto ctx.phiVars.count() 'inherit'
 				var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
+				self.recordDebugRebind(pv.binding.debugLocalSlot, current: pv.binding.boundValue, value: pv.phiId)
 				pv.binding.boundValue = pv.phiId
 			end 'inherit'
 			return
@@ -43954,6 +44073,7 @@ export type Parser
 		for k in 0 upto ctx.phiVars.count() 'mkExitPhi'
 			var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
 			let exitPhiId = self.mintPhiForBinding(exit, binding: pv.binding)
+			self.recordDebugRebind(pv.binding.debugLocalSlot, current: pv.binding.boundValue, value: exitPhiId)
 			pv.binding.boundValue = exitPhiId
 			self.pushMergedEdgeValue(headerVals, binding: pv.binding, value: pv.phiId)
 		end 'mkExitPhi'
@@ -45239,9 +45359,11 @@ export type Parser
 			let entryV = try entryVals.get(k) otherwise panic("setupFallthroughTargetPhis: entryVals.get OOB at {k}")
 			let prevV = try prevExitVals.get(k) otherwise panic("setupFallthroughTargetPhis: prevExitVals.get OOB at {k}")
 			if entryV == prevV 'same'
+				self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: entryV)
 				binding.boundValue = entryV
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(bodyBlock, binding: binding)
+				self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: phiId)
 				binding.boundValue = phiId
 				self.pushMergedEdgeValue(matchEdgeArgs, binding: binding, value: entryV)
 				self.pushMergedEdgeValue(fallthroughEdgeArgs, binding: binding, value: prevV)
@@ -45540,6 +45662,7 @@ export type Parser
 			let isDifferent = try differs.get(k) otherwise panic("finalizeMatchMerge: differs.get OOB at {k}")
 			if isDifferent 'phiVar'
 				let phiId = self.mintPhiForBinding(merge, binding: binding)
+				self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: phiId)
 				binding.boundValue = phiId
 
 				// ⭐ **A CARRIED BINDING'S MERGE IS THE `if` CONTINUATION'S TWIN, ONE CONSTRUCT OVER (G14
@@ -45556,7 +45679,9 @@ export type Parser
 				end 'eachArm'
 				self.recordMergeAliasProof(phiId, incoming: incoming)
 			end 'phiVar' else 'common'
-				binding.boundValue = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
+				let commonValue = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
+				self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: commonValue)
+				binding.boundValue = commonValue
 			end 'common'
 		end 'setBindings'
 
@@ -71808,7 +71933,7 @@ export type Parser
 	// OWNERSHIP or IDENTITY — the drop at scope exit, the owned-binding scans, the move/alias searches — and
 	// for a cell binding the thing this frame owns and the thing another name could alias IS the cell.
 	//
-	// ⚠ The loop-phi and merge-snapshot writers (`boundValue = phiId`) are not in either group and need no
+	// ⚠ The loop-phi and merge-snapshot rebinders are not in either group and need no
 	// arm: a cell binding is never pushed into `mutableVars` (`declareCellLocal`), so no phi machinery can
 	// reach one.
 	function bindingValue(binding VarInfo, range SourceRange) returns ValueId
@@ -73176,6 +73301,8 @@ export type Parser
 		let savedTryBindingMatched = self.tryBindingMatched
 		let savedCurrentBlock = self.currentBlock
 		let savedValueTags = self.valueTags
+		let savedDebugLocals = self.debugLocals
+		let savedDebugBindings = self.debugBindings
 		let savedValueNameIds = self.valueNameIds
 		let savedValueConsts = self.valueConsts
 		let savedValueConstDomains = self.valueConstDomains
@@ -73397,6 +73524,8 @@ export type Parser
 		// at the shared empty rather than allocating (see `sharedEmptyIterationLocks`).
 		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
+		self.debugLocals = DebugLocalDeclArray.create()
+		self.debugBindings = VarInfoArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstDomains = ConstPayloadDomainArray.create()
@@ -73603,6 +73732,7 @@ export type Parser
 		// every declared function's do, while its return type is INFERRED from the body and names no token for
 		// `declaredExistentialInstanceAt` to read.
 		self.publishExistentialInstances(lifted)
+		self.publishDebugLocals(lifted)
 		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath, synthesized: false)
 		self.closureReturns.upsert(closureName, value: returnType)
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
@@ -73633,6 +73763,8 @@ export type Parser
 		self.tryBindingMatched = savedTryBindingMatched
 		self.currentBlock = savedCurrentBlock
 		self.valueTags = savedValueTags
+		self.debugLocals = savedDebugLocals
+		self.debugBindings = savedDebugBindings
 		self.valueNameIds = savedValueNameIds
 		self.valueConsts = savedValueConsts
 		self.valueConstDomains = savedValueConstDomains

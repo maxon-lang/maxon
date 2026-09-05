@@ -416,6 +416,14 @@ export let CompilerOwnedDeclFilePath = FilePath from ""
 // default, so "what does a non-payload binding carry here" has one answer.
 let NoPayloadStorage = MaxonType.unresolved
 
+// ⭐ **WHICH DEBUG-INFO RECORD A BINDING FEEDS, ONE-BASED** — `NoDebugLocalSlot` is "this binding is not
+// one the sidecar names". One-based rather than a union because a `VarInfo` is minted for every synthetic
+// receiver and every match-arm temp in the program, and a payload-carrying union field would put a heap
+// box on each of them.
+export typealias DebugLocalSlot = int(0 to u64.max)
+
+export let NoDebugLocalSlot = 0 as DebugLocalSlot
+
 // VarInfo — one entry in a function's `Scope` symbol table.
 //
 // The parser tracks every local by its source-level `MaxonType`; that type is
@@ -444,6 +452,13 @@ export type VarInfo
 	// reads and writes go through the receiver instead. When mutation + `mem2reg`
 	// land, the slot model (above) supersedes this direct substitution.
 	export var boundValue as ValueId
+	// ⭐ **THE DEBUG-INFO RECORD THIS BINDING FEEDS** (see `DebugLocalSlot`), set for a source `let` / `var`
+	// / parameter of a build writing a sidecar and for nothing else. `boundValue` is the CURRENT value and
+	// is overwritten in place, so it alone cannot say where a debugger should look: a `var` written in both
+	// arms of an `if` and read past the join is three values under one name, and the value the read holds
+	// is the one the merge minted rather than the one the declaration produced. `Parser.recordDebugRebind`
+	// is what keeps the whole sequence, and this is what tells it which record to keep it in.
+	export var debugLocalSlot as DebugLocalSlot = NoDebugLocalSlot
 	// Ownership lattice kind for this binding — the M1 ownership scaffold's
 	// per-binding attribute (see OwnershipKind in MaxonDialect.maxon). ALWAYS
 	// `trivial` at M1 (all bindings are scalars); the Own tier (M6) sets it to

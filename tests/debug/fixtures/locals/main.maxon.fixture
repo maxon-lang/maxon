@@ -1,0 +1,110 @@
+// The type/field/local fixture: one program holding every shape a TYPE entry, a FIELD row or a LOCAL
+// record can quietly lose something in.
+//
+// ⛔ **EVERY FUNCTION LOOPS, AND THAT IS WHAT KEEPS IT IN THE SIDECAR.** `inlineLeaves` copies a small
+// callee's body into its caller and `DeadFunctionElimination` then drops the callee, so a non-looping
+// helper is a name the sidecar can honestly say nothing about — and a local roster read off this source
+// would then be asking about a function that is not in the binary.
+//
+// What each declaration is here for:
+//   • `Tick` — a ranged `typealias`. It is a type entry of its own with a backing width, not the machine
+//     primitive it lowers to, so a table that recorded only nominal declarations drops it.
+//   • `Label` — a `type` reached only as another type's FIELD, so `Reading`'s field window has to point
+//     at a struct entry rather than at whatever id happens to sit at 0.
+//   • `Reading` — a String field, a scalar field and a nested-`type` field: three field kinds inside one
+//     window, which is where a field sub-table indexed by the wrong stride first disagrees.
+//   • `Grade` — raw values declared OUT of ordinal order, so a case row printing the ORDINAL instead of
+//     the RAW TAG is observable here rather than coincidentally right.
+//   • `blend` — exactly THREE simultaneously-live scalars, few enough for the allocator to colour them
+//     all into registers. A local row claiming a stack slot for one of them is a guessed number.
+//   • `churn` — enough simultaneously-live scalars to exhaust the register file, so they are spilled and
+//     the stack-slot half of the location carrier is driven by the same program.
+//   • `main` — a String and a struct local, whose homes are memory whatever the allocator decides.
+typealias Tick = int(0 to 1000)
+
+// Ordinals 0, 1, 2 against raw tags 2, 0, 1 — the two orders share no position.
+enum Grade
+	low = 2
+	high = 0
+	mid = 1
+end 'Grade'
+
+type Label
+	export var text as String
+	export var rank as Tick
+
+	export static function create(text String, rank Tick) returns Self
+		return Self{text: text, rank: rank}
+	end 'create'
+end 'Label'
+
+type Reading
+	export var name as String
+	export var value as Tick
+	export var label as Label
+
+	export static function create(name String, value Tick, label Label) returns Self
+		return Self{name: name, value: value, label: label}
+	end 'create'
+end 'Reading'
+
+function blend(seed Tick) returns Tick
+	var carry = seed
+	var step = 1
+	var rounds = 0
+	while rounds < 3 'mix'
+		carry = (carry + step) mod 97
+		step = step + rounds
+		rounds = rounds + 1
+	end 'mix'
+
+	return carry
+end 'blend'
+
+// ⚠ **THE IDLE BAND IS LIVE ACROSS THE LOOP, NEVER INSIDE IT.** shv2 REFUSES a loop whose working
+// set exceeds the register file (E5001) rather than spilling into the body, so the only way to reach a
+// stack-slot local here is a band of bindings the loop does not touch: those are spilled AROUND it, and
+// that is the half of the location carrier `blend` cannot exercise.
+function churn(seed Tick) returns Tick
+	let a = seed + 1
+	let b = seed + 2
+	let c = seed + 3
+	let d = seed + 4
+	let e = seed + 5
+	let f = seed + 6
+	let g = seed + 7
+	let h = seed + 8
+	let j = seed + 9
+	let k = seed + 10
+	let m = seed + 11
+	let n = seed + 12
+	let p = seed + 13
+	let q = seed + 14
+	let r = seed + 15
+	let t = seed + 16
+	var carry = seed
+	var rounds = 0
+	while rounds < 4 'grind'
+		carry = (carry + rounds) mod 89
+		rounds = rounds + 1
+	end 'grind'
+
+	return (carry + a + b + c + d + e + f + g + h + j + k + m + n + p + q + r + t) mod 89
+end 'churn'
+
+function main() returns ExitCode
+	var total = 0
+	var round = 0
+	while round < 2 'accumulate'
+		total = total + blend(round)
+		round = round + 1
+	end 'accumulate'
+
+	let tag = "reading"
+	let sample = Reading.create(tag, value: total mod 89, label: Label.create("edge", rank: churn(7)))
+	let grade = Grade.high
+
+	print("{sample.name}:{sample.value}:{sample.label.text}:{sample.label.rank}:{grade.rawValue}\n")
+
+	return 0
+end 'main'

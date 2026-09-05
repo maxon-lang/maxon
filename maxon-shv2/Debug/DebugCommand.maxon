@@ -1,6 +1,6 @@
 // Debug/DebugCommand.maxon — `maxon debug`, the READ-ONLY faces of the `.mxdbg` sidecar.
 //
-//   debug --dump-info  <exe|.mxdbg>            print the whole sidecar
+//   debug --dump-info  <exe|.mxdbg> [section...]   print the sidecar, or only the sections named
 //   debug --symbolize  <exe|.mxdbg> <off...>   resolve `.text` code offsets to file:line:col
 //
 // ⭐⭐ **THE SHAPE OF THE DUMP IS THE REFERENCE DRIVER'S, AND THAT IS A CONTRACT RATHER THAN A STYLE.**
@@ -18,6 +18,45 @@
 let DumpInfoOption = "--dump-info"
 let SymbolizeOption = "--symbolize"
 
+// ⭐⭐ **THE SECTIONS, AS ONE ROSTER.** The parser, the usage line and the refusal all read it, so a name
+// the command line accepts, a name the usage advertises and a name the refusal lists cannot come apart —
+// and a section added here is added to all three at once.
+//
+// ⛔ **`locals` IS NOT ONE OF THEM AND MUST NOT BECOME ONE.** Local rows print NESTED under `functions`,
+// beneath the function that owns them; a top-level section would be the same records under a second key.
+//
+// ⚠ `lines` and `statements` are the SAME table asked two questions. `lines` answers a debugger's — "what
+// source position is this `.text` offset?" — so the offset is its subject; `statements` answers a gate's —
+// "which source positions can be stopped on, in code order?" — a fact about the SOURCE that must not move
+// when unrelated codegen shifts every offset in the file.
+let HeaderSection = "header"
+let FilesSection = "files"
+let FunctionsSection = "functions"
+let TypesSection = "types"
+let LinesSection = "lines"
+let StatementsSection = "statements"
+
+// A section's position in that roster. ⛔ **NOTHING NAMES ONE BY NUMBER**: a second list of positions
+// beside the roster would be the order written twice, and inserting a section into the middle of one of
+// them would silently print a different section than the caller asked for.
+typealias DumpSectionIndex = int(0 to u32.max)
+
+// The first command-line argument past `--dump-info <path>`: every one after it is a section name.
+let FirstSectionArgument = 2
+
+// Whether a command-line token named a section. A union rather than a sentinel index, because "not a
+// section" is a refusal the caller reports by name and 0 is a perfectly good section.
+union DumpSectionLookup
+	none
+	at(index DumpSectionIndex)
+end 'DumpSectionLookup'
+
+// What the section arguments asked for: the sections to print, or the first name that is not one.
+union DumpSectionRequest
+	chosen(sections BoolArray)
+	notASection(name String)
+end 'DumpSectionRequest'
+
 // The section the build-id is folded over, spelled per format. `readPeSectionData` and its two siblings
 // answer with the section's real extent, which is the same span the compiler hashed. PE and ELF name
 // their code section identically, so one constant serves both.
@@ -30,8 +69,21 @@ let HexOffsetPrefix = "0x"
 let HexBase = 16
 let DecimalBase = 10
 
-// Column widths of the dump, matching the reference's.
+// Column widths of the dump, matching the reference's. A name longer than its column widens its row
+// rather than being truncated.
 let FunctionNameColumn = 32 as ColumnWidth
+let LocalNameColumn = 20 as ColumnWidth
+let TypeNameColumn = 28 as ColumnWidth
+let FieldNameColumn = 20 as ColumnWidth
+
+// How a location renders. The frame-pointer register is the sidecar's target's, read off its triple.
+let X64FramePointerName = "rbp"
+let Arm64FramePointerName = "x29"
+let Arm64TriplePrefix = "arm64"
+let OptimizedOutLocation = "<optimized out>"
+
+// The magnitude of a frame displacement, one wider than the signed value it is taken from.
+typealias LocationMagnitude = int(0 to 2147483648)
 
 // A `.text` code offset as this command reads one off the command line.
 typealias ParsedCodeOffset = int(0 to u32.max)
@@ -84,7 +136,7 @@ export function runDebugCommand(args MaxonArgs) returns ExitCode
 end 'runDebugCommand'
 
 function printDebugUsage()
-	printError("Usage: maxon-shv2 debug {DumpInfoOption} <exe|.mxdbg>\n")
+	printError("Usage: maxon-shv2 debug {DumpInfoOption} <exe|.mxdbg> [{dumpSectionNames()}]\n")
 	printError("       maxon-shv2 debug {SymbolizeOption} <exe|.mxdbg> <codeOffset...>\n")
 end 'printDebugUsage'
 
@@ -95,11 +147,93 @@ function runDumpInfo(args MaxonArgs) returns ExitCode
 		return 1
 	end 'noPath'
 
+	// ⭐ **THE SECTION NAMES ARE READ BEFORE THE SIDECAR IS.** A name that is not a section is refused
+	// whatever the file turns out to hold, so a misspelling is answered by name rather than by whichever
+	// failure the path happens to produce first.
+	var sections = BoolArray.create()
+	match parseDumpSections(args) 'request'
+		notASection(name) then return refuseUnknownSection(name)
+		chosen(named) then sections = named
+	end 'request'
+
 	match loadSidecarFor(spelled) 'sidecar'
 		refused(reason) then return refuseDebugCommand(reason)
-		loaded(reader) then return dumpSidecar(reader, path: spelled)
+		loaded(reader) then return dumpSidecar(reader, path: spelled, sections: sections)
 	end 'sidecar'
 end 'runDumpInfo'
+
+// The sections named after the path, or ALL of them when none are — so the bare `--dump-info <path>`
+// keeps printing the whole sidecar, which is the documented default and what every other reader of this
+// dump relies on.
+function parseDumpSections(args MaxonArgs) returns DumpSectionRequest
+	var sections = BoolArray.create()
+	sections.refill(dumpSectionRoster().count(), value: args.paths.count() <= FirstSectionArgument)
+
+	for i in FirstSectionArgument upto args.paths.count() 'eachName'
+		let spelled = try args.paths.get(i) otherwise ""
+		match dumpSectionIndexOf(spelled) 'named'
+			none then return DumpSectionRequest.notASection(spelled)
+			at(index) then try sections.set(index, value: true) otherwise panic("parseDumpSections: sections.set OOB at {index} of a column sized to the section roster")
+		end 'named'
+	end 'eachName'
+
+	return DumpSectionRequest.chosen(sections)
+end 'parseDumpSections'
+
+// Case-insensitively, exactly as the reference driver matches one.
+function dumpSectionIndexOf(spelled String) returns DumpSectionLookup
+	let wanted = spelled.toLower()
+	var index = 0 as DumpSectionIndex
+	for name in dumpSectionRoster() 'eachSection'
+		if name == wanted 'theSection'
+			return DumpSectionLookup.at(index)
+		end 'theSection'
+
+		index = index + 1
+	end 'eachSection'
+
+	return DumpSectionLookup.none
+end 'dumpSectionIndexOf'
+
+function dumpSectionRoster() returns StringArray
+	var names = StringArray.create()
+	names.push(HeaderSection)
+	names.push(FilesSection)
+	names.push(FunctionsSection)
+	names.push(TypesSection)
+	names.push(LinesSection)
+	names.push(StatementsSection)
+
+	return names
+end 'dumpSectionRoster'
+
+// The valid set as the usage line and the refusal both spell it.
+function dumpSectionNames() returns String
+	var rendered = ""
+	for name in dumpSectionRoster() 'eachSection'
+		rendered.append(name if rendered.isEmpty() else "|{name}")
+	end 'eachSection'
+
+	return rendered
+end 'dumpSectionNames'
+
+// ⛔ **THE SENTENCE IS THE REFERENCE DRIVER'S, AND SO IS THE PROGRAM NAME IN IT.** One sidecar surface read
+// two ways must refuse the same way and name the same valid set, or a caller learns the roster from
+// whichever driver they happened to run — which is what `tests/debug/dump-info-sections.test.maxon`
+// measures, by spawning the bootstrap on the same binary and comparing its stderr with this.
+function refuseUnknownSection(name String) returns ExitCode
+	printError("maxon debug {DumpInfoOption}: '{name}' is not a section ({dumpSectionNames()}).\n")
+
+	return 1
+end 'refuseUnknownSection'
+
+// Asked by NAME, resolved through the roster — the one place a section's position is stated.
+function sectionIsPrinted(sections BoolArray, section String) returns bool
+	match dumpSectionIndexOf(section) 'named'
+		none then panic("sectionIsPrinted: '{section}' is not in the section roster, which is where every section this command prints is declared")
+		at(index) then return try sections.get(index) otherwise panic("sectionIsPrinted: sections.get OOB at {index} of a column sized to the section roster")
+	end 'named'
+end 'sectionIsPrinted'
 
 function runSymbolize(args MaxonArgs) returns ExitCode
 	let spelled = try args.paths.get(1) otherwise ""
@@ -124,35 +258,106 @@ end 'refuseDebugCommand'
 // PRINTING
 // ============================================================================================
 
-function dumpSidecar(reader MxdbgReader, path String) returns ExitCode
-	print("Debug info: {path}\n")
-	print("  target:   {reader.triple}\n")
-	print("  build-id: 0x{reader.buildId:016x}\n")
+function dumpSidecar(reader MxdbgReader, path String, sections BoolArray) returns ExitCode
+	if sectionIsPrinted(sections, section: HeaderSection) 'theHead'
+		print("Debug info: {path}\n")
+		print("  target:   {reader.triple}\n")
+		print("  build-id: 0x{reader.buildId:016x}\n")
+	end 'theHead'
 
-	print("  files ({reader.fileCount()}):\n")
-	for i in 0 upto reader.fileCount() 'eachFile'
-		print("    [{i}] {reader.fileName(i as MxdbgIndex)}\n")
-	end 'eachFile'
+	if sectionIsPrinted(sections, section: FilesSection) 'theFiles'
+		print("  files ({reader.fileCount()}):\n")
+		for i in 0 upto reader.fileCount() 'eachFile'
+			print("    [{i}] {reader.fileName(i as MxdbgIndex)}\n")
+		end 'eachFile'
+	end 'theFiles'
+
+	if sectionIsPrinted(sections, section: FunctionsSection) 'theFunctions'
+		dumpFunctions(reader)
+	end 'theFunctions'
+
+	// Printed even when the count is 0, and the count is what says so. A dump that omitted the heading
+	// could not be told apart from one whose reader does not know the section exists — and a reader of
+	// the dump uses these headings to tell one section's rows from the next's.
+	if sectionIsPrinted(sections, section: TypesSection) 'theTypes'
+		dumpTypes(reader)
+	end 'theTypes'
+
+	// ONE walk for both questions: the offset column is the `lines` half, the source position the
+	// `statements` half. Asking for both prints the full rows.
+	let withOffsets = sectionIsPrinted(sections, section: LinesSection)
+	if withOffsets or sectionIsPrinted(sections, section: StatementsSection) 'theLineTable'
+		print("  line table ({reader.lineCount()}):\n")
+		for i in 0 upto reader.lineCount() 'eachRow'
+			let row = reader.lineRecord(i as MxdbgIndex)
+			let offset = "0x{row.codeOffset:04x}  " if withOffsets else ""
+			print("    {offset}{row.file}:{row.line}:{row.column}{lineFlagTags(row.flags)}\n")
+		end 'eachRow'
+	end 'theLineTable'
+
+	return 0
+end 'dumpSidecar'
+
+// ⭐ **A FUNCTION'S LOCALS NEST UNDER ITS ROW**, which is why there is no `locals` section to ask for: the
+// records belong to the function that owns them, and a stop is inside one function.
+function dumpFunctions(reader MxdbgReader)
+	let framePointer = framePointerRegisterFor(reader.triple)
 
 	print("  functions ({reader.functionCount()}):\n")
 	for i in 0 upto reader.functionCount() 'eachFunction'
 		let fn = reader.functionRecord(i as MxdbgIndex)
 		print("    {padRight(fn.name, width: FunctionNameColumn)} [0x{fn.codeStart:04x}, 0x{fn.codeEnd:04x})  frame=0x{fn.frameSize:x}  params={fn.paramCount}  lines={fn.lineCount}  locals={fn.localCount}\n")
+		for k in fn.localFirst upto fn.localFirst + fn.localCount 'eachLocal'
+			let local = reader.localRecord(k as MxdbgIndex)
+			print("        {padRight(local.name, width: LocalNameColumn)} {formatLocation(local, framePointer: framePointer)}  : {reader.typeName(local.typeId)}\n")
+		end 'eachLocal'
 	end 'eachFunction'
+end 'dumpFunctions'
 
-	// Printed even when the count is 0, and the count is what says so. A dump that omitted the heading
-	// could not be told apart from one whose reader does not know the section exists — and a reader of
-	// the dump uses these headings to tell one section's rows from the next's.
+function dumpTypes(reader MxdbgReader)
 	print("  types ({reader.typeCount()}):\n")
+	for i in 0 upto reader.typeCount() 'eachType'
+		let entry = reader.typeRecord(i as MxdbgIndex)
+		print("    [{i}] {padRight(entry.name, width: TypeNameColumn)} {mxdbgTypeKindName(entry.kind)}  size={entry.size} align={entry.align}  fields={entry.fieldCount}\n")
+		for k in entry.fieldFirst upto entry.fieldFirst + entry.fieldCount 'eachField'
+			let field = reader.fieldRecord(k as MxdbgIndex)
+			print("        +0x{field.offset:02x}  {padRight(field.name, width: FieldNameColumn)} : {reader.typeName(field.typeId)}\n")
+		end 'eachField'
+	end 'eachType'
+end 'dumpTypes'
 
-	print("  line table ({reader.lineCount()}):\n")
-	for i in 0 upto reader.lineCount() 'eachRow'
-		let row = reader.lineRecord(i as MxdbgIndex)
-		print("    0x{row.codeOffset:04x}  {row.file}:{row.line}:{row.column}{lineFlagTags(row.flags)}\n")
-	end 'eachRow'
+// ⭐ **THE DISPLACEMENTS ARE TARGET-AGNOSTIC AND ONLY THIS LABEL DIFFERS.** The sidecar records a
+// frame-pointer-relative offset; which register that is, is the sidecar's own target's business.
+function framePointerRegisterFor(triple String) returns String
+	return Arm64FramePointerName if triple.startsWith(Arm64TriplePrefix) else X64FramePointerName
+end 'framePointerRegisterFor'
 
-	return 0
-end 'dumpSidecar'
+// ⭐ **THREE FORMS AND NO OTHERS.** `<optimized out>` is a real answer — a value the compiler could not
+// place honestly — and a driver that rendered it as a slot number instead would print a byte of somebody
+// else's frame. A kind neither driver writes is a file this build cannot render, and saying so beats
+// picking one of the three at random.
+function formatLocation(local MxdbgLocalInfo, framePointer String) returns String
+	if local.locKind == MxdbgLocKindStackSlot 'aFrameSlot'
+		if local.locValue >= 0 'aboveTheFramePointer'
+			return "[{framePointer}+0x{local.locValue:x}]"
+		end 'aboveTheFramePointer'
+
+		// Wider than the value it negates: the most negative displacement's magnitude is one past i32.max.
+		let magnitude = (0 - local.locValue) as LocationMagnitude
+
+		return "[{framePointer}-0x{magnitude:x}]"
+	end 'aFrameSlot'
+
+	if local.locKind == MxdbgLocKindRegister 'aRegister'
+		return "reg{local.locValue}"
+	end 'aRegister'
+
+	if local.locKind == MxdbgLocKindOptimizedOut 'nowhere'
+		return OptimizedOutLocation
+	end 'nowhere'
+
+	panic("maxon-shv2 debug: local '{local.name}' states location kind {local.locKind}, which is none of the three the format has")
+end 'formatLocation'
 
 // The tag list a line row's flags render as, in the reference's spelling and order. `coverage` is a flag
 // this compiler never sets and the bootstrap does, and it is rendered here for the reason the whole

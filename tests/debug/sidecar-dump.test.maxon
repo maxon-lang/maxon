@@ -40,9 +40,8 @@
 let DumpCaseLabel = "sidecar-dump"
 let DumpBuildLabel = "dumped"
 
-// The read-only sidecar surfaces, spelled as the reference driver spells them.
-let DebugSubcommand = "debug"
-let DumpInfoOption = "--dump-info"
+// The one read-only surface this file reaches for that the shared half does not carry: every other case
+// here goes through `spawnSidecarDumpInfo`, and only this one symbolizes.
 let SymbolizeOption = "--symbolize"
 
 // The two keyed lines of the dump's head. A value is whatever follows the key on that line, trimmed — the
@@ -64,49 +63,20 @@ let RangeOpen = "["
 let RangeClose = ")"
 let RangeSeparator = ","
 
-// How a declaration is recognized in the staged fixture source: the line that opens it and the line that
-// closes it.
-let FunctionDeclarationPrefix = "function "
+// How a declaration's CLOSE is recognized in the staged fixture source. Its opening line and the name in
+// it are the shared half's, because every case here reads the same roster out of the same source.
 let FunctionEndPrefix = "end '"
 let FunctionEndSuffix = "'"
-let DeclarationNameEnd = "("
-
-// Folds applied to a captured stream before it is read: CR, so a Windows console's line endings do not
-// decide what a row says or where one ends.
-let DumpCarriageReturn = "\r"
-let DumpLineFeed = "\n"
-let DumpSpace = " "
-let DumpTab = "\t"
-
-// How the dump writes a code offset, and the ASCII runs its digits come from. Spelled as numbers rather
-// than as character literals: a character-literal RECEIVER makes the bootstrap's resolver lose the
-// declarations that follow it, and this corpus is compiled by BOTH compilers.
-let HexPrefix = "0x"
-let HexBase = 16
-let DecimalBase = 10
-let HexLetterValue = 10
-let AsciiDigitZero = 48
-let AsciiDigitNine = 57
-let AsciiLowerA = 97
-let AsciiLowerF = 102
-let AsciiUpperA = 65
-let AsciiUpperF = 70
-
-// A `.text` offset, as the dump writes one.
-typealias CodeOffset = int(0 to u64.max)
 
 // A 1-based line of the staged fixture source.
 typealias FixtureLineNumber = int(0 to u64.max)
-
-// One hex digit's value.
-typealias HexDigitValue = int(0 to 15)
 
 // ============================================================================================
 // THE CONTRACT
 // ============================================================================================
 
 test 'the sidecar names this build, this source and every function the fixture declares'
-	let staged = stagedSidecarProgram(DumpCaseLabel)
+	let staged = stagedSidecarProgram(DumpCaseLabel, fixture: SpansFixtureName)
 	let noArguments = StringArray.create()
 
 	let build = spawnSidecarBuild(staged, label: DumpBuildLabel, extraArguments: noArguments)
@@ -119,12 +89,9 @@ test 'the sidecar names this build, this source and every function the fixture d
 		panic("sidecar-dump.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
 	end 'wroteNothing'
 
-	var dumpArguments = StringArray.create()
-	dumpArguments.push(DebugSubcommand)
-	dumpArguments.push(DumpInfoOption)
-	dumpArguments.push(executable.toString())
-	let dumpRun = spawnSidecarCompiler(dumpArguments, staged: staged, what: "the sidecar dump")
-	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommand} {DumpInfoOption} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
+	let noSections = StringArray.create()
+	let dumpRun = spawnSidecarDumpInfo(executable, staged: staged, sections: noSections, binaryStem: TestedCompilerStem)
+	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
 
 	let dump = withoutCarriageReturns(dumpRun.stdout)
 
@@ -172,12 +139,12 @@ test 'the sidecar names this build, this source and every function the fixture d
 	try Expect.notEqual(probeOffset, expected: "", message: "the dump's `{DumpLineTableHeading}…)` section holds no row inside `{probeName}`'s code range — its row reads `{probeRow}`. A function with a code range and no line rows is one a debugger can name and never stop in.")
 
 	var symbolizeArguments = StringArray.create()
-	symbolizeArguments.push(DebugSubcommand)
+	symbolizeArguments.push(DebugSubcommandName)
 	symbolizeArguments.push(SymbolizeOption)
 	symbolizeArguments.push(executable.toString())
 	symbolizeArguments.push(probeOffset)
 	let symbolizeRun = spawnSidecarCompiler(symbolizeArguments, staged: staged, what: "the symbolize lookup")
-	try Expect.equal(symbolizeRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommand} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
+	try Expect.equal(symbolizeRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
 
 	let symbolized = withoutCarriageReturns(symbolizeRun.stdout)
 	try Expect.contains(symbolized, needle: SidecarProgramFileName, message: "`{SymbolizeOption}` resolved {probeOffset} — a row of this binary's own line table, inside `{probeName}` — without naming `{SidecarProgramFileName}`. The offset came out of the sidecar being asked, so an answer naming another file, or none, is the two tables disagreeing.")
@@ -218,16 +185,10 @@ end 'hostTargetTriple'
 // READING THE DUMP
 // ============================================================================================
 
-// One captured stream with CR folded away, so a Windows console's line endings do not decide what a row
-// says or where one ends.
-function withoutCarriageReturns(raw String) returns String
-	return raw.replace(DumpCarriageReturn, with: "")
-end 'withoutCarriageReturns'
-
 // The value of the first `<key> …` line, trimmed. EMPTY when no line carries the key, which the caller
 // compares against what it expected and reports — a helper does not get to decide what an absent key means.
 function keyedDumpValue(dump String, key String) returns String
-	for rawLine in dump.split(DumpLineFeed) 'eachLine'
+	for rawLine in dump.split(SidecarLineFeed) 'eachLine'
 		let line = rawLine.trim()
 		if not line.startsWith(key) 'notThisLine'
 			continue
@@ -250,7 +211,7 @@ function dumpSectionRows(dump String, heading String) returns StringArray
 	var rows = StringArray.create()
 	var inSection = false
 
-	for rawLine in dump.split(DumpLineFeed) 'eachLine'
+	for rawLine in dump.split(SidecarLineFeed) 'eachLine'
 		let line = rawLine.trim()
 		if line.startsWith(heading) 'opensThisSection'
 			inSection = true
@@ -320,7 +281,7 @@ end 'carriesCodeRange'
 
 // One bound of a row's code range — the START, or the END past the separator. A row carrying no range
 // reads 0 for both, which fails the caller's `end exceeds start` assertion rather than passing it.
-function codeRangeBound(row String, upper bool) returns CodeOffset
+function codeRangeBound(row String, upper bool) returns SidecarNumber
 	if not carriesCodeRange(row) 'noRange'
 		return 0
 	end 'noRange'
@@ -340,7 +301,7 @@ end 'codeRangeBound'
 
 // The FIRST line-table row inside `[atLeast, below)`, as the dump spelled its offset — handed straight back
 // to `--symbolize` so nothing here re-spells a number the driver published. EMPTY when no row falls inside.
-function firstLineRowTokenWithin(dump String, atLeast CodeOffset, below CodeOffset) returns String
+function firstLineRowTokenWithin(dump String, atLeast SidecarNumber, below SidecarNumber) returns String
 	for row in dumpSectionRows(dump, heading: DumpLineTableHeading) 'eachRow'
 		let tokens = whitespaceTokens(row)
 		let first = try tokens.get(0) otherwise continue
@@ -369,7 +330,7 @@ function lineNumberAfter(text String, marker String) returns FixtureLineNumber
 	var seenADigit = false
 	for c in text.slice(cursor, endIndex: text.endIndex()) 'eachCharacter'
 		if Ascii.isDigit(c) 'aDigit'
-			value = value * DecimalBase + hexDigitValue(c)
+			value = value * SidecarDecimalBase + hexDigitValue(c)
 			seenADigit = true
 			continue
 		end 'aDigit'
@@ -386,26 +347,6 @@ end 'lineNumberAfter'
 // READING THE STAGED FIXTURE
 // ============================================================================================
 
-// The functions the staged program DECLARES, in source order. Derived from the source rather than listed
-// in this file, so a fixture that grows a function grows the roster this case checks.
-function declaredFunctionNames(staged FilePath) returns StringArray
-	var names = StringArray.create()
-	for line in stagedSourceLines(staged) 'eachLine'
-		if line.startsWith(FunctionDeclarationPrefix) 'aDeclaration'
-			names.push(declaredNameIn(line))
-		end 'aDeclaration'
-	end 'eachLine'
-
-	return names
-end 'declaredFunctionNames'
-
-// The name in a `function NAME(…)` line.
-function declaredNameIn(line String) returns String
-	let open = try line.findFirst(DeclarationNameEnd) otherwise panic("sidecar-dump.test: the gate could not run — the staged fixture line '{line}' opens a declaration and spells no '{DeclarationNameEnd}'.")
-
-	return line.slice(line.startIndex(), endIndex: open).replace(FunctionDeclarationPrefix, with: "").trim()
-end 'declaredNameIn'
-
 // The 1-based line of the staged source that starts with `prefix`. It refuses loudly: every prefix asked
 // for here was built from a name this process read out of that very file moments ago.
 function sourceLineStartingWith(staged FilePath, prefix String, what String) returns FixtureLineNumber
@@ -420,31 +361,9 @@ function sourceLineStartingWith(staged FilePath, prefix String, what String) ret
 	panic("sidecar-dump.test: the gate could not run — the staged fixture holds no line starting with '{prefix}', which is {what}.")
 end 'sourceLineStartingWith'
 
-// The staged program's lines, CR folded. Read on demand rather than held: this is the cold path of a case
-// whose cost is three spawned processes.
-function stagedSourceLines(staged FilePath) returns StringArray
-	let path = staged.join("{SidecarProgramFileName}")
-	let body = try File.readText(path) otherwise panic("sidecar-dump.test: the gate could not run — could not read the staged program at {path.toString()}, which this process wrote moments ago.")
-
-	return withoutCarriageReturns(body).split(DumpLineFeed)
-end 'stagedSourceLines'
-
 // ============================================================================================
 // TEXT
 // ============================================================================================
-
-// A row's words, with the runs of spacing the dump lays its columns out with dropped. Tabs fold to spaces
-// first, so a column written with either separates two words.
-function whitespaceTokens(row String) returns StringArray
-	var tokens = StringArray.create()
-	for piece in row.replace(DumpTab, with: DumpSpace).split(DumpSpace) 'eachPiece'
-		if not piece.isEmpty() 'aWord'
-			tokens.push(piece)
-		end 'aWord'
-	end 'eachPiece'
-
-	return tokens
-end 'whitespaceTokens'
 
 // A list of rows as the text a failure report shows, so a disagreement reads as a listing rather than as
 // an array identity. EMPTY for an empty list, which is what makes the two roster assertions an `isEmpty`
@@ -452,27 +371,11 @@ end 'whitespaceTokens'
 function renderedRows(rows StringArray) returns String
 	var rendered = ""
 	for row in rows 'eachRow'
-		rendered.append("{DumpLineFeed}  {row}")
+		rendered.append("{SidecarLineFeed}  {row}")
 	end 'eachRow'
 
 	return rendered
 end 'renderedRows'
-
-// A hex token's value. An optional `0x` opens it and the digits are read until the first character that is
-// not one, so a token carrying no digits reads 0 — which fails the assertion that consumes it rather than
-// standing in for a number nobody published.
-function hexValue(token String) returns CodeOffset
-	var value = 0
-	for c in token.trim().replace(HexPrefix, with: "") 'eachCharacter'
-		if not isHexDigit(c) 'pastTheDigits'
-			break
-		end 'pastTheDigits'
-
-		value = value * HexBase + hexDigitValue(c)
-	end 'eachCharacter'
-
-	return value
-end 'hexValue'
 
 // Whether a build-id carries any digit that is not zero. An unfilled field reads as zeros, and a sidecar
 // with an all-zero identity describes every build of every binary equally well.
@@ -485,23 +388,3 @@ function hasNonZeroHexDigit(text String) returns bool
 
 	return false
 end 'hasNonZeroHexDigit'
-
-function isHexDigit(c Character) returns bool
-	let code = try c.asciiValue() otherwise return false
-
-	return (code >= AsciiDigitZero and code <= AsciiDigitNine) or (code >= AsciiLowerA and code <= AsciiLowerF) or (code >= AsciiUpperA and code <= AsciiUpperF)
-end 'isHexDigit'
-
-// A hex digit's value. The caller has already classified `c`, so the conversion cannot fail.
-function hexDigitValue(c Character) returns HexDigitValue
-	let code = try c.asciiValue() otherwise panic("sidecar-dump.test: hexDigitValue is reached only past an isHexDigit test")
-	if code <= AsciiDigitNine 'aDecimalDigit'
-		return code - AsciiDigitZero
-	end 'aDecimalDigit'
-
-	if code <= AsciiUpperF 'anUpperCaseLetter'
-		return code - AsciiUpperA + HexLetterValue
-	end 'anUpperCaseLetter'
-
-	return code - AsciiLowerA + HexLetterValue
-end 'hexDigitValue'

@@ -90,6 +90,30 @@ module let MxdbgFuncLineCount = 28
 module let MxdbgFuncLocalFirst = 32
 module let MxdbgFuncLocalCount = 36
 
+// Where a type record's fields sit inside its 28 bytes.
+module let MxdbgTypeNameOff = 0
+module let MxdbgTypeNameLen = 4
+module let MxdbgTypeKindWord = 8
+module let MxdbgTypeSize = 12
+module let MxdbgTypeAlign = 16
+module let MxdbgTypeFieldFirst = 20
+module let MxdbgTypeFieldCount = 24
+
+// Where a field record's fields sit inside its 16 bytes.
+module let MxdbgFieldNameOff = 0
+module let MxdbgFieldNameLen = 4
+module let MxdbgFieldOffset = 8
+module let MxdbgFieldTypeId = 12
+
+// Where a local record's fields sit inside its 28 bytes.
+module let MxdbgLocalNameOff = 0
+module let MxdbgLocalNameLen = 4
+module let MxdbgLocalLocKind = 8
+module let MxdbgLocalLocValue = 12
+module let MxdbgLocalTypeId = 16
+module let MxdbgLocalScopeStart = 20
+module let MxdbgLocalScopeEnd = 24
+
 // Where a line record's fields sit inside its 20 bytes.
 module let MxdbgLineCodeOffset = 0
 module let MxdbgLineFileId = 4
@@ -102,6 +126,98 @@ export typealias MxdbgIndex = int(0 to u32.max)
 
 // A `.text` code offset as the sidecar records one.
 export typealias MxdbgCodeOffset = int(0 to u32.max)
+
+// A local record's `locValue`: a stack displacement, a register number, or unused, per its `locKind`.
+export typealias MxdbgLocValue = int(i32.min to i32.max)
+
+// ⭐ **WHAT A TYPE RECORD'S `kind` WORD SAYS, AND THE WORDS ARE THE REFERENCE'S.** A renderer decides how
+// to read the bytes at a local's location from this word alone, so a kind a reader does not know must
+// reach it as the raw number rather than be folded into one it does.
+//
+// `string` and `array` name the fused heap records; `managedRecord` is the 8-byte-pointer catch-all (an
+// interface value, a function value, an unresolved type parameter) that exists so a field or a local of
+// such a type has a valid `typeId` to point at.
+export let MxdbgTypeKindPrimitive = 0 as MxdbgIndex
+export let MxdbgTypeKindIntRanged = 1 as MxdbgIndex
+export let MxdbgTypeKindFloatRanged = 2 as MxdbgIndex
+export let MxdbgTypeKindStruct = 3 as MxdbgIndex
+export let MxdbgTypeKindEnum = 4 as MxdbgIndex
+export let MxdbgTypeKindUnion = 5 as MxdbgIndex
+export let MxdbgTypeKindString = 6 as MxdbgIndex
+
+// The one kind this compiler never writes — the fused heap Array record has no declaration to describe it
+// from — and it is here because a sidecar the BOOTSTRAP wrote does, and the dump prints either one.
+let MxdbgTypeKindArray = 7 as MxdbgIndex
+export let MxdbgTypeKindManagedRecord = 8 as MxdbgIndex
+
+// ⭐ **WHERE A LOCAL LIVES, AND THERE IS NO FOURTH ANSWER.** `optimizedOut` is the honest one for a value
+// the compiler cannot place: a guessed slot number is a debugger printing a byte of somebody else's frame.
+export let MxdbgLocKindStackSlot = 0 as MxdbgIndex
+export let MxdbgLocKindRegister = 1 as MxdbgIndex
+export let MxdbgLocKindOptimizedOut = 2 as MxdbgIndex
+
+// The word a type record's kind renders as. A kind this build does not know renders as its NUMBER, which
+// is the reference driver's own answer for an out-of-range word and the only honest one for a file some
+// other writer made.
+export function mxdbgTypeKindName(kind MxdbgIndex) returns String
+	if kind == MxdbgTypeKindPrimitive 'primitive'
+		return "Primitive"
+	end 'primitive'
+
+	if kind == MxdbgTypeKindIntRanged 'intRanged'
+		return "IntRanged"
+	end 'intRanged'
+
+	if kind == MxdbgTypeKindFloatRanged 'floatRanged'
+		return "FloatRanged"
+	end 'floatRanged'
+
+	if kind == MxdbgTypeKindStruct 'struct'
+		return "Struct"
+	end 'struct'
+
+	if kind == MxdbgTypeKindEnum 'enumeration'
+		return "Enum"
+	end 'enumeration'
+
+	if kind == MxdbgTypeKindUnion 'union'
+		return "Union"
+	end 'union'
+
+	if kind == MxdbgTypeKindString 'string'
+		return "String"
+	end 'string'
+
+	if kind == MxdbgTypeKindArray 'array'
+		return "Array"
+	end 'array'
+
+	return "ManagedRecord" if kind == MxdbgTypeKindManagedRecord else "{kind}"
+end 'mxdbgTypeKindName'
+
+let MxdbgSignedWordMax = i32.max as MxdbgIndex
+let MxdbgWordModulus = 4294967296
+
+// ⚠ **A `locValue` IS A SIGNED i32 STORED AS ITS TWO'S-COMPLEMENT u32.** A stack slot BELOW the frame
+// pointer is a negative displacement, and reading that word unsigned places it 4 GB above instead.
+module function mxdbgSignedWord(raw MxdbgIndex) returns MxdbgLocValue
+	if raw > MxdbgSignedWordMax 'negative'
+		return (raw - MxdbgWordModulus) as MxdbgLocValue
+	end 'negative'
+
+	return raw as MxdbgLocValue
+end 'mxdbgSignedWord'
+
+// The u32 word a `locValue` is STORED as — `mxdbgSignedWord`'s inverse, and the other half of the same
+// rule: a displacement below the frame pointer is negative, and a word written unsigned places it 4 GB
+// above instead.
+module function mxdbgLocValueWord(value MxdbgLocValue) returns MxdbgIndex
+	if value < 0 'negative'
+		return (value + MxdbgWordModulus) as MxdbgIndex
+	end 'negative'
+
+	return value as MxdbgIndex
+end 'mxdbgLocValueWord'
 
 // Whether `image` opens with the sidecar magic. Split from the reader so a caller can ask before
 // paying for a parse.

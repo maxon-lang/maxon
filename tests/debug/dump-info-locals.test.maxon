@@ -1,0 +1,402 @@
+// dump-info-locals.test.maxon — every binding a function DECLARES has exactly one local record, and every
+// location it states is one the compiler can stand behind.
+//
+// `--dump-info <exe> functions` prints each function's row and NESTS its locals under it, one per line:
+// `name  <location>  : TypeName`. (`locals` is deliberately not a section name in either driver — the rows
+// belong to the function that owns them, and a top-level section would be the same records under a second
+// key.) A location renders in exactly three forms and no others: a frame-pointer-relative stack slot
+// `[rbp±0x…]` (`x29` on arm64), a register `regN`, or `<optimized out>`.
+//
+// ⭐⭐ **THE THIRD FORM IS THE POINT.** A value the compiler cannot honestly locate at a given PC has an
+// answer — `<optimized out>` — and a debugger that prints it is telling the truth. The failure this file
+// exists to catch is the other choice: mapping an unlocatable value onto a plausible-looking slot number,
+// which a reader cannot tell from a real one and which prints a byte of somebody else's frame.
+//
+// ⭐ **SO THE REGISTER-RESIDENT FUNCTION IS ASKED FOR A NEGATIVE.** The fixture's `blend` holds three
+// simultaneously-live scalars — few enough that shv2's allocator colours every one of them into a register
+// and gives the function a frame with no spill slots at all. NOT ONE of its local rows may claim a stack
+// slot, because there is no stack slot for any of them to be in: a slot number there was invented. Its
+// sibling `churn` holds a band of bindings live ACROSS its loop, which ARE spilled, so the two functions
+// are the two carriers and neither can stand in for the other.
+//
+// ⭐⭐ **THE ROSTER IS READ OUT OF THE STAGED SOURCE, NEVER WRITTEN DOWN HERE** — the parameters of each
+// declared function plus every `let`/`var` in its body — so a fixture that grows a binding grows what this
+// case demands of the sidecar. And the demand is EXACTLY ONCE: a binding recorded twice is a debugger
+// offering the same name at two locations with no way to choose, and one recorded zero times is a value a
+// user cannot ask about at all.
+//
+// ⭐⭐ **ONE BINARY, TWO READERS, BYTE FOR BYTE.** The last assertion runs the REFERENCE driver over the
+// very executable this compiler built and compares the two renderings. Line endings are folded first — a
+// console's CRLF is not what is under test.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION** — a
+// missing compiler, a spawn that never happened, a BUILD that produced no program.
+//
+// ⛔ **ONE SPAWNING `test`, ONE FILE, ONE COMPILE.** Two dumps are two further spawns and no further
+// compiles. Staging goes to a directory named for THIS case, because `maxon test` runs files concurrently.
+
+// The label this case stages under, and the build it dumps.
+let LocalsCaseLabel = "dump-info-locals"
+let LocalsBuildLabel = "located"
+
+// The section asked for. Local rows print nested under it; there is no `locals` section to ask for.
+let FunctionsSectionName = "functions"
+
+// The fixture's register-resident function — three simultaneously-live scalars, a frame with no spill
+// slots (`tests/debug/fixtures/locals/main.maxon.fixture` says why it is shaped that way).
+let RegisterResidentFunctionName = "blend"
+
+// The dump's own spellings. A function row carries a `[START, END)` code range; a local row nested under
+// it carries a location and no range, which is what tells the two apart inside one section.
+let FunctionsHeading = "functions ("
+let RangeOpener = "["
+let RangeCloser = ")"
+let RangeSeparator = ","
+let LocationTypeSeparator = ":"
+let SectionHeadingCloser = "):"
+
+// The three honest location forms, and nothing else.
+let RegisterLocationPrefix = "reg"
+let OptimizedOutLocation = "<optimized out>"
+let StackSlotOpener = "["
+let StackSlotCloser = "]"
+let StackSlotPositive = "+0x"
+let StackSlotNegative = "-0x"
+
+// How the fixture spells the bindings this case reads back out of it.
+let BindingIndent = "\t"
+let LetBindingPrefix = "let "
+let VarBindingPrefix = "var "
+let ParameterListOpener = "("
+let ParameterListCloser = ")"
+let ParameterSeparator = ","
+let BlockCloserPrefix = "end '"
+let BlockCloserSuffix = "'"
+
+// Where a name sits in a row or a declaration, once the runs of column padding are folded away.
+let RowNameColumn = 0
+let BindingNameColumn = 1
+
+// A tally of matching rows.
+typealias RowTally = int(0 to u64.max)
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'every declared binding has one local record and every location is one of three honest forms'
+	let staged = stagedSidecarProgram(LocalsCaseLabel, fixture: LocalsFixtureName)
+	let executable = builtLocalsFixture(staged)
+
+	var sections = StringArray.create()
+	sections.push(FunctionsSectionName)
+	let dumpRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: TestedCompilerStem)
+	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {FunctionsSectionName}` exited {dumpRun.exitCode()}. It wrote to stderr: {dumpRun.stderr}")
+
+	let dump = withoutCarriageReturns(dumpRun.stdout)
+	let rows = functionSectionRows(dump)
+
+	// ⭐ THE ROSTER. Every binding each DECLARED function has, asked of the rows nested under it.
+	let declaredFunctions = declaredFunctionNames(staged)
+	try Expect.notEqual(declaredFunctions.count() as AssertedInt, expected: 0, message: "dump-info-locals.test: no `{FunctionDeclarationPrefix}` line was found in the staged fixture, so this case would assert nothing at all about local records.")
+
+	for name in declaredFunctions 'eachFunction'
+		try requireLocalsOf(rows, staged: staged, functionName: name, dump: dump)
+	end 'eachFunction'
+
+	// ⭐ THE NEGATIVE. The register-resident function has no spill slots, so no row of it may claim one.
+	try requireNoStackSlotsIn(rows, functionName: RegisterResidentFunctionName, dump: dump)
+
+	// ⭐ ONE BINARY, TWO READERS.
+	let referenceRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: BootstrapCompilerStem)
+	try Expect.equal(referenceRun.exitCode() as AssertedInt, expected: 0, message: "the REFERENCE driver `{BootstrapCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe> {FunctionsSectionName}` exited {referenceRun.exitCode()} over a binary this compiler built, so the two dumps cannot be compared. It wrote to stderr: {referenceRun.stderr}")
+	let referenceDump = withoutCarriageReturns(referenceRun.stdout)
+	try Expect.equal(dump, expected: referenceDump, message: "the two drivers print DIFFERENT local rows out of ONE sidecar. A local record's fields sit at fixed offsets inside a fixed stride, so a reader that disagrees with the writer about either reads a name, a location and a type id that belong to no record at all.")
+end 'every declared binding has one local record and every location is one of three honest forms'
+
+// ============================================================================================
+// ONE FUNCTION'S LOCAL ROWS
+// ============================================================================================
+
+function requireLocalsOf(rows StringArray, staged FilePath, functionName String, dump String) throws TestFailure
+	let declared = declaredBindingsOf(staged, functionName: functionName)
+	try Expect.notEqual(declared.count() as AssertedInt, expected: 0, message: "dump-info-locals.test: `{functionName}` was read out of the staged fixture with no parameters and no `{LetBindingPrefix}`/`{VarBindingPrefix}` binding at all, so this case would assert nothing about it.")
+
+	let nested = localRowsOf(rows, functionName: functionName)
+	try Expect.notEqual(nested.count() as AssertedInt, expected: 0, message: "the dump nests no local row under `{functionName}`, which the staged fixture declares {declared.count()} binding(s) in. A function whose bindings the sidecar does not record is one a debugger can stop inside and show nothing. The section held: {dump}")
+
+	for binding in declared 'eachBinding'
+		let tally = rowTallyNamed(nested, name: binding)
+		try Expect.equal(tally as AssertedInt, expected: 1, message: "`{functionName}.{binding}` has {tally} local record(s) where every DECLARED binding has exactly one. Zero is a value a user cannot ask about at all; more than one offers the same name at two locations with no way to choose between them. The rows under `{functionName}` were: {renderedLocalRows(nested)}")
+	end 'eachBinding'
+
+	try Expect.equal(nested.count() as AssertedInt, expected: declared.count() as AssertedInt, message: "`{functionName}` carries {nested.count()} local record(s) where the staged fixture declares {declared.count()}. A record naming something the source does not bind is a name a user will look for and not find in their own program. The rows under `{functionName}` were: {renderedLocalRows(nested)}")
+
+	// Every location is one of the three the format can state, and every row names a type. A row whose
+	// type id missed renders as the empty name, which reads as a column the dump forgot rather than as
+	// the dangling reference it is.
+	for row in nested 'eachRow'
+		let location = locationIn(row)
+		try Expect.isTrue(isHonestLocation(location), message: "`{functionName}.{rowName(row)}` states its location as `{location}`, which is none of the three forms the format has: a frame-pointer slot (`{StackSlotOpener}{framePointerRegister()}{StackSlotPositive}…{StackSlotCloser}`), a register (`{RegisterLocationPrefix}N`), or `{OptimizedOutLocation}`. A location a driver renders without being able to say which of the three it is, is one nobody can act on. The row reads: {row}")
+		let typeName = typeNameIn(row)
+		try Expect.notEqual(typeName, expected: "", message: "`{functionName}.{rowName(row)}` names no type. A local's type id is what decides how the bytes at its location are read, and an id that resolves to nothing leaves the value unrenderable. The row reads: {row}")
+	end 'eachRow'
+end 'requireLocalsOf'
+
+// ⭐ The assertion that catches "map an unknown location to slot 0". `blend`'s three scalars are colour
+// -ed into registers and its frame carries no spill slots, so a stack displacement stated for any of them
+// was not measured — it was invented, and it points into the caller's frame or the shadow space.
+function requireNoStackSlotsIn(rows StringArray, functionName String, dump String) throws TestFailure
+	let nested = localRowsOf(rows, functionName: functionName)
+	try Expect.notEqual(nested.count() as AssertedInt, expected: 0, message: "the dump nests no local row under `{functionName}`, so the one function whose values are known to have NO stack home asserts nothing. The section held: {dump}")
+
+	for row in nested 'eachRow'
+		let location = locationIn(row)
+		try Expect.isFalse(isStackSlot(location), message: "`{functionName}.{rowName(row)}` claims the stack slot `{location}`. `{functionName}` holds few enough simultaneously-live scalars that the allocator colours all of them into registers, and its frame carries no spill slots — so that displacement names memory belonging to something else. An unlocatable value's honest answer is `{OptimizedOutLocation}`; a slot number is a guess a reader cannot tell from a measurement. The row reads: {row}")
+	end 'eachRow'
+end 'requireNoStackSlotsIn'
+
+// ============================================================================================
+// THE BUILD UNDER TEST
+// ============================================================================================
+
+function builtLocalsFixture(staged FilePath) returns FilePath
+	let noArguments = StringArray.create()
+	let build = spawnSidecarBuild(staged, label: LocalsBuildLabel, extraArguments: noArguments)
+	if build.exitCode() != 0 'didNotBuild'
+		panic("dump-info-locals.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	let executable = builtSidecarExecutable(staged, label: LocalsBuildLabel)
+	if not File.exists(executable) 'wroteNothing'
+		panic("dump-info-locals.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
+	end 'wroteNothing'
+
+	return executable
+end 'builtLocalsFixture'
+
+// ============================================================================================
+// READING THE FUNCTION SECTION
+// ============================================================================================
+
+// The rows of the `functions (…)` section: every line after its heading, up to the line that opens the
+// NEXT section. The stop matters even when the section was asked for alone — a driver that ignores its
+// section argument prints the whole sidecar, and a line-table row would then be read as a local.
+function functionSectionRows(dump String) returns StringArray
+	var rows = StringArray.create()
+	var inSection = false
+	for rawLine in sidecarOutputLines(dump) 'eachLine'
+		let line = rawLine.trim()
+		if line.startsWith(FunctionsHeading) 'opensTheSection'
+			inSection = true
+			continue
+		end 'opensTheSection'
+
+		if not inSection 'beforeTheSection'
+			continue
+		end 'beforeTheSection'
+
+		if opensAFurtherSection(line) 'nextSection'
+			break
+		end 'nextSection'
+
+		if not line.isEmpty() 'aRow'
+			rows.push(line)
+		end 'aRow'
+	end 'eachLine'
+
+	return rows
+end 'functionSectionRows'
+
+// Whether a line opens a section other than the function table. Every heading reads `<name> (<count>):`
+// and no row of any section does, so the test is on the SHAPE rather than on a roster that would go stale
+// as sections are added.
+function opensAFurtherSection(line String) returns bool
+	return line.endsWith(SectionHeadingCloser) and not carriesFunctionRange(line)
+end 'opensAFurtherSection'
+
+// The local rows nested under a named function: the rows that follow its own, up to the next FUNCTION row.
+function localRowsOf(rows StringArray, functionName String) returns StringArray
+	var nested = StringArray.create()
+	var inFunction = false
+	for row in rows 'eachRow'
+		if carriesFunctionRange(row) 'aFunctionRow'
+			if inFunction 'thisFunctionIsDone'
+				break
+			end 'thisFunctionIsDone'
+
+			inFunction = rowName(row) == functionName
+			continue
+		end 'aFunctionRow'
+
+		if inFunction 'oneOfItsLocals'
+			nested.push(row)
+		end 'oneOfItsLocals'
+	end 'eachRow'
+
+	return nested
+end 'localRowsOf'
+
+// Whether a row spells a `[START, END)` code range, which only a FUNCTION row does. A local's location
+// also opens with a bracket (`[rbp-0x10]`) and carries neither the separator nor the closing paren.
+function carriesFunctionRange(row String) returns bool
+	let open = try row.findFirst(RangeOpener) otherwise return false
+	let rest = row.slice(open, endIndex: row.endIndex())
+
+	return rest.contains(RangeCloser) and rest.contains(RangeSeparator)
+end 'carriesFunctionRange'
+
+function rowName(row String) returns String
+	return try whitespaceTokens(row).get(RowNameColumn) otherwise ""
+end 'rowName'
+
+// How many of `rows` name `name`.
+function rowTallyNamed(rows StringArray, name String) returns RowTally
+	var tally = 0
+	for row in rows 'eachRow'
+		if rowName(row) == name 'namesIt'
+			tally = tally + 1
+		end 'namesIt'
+	end 'eachRow'
+
+	return tally
+end 'rowTallyNamed'
+
+// ⚠ A local row is `NAME  <location>  : TypeName`, and the LOCATION IS NOT ONE WORD — `<optimized out>`
+// is two. So the row is split at its one colon rather than tokenized: neither a location nor a type name
+// spells one, and a function row (which this is never called on) spells none either.
+function locationIn(row String) returns String
+	let halves = row.split(LocationTypeSeparator)
+	let head = try halves.get(0) otherwise return ""
+
+	var rendered = ""
+	var pastTheName = false
+	for token in whitespaceTokens(head) 'eachToken'
+		if not pastTheName 'theNameColumn'
+			pastTheName = true
+			continue
+		end 'theNameColumn'
+
+		rendered.append(token if rendered.isEmpty() else " {token}")
+	end 'eachToken'
+
+	return rendered
+end 'locationIn'
+
+function typeNameIn(row String) returns String
+	let halves = row.split(LocationTypeSeparator)
+
+	return (try halves.get(1) otherwise "").trim()
+end 'typeNameIn'
+
+// The three forms the format can state, and nothing else.
+function isHonestLocation(location String) returns bool
+	return isStackSlot(location) or isRegister(location) or location == OptimizedOutLocation
+end 'isHonestLocation'
+
+// A frame-pointer-relative slot, `[<fp>+0x…]` or `[<fp>-0x…]`. The DISPLACEMENT's sign is part of the
+// shape: a driver that rendered a negative offset as an unsigned one would print a slot gigabytes above
+// the frame, which is a location no reader would question.
+function isStackSlot(location String) returns bool
+	let opener = "{StackSlotOpener}{framePointerRegister()}"
+
+	return location.startsWith(opener) and location.endsWith(StackSlotCloser) and (location.contains(StackSlotPositive) or location.contains(StackSlotNegative))
+end 'isStackSlot'
+
+function isRegister(location String) returns bool
+	if not location.startsWith(RegisterLocationPrefix) 'notARegister'
+		return false
+	end 'notARegister'
+
+	var digits = 0
+	for c in location.replace(RegisterLocationPrefix, with: "") 'eachCharacter'
+		if not Ascii.isDigit(c) 'notADigit'
+			return false
+		end 'notADigit'
+
+		digits = digits + 1
+	end 'eachCharacter'
+
+	return digits != 0
+end 'isRegister'
+
+// The register the sidecar's stack displacements are relative to, per this host's architecture. The
+// offsets themselves are target-agnostic; only the label differs.
+function framePointerRegister() returns String
+	#if arch(x64)
+		let name = "rbp"
+	#else
+		let name = "x29"
+	#endif
+
+	return name
+end 'framePointerRegister'
+
+// A function's local rows as the text a failure report shows, so a disagreement reads as a listing.
+function renderedLocalRows(rows StringArray) returns String
+	var rendered = ""
+	for row in rows 'eachRow'
+		rendered.append("{SidecarLineFeed}  {row}")
+	end 'eachRow'
+
+	return rendered
+end 'renderedLocalRows'
+
+// ============================================================================================
+// READING THE STAGED FIXTURE
+// ============================================================================================
+
+// Everything a named function BINDS: its parameters, then every `let`/`var` its body declares, in source
+// order. Derived rather than written down, so a fixture that grows a binding grows this roster.
+//
+// ⚠ A binding is recognized at ONE level of indent. A statement inside a loop is deeper and is an
+// ASSIGNMENT rather than a declaration, and reading one as a binding would demand a second record for a
+// name that has exactly one.
+function declaredBindingsOf(staged FilePath, functionName String) returns StringArray
+	var names = StringArray.create()
+	var inFunction = false
+	var seen = false
+	for line in stagedSourceLines(staged) 'eachLine'
+		if line.startsWith("{FunctionDeclarationPrefix}{functionName}{DeclarationNameEnd}") 'opensTheFunction'
+			inFunction = true
+			seen = true
+			for parameter in parameterNamesIn(line) 'eachParameter'
+				names.push(parameter)
+			end 'eachParameter'
+			continue
+		end 'opensTheFunction'
+
+		if not inFunction 'outsideTheFunction'
+			continue
+		end 'outsideTheFunction'
+
+		if line.startsWith("{BlockCloserPrefix}{functionName}{BlockCloserSuffix}") 'closesTheFunction'
+			break
+		end 'closesTheFunction'
+
+		if line.startsWith("{BindingIndent}{LetBindingPrefix}") or line.startsWith("{BindingIndent}{VarBindingPrefix}") 'aBinding'
+			names.push(try whitespaceTokens(line).get(BindingNameColumn) otherwise continue)
+		end 'aBinding'
+	end 'eachLine'
+
+	if not seen 'noSuchFunction'
+		panic("dump-info-locals.test: the gate could not run — the staged fixture declares no `{FunctionDeclarationPrefix}{functionName}{DeclarationNameEnd}`, and the roster asking for it was read out of that very file moments ago.")
+	end 'noSuchFunction'
+
+	return names
+end 'declaredBindingsOf'
+
+// The parameter names in a `function NAME(a A, b B) returns R` line.
+function parameterNamesIn(line String) returns StringArray
+	var names = StringArray.create()
+	let open = try line.findFirst(ParameterListOpener) otherwise return names
+	let afterOpen = try line.indexAfter(open) otherwise return names
+	let rest = line.slice(afterOpen, endIndex: line.endIndex())
+	let close = try rest.findFirst(ParameterListCloser) otherwise return names
+
+	for parameter in rest.slice(rest.startIndex(), endIndex: close).split(ParameterSeparator) 'eachParameter'
+		names.push(try whitespaceTokens(parameter).get(0) otherwise continue)
+	end 'eachParameter'
+
+	return names
+end 'parameterNamesIn'

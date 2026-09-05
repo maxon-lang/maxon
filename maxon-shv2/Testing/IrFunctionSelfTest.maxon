@@ -1,0 +1,67 @@
+// Testing/IrFunctionSelfTest.maxon — ⭐⭐ **THE GATE OVER `IrFunction.createFromStd`'S MANAGED
+// PLACEHOLDERS: two functions built through that door share no box.**
+//
+// ⛔⛔ **THAT DOOR IS THE REGISTER ALLOCATOR'S POOL-WORKER DOOR.** `RegAllocUnit.rebuildUnitModule` builds
+// one function per message, on whichever OS thread the scheduler picked, so a placeholder that aliases a
+// module-level record is retained and released by every worker at once. This language's reference counting
+// is a plain load/add/store because one green thread owns each box; a shared placeholder is therefore a lost
+// update, and a lost update on a process-lifetime record surfaces only as a non-zero count at exit — a
+// COMPLETE, correct, byte-identical artifact and exit 101, on some runs and not others.
+//
+// ⛔⛔ **THE INVARIANT EXISTED AS A COMMENT ABOVE THAT LITERAL AND WAS BROKEN ANYWAY, WHICH IS THE WHOLE
+// REASON THIS FILE EXISTS.** Two placeholders were added to the literal as singletons, directly under a
+// paragraph forbidding it, and the count in that paragraph did not move with them. A comment is a test
+// nobody wrote: it cannot fail. This asks the question instead, of every suite run.
+//
+// It is asked HERE for `FormatterSelfTest`'s stated reason — a spec case cannot reach `IrFunction`, which
+// lives in `Compiler/`, where the corpus's vocabulary does not go — and it costs two function records and
+// six reference comparisons.
+//
+// ⚠ **IT ASKS ABOUT `createFromStd` AND MUST NOT BE POINTED AT `create`.** The parser's door keeps the
+// shared singletons deliberately, for its thousands of functions, and nothing reaches it off a worker.
+
+typealias AliasedPlaceholderNames = Array with String
+
+// The six placeholders `createFromStd` allocates, asked as one question. A name lands in the report for
+// each pair that came back the SAME box; an empty report is the invariant holding.
+export function requireWorkerFunctionPlaceholdersAreFresh()
+	let first = IrFunction.createFromStd(b"__selfTestPlaceholdersFirst", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	let second = IrFunction.createFromStd(b"__selfTestPlaceholdersSecond", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+
+	var aliased = AliasedPlaceholderNames.create()
+
+	if first.valueExistentialInstances is second.valueExistentialInstances 'existentialInstances'
+		aliased.push("valueExistentialInstances")
+	end 'existentialInstances'
+
+	if first.immutableGlobalAliasValues is second.immutableGlobalAliasValues 'globalAliasValues'
+		aliased.push("immutableGlobalAliasValues")
+	end 'globalAliasValues'
+
+	if first.borrowFacts is second.borrowFacts 'borrowFacts'
+		aliased.push("borrowFacts")
+	end 'borrowFacts'
+
+	if first.paramGuards is second.paramGuards 'paramGuards'
+		aliased.push("paramGuards")
+	end 'paramGuards'
+
+	if first.debugLocals is second.debugLocals 'debugLocals'
+		aliased.push("debugLocals")
+	end 'debugLocals'
+
+	if first.debugLocalLocations is second.debugLocalLocations 'debugLocalLocations'
+		aliased.push("debugLocalLocations")
+	end 'debugLocalLocations'
+
+	if aliased.count() == 0 'everyPlaceholderIsItsOwnBox'
+		return
+	end 'everyPlaceholderIsItsOwnBox'
+
+	var named = ""
+	for name in aliased 'eachAliased'
+		named.append("\n  {name}")
+	end 'eachAliased'
+
+	panic("IrFunctionSelfTest: {aliased.count()} of `IrFunction.createFromStd`'s managed placeholders came back as ONE box shared by two functions:{named}\n\nThat door is the register allocator's pool-worker door, so a shared placeholder is retained and released on every worker OS thread at once, against a plain refcount — a lost update, and a leak at exit on some runs. Allocate each placeholder fresh in `createFromStd`'s literal, as its five siblings do. `create` is the parser's door and keeps the shared singletons deliberately; do not point this check at it.")
+end 'requireWorkerFunctionPlaceholdersAreFresh'

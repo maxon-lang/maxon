@@ -49,11 +49,12 @@ let StoredFixtureSuffix = ".fixture"
 let StagedProgramFileName = "main.maxon"
 let BuiltProgramStem = "out"
 
-// The two binaries, relative to the checkout root and without their host suffix. The first is the compiler
-// under test AND the consumer under test; the second is the reference decoder. Every case file in this
-// directory reaches the compiler under test through the first, which is what keeps one path to it here.
+// The two binaries this directory spawns, relative to the checkout root and without their host suffix.
+// The first is the compiler under test AND the consumer under test; the second is the REFERENCE — the
+// decoder this file compares against, and the second reader of a sidecar the dump cases build. Every case
+// file in this directory reaches each of them through these, which is what keeps one path to each here.
 export let TestedCompilerStem = "maxon-shv2/.maxon/maxon-shv2"
-let BootstrapMonitorStem = "bin/maxon"
+export let BootstrapCompilerStem = "bin/maxon"
 
 // The command line the traced program is built from: `build <staged>/main.maxon -o <staged>/out[.exe]
 // --debugstream`. Without the flag the binary emits no producer at all and every monitor reads an empty
@@ -131,9 +132,9 @@ test 'both monitors read one traced binary the same way'
 	let staged = stagedProgram()
 	buildTracedProgram(staged)
 
-	let referenceRun = runMonitor(hostBinaryPath(BootstrapMonitorStem), monitorLabel: BootstrapMonitorStem, staged: staged)
+	let referenceRun = runMonitor(hostBinaryPath(BootstrapCompilerStem), monitorLabel: BootstrapCompilerStem, staged: staged)
 	let referenceExit = referenceRun.exitCode()
-	try Expect.equal(referenceExit as AssertedInt, expected: FixtureExitCode, message: "the reference monitor `{BootstrapMonitorStem} {MonitorSubcommand}` did not answer the traced child's own exit code. A monitor that did not run the child cannot have read its ring, so nothing below this line would mean anything. It wrote to stderr: {referenceRun.stderr}")
+	try Expect.equal(referenceExit as AssertedInt, expected: FixtureExitCode, message: "the reference monitor `{BootstrapCompilerStem} {MonitorSubcommand}` did not answer the traced child's own exit code. A monitor that did not run the child cannot have read its ring, so nothing below this line would mean anything. It wrote to stderr: {referenceRun.stderr}")
 
 	let referenceEvents = decodedEvents(referenceRun)
 	try Expect.notEqual(referenceEvents.count() as AssertedInt, expected: 0, message: "the reference monitor decoded ZERO `{MmTraceEventPrefix}` events from a binary built with `{DebugStreamFlag}`. This is the positive control: without it two decoders that both read nothing would compare equal and this case would be green having measured nothing. It printed: {referenceRun.stdout}")
@@ -162,10 +163,10 @@ test 'both monitors read one traced binary the same way'
 	// ⭐ **AND THE HALF THE COMPARISON ABOVE STRIPS.** The payloads agree whichever counter a monitor seeded
 	// the header with, because the producer writes them the same either way — so the stamp is the only place
 	// a disagreement about the CLOCK can show, and the equality above is blind to it by construction.
-	let referenceStampMs = firstEventTimestampMs(referenceRun, monitorLabel: BootstrapMonitorStem)
+	let referenceStampMs = firstEventTimestampMs(referenceRun, monitorLabel: BootstrapCompilerStem)
 	let testedStampMs = firstEventTimestampMs(testedRun, monitorLabel: TestedCompilerStem)
 	let skewMs = testedStampMs - referenceStampMs if testedStampMs > referenceStampMs else referenceStampMs - testedStampMs
-	try Expect.atMost(skewMs as AssertedInt, than: AllowedTimestampSkewMs, message: "the two monitors stamped their first `{MmTraceEventPrefix}` event {skewMs} ms apart — {BootstrapMonitorStem} said {referenceStampMs} ms and {TestedCompilerStem} said {testedStampMs} ms. `{MonitorLinePrefix}SSSS.mmm{MonitorTimestampEnd}` is elapsed time since THAT monitor attached, so a gap this size means one of them seeded the segment header's start timestamp with a counter the producer does not subtract from, and every line it printed carries that counter itself rather than an elapsed time.")
+	try Expect.atMost(skewMs as AssertedInt, than: AllowedTimestampSkewMs, message: "the two monitors stamped their first `{MmTraceEventPrefix}` event {skewMs} ms apart — {BootstrapCompilerStem} said {referenceStampMs} ms and {TestedCompilerStem} said {testedStampMs} ms. `{MonitorLinePrefix}SSSS.mmm{MonitorTimestampEnd}` is elapsed time since THAT monitor attached, so a gap this size means one of them seeded the segment header's start timestamp with a counter the producer does not subtract from, and every line it printed carries that counter itself rather than an elapsed time.")
 end 'both monitors read one traced binary the same way'
 
 // ============================================================================================

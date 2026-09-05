@@ -142,6 +142,72 @@ let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
 // operation that would write to it (`recordParamGuard`) REPLACES the field first.
 let sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
 
+// ⭐⭐ **ONE SOURCE NAME A DEBUGGER CAN BE ASKED ABOUT, AND EVERY SSA VALUE IT EVER OWNED.**
+//
+// A name owns a SEQUENCE of values, not one: `mergeAtContinuation` mints a fresh `ValueId` where control
+// flow rejoins and a loop header mints a phi, so a `var` written in both arms of an `if` and read after it
+// is three values under one name. A channel keyed one value to one name attaches the name to the value the
+// DECLARATION produced — which is dead by the time the read happens.
+//
+// The TYPE is captured with the name because the Std tier erases it: every store below the Maxon boundary
+// carries a width and no source type at all.
+export type DebugLocalDecl
+	export var name as ByteArray
+	export var declaredType as MaxonType
+	export var valueIds as ValueIdArray
+	// ⭐ **THE NAME DENOTES A CELL ADDRESS, NOT THE VALUE** — a `var` another frame may write, or a
+	// by-reference parameter. Its values locate the CELL, so a register or a slot stated for one of them
+	// would be the address rendered as the contents; the format has no indirect kind, and the honest
+	// answer for such a binding is `optimizedOut`.
+	export var heldInACell as bool
+
+	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, heldInACell bool) returns DebugLocalDecl
+		var valueIds = ValueIdArray.create()
+		valueIds.push(firstValue)
+
+		return Self{name: name, declaredType: declaredType, valueIds: valueIds, heldInACell: heldInACell}
+	end 'create'
+end 'DebugLocalDecl'
+
+export typealias DebugLocalDeclArray = Array with DebugLocalDecl
+
+// ⭐⭐ **WHERE ONE NAMED VALUE ENDED UP, AS THE REGISTER ALLOCATOR ANSWERS IT.** Those are the only three
+// answers a location has, and `nowhere` is a real one: a value the colouring never placed is `optimizedOut`
+// in the sidecar, never a guessed slot number.
+//
+// ⚠ **`number` IS A SPILL-SLOT INDEX, NOT A DISPLACEMENT.** Turning a slot into a frame-pointer-relative
+// byte offset needs the function's frame, which is an ISA fact the allocator does not hold — so the
+// conversion happens where the sidecar is written and the two targets differ there and nowhere else.
+export typealias DebugValueLocationKind = int(0 to 2)
+
+export let DebugValueNowhere = 0 as DebugValueLocationKind
+export let DebugValueInRegister = 1 as DebugValueLocationKind
+export let DebugValueInSpillSlot = 2 as DebugValueLocationKind
+
+export typealias DebugValueNumber = int(0 to u64.max)
+
+export type DebugValueLocation
+	export var kind as DebugValueLocationKind
+	export var number as DebugValueNumber
+
+	export static function create(kind DebugValueLocationKind, number DebugValueNumber) returns DebugValueLocation
+		return Self{kind: kind, number: number}
+	end 'create'
+end 'DebugValueLocation'
+
+export typealias DebugValueLocationArray = Array with DebugValueLocation
+
+// The roster of a function nothing recorded a binding for, and the locations of one the allocator was
+// asked for none of. Shared for `sharedEmptyGlobalAliasValues`' reason and with its invariant: never
+// mutated, because the parser and the splice each REPLACE the field before anything is recorded.
+//
+// ⛔ **`createFromStd` MAY NOT REACH FOR EITHER, AND NEITHER MAY ANY PLACEHOLDER ADDED BESIDE THEM** —
+// that door is on the register allocator's pool-worker path, where storing a module-level record into a
+// fresh function retains it on whichever OS thread the scheduler picked. See its header for the full
+// argument; this is the half of it written where the next singleton will be reached for.
+let sharedEmptyDebugLocals = DebugLocalDeclArray.create()
+let sharedEmptyDebugValueLocations = DebugValueLocationArray.create()
+
 // The per-function counter that names lifted NON-CAPTURING closure literals (P1.5-A2a). A count with
 // no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
 // the ranged-type convention rather than pinned to a false ceiling.
@@ -627,6 +693,19 @@ export type IrFunction
 	// it. Read by `InlineLeaves`, which is the only pass that can prove a cascade dead from OUTSIDE the
 	// function it stands in.
 	export var paramGuards as RangeCheckParamGuardArray
+	// ⭐ **THE SOURCE BINDINGS OF THIS FUNCTION, PUBLISHED BY THE PARSER FOR THE DEBUG-INFO SIDECAR** (see
+	// `DebugLocalDecl`). Empty unless the build is writing one — no pass reads it and nothing branches on
+	// it, which is what keeps the emitted image byte-identical either way.
+	//
+	// ⚠ The ValueIds in it are the PARSER's, and they stay meaningful all the way to the register allocator
+	// because the same `IrFunction` object is carried through Maxon → Std → Target and ids pass through
+	// verbatim (`LowerMaxonToStd`'s header).
+	export var debugLocals as DebugLocalDeclArray
+	// ⭐ **WHERE EACH OF THOSE BINDINGS' VALUES ENDED UP** — flat, in `debugLocals` order and within each
+	// record in its `valueIds` order, spliced home by the register allocator (`spliceRegAllocResult`). Kept
+	// beside the roster it answers rather than inside it, because the two are filled by tiers a worker-pool
+	// boundary apart and only their ORDER can cross it.
+	export var debugLocalLocations as DebugValueLocationArray
 
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
@@ -697,7 +776,9 @@ export type IrFunction
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			borrowFacts: sharedEmptyBorrowFacts,
-			paramGuards: sharedEmptyParamGuards
+			paramGuards: sharedEmptyParamGuards,
+			debugLocals: sharedEmptyDebugLocals,
+			debugLocalLocations: sharedEmptyDebugValueLocations
 		}
 	end 'create'
 
@@ -715,13 +796,13 @@ export type IrFunction
 	// whose frame and nesting the runtime itself bounds. The per-type CASCADES come through this same door and
 	// do not — see the field.
 	//
-	// ⛔⛔ **ITS FOUR MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
+	// ⛔⛔ **ITS SIX MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
 	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the register allocator's POOL WORKER path:
 	// `RegAllocUnit` rebuilds one function per message, on whichever green thread the scheduler picked.
 	// Storing a module-level record into a fresh one RETAINS it, and this language's reference counting is a
 	// plain load/add/store precisely because the language guarantees one green thread per box — so sixteen
 	// workers retaining and releasing ONE singleton is the lost update that guarantee exists to make
-	// impossible. Four small empties per call, on a door the parser never takes (`create` is the parser's,
+	// impossible. Six small empties per call, on a door the parser never takes (`create` is the parser's,
 	// and it keeps the singletons for its thousands of functions).
 	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		let declaredAt = SourcePosition.synthesized()
@@ -762,7 +843,9 @@ export type IrFunction
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			borrowFacts: BorrowFacts.create(),
-			paramGuards: RangeCheckParamGuardArray.create()
+			paramGuards: RangeCheckParamGuardArray.create(),
+			debugLocals: DebugLocalDeclArray.create(),
+			debugLocalLocations: DebugValueLocationArray.create()
 		}
 	end 'createFromStd'
 
@@ -791,6 +874,8 @@ export type IrFunction
 			maxonReturnType: src.maxonReturnType,
 			maxonParamTypes: src.maxonParamTypes,
 			valueTags: src.valueTags,
+			debugLocals: src.debugLocals,
+			debugLocalLocations: src.debugLocalLocations,
 			valueNameIds: src.valueNameIds,
 			valueBrandIds: src.valueBrandIds,
 			valueClosureEnv: src.valueClosureEnv,

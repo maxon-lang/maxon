@@ -1,0 +1,389 @@
+// Compiler/Debug/MxdbgTypeTable.maxon — the sidecar's TYPE table and its FIELD sub-table.
+//
+// ⭐⭐ **A LOCAL RECORD NAMES ITS TYPE BY ID, SO WITHOUT THIS TABLE A DEBUGGER CAN NAME A VALUE AND NEVER
+// RENDER IT.** What decides how the bytes at a location are read is the entry the id lands on: its kind,
+// its size, and — for a record — the named, offset, typed fields under it.
+//
+// ⭐ **IT IS SEEDED FROM THE PROGRAM'S OWN DECLARATIONS AND FROM EVERY NAMED LOCAL'S TYPE, THEN CLOSED.**
+// Both halves are needed and neither implies the other: a declared `enum` reaches a local only as the
+// integer tag it lowers to, so a table built from locals alone would describe no enum at all — and a
+// local's type is often a machine primitive no declaration mentions.
+//
+// ⭐ **THE ID IS THE POSITION AND THE POSITIONS ARE SORTED BY NAME.** Insertion order would be
+// deterministic too — the seeds are a walk of the emitted functions in order — but a dump nobody can scan
+// is a dump nobody reads.
+//
+// ⚠ **THE ORDER IS FIXED ONCE, BY `seal`, RATHER THAN AT EVERY INSERT.** A sorted insert shifts the whole
+// tail per type, which is quadratic in the type count; one sort is not. Nothing asks for an id before the
+// table is written — a field holds its type by NAME for exactly that reason — so there is no moment at
+// which an id means one thing and then another, and `seal` is what keeps that a rule rather than a habit.
+
+// The width of a primitive SPELLING, and the answer for a name that is not one. `void` is a real primitive
+// of no bytes, so "not a primitive" cannot be 0 — it is its own answer.
+typealias MxdbgPrimitiveWidth = int(0 to 8)
+
+union MxdbgPrimitiveSpelling
+	notAPrimitive
+	width(bytes MxdbgPrimitiveWidth)
+end 'MxdbgPrimitiveSpelling'
+
+// The names the language's own types are described under. A `MaxonType` arm carries no spelling of its
+// own, so this is where one is chosen — once, because the table is keyed by it and a local's record finds
+// its entry through the very same function.
+let MxdbgBoolName = b"i1"
+let MxdbgIntName = b"i64"
+let MxdbgFloatName = b"f64"
+let MxdbgVoidName = b"void"
+let MxdbgExitCodeName = b"ExitCode"
+let MxdbgStringName = b"String"
+let MxdbgCharacterName = b"Character"
+let MxdbgUnresolvedName = b"<unresolved>"
+let MxdbgTypeParameterName = b"<type parameter>"
+let MxdbgGenericInstanceName = b"<generic instance>"
+let MxdbgUnnamedName = b"<unnamed>"
+
+// A record reached through a pointer whose layout the sidecar does not describe further.
+let MxdbgManagedRecordBytes = 8 as MxdbgIndex
+
+// Every struct and every enum box is addressed on the machine-word grid.
+let MxdbgAggregateAlign = 8 as MxdbgIndex
+
+// A zero-byte primitive still has an alignment, and it is one.
+let MxdbgVoidAlign = 1 as MxdbgIndex
+
+// One field of a described type. Its type is held by NAME rather than by id, because the entry it names
+// may not be in the table yet when the field is recorded.
+type MxdbgFieldDesc
+	export var name as ByteArray
+	export var offset as MxdbgIndex
+	export var typeName as ByteArray
+
+	export static function create(name ByteArray, offset MxdbgIndex, typeName ByteArray) returns MxdbgFieldDesc
+		return Self{name: name, offset: offset, typeName: typeName}
+	end 'create'
+end 'MxdbgFieldDesc'
+
+typealias MxdbgFieldDescArray = Array with MxdbgFieldDesc
+
+type MxdbgTypeDesc
+	export var kind as MxdbgIndex
+	export var size as MxdbgIndex
+	export var align as MxdbgIndex
+	export var fields as MxdbgFieldDescArray
+
+	export static function create(kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fields MxdbgFieldDescArray) returns MxdbgTypeDesc
+		return Self{kind: kind, size: size, align: align, fields: fields}
+	end 'create'
+end 'MxdbgTypeDesc'
+
+// One described type. The name and the description travel as ONE record because the id every field and
+// every local carries is the entry's POSITION, and two columns that could fall out of step would make
+// that position mean two different things.
+type MxdbgTypeEntry
+	export var name as ByteArray
+	export var desc as MxdbgTypeDesc
+
+	export static function create(name ByteArray, desc MxdbgTypeDesc) returns MxdbgTypeEntry
+		return Self{name: name, desc: desc}
+	end 'create'
+end 'MxdbgTypeEntry'
+
+typealias MxdbgTypeEntryArray = Array with MxdbgTypeEntry
+
+// Where a described name sits. Rebuilt by `seal` against the sorted positions, which is what makes the
+// id `idOf` answers the id the table was written under.
+typealias MxdbgTypePositionMap = Map with (ByteArray, ElementIndex)
+
+export type MxdbgTypeTable
+	// Discovery order until `seal`, name order after it — and a sealed entry's position IS the type id
+	// every field and every local record carries.
+	var entries as MxdbgTypeEntryArray
+	// Where each name sits, so "is this type already described?" is one probe rather than a search.
+	var positionByName as MxdbgTypePositionMap
+	// Sorting is a ONE-WAY door: it fixes every id, so a type described past it would be numbered against
+	// a table that has already been written.
+	var sealed as bool
+
+	export static function create() returns MxdbgTypeTable
+		return Self{entries: MxdbgTypeEntryArray.create(), positionByName: MxdbgTypePositionMap.create(), sealed: false}
+	end 'create'
+
+	// Every type the program DECLARES. Seeded whatever reaches a local, because an enum is erased to its
+	// tag by the time a binding carries one and would otherwise be in no table a renderer could match a
+	// stopped discriminant against.
+	//
+	// ⚠ The registries are hash maps and their walk order is not a promise, which costs nothing here: an
+	// entry's id is its position in the NAME order `seal` fixes, so the table is the same table whatever
+	// order it was discovered in.
+	export function closeDeclaredTypes(project Project)
+		for (name, _) in project.structTypes 'eachStruct'
+			self.close(project, name: name)
+		end 'eachStruct'
+
+		for (name, _) in project.enumTypes 'eachEnumOrUnion'
+			self.close(project, name: name)
+		end 'eachEnumOrUnion'
+	end 'closeDeclaredTypes'
+
+	// Describe `name` and everything it refers to. A worklist rather than recursion: a type may reach
+	// itself through a field, and the "already described" test is what ends the walk either way.
+	export function close(project Project, name ByteArray)
+		if self.sealed 'alreadyNumbered'
+			panic("MxdbgTypeTable.close: '{String.from(name)}' arrived after the table was sealed — the sort fixes every id, so a type described past it would be numbered against a table already written")
+		end 'alreadyNumbered'
+
+		// Asked before the worklist exists, because the overwhelmingly common case is a name already in the
+		// table — one binding per type is the exception, not the rule.
+		if self.positionByName.contains(name) 'alreadyDescribed'
+			return
+		end 'alreadyDescribed'
+
+		var pending = ByteArrayArray.create()
+		pending.push(name)
+
+		var at = 0 as ElementIndex
+		while at < pending.count() 'eachPending'
+			let next = try pending.get(at) otherwise panic("MxdbgTypeTable.close: pending.get OOB at {at} despite the while guard")
+			at = at + 1
+			if self.positionByName.contains(next) 'alreadyDescribed'
+				continue
+			end 'alreadyDescribed'
+
+			// ⚠ The names this one refers to are collected FIRST and appended only past `next`'s last use:
+			// `next` is an element borrow of the worklist, and growing the worklist under it is E3070.
+			let desc = mxdbgDescribeType(project, name: next)
+			var referenced = ByteArrayArray.create()
+			referenced.reserve(desc.fields.count())
+			for field in desc.fields 'eachFieldType'
+				referenced.push(field.typeName)
+			end 'eachFieldType'
+			self.append(next, desc: desc)
+
+			for referredTo in referenced 'eachReferredTo'
+				pending.push(referredTo)
+			end 'eachReferredTo'
+		end 'eachPending'
+	end 'close'
+
+	// The id `name` was given. Every name asked about here was closed over first, so a miss is a caller
+	// that skipped that step rather than a type the program does not have.
+	export function idOf(name ByteArray) returns MxdbgIndex
+		if not self.sealed 'notNumberedYet'
+			panic("MxdbgTypeTable.idOf: '{String.from(name)}' was asked for before the table was sealed — an id read here is a discovery position, not the id the table is written under")
+		end 'notNumberedYet'
+
+		return (try self.positionByName.get(name) otherwise panic("MxdbgTypeTable.idOf: '{String.from(name)}' is not in the table — every name a record points at is closed over before any id is asked for")) as MxdbgIndex
+	end 'idOf'
+
+	export function writeInto(writer MxdbgWriter)
+		self.seal()
+		for i in 0 upto self.entries.count() 'eachType'
+			let entry = try self.entries.get(i) otherwise panic("MxdbgTypeTable.writeInto: entries.get OOB at {i} despite the upto bound")
+			writer.addType(String.from(entry.name), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align)
+			for field in entry.desc.fields 'eachField'
+				writer.addField(String.from(field.name), offset: field.offset, typeId: self.idOf(field.typeName))
+			end 'eachField'
+		end 'eachType'
+	end 'writeInto'
+
+	// ⭐ **PUT THE ENTRIES IN NAME ORDER AND NUMBER THEM.** One sort at the end rather than a sorted
+	// insert per type: the insert shifts the whole tail, and that is what makes the table quadratic.
+	function seal()
+		if self.sealed 'alreadySealed'
+			return
+		end 'alreadySealed'
+
+		self.entries.sort(function(left MxdbgTypeEntry, right MxdbgTypeEntry) gives compareBytesOrdinally(left.name, right: right.name))
+
+		// The names are lifted out before the map is refilled: an entry read from `entries` is an element
+		// borrow of it, and the map being rebuilt lives on the same record.
+		var names = ByteArrayArray.create()
+		names.reserve(self.entries.count())
+		for entry in self.entries 'eachName'
+			names.push(entry.name)
+		end 'eachName'
+
+		self.positionByName = MxdbgTypePositionMap.create()
+		for at in 0 upto names.count() 'eachPosition'
+			let name = try names.get(at) otherwise panic("MxdbgTypeTable.seal: names.get OOB at {at} despite the upto bound")
+			self.positionByName.upsert(name, value: at)
+		end 'eachPosition'
+
+		self.sealed = true
+	end 'seal'
+
+	// Append in discovery order. `seal` is what puts the entries in name order, so nothing here has to
+	// keep them in it.
+	function append(name ByteArray, desc MxdbgTypeDesc)
+		self.positionByName.upsert(name, value: self.entries.count())
+		self.entries.push(MxdbgTypeEntry.create(name, desc: desc))
+	end 'append'
+end 'MxdbgTypeTable'
+
+// ============================================================================================
+// NAMING A TYPE
+// ============================================================================================
+
+// ⭐ **THE NAME A `MaxonType` IS DESCRIBED UNDER, AND THE ONE PLACE IT IS CHOSEN.** A field's type and a
+// local's type both come through here, so an entry a record points at and the entry the table built are
+// the same by construction rather than by agreement.
+export function mxdbgTypeNameOf(project Project, ref MaxonType) returns ByteArray
+	return match ref 'arm'
+		boolean gives MxdbgBoolName
+		integer gives MxdbgIntName
+		float gives MxdbgFloatName
+		named(id) gives mxdbgInternedName(project, id: id)
+		exitCode gives MxdbgExitCodeName
+		unresolved gives MxdbgUnresolvedName
+		structRef(id) gives mxdbgInternedName(project, id: id)
+		string gives MxdbgStringName
+		function(id) gives mxdbgInternedName(project, id: id)
+		typeParameter gives MxdbgTypeParameterName
+		genericInstance gives MxdbgGenericInstanceName
+		character gives MxdbgCharacterName
+		interfaceRef(id) gives mxdbgInternedName(project, id: id)
+	end 'arm'
+end 'mxdbgTypeNameOf'
+
+// A name the interner does not know is a compiler invariant break rather than a user error, but the
+// sidecar is a diagnostic side output and must never fail a build that produced a correct executable —
+// so it is described under an honest placeholder instead.
+function mxdbgInternedName(project Project, id TypeNameId) returns ByteArray
+	return try project.typeNames.nameOf(id) otherwise MxdbgUnnamedName
+end 'mxdbgInternedName'
+
+// ============================================================================================
+// DESCRIBING A TYPE
+// ============================================================================================
+
+// What the bytes under `name` are, in the order the registries can answer it: the language's own fused
+// records, then a declared struct, then a declared enum or union, then a ranged alias, then a machine
+// primitive. A name in none of them is a record reached through a pointer, described as exactly that —
+// which is what gives a field or a local of such a type a truthful entry to point at instead of landing
+// on an unrelated one.
+function mxdbgDescribeType(project Project, name ByteArray) returns MxdbgTypeDesc
+	if name.equals(MxdbgStringName) or name.equals(MxdbgCharacterName) 'aFusedByteRecord'
+		return MxdbgTypeDesc.create(MxdbgTypeKindString, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create())
+	end 'aFusedByteRecord'
+
+	if let layout = try project.structTypes.get(name) 'aDeclaredStruct'
+		return mxdbgDescribeStruct(project, layout: layout)
+	end 'aDeclaredStruct'
+
+	if let layout = try project.enumTypes.get(name) 'aDeclaredEnumOrUnion'
+		return mxdbgDescribeEnum(project, layout: layout)
+	end 'aDeclaredEnumOrUnion'
+
+	match project.typeAliases.lookup(name, readerFilePath: CompilerOwnedDeclFilePath) 'alias'
+		undeclared then break 'alias'
+		declared(alias) then return mxdbgDescribeRangedAlias(alias)
+	end 'alias'
+
+	match mxdbgPrimitiveSpellingOf(name) 'primitive'
+		notAPrimitive then break 'primitive'
+		width(bytes) then return MxdbgTypeDesc.create(MxdbgTypeKindPrimitive, size: bytes as MxdbgIndex, align: mxdbgPrimitiveAlign(bytes), fields: MxdbgFieldDescArray.create())
+	end 'primitive'
+
+	return MxdbgTypeDesc.create(MxdbgTypeKindManagedRecord, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create())
+end 'mxdbgDescribeType'
+
+// A struct's fields in DECLARATION order, at the very offsets codegen laid them out at.
+function mxdbgDescribeStruct(project Project, layout StructLayout) returns MxdbgTypeDesc
+	var fields = MxdbgFieldDescArray.create()
+	fields.reserve(layout.fieldCount() as ElementIndex)
+	for i in 0 upto layout.fieldCount() 'eachField'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("mxdbgDescribeStruct: fieldTypes.get OOB at {i} for `type {String.from(layout.name)}`, whose columns are index-parallel")
+		fields.push(MxdbgFieldDesc.create(layout.fieldNameAt(i), offset: layout.offsetOfField(i) as MxdbgIndex, typeName: mxdbgTypeNameOf(project, ref: fieldType)))
+	end 'eachField'
+
+	return MxdbgTypeDesc.create(MxdbgTypeKindStruct, size: layout.sizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)
+end 'mxdbgDescribeStruct'
+
+// ⭐ **AN ENUM'S "FIELD" IS A CASE, AND ITS OFFSET COLUMN IS THE CASE'S RAW TAG RATHER THAN ITS ORDINAL.**
+// That column is what a renderer matches a stopped discriminant against, and an enum whose raw values are
+// not its ordinals renders as the wrong case entirely if the two are confused.
+//
+// A case's "type" is its payload: `void` for a payload-free case, that type for a single value, and the
+// managed-record placeholder for a multi-value payload, which has no single type in this model.
+function mxdbgDescribeEnum(project Project, layout EnumLayout) returns MxdbgTypeDesc
+	var fields = MxdbgFieldDescArray.create()
+	fields.reserve(layout.caseCount() as ElementIndex)
+	for i in 0 upto layout.caseCount() 'eachCase'
+		let tag = try layout.caseTags.get(i) otherwise panic("mxdbgDescribeEnum: caseTags.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
+		let payload = try layout.casePayloads.get(i) otherwise panic("mxdbgDescribeEnum: casePayloads.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
+		fields.push(MxdbgFieldDesc.create(layout.caseNameAt(i), offset: mxdbgTagWord(tag), typeName: mxdbgCasePayloadName(project, payload: payload)))
+	end 'eachCase'
+
+	return MxdbgTypeDesc.create(MxdbgTypeKindUnion if layout.isUnion else MxdbgTypeKindEnum, size: layout.boxSizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)
+end 'mxdbgDescribeEnum'
+
+// A raw tag as the field record's offset word holds it. A tag outside the word — a negative raw value, or
+// one past u32 — has no room in that slot and is written as 0, which a renderer reports as an unresolved
+// case rather than confidently as the wrong one.
+function mxdbgTagWord(tag ParsedInt) returns MxdbgIndex
+	if tag < 0 or tag > (u32.max as ParsedInt) 'pastTheSlot'
+		return 0
+	end 'pastTheSlot'
+
+	return tag as MxdbgIndex
+end 'mxdbgTagWord'
+
+function mxdbgCasePayloadName(project Project, payload PayloadFieldArray) returns ByteArray
+	if payload.count() == 0 'payloadFree'
+		return MxdbgVoidName
+	end 'payloadFree'
+
+	if payload.count() > 1 'severalSlots'
+		return MxdbgGenericInstanceName
+	end 'severalSlots'
+
+	let only = try payload.get(0) otherwise panic("mxdbgCasePayloadName: payload.get OOB at 0 of a payload holding {payload.count()}")
+
+	return mxdbgTypeNameOf(project, ref: only.declaredType)
+end 'mxdbgCasePayloadName'
+
+// A ranged alias carries the width it is STORED in, not the width of the keyword it was declared over —
+// which is the whole reason it is an entry of its own rather than the primitive it lowers to.
+function mxdbgDescribeRangedAlias(alias RangedTypeAlias) returns MxdbgTypeDesc
+	var kind = MxdbgTypeKindIntRanged
+	match alias.underlying 'backing'
+		float then kind = MxdbgTypeKindFloatRanged
+		integer then break 'backing'
+		default panic("mxdbgDescribeRangedAlias: `typealias {String.from(alias.name)}` resolves to neither `int` nor `float` — a ranged alias is declared over one of the two keywords")
+	end 'backing'
+
+	let bytes = rangedAliasStorageBytes(alias.low, high: alias.high) as MxdbgIndex
+
+	return MxdbgTypeDesc.create(kind, size: bytes, align: bytes, fields: MxdbgFieldDescArray.create())
+end 'mxdbgDescribeRangedAlias'
+
+function mxdbgPrimitiveAlign(bytes MxdbgPrimitiveWidth) returns MxdbgIndex
+	return MxdbgVoidAlign if bytes == 0 else bytes as MxdbgIndex
+end 'mxdbgPrimitiveAlign'
+
+// The machine widths, by the spellings `mxdbgTypeNameOf` chooses and the ones a lowered field type can
+// carry. A name in none of them is not a primitive, which is a different answer from a primitive of no
+// bytes — `void` is one of those.
+function mxdbgPrimitiveSpellingOf(name ByteArray) returns MxdbgPrimitiveSpelling
+	if name.equals(MxdbgVoidName) 'void'
+		return MxdbgPrimitiveSpelling.width(0)
+	end 'void'
+
+	if name.equals(MxdbgBoolName) or name.equals(b"i8") or name.equals(b"u8") 'oneByte'
+		return MxdbgPrimitiveSpelling.width(1)
+	end 'oneByte'
+
+	if name.equals(b"i16") or name.equals(b"u16") 'twoBytes'
+		return MxdbgPrimitiveSpelling.width(2)
+	end 'twoBytes'
+
+	if name.equals(b"i32") or name.equals(b"u32") or name.equals(b"f32") 'fourBytes'
+		return MxdbgPrimitiveSpelling.width(4)
+	end 'fourBytes'
+
+	if name.equals(MxdbgIntName) or name.equals(b"u64") or name.equals(MxdbgFloatName) or name.equals(b"cstring") 'eightBytes'
+		return MxdbgPrimitiveSpelling.width(8)
+	end 'eightBytes'
+
+	return MxdbgPrimitiveSpelling.notAPrimitive
+end 'mxdbgPrimitiveSpellingOf'

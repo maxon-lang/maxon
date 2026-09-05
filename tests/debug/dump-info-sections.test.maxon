@@ -1,0 +1,172 @@
+// dump-info-sections.test.maxon — `debug --dump-info` PRINTS THE SECTIONS IT WAS ASKED FOR, and REFUSES
+// a name that is not one.
+//
+// `--dump-info <exe> [header|files|functions|types|lines|statements]` takes its sections as trailing
+// arguments; naming none prints the whole sidecar. That default is the only shape `sidecar-dump` exercises,
+// so a driver that silently ignores the section list is green everywhere else in this corpus.
+//
+// ⭐⭐ **A DROPPED SECTION NAME IS NOT A COSMETIC DEFECT — IT IS AN INSTRUMENT ANSWERING A QUESTION IT WAS
+// NOT ASKED.** A caller who asks for `types` and is handed the whole dump cannot tell that from a driver
+// that understood it, and neither can a script reading the answer. Worse, a name that is not a section at
+// all is then accepted too: a misspelling that silently prints everything and exits 0 is a wrong answer a
+// user has no way to notice.
+//
+// ⛔ **THE REFUSAL SENTENCE IS TAKEN FROM THE REFERENCE DRIVER, NOT WRITTEN DOWN HERE.** The bootstrap is
+// spawned on the same binary with the same bad name and its stderr is the expectation, which is what makes
+// this a parity oracle rather than a record of what this file's author expected (`tests/README.md` rule 4).
+// The two drivers' LINE ENDINGS are folded first: a console's CRLF is not what is under test, and
+// everything else — wording, the valid-name roster, the quoting — is compared as written.
+//
+// ⛔ **`locals` IS NOT A SECTION NAME IN EITHER DRIVER, AND MUST NOT BECOME ONE.** Local rows print NESTED
+// under `functions`, indented beneath the function that owns them; a top-level `locals` section would be
+// the same records printed twice under two different keys.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION** — a
+// missing compiler, a spawn that never happened, a BUILD that produced no program. The subject here is
+// `--dump-info`'s argument handling, so a build that fails leaves nothing to ask.
+//
+// ⛔ **ONE SPAWNING `test`, ONE FILE, ONE COMPILE.** The five dumps below are five further spawns and no
+// further compiles. Staging goes to a directory named for THIS case, because `maxon test` runs files
+// concurrently.
+
+// The label this case stages under, and the build it dumps.
+let SectionsCaseLabel = "dump-info-sections"
+let SectionsBuildLabel = "sectioned"
+
+// The section names the command line accepts, spelled as the reference driver spells them.
+let HeaderSectionName = "header"
+let TypesSectionName = "types"
+
+// A name that is not a section. Deliberately NOT a near-miss of a real one: what is under test is the
+// refusal, and a driver that only rejects typos of real names would still pass a `zzz` through.
+let NotASectionName = "zzz"
+
+// What each printed section opens with. A heading is how this case tells "printed" from "not printed", so
+// the roster has to be complete: a section missing from it reads as absent however loudly it was printed.
+let DumpInfoHeadPrefix = "Debug info:"
+let TargetKeyPrefix = "target:"
+let BuildIdKeyPrefix = "build-id:"
+let FilesHeading = "files ("
+let FunctionsHeading = "functions ("
+let TypesHeading = "types ("
+let LineTableHeading = "line table ("
+
+// The head is exactly three lines: the path, the target and the build-id.
+let HeaderSectionLineTally = 3
+
+// A tally of printed lines.
+typealias LineTally = int(0 to u64.max)
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'dump-info prints the sections it was named and refuses a name that is not one'
+	let staged = stagedSidecarProgram(SectionsCaseLabel, fixture: LocalsFixtureName)
+	let executable = builtSectionsFixture(staged)
+
+	// ⭐ ONE SECTION. `header` is the section with a fixed, countable size, so "only what was asked for"
+	// is a number here rather than a judgement about which rows belong to what.
+	var headerOnly = StringArray.create()
+	headerOnly.push(HeaderSectionName)
+	let headerRun = spawnSidecarDumpInfo(executable, staged: staged, sections: headerOnly, binaryStem: TestedCompilerStem)
+	try Expect.equal(headerRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {HeaderSectionName}` exited {headerRun.exitCode()}. It wrote to stderr: {headerRun.stderr}")
+
+	let headerDump = withoutCarriageReturns(headerRun.stdout)
+	let headerLineTally = printedLineTally(headerDump)
+	try Expect.equal(headerLineTally as AssertedInt, expected: HeaderSectionLineTally, message: "`{DumpInfoOptionName} <exe> {HeaderSectionName}` printed {headerLineTally} lines where the head is {HeaderSectionLineTally} — the path, the `{TargetKeyPrefix}` line and the `{BuildIdKeyPrefix}` line. A driver that prints the whole sidecar whatever it was asked for cannot be told apart from one that understood the request. It printed: {headerDump}")
+	try requireHeadPrinted(headerDump, asked: HeaderSectionName)
+	try requireSectionsAbsent(headerDump, asked: HeaderSectionName)
+
+	// TWO SECTIONS: both, and still nothing else.
+	var headerAndTypes = StringArray.create()
+	headerAndTypes.push(HeaderSectionName)
+	headerAndTypes.push(TypesSectionName)
+	let pairRun = spawnSidecarDumpInfo(executable, staged: staged, sections: headerAndTypes, binaryStem: TestedCompilerStem)
+	try Expect.equal(pairRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {HeaderSectionName} {TypesSectionName}` exited {pairRun.exitCode()}. It wrote to stderr: {pairRun.stderr}")
+
+	let pairDump = withoutCarriageReturns(pairRun.stdout)
+	try requireHeadPrinted(pairDump, asked: "{HeaderSectionName} {TypesSectionName}")
+	try Expect.contains(pairDump, needle: TypesHeading, message: "`{DumpInfoOptionName} <exe> {HeaderSectionName} {TypesSectionName}` printed no `{TypesHeading}…)` section. Naming two sections must print both — a driver that honours only the first has a list it does not read to the end. It printed: {pairDump}")
+	try Expect.isFalse(pairDump.contains(FilesHeading) or pairDump.contains(FunctionsHeading) or pairDump.contains(LineTableHeading), message: "`{DumpInfoOptionName} <exe> {HeaderSectionName} {TypesSectionName}` also printed a section it was not asked for. It printed: {pairDump}")
+
+	// ⭐ THE REFUSAL, against the reference driver's own sentence over the very same binary.
+	var badSection = StringArray.create()
+	badSection.push(NotASectionName)
+	let refusedRun = spawnSidecarDumpInfo(executable, staged: staged, sections: badSection, binaryStem: TestedCompilerStem)
+	let referenceRun = spawnSidecarDumpInfo(executable, staged: staged, sections: badSection, binaryStem: BootstrapCompilerStem)
+
+	try Expect.equal(referenceRun.exitCode() as AssertedInt, expected: 1, message: "the REFERENCE driver `{BootstrapCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe> {NotASectionName}` exited {referenceRun.exitCode()} rather than 1, so this case has no expectation to compare against and could not be measured. It wrote to stderr: {referenceRun.stderr}")
+	let referenceRefusal = withoutCarriageReturns(referenceRun.stderr).trim()
+	try Expect.notEqual(referenceRefusal, expected: "", message: "the REFERENCE driver refused `{NotASectionName}` and wrote nothing to stderr, so there is no sentence to compare against.")
+
+	try Expect.equal(refusedRun.exitCode() as AssertedInt, expected: 1, message: "`{DumpInfoOptionName} <exe> {NotASectionName}` exited {refusedRun.exitCode()}. `{NotASectionName}` is not a section, and a driver that accepts it prints a dump the caller did not ask for and cannot tell apart from the one they wanted. It printed: {refusedRun.stdout} — and wrote to stderr: {refusedRun.stderr}")
+	let refusedStdout = withoutCarriageReturns(refusedRun.stdout).trim()
+	try Expect.isEmpty(refusedStdout, message: "`{DumpInfoOptionName} <exe> {NotASectionName}` was refused and still printed a dump to stdout. A refusal that prints its answer anyway is not a refusal. It printed: {refusedStdout}")
+	let refusal = withoutCarriageReturns(refusedRun.stderr).trim()
+	try Expect.equal(refusal, expected: referenceRefusal, message: "the two drivers refuse `{NotASectionName}` with different sentences. One sidecar surface read two ways must refuse the same way and name the same valid set, or a caller learns the roster from whichever driver they happened to run.")
+
+	// NAMING NONE prints everything, which is the documented default and the shape every other case in
+	// this corpus reads.
+	let noSections = StringArray.create()
+	let wholeRun = spawnSidecarDumpInfo(executable, staged: staged, sections: noSections, binaryStem: TestedCompilerStem)
+	try Expect.equal(wholeRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe>` with no section named exited {wholeRun.exitCode()}. It wrote to stderr: {wholeRun.stderr}")
+
+	let wholeDump = withoutCarriageReturns(wholeRun.stdout)
+	try requireHeadPrinted(wholeDump, asked: "no section")
+	try Expect.isTrue(wholeDump.contains(FilesHeading) and wholeDump.contains(FunctionsHeading) and wholeDump.contains(TypesHeading) and wholeDump.contains(LineTableHeading), message: "`{DumpInfoOptionName} <exe>` with no section named did not print every section. Naming none is the documented default and is what every other reader of this dump relies on. It printed: {wholeDump}")
+end 'dump-info prints the sections it was named and refuses a name that is not one'
+
+// ============================================================================================
+// THE BUILD UNDER TEST
+// ============================================================================================
+
+// The staged fixture, compiled by the compiler under test. A build that did not happen is not this case's
+// subject, so it panics rather than failing an assertion.
+function builtSectionsFixture(staged FilePath) returns FilePath
+	let noArguments = StringArray.create()
+	let build = spawnSidecarBuild(staged, label: SectionsBuildLabel, extraArguments: noArguments)
+	if build.exitCode() != 0 'didNotBuild'
+		panic("dump-info-sections.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	let executable = builtSidecarExecutable(staged, label: SectionsBuildLabel)
+	if not File.exists(executable) 'wroteNothing'
+		panic("dump-info-sections.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
+	end 'wroteNothing'
+
+	return executable
+end 'builtSectionsFixture'
+
+// ============================================================================================
+// READING WHAT WAS PRINTED
+// ============================================================================================
+
+// The head, which every section list that names `header` and every list that names none must carry.
+function requireHeadPrinted(dump String, asked String) throws TestFailure
+	try Expect.contains(dump, needle: DumpInfoHeadPrefix, message: "`{DumpInfoOptionName} <exe> {asked}` printed no `{DumpInfoHeadPrefix}` line. It printed: {dump}")
+	try Expect.contains(dump, needle: TargetKeyPrefix, message: "`{DumpInfoOptionName} <exe> {asked}` printed no `{TargetKeyPrefix}` line. It printed: {dump}")
+	try Expect.contains(dump, needle: BuildIdKeyPrefix, message: "`{DumpInfoOptionName} <exe> {asked}` printed no `{BuildIdKeyPrefix}` line. It printed: {dump}")
+end 'requireHeadPrinted'
+
+// Every section heading, asserted ABSENT. The line-count assertion above already fails a dump carrying
+// them, and this one names WHICH section leaked — the count alone sends a reader to look at a number.
+function requireSectionsAbsent(dump String, asked String) throws TestFailure
+	try Expect.isFalse(dump.contains(FilesHeading), message: "`{DumpInfoOptionName} <exe> {asked}` also printed the `{FilesHeading}…)` section. It printed: {dump}")
+	try Expect.isFalse(dump.contains(FunctionsHeading), message: "`{DumpInfoOptionName} <exe> {asked}` also printed the `{FunctionsHeading}…)` section. It printed: {dump}")
+	try Expect.isFalse(dump.contains(TypesHeading), message: "`{DumpInfoOptionName} <exe> {asked}` also printed the `{TypesHeading}…)` section. It printed: {dump}")
+	try Expect.isFalse(dump.contains(LineTableHeading), message: "`{DumpInfoOptionName} <exe> {asked}` also printed the `{LineTableHeading}…)` section. It printed: {dump}")
+end 'requireSectionsAbsent'
+
+// How many lines a dump actually printed. Blank lines are not counted: neither driver emits one, and a
+// trailing newline must not read as a fourth line of a three-line head.
+function printedLineTally(dump String) returns LineTally
+	var tally = 0
+	for line in sidecarOutputLines(dump) 'eachLine'
+		if not line.trim().isEmpty() 'aPrintedLine'
+			tally = tally + 1
+		end 'aPrintedLine'
+	end 'eachLine'
+
+	return tally
+end 'printedLineTally'

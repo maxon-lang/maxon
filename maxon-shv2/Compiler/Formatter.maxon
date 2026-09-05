@@ -1524,22 +1524,8 @@ function formattableFileName(name String) returns bool
 	return name.toLower() != BuildManifestName
 end 'formattableFileName'
 
-// Order two discovered paths by their spelling, byte for byte. A `FilePath` is not `Comparable` and the
-// ordering wanted here is the filesystem-neutral one: the bytes, not a locale's idea of them.
+// Order two discovered paths by their spelling. A `FilePath` is not `Comparable`, and the ordering wanted
+// here is the filesystem-neutral one — the bytes, not a locale's idea of them (`compareBytesOrdinally`).
 function comparePathSpelling(left FilePath, right FilePath) returns Ordering
-	let a = left.toString().toByteArray()
-	let b = right.toString().toByteArray()
-	let shared = a.count() if a.count() < b.count() else b.count()
-
-	var i = 0
-	while i < shared 'eachByte'
-		let x = try a.get(i) otherwise panic("comparePathSpelling: index {i} below the shared length {shared}")
-		let y = try b.get(i) otherwise panic("comparePathSpelling: index {i} below the shared length {shared}")
-		if x != y 'differ'
-			return Ordering.lessThan if x < y else Ordering.greaterThan
-		end 'differ'
-		i = i + 1
-	end 'eachByte'
-
-	return a.count().compare(b.count())
+	return compareBytesOrdinally(left.toString().toByteArray(), right: right.toString().toByteArray())
 end 'comparePathSpelling'

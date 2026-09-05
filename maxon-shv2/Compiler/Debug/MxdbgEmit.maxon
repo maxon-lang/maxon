@@ -26,7 +26,6 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	// module stops being appended to, and the prologue pass and the runtime band both mint ops after the
 	// allocator has handed everything back.
 	codeResult.targetModule.spans.requireParallelTo(codeResult.targetModule.ops.count(), what: "at the sidecar")
-	requireNoLeakedSpanCursor(project, targetModule: codeResult.targetModule)
 
 	var writer = MxdbgWriter.create()
 	// ⭐ **THE POSITIONLESS FILE IS NOT A SOURCE FILE AND IS NOT WRITTEN.** Emitting it would put a nameless
@@ -36,8 +35,25 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		writer.addFile(project.debugSpanTable.filePath(fileId as DebugFileId))
 	end 'eachFile'
 
+	// ⭐ **THE TYPE TABLE IS BUILT BEFORE ANY RECORD POINTS INTO IT.** A local names its type by ID, so
+	// every id has to be fixed before the first local record is written.
+	let functionsByName = mxdbgFunctionIndex(codeResult.targetModule)
+	var types = MxdbgTypeTable.create()
+	types.closeDeclaredTypes(project)
+	for fn in codeResult.debugFunctions 'eachFunctionsTypes'
+		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
+			none then break 'itsIr'
+			found(func) then closeLocalTypes(project, types: types, func: func)
+		end 'itsIr'
+	end 'eachFunctionsTypes'
+	types.writeInto(writer)
+
 	for fn in codeResult.debugFunctions 'eachFunction'
 		writer.addFunction(String.from(fn.name), codeStart: fn.codeStart as MxdbgCodeOffset, codeEnd: fn.codeEnd as MxdbgCodeOffset, frameSize: fn.frameSize as MxdbgIndex, paramCount: fn.paramCount as MxdbgIndex)
+		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
+			none then break 'itsIr'
+			found(func) then writeFunctionLocals(project, writer: writer, types: types, module: codeResult.targetModule, func: func, range: fn)
+		end 'itsIr'
 	end 'eachFunction'
 
 	for row in codeResult.debugLineRows 'eachRow'
@@ -63,6 +79,193 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {image.count()} bytes of debug info to {sidecarPath}")
 end 'writeDebugInfoSidecar'
+
+// ============================================================================================
+// LOCALS
+// ============================================================================================
+
+// Every type a function's bindings are declared at, folded into the table so their records have a real
+// entry to point at. A local's type is often a machine primitive or a ranged alias no declaration
+// mentions, which is why the declared types alone are not enough.
+function closeLocalTypes(project Project, types MxdbgTypeTable, func IrFunction)
+	for local in func.debugLocals 'eachBinding'
+		types.close(project, name: mxdbgTypeNameOf(project, ref: local.declaredType))
+	end 'eachBinding'
+end 'closeLocalTypes'
+
+// ⭐⭐ **ONE RECORD PER DECLARED BINDING, INCLUDING THE ONES THE COMPILER CANNOT PLACE.** A binding with
+// no honest location gets an `optimizedOut` record rather than no record at all, so a debugger says
+// "optimized out" where the alternative is "no local named that here" — a name the user can see in their
+// own source and cannot ask about.
+//
+// ⛔ **AND NEVER A GUESSED SLOT.** A name whose several values disagree about where they live has no one
+// location that is true at every PC of the function, and a record's scope range IS the whole function —
+// so the honest answer there is `optimizedOut` too.
+function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTypeTable, module TargetModule, func IrFunction, range DebugFunctionRange)
+	if func.debugLocals.count() == 0 'noBindings'
+		return
+	end 'noBindings'
+
+	var records = MxdbgLocalDraftArray.create()
+	records.reserve(func.debugLocals.count())
+
+	var at = 0 as ElementIndex
+	for local in func.debugLocals 'eachBinding'
+		let placement = mxdbgAgreedPlacement(project, module: module, func: func, frameSize: range.frameSize, local: local, first: at)
+		at = at + local.valueIds.count()
+		records.push(MxdbgLocalDraft.create(local.name, placement: placement, typeId: types.idOf(mxdbgTypeNameOf(project, ref: local.declaredType))))
+	end 'eachBinding'
+
+	if at != func.debugLocalLocations.count() 'locationsOutOfStep'
+		panic("debug info: '{String.from(func.name)}' names {at} value(s) across its bindings and the allocator answered for {func.debugLocalLocations.count()} — the roster and the location column describe different value spaces")
+	end 'locationsOutOfStep'
+
+	// Ordinal, by name — the reference's order, and the one a reader scans. Sorted STABLY, so two
+	// bindings a nested scope gave the same name keep their declaration order.
+	records.sort(function(left MxdbgLocalDraft, right MxdbgLocalDraft) gives compareBytesOrdinally(left.name, right: right.name))
+
+	for record in records 'eachRecord'
+		writer.addLocal(String.from(record.name), locKind: record.locKind, locValue: record.locValue, typeId: record.typeId, scopeStart: range.codeStart as MxdbgCodeOffset, scopeEnd: range.codeEnd as MxdbgCodeOffset)
+	end 'eachRecord'
+end 'writeFunctionLocals'
+
+// One local record, before the roster is put in name order.
+type MxdbgLocalDraft
+	export var name as ByteArray
+	export var locKind as MxdbgIndex
+	export var locValue as MxdbgLocValue
+	export var typeId as MxdbgIndex
+
+	export static function create(name ByteArray, placement MxdbgPlacement, typeId MxdbgIndex) returns MxdbgLocalDraft
+		return Self{name: name, locKind: placement.locKind, locValue: placement.locValue, typeId: typeId}
+	end 'create'
+end 'MxdbgLocalDraft'
+
+typealias MxdbgLocalDraftArray = Array with MxdbgLocalDraft
+
+// A location as the sidecar states one.
+type MxdbgPlacement
+	export var locKind as MxdbgIndex
+	export var locValue as MxdbgLocValue
+
+	export static function create(locKind MxdbgIndex, locValue MxdbgLocValue) returns MxdbgPlacement
+		return Self{locKind: locKind, locValue: locValue}
+	end 'create'
+end 'MxdbgPlacement'
+
+let MxdbgOptimizedOutPlacement = MxdbgPlacement.create(MxdbgLocKindOptimizedOut, locValue: 0)
+
+// The ONE location a name can be stated at, or `optimizedOut`. A name owns a sequence of values, and the
+// record covers the whole function — so a location is stated only where every value of the name agrees on
+// it, which is the only reading that is true wherever the debugger stops.
+function mxdbgAgreedPlacement(project Project, module TargetModule, func IrFunction, frameSize StackSize, local DebugLocalDecl, first ElementIndex) returns MxdbgPlacement
+	// The name denotes a CELL ADDRESS, and the format has no indirect kind to say so with.
+	if local.heldInACell 'nothingToState'
+		return MxdbgOptimizedOutPlacement
+	end 'nothingToState'
+
+	// ⭐ **A VALUE THE COLOURING NEVER PLACED IS NOT IN THE EMITTED CODE**, so no PC holds it and it says
+	// nothing about where the NAME lives. What has to agree is the values that survived.
+	var placed = 0 as ElementIndex
+	var kind = DebugValueNowhere
+	var number = 0 as DebugValueNumber
+	let past = first + local.valueIds.count()
+	var at = first
+	while at < past 'eachValue'
+		let location = mxdbgLocationAt(func, at: at)
+		at = at + 1
+		if location.kind == DebugValueNowhere 'notInTheCode'
+			continue
+		end 'notInTheCode'
+
+		if placed > 0 and (location.kind != kind or location.number != number) 'theyDisagree'
+			return MxdbgOptimizedOutPlacement
+		end 'theyDisagree'
+
+		kind = location.kind
+		number = location.number
+		placed = placed + 1
+	end 'eachValue'
+
+	if placed == 0 'neverPlaced'
+		return MxdbgOptimizedOutPlacement
+	end 'neverPlaced'
+
+	if kind == DebugValueInRegister 'aRegister'
+		return MxdbgPlacement.create(MxdbgLocKindRegister, locValue: number as MxdbgLocValue)
+	end 'aRegister'
+
+	return MxdbgPlacement.create(MxdbgLocKindStackSlot, locValue: mxdbgFrameDisplacement(project, module: module, func: func, frameSize: frameSize, slot: number as SpillSlot))
+end 'mxdbgAgreedPlacement'
+
+function mxdbgLocationAt(func IrFunction, at ElementIndex) returns DebugValueLocation
+	return try func.debugLocalLocations.get(at) otherwise panic("debug info: '{String.from(func.name)}' has no location at {at} of the {func.debugLocalLocations.count()} the allocator answered for — the roster and the column are walked in one order")
+end 'mxdbgLocationAt'
+
+// ⭐⭐ **A SPILL SLOT AS A FRAME-POINTER-RELATIVE DISPLACEMENT, AND THIS IS WHERE THE TWO ISAs DIFFER.**
+// The sidecar states one signed offset from the frame pointer and a driver labels it per target, so the
+// per-ISA slot arithmetic has to be collapsed to that here rather than carried in the file.
+//
+// arm64's own displacement already is one: x29 points at the saved frame record and the slot area opens
+// just past it. x64's is rsp-relative and call-dependent — a caller's slots sit above the shadow space and
+// its outgoing arguments — so it is rebased by the frame the prologue reserves, which puts a slot BELOW
+// the notional frame pointer exactly as the reference driver renders it.
+function mxdbgFrameDisplacement(project Project, module TargetModule, func IrFunction, frameSize StackSize, slot SpillSlot) returns MxdbgLocValue
+	return match project.target.cpu 'isa'
+		arm64 gives arm64SlotDisplacement(slot) as MxdbgLocValue
+		x64 gives mxdbgX64FrameDisplacement(module, func: func, frameSize: frameSize, slot: slot)
+		wasm32 gives panicNoFrameOnWasm()
+	end 'isa'
+end 'mxdbgFrameDisplacement'
+
+// ⚠ **THE SUBTRACTION IS DONE IN THE SIGNED WIDTH, AND THAT IS NOT A STYLE CHOICE.** A `StackSize` cannot
+// hold a negative number, and a slot inside the frame the prologue reserved is BELOW the notional frame
+// pointer — so computing it there would trap on the range check for the ordinary case rather than the
+// exotic one.
+function mxdbgX64FrameDisplacement(module TargetModule, func IrFunction, frameSize StackSize, slot SpillSlot) returns MxdbgLocValue
+	let fromStackPointer = (spillSlotBaseDisp(module, func: func) + (slot as StackSize) * SpillSlotBytes) as MxdbgLocValue
+
+	return fromStackPointer - (frameSize as MxdbgLocValue)
+end 'mxdbgX64FrameDisplacement'
+
+// The wasm lane emits no `.text` image and writes no sidecar at all, so no spill slot of it can reach the
+// arithmetic above. Its own function because the arm has to answer with a value.
+function panicNoFrameOnWasm() returns MxdbgLocValue
+	panic("debug info: a spill slot was asked for a frame displacement on wasm32, which writes no sidecar at all")
+end 'panicNoFrameOnWasm'
+
+// ============================================================================================
+// FINDING A FUNCTION'S IR
+// ============================================================================================
+
+// The Target function each emitted chunk came from, by name. A chunk carries the ranges and the frame; the
+// `IrFunction` carries the bindings and the locations the allocator sent home, and the two are joined
+// nowhere else.
+function mxdbgFunctionIndex(module TargetModule) returns MxdbgFunctionIndexMap
+	var index = MxdbgFunctionIndexMap.create()
+	for i in 0 upto module.funcCount() 'eachFunction'
+		let func = try module.functions.get(i) otherwise panic("mxdbgFunctionIndex: functions.get OOB at {i} below the module's {module.funcCount()}")
+		index.upsert(func.name, value: i as FuncIndex)
+	end 'eachFunction'
+
+	return index
+end 'mxdbgFunctionIndex'
+
+typealias MxdbgFunctionIndexMap = Map with (ByteArray, FuncIndex)
+
+// ⚠ **A CHUNK NEED NOT HAVE AN `IrFunction` AT ALL.** The panic runtime and the entry stub are
+// hand-assembled chunks the backends append past the module's own functions, and they have no bindings
+// to describe — so "no IR" is an ANSWER here, not a failure.
+function mxdbgFunctionOf(module TargetModule, functionsByName MxdbgFunctionIndexMap, name ByteArray) returns MxdbgIrLookup
+	let at = try functionsByName.get(name) otherwise return MxdbgIrLookup.none
+
+	return MxdbgIrLookup.found(try module.functions.get(at) otherwise panic("debug info: functions.get OOB at {at}, which this compile's own index answered with"))
+end 'mxdbgFunctionOf'
+
+union MxdbgIrLookup
+	none
+	found(func IrFunction)
+end 'MxdbgIrLookup'
 
 // A `DebugSpanTable` file id as the sidecar's file table numbers it: one behind, because that table
 // holds the program's real files only and the span table reserves entry 0 for the positionless file.
@@ -91,30 +294,3 @@ export function discardDebugInfoSidecar(outputPath FilePath)
 
 	try File.delete(sidecarPath) otherwise ignore
 end 'discardDebugInfoSidecar'
-
-// ⭐⭐ **THE LEAKED-CURSOR DETECTOR, AND IT IS THE ONE TRIPWIRE NOTHING ELSE COULD FIRE.**
-//
-// The span cursor is set by a lowering walk and cleared when that walk ends. Left set, the runtime
-// installers — which build thousands of ops through `appendOp` after the lowering — would every one of
-// them be stamped with the last user statement, and the result would be a line table that looks full,
-// loads cleanly and points a debugger at a source line for code that source never wrote.
-//
-// A compiler-emitted function has an EMPTY `sourceFilePath`, so "every op of such a function carries no
-// span" is exactly the condition a leak breaks, and it is checkable here with the module in hand.
-function requireNoLeakedSpanCursor(project Project, targetModule TargetModule)
-	if not project.debugInfo 'notCapturing'
-		return
-	end 'notCapturing'
-
-	for func in targetModule.functions 'eachFunction'
-		if not func.sourceFilePath.isEmpty() 'writtenByAnAuthor'
-			continue
-		end 'writtenByAnAuthor'
-
-		for opIdx in targetModule.liveOpIndices(func) 'eachOp'
-			if targetModule.spans.at(opIdx) != NoSpanId 'stampedWithAStatement'
-				panic("debug info: op {opIdx} of the compiler-emitted function '{String.from(func.name)}' carries a source span — a lowering walk left its cursor set, so the emitted runtime is being attributed to whatever statement ran last")
-			end 'stampedWithAStatement'
-		end 'eachOp'
-	end 'eachFunction'
-end 'requireNoLeakedSpanCursor'

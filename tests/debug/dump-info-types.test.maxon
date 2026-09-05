@@ -1,0 +1,488 @@
+// dump-info-types.test.maxon — the sidecar's TYPE table describes the program's own types, and BOTH
+// drivers print it identically.
+//
+// `--dump-info <exe> types` prints one row per source-level type — `[id] Name Kind size=… align=…
+// fields=…` — with its fields nested under it as `+0xOFF  name : TypeName`. Without it a debugger can
+// name a local and never render its value: a local record points at a type by ID, and an id into a table
+// nobody filled resolves to nothing.
+//
+// ⭐⭐ **WHAT IS PINNED IS RELATIONSHIPS, NEVER NUMBERS.** A struct's size and a type's position in the
+// table both move with the layout and with the stdlib the program pulls in, and a case that pinned them
+// would go red for every unrelated change and teach a reader to re-bless it. So this case asks the table
+// about the FIXTURE'S OWN declarations, read out of the staged source:
+//   • the type table is not empty — a count of zero is the shape a whole missing table hides in;
+//   • the fixture's struct is listed as a struct, carrying exactly the fields it DECLARES, in order;
+//   • its nested-type field names that type, because a nominal type keeps its name where a ranged alias
+//     lowers to the width backing it;
+//   • every field offset falls inside the record's own size, and the size is a whole number of aligns;
+//   • the fixture's enum is listed as an enum, and each case row's offset column is the RAW TAG the case
+//     declares — not its ordinal.
+//
+// ⭐ **THE ENUM'S RAW VALUES ARE DECLARED OUT OF ORDINAL ORDER ON PURPOSE** (`tests/debug/fixtures/locals`).
+// An offset column that printed the ordinal would agree with the tag for an enum that declares neither, so
+// a fixture whose two orders coincide cannot tell the two apart.
+//
+// ⭐⭐ **ONE BINARY, TWO READERS, BYTE FOR BYTE.** The last assertion runs the REFERENCE driver over the
+// very same executable this compiler built and compares the two dumps as text. That is the format
+// contract `tests/README.md` rule 6 exists for, and it is exact: a field the writer lays down at the
+// wrong intra-record offset is read as garbage by whichever reader did not agree with it. Line endings
+// are folded first — a console's CRLF is not what is under test.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION** — a
+// missing compiler, a spawn that never happened, a BUILD that produced no program.
+//
+// ⛔ **ONE SPAWNING `test`, ONE FILE, ONE COMPILE.** Two dumps are two further spawns and no further
+// compiles. Staging goes to a directory named for THIS case, because `maxon test` runs files concurrently.
+
+// The label this case stages under, and the build it dumps.
+let TypesCaseLabel = "dump-info-types"
+let TypesBuildLabel = "typed"
+
+// The section asked for, spelled as the command line takes it.
+let TypesSectionName = "types"
+
+// The fixture's own declarations this case asks the table about. The NAMES are written here because they
+// are what the case is about; everything INSIDE them — the fields, the cases, the raw tags — is read out
+// of the staged source, so a fixture that grows a field grows this roster with it.
+let FixtureStructName = "Reading"
+let FixtureNestedTypeName = "Label"
+let FixtureEnumName = "Grade"
+let FixtureNestedFieldName = "label"
+
+// How the fixture spells the declarations this case reads back.
+let TypeOpenerPrefix = "type "
+let EnumOpenerPrefix = "enum "
+let BlockCloserPrefix = "end '"
+let FieldDeclarationPrefix = "export var "
+let FieldTypeSeparator = "as"
+let EnumRawValueSeparator = "="
+
+// The dump's own spellings: the section heading, the kind column's words, and the keyed columns.
+let TypesHeading = "types ("
+let StructKindWord = "Struct"
+let EnumKindWord = "Enum"
+let SizeKey = "size="
+let AlignKey = "align="
+let FieldsKey = "fields="
+
+// A type row opens with its id in brackets; a field row nested under it opens with a `+`-prefixed offset.
+// The two are what tells one kind of row from the other inside one section.
+let TypeIdOpener = "["
+let FieldOffsetOpener = "+"
+let SectionHeadingMarker = " ("
+
+// Where a name sits in each row, once the runs of column padding are folded away.
+let TypeRowNameColumn = 1
+let TypeRowKindColumn = 2
+let FieldRowNameColumn = 1
+let FieldRowTypeColumn = 3
+
+// Where a member's parts sit in its declaration line: `export var NAME as TYPE`, `NAME = RAW`.
+let FieldDeclarationNameColumn = 2
+let FieldDeclarationTypeColumn = 4
+let EnumCaseNameColumn = 0
+let EnumCaseRawColumn = 2
+
+// A row of the type section, or the absence of one. A union rather than an empty string, because "the
+// table lists no such type" is the headline failure here and must not read as a row with no words in it.
+union TypeRowLookup
+	none
+	found(index TypeRowIndex, row String)
+end 'TypeRowLookup'
+
+typealias TypeRowIndex = int(0 to u64.max)
+
+// A size or an alignment, narrowed past the assertions that neither is zero — which is what makes the
+// remainder below a plain one rather than a throwing divide.
+typealias NonZeroExtent = int(1 to u64.max)
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'the type table describes the fixture own types and both drivers print it identically'
+	let staged = stagedSidecarProgram(TypesCaseLabel, fixture: LocalsFixtureName)
+	let executable = builtTypesFixture(staged)
+
+	var sections = StringArray.create()
+	sections.push(TypesSectionName)
+	let dumpRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: TestedCompilerStem)
+	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName} <exe> {TypesSectionName}` exited {dumpRun.exitCode()}. It wrote to stderr: {dumpRun.stderr}")
+
+	let dump = withoutCarriageReturns(dumpRun.stdout)
+
+	// ⭐ THE HEADLINE. Every program has types, so a table naming none is one the writer never filled —
+	// and every window check over it passes vacuously.
+	try Expect.notEqual(typeTallyIn(dump) as AssertedInt, expected: 0, message: "the `{TypesHeading}…)` section reports 0 types. Every program has types, so a table that names none is one nobody filled — and a local record pointing into it resolves to nothing, which is a debugger that can name a value and never show it. It printed: {dump}")
+
+	let rows = typeSectionRows(dump)
+	try requireStructDescribed(rows, staged: staged, dump: dump)
+	try requireEnumDescribed(rows, staged: staged, dump: dump)
+
+	// ⭐ ONE BINARY, TWO READERS. The reference driver over this compiler's own output.
+	let referenceRun = spawnSidecarDumpInfo(executable, staged: staged, sections: sections, binaryStem: BootstrapCompilerStem)
+	try Expect.equal(referenceRun.exitCode() as AssertedInt, expected: 0, message: "the REFERENCE driver `{BootstrapCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe> {TypesSectionName}` exited {referenceRun.exitCode()} over a binary this compiler built, so the two dumps cannot be compared. It wrote to stderr: {referenceRun.stderr}")
+	let referenceDump = withoutCarriageReturns(referenceRun.stdout)
+	try Expect.equal(dump, expected: referenceDump, message: "the two drivers print DIFFERENT type tables out of ONE sidecar. The record layout is the format's, not a driver's: a reader that disagrees with the writer about an intra-record offset reads every later column as garbage, and the disagreement shows up first as a rendering difference like this one.")
+end 'the type table describes the fixture own types and both drivers print it identically'
+
+// ============================================================================================
+// THE FIXTURE'S STRUCT
+// ============================================================================================
+
+function requireStructDescribed(rows StringArray, staged FilePath, dump String) throws TestFailure
+	let lookup = typeRowNamed(rows, name: FixtureStructName)
+	match lookup 'listed'
+		none then try Expect.fail("the type table lists no `{FixtureStructName}`, which the staged fixture DECLARES. A struct the table does not know exists is one no local of that type can be rendered as. The section held: {dump}")
+		found(index, row) then try requireStructRow(rows, index: index, row: row, staged: staged)
+	end 'listed'
+end 'requireStructDescribed'
+
+function requireStructRow(rows StringArray, index TypeRowIndex, row String, staged FilePath) throws TestFailure
+	let kind = columnOf(row, at: TypeRowKindColumn)
+	try Expect.equal(kind, expected: StructKindWord, message: "`{FixtureStructName}` is listed as `{kind}` rather than `{StructKindWord}`. The kind is what decides how a renderer reads the bytes at a local's location, so a struct described as anything else renders as something it is not. Its row reads: {row}")
+
+	let size = keyedDecimalValue(keyedColumnOf(row, key: SizeKey))
+	let align = keyedDecimalValue(keyedColumnOf(row, key: AlignKey))
+	try Expect.notEqual(size as AssertedInt, expected: 0, message: "`{FixtureStructName}` is listed with `{SizeKey}0`. A record of no bytes is one a renderer reads nothing out of. Its row reads: {row}")
+	try Expect.notEqual(align as AssertedInt, expected: 0, message: "`{FixtureStructName}` is listed with `{AlignKey}0`, which no layout has. Its row reads: {row}")
+
+	// Both narrowed past the two assertions above, which is what makes the remainder non-throwing.
+	try Expect.equal(((size as NonZeroExtent) mod (align as NonZeroExtent)) as AssertedInt, expected: 0, message: "`{FixtureStructName}` is listed `{SizeKey}{size} {AlignKey}{align}`, and a record's size is always a whole number of its alignment. Its row reads: {row}")
+
+	// The fields the SOURCE declares, in declaration order, against the rows nested under this type.
+	let declared = declaredStructFieldNames(staged)
+	let printed = joined(fieldRowNamesUnder(rows, index: index))
+	try Expect.notEqual(declared.count() as AssertedInt, expected: 0, message: "dump-info-types.test: no `{FieldDeclarationPrefix}` line was found inside `{TypeOpenerPrefix}{FixtureStructName}` in the staged fixture, so this case would assert nothing at all about the field table.")
+	let expectedFields = joined(declared)
+	try Expect.equal(printed, expected: expectedFields, message: "the fields nested under `{FixtureStructName}` are not the ones it declares, in order. A field sub-table indexed by the wrong stride, or a window that starts one record early, reads as a plausible list of somebody else's fields. Its row reads: {row}")
+	let claimedFields = keyedDecimalValue(keyedColumnOf(row, key: FieldsKey))
+	try Expect.equal(claimedFields as AssertedInt, expected: declared.count() as AssertedInt, message: "`{FixtureStructName}` claims `{FieldsKey}{claimedFields}` where the staged fixture declares {declared.count()}. Its row reads: {row}")
+
+	// ⭐ A NOMINAL TYPE KEEPS ITS NAME. A ranged alias lowers to the width backing it (`Tick` prints as
+	// the integer it is stored in), so only the nested TYPE's field can be asked to name its declaration
+	// — and it is the one that proves a field's `typeId` reaches a real entry rather than id 0.
+	let nestedFieldType = fieldRowTypeNameUnder(rows, index: index, fieldName: FixtureNestedFieldName)
+	try Expect.equal(nestedFieldType, expected: FixtureNestedTypeName, message: "`{FixtureStructName}.{FixtureNestedFieldName}` does not name `{FixtureNestedTypeName}` as its type. A field whose `typeId` misses lands on an unrelated entry — usually the alphabetically first — and renders a nested record as whatever that type happens to be.")
+
+	// Every field offset is INSIDE the record. A struct field's offset column is a real byte offset (an
+	// enum's is a tag, which is why this is asked of the struct alone).
+	for field in fieldRowsUnder(rows, index: index) 'eachField'
+		try Expect.lessThan(fieldOffsetIn(field) as AssertedInt, than: size as AssertedInt, message: "a field of `{FixtureStructName}` sits at offset {fieldOffsetIn(field)} of a record `{SizeKey}{size}`. An offset past the record's own end reads bytes belonging to whatever follows it. The field row reads: {field}")
+	end 'eachField'
+end 'requireStructRow'
+
+// ============================================================================================
+// THE FIXTURE'S ENUM
+// ============================================================================================
+
+function requireEnumDescribed(rows StringArray, staged FilePath, dump String) throws TestFailure
+	let lookup = typeRowNamed(rows, name: FixtureEnumName)
+	match lookup 'listed'
+		none then try Expect.fail("the type table lists no `{FixtureEnumName}`, which the staged fixture DECLARES. The section held: {dump}")
+		found(index, row) then try requireEnumRow(rows, index: index, row: row, staged: staged)
+	end 'listed'
+end 'requireEnumDescribed'
+
+function requireEnumRow(rows StringArray, index TypeRowIndex, row String, staged FilePath) throws TestFailure
+	let kind = columnOf(row, at: TypeRowKindColumn)
+	try Expect.equal(kind, expected: EnumKindWord, message: "`{FixtureEnumName}` is listed as `{kind}` rather than `{EnumKindWord}`. Its row reads: {row}")
+
+	let declaredNames = declaredEnumCaseNames(staged)
+	let declaredTags = declaredEnumCaseTags(staged)
+	try Expect.notEqual(declaredNames.count() as AssertedInt, expected: 0, message: "dump-info-types.test: no case was found inside `{EnumOpenerPrefix}{FixtureEnumName}` in the staged fixture, so this case would assert nothing at all about an enum's case rows.")
+	let printedCases = joined(fieldRowNamesUnder(rows, index: index))
+	let expectedCases = joined(declaredNames)
+	try Expect.equal(printedCases, expected: expectedCases, message: "the cases nested under `{FixtureEnumName}` are not the ones it declares, in order. Its row reads: {row}")
+
+	// ⭐ THE OFFSET COLUMN OF AN ENUM CASE IS ITS RAW TAG, NOT ITS ORDINAL. The fixture declares its raw
+	// values out of ordinal order precisely so the two cannot be confused for one another here.
+	var position = 0
+	for field in fieldRowsUnder(rows, index: index) 'eachCase'
+		let name = columnOf(field, at: FieldRowNameColumn)
+		let expectedTag = try declaredTags.get(position) otherwise panic("dump-info-types.test: the case rows and the declared cases were asserted equal in count and order before this walk")
+		try Expect.equal(fieldOffsetIn(field) as AssertedInt, expected: expectedTag as AssertedInt, message: "case `{FixtureEnumName}.{name}` prints its offset column as {fieldOffsetIn(field)}, where the staged fixture declares the raw value {expectedTag}. That column is the RUNTIME TAG a case stores, and a renderer matches a stopped discriminant against it — printing the ORDINAL instead names the wrong case for every enum whose raw values are not its ordinals. The case row reads: {field}")
+		position = position + 1
+	end 'eachCase'
+end 'requireEnumRow'
+
+// ============================================================================================
+// THE BUILD UNDER TEST
+// ============================================================================================
+
+function builtTypesFixture(staged FilePath) returns FilePath
+	let noArguments = StringArray.create()
+	let build = spawnSidecarBuild(staged, label: TypesBuildLabel, extraArguments: noArguments)
+	if build.exitCode() != 0 'didNotBuild'
+		panic("dump-info-types.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	let executable = builtSidecarExecutable(staged, label: TypesBuildLabel)
+	if not File.exists(executable) 'wroteNothing'
+		panic("dump-info-types.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
+	end 'wroteNothing'
+
+	return executable
+end 'builtTypesFixture'
+
+// ============================================================================================
+// READING THE TYPE SECTION
+// ============================================================================================
+
+// The rows of the `types (…)` section: every line after its heading, up to the line that opens the NEXT
+// section. The stop matters even when the section was asked for alone — a driver that ignores its section
+// argument prints the whole sidecar, and reading a line table as type rows would bury that with a parse
+// failure instead of naming it.
+function typeSectionRows(dump String) returns StringArray
+	var rows = StringArray.create()
+	var inSection = false
+	for rawLine in sidecarOutputLines(dump) 'eachLine'
+		let line = rawLine.trim()
+		if line.startsWith(TypesHeading) 'opensTheSection'
+			inSection = true
+			continue
+		end 'opensTheSection'
+
+		if not inSection 'beforeTheSection'
+			continue
+		end 'beforeTheSection'
+
+		if opensAnotherSection(line) 'nextSection'
+			break
+		end 'nextSection'
+
+		if not line.isEmpty() 'aRow'
+			rows.push(line)
+		end 'aRow'
+	end 'eachLine'
+
+	return rows
+end 'typeSectionRows'
+
+// Whether a line opens a section other than the type table. Every heading this dump writes reads
+// `<name> (<count>):` and no row of any section does, so the test is on the SHAPE rather than on a roster
+// that would silently go stale as sections are added.
+function opensAnotherSection(line String) returns bool
+	return line.contains(SectionHeadingMarker) and line.endsWith(HeadingCloser) and not line.startsWith(TypeIdOpener) and not line.startsWith(FieldOffsetOpener)
+end 'opensAnotherSection'
+
+let HeadingCloser = "):"
+
+// How many types the section heading claims. 0 when there is no heading at all, which is the same
+// failure the caller reports.
+function typeTallyIn(dump String) returns SidecarNumber
+	for rawLine in sidecarOutputLines(dump) 'eachLine'
+		let line = rawLine.trim()
+		if line.startsWith(TypesHeading) 'theHeading'
+			return parenthesizedTally(line)
+		end 'theHeading'
+	end 'eachLine'
+
+	return 0
+end 'typeTallyIn'
+
+// The digits between a heading's parentheses.
+function parenthesizedTally(line String) returns SidecarNumber
+	var value = 0
+	var pastTheOpener = false
+	for c in line 'eachCharacter'
+		if not pastTheOpener 'stillTheName'
+			pastTheOpener = Ascii.isDigit(c)
+		end 'stillTheName'
+
+		if not pastTheOpener 'noDigitYet'
+			continue
+		end 'noDigitYet'
+
+		if not Ascii.isDigit(c) 'pastTheDigits'
+			break
+		end 'pastTheDigits'
+
+		value = value * SidecarDecimalBase + hexDigitValue(c)
+	end 'eachCharacter'
+
+	return value
+end 'parenthesizedTally'
+
+// The type row whose NAME column is `name`, with its position, so the rows nested under it can be found.
+function typeRowNamed(rows StringArray, name String) returns TypeRowLookup
+	var index = 0
+	for row in rows 'eachRow'
+		if row.startsWith(TypeIdOpener) and columnOf(row, at: TypeRowNameColumn) == name 'theRow'
+			return TypeRowLookup.found(index, row: row)
+		end 'theRow'
+
+		index = index + 1
+	end 'eachRow'
+
+	return TypeRowLookup.none
+end 'typeRowNamed'
+
+// The field rows nested under the type row at `index`: the rows that follow it up to the next TYPE row.
+function fieldRowsUnder(rows StringArray, index TypeRowIndex) returns StringArray
+	var nested = StringArray.create()
+	let firstNested = index + 1
+	for i in firstNested upto rows.count() 'eachFollowingRow'
+		let row = try rows.get(i) otherwise break
+		if not row.startsWith(FieldOffsetOpener) 'theNextType'
+			break
+		end 'theNextType'
+
+		nested.push(row)
+	end 'eachFollowingRow'
+
+	return nested
+end 'fieldRowsUnder'
+
+function fieldRowNamesUnder(rows StringArray, index TypeRowIndex) returns StringArray
+	var names = StringArray.create()
+	for row in fieldRowsUnder(rows, index: index) 'eachField'
+		names.push(columnOf(row, at: FieldRowNameColumn))
+	end 'eachField'
+
+	return names
+end 'fieldRowNamesUnder'
+
+// The type NAME a named field row points at, or empty when this type has no such field — which fails the
+// caller's comparison rather than passing it.
+function fieldRowTypeNameUnder(rows StringArray, index TypeRowIndex, fieldName String) returns String
+	for row in fieldRowsUnder(rows, index: index) 'eachField'
+		if columnOf(row, at: FieldRowNameColumn) == fieldName 'theField'
+			return columnOf(row, at: FieldRowTypeColumn)
+		end 'theField'
+	end 'eachField'
+
+	return ""
+end 'fieldRowTypeNameUnder'
+
+// A field row's offset column, with the `+` that opens it dropped so the `0x` prefix can be read.
+function fieldOffsetIn(row String) returns SidecarNumber
+	return hexValue(columnOf(row, at: 0).replace(FieldOffsetOpener, with: ""))
+end 'fieldOffsetIn'
+
+// One whitespace-separated column of a row, or empty when the row has no such column — which fails the
+// assertion that consumes it rather than standing in for a word nobody printed.
+function columnOf(row String, at ColumnIndex) returns String
+	return try whitespaceTokens(row).get(at) otherwise ""
+end 'columnOf'
+
+// The `key=VALUE` column of a row, whole, so the caller reads its number through one parser.
+function keyedColumnOf(row String, key String) returns String
+	for token in whitespaceTokens(row) 'eachToken'
+		if token.startsWith(key) 'theColumn'
+			return token
+		end 'theColumn'
+	end 'eachToken'
+
+	return ""
+end 'keyedColumnOf'
+
+typealias ColumnIndex = int(0 to 64)
+
+// ============================================================================================
+// READING THE STAGED FIXTURE
+// ============================================================================================
+
+// The names the fixture's struct DECLARES, in declaration order.
+function declaredStructFieldNames(staged FilePath) returns StringArray
+	var names = StringArray.create()
+	for line in declarationBlockLines(staged, opener: "{TypeOpenerPrefix}{FixtureStructName}", closer: "{BlockCloserPrefix}{FixtureStructName}") 'eachLine'
+		if line.startsWith(FieldDeclarationPrefix) and columnOf(line, at: 3) == FieldTypeSeparator 'aField'
+			names.push(columnOf(line, at: FieldDeclarationNameColumn))
+		end 'aField'
+	end 'eachLine'
+
+	return names
+end 'declaredStructFieldNames'
+
+// The names the fixture's enum DECLARES, in declaration order.
+function declaredEnumCaseNames(staged FilePath) returns StringArray
+	var names = StringArray.create()
+	for line in enumCaseLines(staged) 'eachCase'
+		names.push(columnOf(line, at: EnumCaseNameColumn))
+	end 'eachCase'
+
+	return names
+end 'declaredEnumCaseNames'
+
+// The RAW VALUES those cases declare, in the same order.
+function declaredEnumCaseTags(staged FilePath) returns TagArray
+	var tags = TagArray.create()
+	for line in enumCaseLines(staged) 'eachCase'
+		tags.push(decimalColumn(line, at: EnumCaseRawColumn))
+	end 'eachCase'
+
+	return tags
+end 'declaredEnumCaseTags'
+
+typealias TagArray = Array with SidecarNumber
+
+// Every `NAME = RAW` line of the fixture's enum. A case that declares no raw value is not one of them —
+// the fixture declares all three, and a case whose tag is implicit is one this comparison cannot make.
+function enumCaseLines(staged FilePath) returns StringArray
+	var cases = StringArray.create()
+	for line in declarationBlockLines(staged, opener: "{EnumOpenerPrefix}{FixtureEnumName}", closer: "{BlockCloserPrefix}{FixtureEnumName}") 'eachLine'
+		if line.contains(EnumRawValueSeparator) 'aCase'
+			cases.push(line)
+		end 'aCase'
+	end 'eachLine'
+
+	return cases
+end 'enumCaseLines'
+
+// The lines strictly between a declaration's opening line and its closer, trimmed. Refused loudly when
+// the fixture holds no such declaration: every opener asked for here names something this case is about.
+function declarationBlockLines(staged FilePath, opener String, closer String) returns StringArray
+	var block = StringArray.create()
+	var inBlock = false
+	var seen = false
+	for rawLine in stagedSourceLines(staged) 'eachLine'
+		let line = rawLine.trim()
+		if line.startsWith(opener) 'opensTheBlock'
+			inBlock = true
+			seen = true
+			continue
+		end 'opensTheBlock'
+
+		if not inBlock 'outsideTheBlock'
+			continue
+		end 'outsideTheBlock'
+
+		if line.startsWith(closer) 'closesTheBlock'
+			break
+		end 'closesTheBlock'
+
+		block.push(line)
+	end 'eachLine'
+
+	if not seen 'noSuchDeclaration'
+		panic("dump-info-types.test: the gate could not run — the staged fixture holds no line starting with '{opener}', which is a declaration this case asks the type table about.")
+	end 'noSuchDeclaration'
+
+	return block
+end 'declarationBlockLines'
+
+// One column of a source line read as a decimal number.
+function decimalColumn(line String, at ColumnIndex) returns SidecarNumber
+	var value = 0
+	for c in columnOf(line, at: at) 'eachCharacter'
+		if not Ascii.isDigit(c) 'pastTheDigits'
+			break
+		end 'pastTheDigits'
+
+		value = value * SidecarDecimalBase + hexDigitValue(c)
+	end 'eachCharacter'
+
+	return value
+end 'decimalColumn'
+
+// A list of names as ONE comparable string, so a disagreement reports both lists in full rather than the
+// first element that differs.
+function joined(names StringArray) returns String
+	var rendered = ""
+	for name in names 'eachName'
+		rendered.append("[{name}]")
+	end 'eachName'
+
+	return rendered
+end 'joined'

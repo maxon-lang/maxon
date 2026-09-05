@@ -269,33 +269,10 @@ export function reportFileOrder(groups TestFileGroupArray) returns ReportFileArr
 		ordered.push(ReportFile.create(reportPathDisplay(group.file), index: iter.index() as ReportFileIndex, group: group))
 	end 'eachGroup'
 
-	// TOTAL, because one file is one group and no two groups name the same path.
-	ordered.sort(function(left ReportFile, right ReportFile) gives comparePathText(left.displayPath, right: right.displayPath))
+	// TOTAL, because one file is one group and no two groups name the same path. ⚠ The measure is BYTES
+	// (`compareBytesOrdinally`), as it is for every other table this command prints; the reference compares
+	// UTF-16 code units, the two agree for every ASCII path, and neither is a collation.
+	ordered.sort(function(left ReportFile, right ReportFile) gives compareBytesOrdinally(left.displayPath.toByteArray(), right: right.displayPath.toByteArray()))
 
 	return ordered
 end 'reportFileOrder'
-
-// ⚠ **THE MEASURE IS BYTES**, as it is for every other table this command prints. The reference
-// compares UTF-16 code units; the two agree for every ASCII path, and neither is a collation.
-function comparePathText(left String, right String) returns Ordering
-	let leftBytes = left.toByteArray()
-	let rightBytes = right.toByteArray()
-
-	for (iter, leftByte) in leftBytes.withIterator() 'eachByte'
-		if iter.index() >= rightBytes.count() 'rightIsAPrefix'
-			return Ordering.greaterThan
-		end 'rightIsAPrefix'
-
-		let rightByte = try rightBytes.get(iter.index()) otherwise panic("comparePathText: the index is in bounds by the guard above")
-
-		if leftByte != rightByte 'differs'
-			return Ordering.lessThan if leftByte < rightByte else Ordering.greaterThan
-		end 'differs'
-	end 'eachByte'
-
-	if leftBytes.count() < rightBytes.count() 'leftIsAPrefix'
-		return Ordering.lessThan
-	end 'leftIsAPrefix'
-
-	return Ordering.equalTo
-end 'comparePathText'

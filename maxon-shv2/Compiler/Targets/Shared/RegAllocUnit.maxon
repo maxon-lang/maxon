@@ -123,6 +123,10 @@ module type RegAllocUnit
 	// an empty column and a function with no live ops are different facts, and the private module has to
 	// know which it is before it appends anything.
 	export var spansArmed as bool
+	// ⭐ **THE VALUES THE PARSER NAMED, FLAT AND IN `IrFunction.debugLocals` ORDER.** The allocator is the
+	// last point at which a `ValueId` still means anything — the encoder sees physical registers — so this
+	// is the question that has to cross, and the answer comes home in the same order.
+	export var debugValueIds as ValueIdArray
 
 	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
 	// argument of a send: `returnsFreshValue` admits exactly that shape, and E3138 refuses everything it
@@ -140,9 +144,35 @@ module type RegAllocUnit
 			blocks.push(extractUnitBlock(module, block: block))
 		end 'eachBlock'
 
-		return Self{name: func.name.clone(), hasAuthor: not func.sourceFilePath.isEmpty(), paramCount: func.paramCount, stackSize: func.stackSize, valueClass: valueClass.clone(), blocks: blocks, spanIds: spanIds, spansArmed: module.spans.armed}
+		return Self{name: func.name.clone(), hasAuthor: not func.sourceFilePath.isEmpty(), paramCount: func.paramCount, stackSize: func.stackSize, valueClass: valueClass.clone(), blocks: blocks, spanIds: spanIds, spansArmed: module.spans.armed, debugValueIds: debugValueIdsOf(func)}
 	end 'extract'
 end 'RegAllocUnit'
+
+// Every value the parser named a binding for, flattened — built FRESH, because it is MOVED to a worker.
+// Empty on a build that records no bindings, which is what makes the whole carrier free when disarmed.
+function debugValueIdsOf(func IrFunction) returns ValueIdArray
+	var valueIds = ValueIdArray.create()
+	valueIds.reserve(debugValueTallyOf(func))
+	for local in func.debugLocals 'eachBinding'
+		for v in local.valueIds 'eachValue'
+			valueIds.push(v)
+		end 'eachValue'
+	end 'eachBinding'
+
+	return valueIds
+end 'debugValueIdsOf'
+
+// How many values that list holds. Its own walk rather than `debugValueIdsOf(func).count()`, because the
+// splice asks it on EVERY function of every build and building the array to measure it would allocate one
+// per function for a number.
+function debugValueTallyOf(func IrFunction) returns ElementIndex
+	var tally = 0 as ElementIndex
+	for local in func.debugLocals 'eachBinding'
+		tally = tally + local.valueIds.count()
+	end 'eachBinding'
+
+	return tally
+end 'debugValueTallyOf'
 
 // ⭐ **ONE BLOCK'S LIVE BODY, CARRIED SOLE, AND WHERE ITS CONDITIONAL BRANCH LANDED.** `unitOpAt` is
 // where "sole" is bought — by a mint on the way out and by a move on the way home.
@@ -587,6 +617,10 @@ module type RegAllocResult
 	// reordered the blocks and minted ops of its own. `spliceRegAllocResult` consumes it in lockstep with
 	// the ops and refuses if the two do not come out even.
 	export var spanIds as SpanIdArray
+	// The location of every value the unit asked about, in the order it asked — the one shape that can
+	// cross, exactly as `spanIds` does. `spliceRegAllocResult` refuses a count that does not match the
+	// question, because a shortfall would misattribute every later record.
+	export var debugLocations as DebugValueLocationArray
 
 	// ALLOCATE ONE UNIT - the whole of what a pool worker does, and the whole of what the serial path
 	// does. It takes the four per-ISA facts rather than deriving them, because both callers already hold
@@ -617,7 +651,9 @@ module type RegAllocResult
 		var facts = RegAllocFacts.create()
 		var refusal = RegAllocRefusalSite.create()
 
-		try allocateFunctionCore(module, func: func, hasAuthor: unit.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: unit.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal)
+		var debugLocations = DebugValueLocationArray.create()
+
+		try allocateFunctionCore(module, func: func, hasAuthor: unit.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: unit.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: unit.debugValueIds, debugLocations: debugLocations)
 
 		// Asked HERE because this is where the private module stops being appended to: the splitter and SSA
 		// destruction have both run, and both mint ops by pushing onto `ops` directly.
@@ -634,7 +670,7 @@ module type RegAllocResult
 		// rather than a third copy of every one. Nothing reads `module` past here.
 		module.ops.clear()
 
-		return Self{stackSize: stackSize, blocks: blocks, counters: counters, facts: facts, costs: costs, spanIds: spanIds}
+		return Self{stackSize: stackSize, blocks: blocks, counters: counters, facts: facts, costs: costs, spanIds: spanIds, debugLocations: debugLocations}
 	end 'byAllocating'
 end 'RegAllocResult'
 
@@ -727,6 +763,15 @@ module function spliceRegAllocResult(module TargetModule, func IrFunction, resul
 
 	func.blockRefs = newRefs
 	func.stackSize = result.stackSize
+
+	// ⭐ **THE LOCATIONS COME HOME BY ORDER, SO THE COUNT IS THE ONLY THING THAT CAN SAY THE TWO AGREE.**
+	// A shortfall would silently shift every later binding onto its neighbour's location, which reads as a
+	// plausible dump rather than as a defect.
+	let debugValueTally = debugValueTallyOf(func)
+	if result.debugLocations.count() != debugValueTally 'debugLocationsOutOfStep'
+		panic("spliceRegAllocResult: '{String.from(func.name)}' asked the allocator about {debugValueTally} named value(s) and {result.debugLocations.count()} came home — the two orders have drifted, and every record past the shortfall would name another binding's location")
+	end 'debugLocationsOutOfStep'
+	func.debugLocalLocations = result.debugLocations
 
 	// ⭐ **THE COLUMN AND THE OPS CAME OUT EVEN.** The splice walks the result's blocks and the column was
 	// collected off those very blocks, so a leftover or a shortfall is the two orders having drifted —

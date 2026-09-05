@@ -1052,7 +1052,8 @@ module function refuseForRegisterPressure(project Project, module TargetModule, 
 	var costs = RegAllocCosts.create()
 	var facts = RegAllocFacts.create()
 
-	try allocateFunctionCore(module, func: func, hasAuthor: not func.sourceFilePath.isEmpty(), pool: pool, callerSaved: callerSaved, file: file, valueClass: valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal) otherwise 'refusedAgain'
+	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
+	try allocateFunctionCore(module, func: func, hasAuthor: not func.sourceFilePath.isEmpty(), pool: pool, callerSaved: callerSaved, file: file, valueClass: valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create()) otherwise 'refusedAgain'
 		try renderRegisterPressureRefusal(project, module: module, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
 	end 'refusedAgain'
 
@@ -1108,7 +1109,7 @@ end 'foldFunctionAllocation'
 // values its caller hands it: `counters` (this function's sums), `facts` (this function's own figures)
 // and `costs` (the sub-phase brackets). A hot-loop overflow leaves through `refusal` and a `throw`,
 // because E5001 can only be built from tables a `Project` holds.
-module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs RegAllocCosts, facts RegAllocFacts, refusal RegAllocRefusalSite) throws RegAllocRefusal
+module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs RegAllocCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValueIds ValueIdArray, debugLocations DebugValueLocationArray) throws RegAllocRefusal
 	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
 	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
@@ -1162,6 +1163,12 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	// frame sized at the end of splitting would be short by exactly those slots.
 	driver.fixFrameSize(func)
 
+	// ⭐⭐ **THE ONE POINT AT WHICH A SOURCE NAME CAN STILL BE JOINED TO A MACHINE LOCATION.** `Allocation`
+	// is discarded with this pass, and by the time the encoder runs every operand is a physical register
+	// rather than a `ValueId` — so a debug-info location harvested anywhere later would have nothing left
+	// to key on. Read-only: nothing here can move an instruction.
+	harvestDebugValueLocations(alloc, liveness: liveness, valueIds: debugValueIds, into: debugLocations)
+
 	// ⚠ THE PER-FUNCTION FIGURES ARE READ AFTER THE COLOURING, NOT BEFORE IT, AND THE REPAIR IS WHY. A
 	// repair is a SPLIT: it walks liveness (`livenessMarkSteps`) and it lowers a block's demand
 	// (`maxPressure`). Read before the loop above, the one counter that would show a repair's liveness
@@ -1185,6 +1192,40 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	applyAllocation(module, func: func, alloc: alloc, plans: plans, reuseCopies: reuseCopies)
 	costs.record(RegAllocPhase.rewrite, probe: rewriteProbe)
 end 'allocateFunctionCore'
+
+// Where each named value ended up, in the order it was asked about. Nothing is harvested on a build that
+// named none, which is what makes the whole carrier cost an ordinary compile one branch.
+function harvestDebugValueLocations(alloc Allocation, liveness LivenessResult, valueIds ValueIdArray, into DebugValueLocationArray)
+	if valueIds.count() == 0 'nothingNamed'
+		return
+	end 'nothingNamed'
+
+	into.reserve(valueIds.count())
+	for value in valueIds 'eachNamedValue'
+		into.push(debugValueLocationOf(alloc, liveness: liveness, value: value))
+	end 'eachNamedValue'
+end 'harvestDebugValueLocations'
+
+// ⭐ **MEMORY BEFORE REGISTERS, AND `nowhere` RATHER THAN A GUESS.** A slot-resident value is one memory
+// holds whatever register it was also coloured into, so the slot is the location a reader can act on at
+// any PC in the function; a value this colouring never saw — folded away, or minted in a body the lowering
+// skipped — has no location at all, and saying so is the whole point of the third answer.
+function debugValueLocationOf(alloc Allocation, liveness LivenessResult, value ValueId) returns DebugValueLocation
+	if value >= alloc.valueCount 'notInThisFunction'
+		return DebugValueLocation.create(DebugValueNowhere, number: 0)
+	end 'notInThisFunction'
+
+	match liveness.useIndex.spillSlotOf(value) 'home'
+		none then break 'home'
+		slot(slot) then return DebugValueLocation.create(DebugValueInSpillSlot, number: slot as DebugValueNumber)
+	end 'home'
+
+	if not alloc.isColored(value) 'neverPlaced'
+		return DebugValueLocation.create(DebugValueNowhere, number: 0)
+	end 'neverPlaced'
+
+	return DebugValueLocation.create(DebugValueInRegister, number: alloc.regNumOf(value) as DebugValueNumber)
+end 'debugValueLocationOf'
 
 // The values ONE colouring pass could not place — and, for each, the two things its failing POINT knew
 // that no later pass can re-derive, because by then the point no longer exists.

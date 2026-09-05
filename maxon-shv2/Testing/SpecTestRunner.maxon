@@ -3152,7 +3152,7 @@ end 'PreRunVerdict'
 
 function preRunVerdict(test SpecTest, specName String, compile CompileAnswer, staged StagedTest, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
 	return match test.expectation 'e'
-		run(expected, stderr, stdout, sectionPins) gives runPreconditions(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget)
+		run(expected, stderr, stdout, sectionPins) gives runPreconditions(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget, debugInfo: test.debugInfo)
 		compilerError(text) gives PreRunVerdict.settled(checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged))
 	end 'e'
 end 'preRunVerdict'
@@ -4244,7 +4244,7 @@ end 'requireWslAvailable'
 // A RUN test (whatever result blocks the case carried — an ```exitcode, a ```stdout, a ```stderr, a
 // ```RequiredData, a ```RequiredRdata, in any combination): the compile MUST succeed and every section
 // the case pinned must hold BEFORE the program is worth running at all.
-function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile CompileAnswer, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
+function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile CompileAnswer, exePath FilePath, effectiveTarget Target, debugInfo bool) returns PreRunVerdict
 	if not compile.isBuilt() 'compileFailed'
 		return PreRunVerdict.settled(TestOutcome.fail("compilation failed: {compile.diagnostics.trim()}"))
 	end 'compileFailed'
@@ -4270,8 +4270,128 @@ function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecS
 		return PreRunVerdict.settled(sectionOutcome)
 	end 'sectionDisagreed'
 
+	// The sidecar is a property of what was WRITTEN, so it is read here beside the section pins and
+	// before the program is worth running: a case whose debug info cannot be walked is not a case whose
+	// exit code is interesting.
+	let sidecarOutcome = checkDebugInfoSidecar(debugInfo, exePath: exePath, effectiveTarget: effectiveTarget)
+	if not sidecarOutcome.isPass() 'sidecarDisagreed'
+		return PreRunVerdict.settled(sidecarOutcome)
+	end 'sidecarDisagreed'
+
 	return PreRunVerdict.needsExecution(expected, stderr: stderr, stdout: stdout)
 end 'runPreconditions'
+
+// ============================================================================
+// `<!-- DebugInfo -->`: the sidecar must be WALKABLE, not merely written
+// ============================================================================
+//
+// ⭐⭐ **A `.mxdbg` THAT MERELY EXISTS PROVES NOTHING.** Every window this file writes is a
+// `(first, count)` pair into a separate table, and a pair that runs past its table's end produces a
+// file that LOADS and then answers confidently out of whatever bytes follow. So a marked case's
+// sidecar is opened and walked, and a case is failed by name for each way the walk cannot be trusted.
+//
+// ⭐ **A COUNT OF ZERO IS THE SHAPE A WHOLE MISSING TABLE HIDES IN**, and every offset check passes
+// over it vacuously. The type count is therefore asserted NON-ZERO: every program has types, so a
+// table naming none is one nobody filled rather than a program that has none.
+//
+// ⚠ **THE wasm LANE WRITES NO SIDECAR AT ALL**, and that is deliberate: it emits a core module rather
+// than a `.text` image, so a table keyed by `.text` offsets has nothing to describe
+// (`writeDebugInfoSidecar`). The gate is therefore the same predicate that decides whether a target
+// goes through a register backend at all — a case marked `<!-- DebugInfo -->` is checked on every lane
+// that emits an image and skipped, rather than failed, on the one that does not.
+function checkDebugInfoSidecar(debugInfo bool, exePath FilePath, effectiveTarget Target) returns TestOutcome
+	if not debugInfo or not emitsTargetIr(effectiveTarget) 'noSidecarExpected'
+		return TestOutcome.pass
+	end 'noSidecarExpected'
+
+	let sidecarPath = try FilePath.from(sidecarPathOf(exePath)) otherwise 'badPath'
+		return TestOutcome.fail("could not spell the .mxdbg sidecar path beside {exePath}")
+	end 'badPath'
+
+	let image = try File.readBinary(sidecarPath) otherwise 'unreadable'
+		return TestOutcome.fail("a `<!-- DebugInfo -->` case built no readable .mxdbg sidecar at {sidecarPath}. It is written by default and leaves the executable byte-identical, so a build that produced none leaves the whole debug-info path unmeasured on this lane")
+	end 'unreadable'
+
+	let reader = try MxdbgReader.parse(image) otherwise (e) 'badImage'
+		return TestOutcome.fail("the .mxdbg sidecar at {sidecarPath} could not be parsed: {e.displayReason()}")
+	end 'badImage'
+
+	return sidecarStructureOutcome(reader)
+end 'checkDebugInfoSidecar'
+
+function sidecarStructureOutcome(reader MxdbgReader) returns TestOutcome
+	if reader.typeCount() == 0 'noTypes'
+		return TestOutcome.fail("the .mxdbg sidecar describes 0 types. Every program has types, so a type table naming none is one the writer never filled — and a debugger with no type table can name a local and never render its value")
+	end 'noTypes'
+
+	let referenceOutcome = sidecarTypeReferenceOutcome(reader)
+	if not referenceOutcome.isPass() 'danglingTypeId'
+		return referenceOutcome
+	end 'danglingTypeId'
+
+	let windowOutcome = sidecarTypeWindowOutcome(reader)
+	if not windowOutcome.isPass() 'fieldWindowEscapes'
+		return windowOutcome
+	end 'fieldWindowEscapes'
+
+	return sidecarLocalWindowOutcome(reader)
+end 'sidecarStructureOutcome'
+
+// Every `typeId` a field or a local carries, checked against the type table it indexes. A dangling id
+// is the failure that renders as a real type name belonging to something else entirely.
+function sidecarTypeReferenceOutcome(reader MxdbgReader) returns TestOutcome
+	for i in 0 upto reader.fieldCount() 'eachField'
+		let field = reader.fieldRecord(i as MxdbgIndex)
+		if field.typeId >= reader.typeCount() 'pastTheTypeTable'
+			return TestOutcome.fail("field record {i} ('{field.name}') names type {field.typeId}, past the sidecar's {reader.typeCount()} types")
+		end 'pastTheTypeTable'
+	end 'eachField'
+
+	for i in 0 upto reader.localCount() 'eachLocal'
+		let local = reader.localRecord(i as MxdbgIndex)
+		if local.typeId >= reader.typeCount() 'pastTheTypeTable'
+			return TestOutcome.fail("local record {i} ('{local.name}') names type {local.typeId}, past the sidecar's {reader.typeCount()} types")
+		end 'pastTheTypeTable'
+	end 'eachLocal'
+
+	return TestOutcome.pass
+end 'sidecarTypeReferenceOutcome'
+
+// ⚠ The window's end is tested as a REMAINING COUNT rather than as `first + count`: the two words are
+// each a full u32, so their sum is the one arithmetic here that could carry past the width it is
+// compared in.
+function sidecarTypeWindowOutcome(reader MxdbgReader) returns TestOutcome
+	for i in 0 upto reader.typeCount() 'eachType'
+		let entry = reader.typeRecord(i as MxdbgIndex)
+		if entry.fieldFirst > reader.fieldCount() or entry.fieldCount > reader.fieldCount() - entry.fieldFirst 'windowEscapes'
+			return TestOutcome.fail("type {i} ('{entry.name}') claims {entry.fieldCount} field(s) from {entry.fieldFirst} of a field table holding {reader.fieldCount()}")
+		end 'windowEscapes'
+	end 'eachType'
+
+	return TestOutcome.pass
+end 'sidecarTypeWindowOutcome'
+
+// ⚠ **THE LOCAL WINDOWS ARE ASSERTED CONTIGUOUS, NOT MERELY IN RANGE.** Each function's records are
+// appended in function order, so `localFirst` is the running total — and a window that is individually
+// in range while OVERLAPPING its neighbour hands two functions the same records, which reads as a
+// plausible dump rather than as a defect.
+function sidecarLocalWindowOutcome(reader MxdbgReader) returns TestOutcome
+	var nextLocal = 0 as MxdbgIndex
+	for i in 0 upto reader.functionCount() 'eachFunction'
+		let fn = reader.functionRecord(i as MxdbgIndex)
+		if fn.localFirst != nextLocal 'notContiguous'
+			return TestOutcome.fail("function {i} ('{fn.name}') opens its local window at {fn.localFirst}, where the functions before it end at {nextLocal}. The windows are appended in function order, so a gap loses records and an overlap hands two functions the same ones")
+		end 'notContiguous'
+
+		if fn.localCount > reader.localCount() - fn.localFirst 'windowEscapes'
+			return TestOutcome.fail("function {i} ('{fn.name}') claims {fn.localCount} local(s) from {fn.localFirst} of a local table holding {reader.localCount()}")
+		end 'windowEscapes'
+
+		nextLocal = (fn.localFirst + fn.localCount) as MxdbgIndex
+	end 'eachFunction'
+
+	return TestOutcome.pass
+end 'sidecarLocalWindowOutcome'
 
 // The verdict a RUN expectation takes from the execution it asked for — whichever way this lane
 // performed it (`executeRuns`).

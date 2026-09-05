@@ -26,7 +26,7 @@ SERVER its tests spawn.
 | `lsp/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the server, not the dir |
 | `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
 | `parallel-compile/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the compiler it spawns |
-| `debug/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` + `BootstrapMonitorStem` — the two monitors it spawns, and the first is also what the sidecar cases build with |
+| `debug/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` + `BootstrapCompilerStem` — the two binaries it spawns: the compiler under test, which is also what the sidecar cases build with, and the reference, which is both the second monitor and the second reader of a sidecar |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler, `maxon-sharp/` and
@@ -69,9 +69,14 @@ tests/
   debug/
     monitor-agreement.test.maxon            the DebugStream consumers, compared to each other
     byte-identical-debug-info.test.maxon    the sidecar is metadata: ONE source, two builds, one image
+                                            - AND the staging/spawning/reading half every case below shares
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
+    dump-info-sections.test.maxon           --dump-info prints the sections it was named, and refuses others
+    dump-info-types.test.maxon              the TYPE table describes the program's own types
+    dump-info-locals.test.maxon             one local record per declared binding, three honest locations
     fixtures/trace/main.maxon.fixture       stored name only - see rule 1
     fixtures/spans/main.maxon.fixture       stored name only - see rule 1
+    fixtures/locals/main.maxon.fixture      stored name only - see rule 1
 ```
 
 ## The six rules, and the hazard each one answers

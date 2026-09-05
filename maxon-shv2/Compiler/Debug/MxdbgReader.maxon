@@ -54,6 +54,48 @@ export type MxdbgLineInfo
 	end 'create'
 end 'MxdbgLineInfo'
 
+// One type record, materialized. `kind` stays the raw word the file carries: this reader's job is to
+// hand back what is written, and a kind it does not recognize must reach the caller rather than be
+// folded into one it does.
+export type MxdbgTypeInfo
+	export var name as String
+	export var kind as MxdbgIndex
+	export var size as MxdbgIndex
+	export var align as MxdbgIndex
+	export var fieldFirst as MxdbgIndex
+	export var fieldCount as MxdbgIndex
+
+	export static function create(name String, kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fieldFirst MxdbgIndex, fieldCount MxdbgIndex) returns MxdbgTypeInfo
+		return Self{name: name, kind: kind, size: size, align: align, fieldFirst: fieldFirst, fieldCount: fieldCount}
+	end 'create'
+end 'MxdbgTypeInfo'
+
+// One field record, materialized. For an enum entry a "field" is a CASE and `offset` is its RAW TAG
+// VALUE rather than its ordinal, which is what a renderer has to match a stopped discriminant against.
+export type MxdbgFieldInfo
+	export var name as String
+	export var offset as MxdbgIndex
+	export var typeId as MxdbgIndex
+
+	export static function create(name String, offset MxdbgIndex, typeId MxdbgIndex) returns MxdbgFieldInfo
+		return Self{name: name, offset: offset, typeId: typeId}
+	end 'create'
+end 'MxdbgFieldInfo'
+
+// One local record, materialized. `locKind` stays the raw word for `MxdbgTypeInfo.kind`'s reason.
+export type MxdbgLocalInfo
+	export var name as String
+	export var locKind as MxdbgIndex
+	export var locValue as MxdbgLocValue
+	export var typeId as MxdbgIndex
+	export var scopeStart as MxdbgCodeOffset
+	export var scopeEnd as MxdbgCodeOffset
+
+	export static function create(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset) returns MxdbgLocalInfo
+		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd}
+	end 'create'
+end 'MxdbgLocalInfo'
+
 // A lookup that legitimately finds nothing: an offset in a gap (padding, the appended symbol table), or
 // a function with no line rows. A union rather than a zero record, because "no code there" and "code at
 // line 0" are different answers and a debugger must be able to say the first one.
@@ -78,7 +120,12 @@ export type MxdbgReader
 	var funcTally as MxdbgIndex
 	var lineTableOff as ByteOffset
 	var lineTally as MxdbgIndex
+	var typeTableOff as ByteOffset
 	var typeTally as MxdbgIndex
+	var fieldTableOff as ByteOffset
+	var fieldTally as MxdbgIndex
+	var localTableOff as ByteOffset
+	var localTally as MxdbgIndex
 
 	export static function parse(image ByteArray) returns MxdbgReader throws MxdbgReadError
 		if not mxdbgMagicMatches(image) 'badMagic'
@@ -106,10 +153,23 @@ export type MxdbgReader
 			throw MxdbgReadError.truncated
 		end 'tablePastEnd'
 
+		// ⛔ The three record tables are found through their OWN header slots, whose order is not the
+		// order the sections sit in on disk (see `MxdbgFormat`). Deriving one from another's extent would
+		// bake that trap in.
+		let typeTableOff = imageReadU32(image, at: MxdbgOffTypeTableOff) as ByteOffset
+		let typeTally = imageReadU32(image, at: MxdbgOffTypeCount) as MxdbgIndex
+		let fieldTableOff = imageReadU32(image, at: MxdbgOffFieldTableOff) as ByteOffset
+		let fieldTally = imageReadU32(image, at: MxdbgOffFieldCount) as MxdbgIndex
+		let localTableOff = imageReadU32(image, at: MxdbgOffLocalTableOff) as ByteOffset
+		let localTally = imageReadU32(image, at: MxdbgOffLocalCount) as MxdbgIndex
+		if not imageRangeFits(image, start: typeTableOff, count: (typeTally * MxdbgTypeEntrySize) as BytePos) or not imageRangeFits(image, start: fieldTableOff, count: (fieldTally * MxdbgFieldEntrySize) as BytePos) or not imageRangeFits(image, start: localTableOff, count: (localTally * MxdbgLocalEntrySize) as BytePos) 'recordTablePastEnd'
+			throw MxdbgReadError.truncated
+		end 'recordTablePastEnd'
+
 		let tripleOff = imageReadU32(image, at: MxdbgOffTripleOff) as ByteOffset
 		let tripleLen = imageReadU32(image, at: MxdbgOffTripleLen) as BytePos
 
-		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTally: imageReadU32(image, at: MxdbgOffTypeCount) as MxdbgIndex}
+		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally}
 	end 'parse'
 
 	export function fileCount() returns MxdbgIndex
@@ -124,12 +184,59 @@ export type MxdbgReader
 		return self.lineTally
 	end 'lineCount'
 
-	// How many source-level TYPES this sidecar describes. Zero for every build this compiler writes
-	// today; reported rather than omitted, because a dump that printed no `types` section could not be
-	// told apart from one whose reader does not know the section exists.
+	// How many source-level TYPES this sidecar describes.
 	export function typeCount() returns MxdbgIndex
 		return self.typeTally
 	end 'typeCount'
+
+	export function fieldCount() returns MxdbgIndex
+		return self.fieldTally
+	end 'fieldCount'
+
+	export function localCount() returns MxdbgIndex
+		return self.localTally
+	end 'localCount'
+
+	export function typeRecord(index MxdbgIndex) returns MxdbgTypeInfo
+		if index >= self.typeTally 'noSuchType'
+			panic("MxdbgReader.typeRecord: type {index} is past the sidecar's {self.typeTally} — every caller bounds itself by `typeCount`")
+		end 'noSuchType'
+
+		let rec = self.typeTableOff + (index * MxdbgTypeEntrySize) as ByteOffset
+
+		return MxdbgTypeInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgTypeNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgTypeNameLen) as BytePos), kind: imageReadU32(self.image, at: rec + MxdbgTypeKindWord) as MxdbgIndex, size: imageReadU32(self.image, at: rec + MxdbgTypeSize) as MxdbgIndex, align: imageReadU32(self.image, at: rec + MxdbgTypeAlign) as MxdbgIndex, fieldFirst: imageReadU32(self.image, at: rec + MxdbgTypeFieldFirst) as MxdbgIndex, fieldCount: imageReadU32(self.image, at: rec + MxdbgTypeFieldCount) as MxdbgIndex)
+	end 'typeRecord'
+
+	export function fieldRecord(index MxdbgIndex) returns MxdbgFieldInfo
+		if index >= self.fieldTally 'noSuchField'
+			panic("MxdbgReader.fieldRecord: field {index} is past the sidecar's {self.fieldTally} — every caller bounds itself by `fieldCount` or by a type's field window")
+		end 'noSuchField'
+
+		let rec = self.fieldTableOff + (index * MxdbgFieldEntrySize) as ByteOffset
+
+		return MxdbgFieldInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgFieldNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgFieldNameLen) as BytePos), offset: imageReadU32(self.image, at: rec + MxdbgFieldOffset) as MxdbgIndex, typeId: imageReadU32(self.image, at: rec + MxdbgFieldTypeId) as MxdbgIndex)
+	end 'fieldRecord'
+
+	export function localRecord(index MxdbgIndex) returns MxdbgLocalInfo
+		if index >= self.localTally 'noSuchLocal'
+			panic("MxdbgReader.localRecord: local {index} is past the sidecar's {self.localTally} — every caller bounds itself by `localCount` or by a function's local window")
+		end 'noSuchLocal'
+
+		let rec = self.localTableOff + (index * MxdbgLocalEntrySize) as ByteOffset
+
+		return MxdbgLocalInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgLocalNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgLocalNameLen) as BytePos), locKind: imageReadU32(self.image, at: rec + MxdbgLocalLocKind) as MxdbgIndex, locValue: mxdbgSignedWord(imageReadU32(self.image, at: rec + MxdbgLocalLocValue) as MxdbgIndex), typeId: imageReadU32(self.image, at: rec + MxdbgLocalTypeId) as MxdbgIndex, scopeStart: imageReadU32(self.image, at: rec + MxdbgLocalScopeStart) as MxdbgCodeOffset, scopeEnd: imageReadU32(self.image, at: rec + MxdbgLocalScopeEnd) as MxdbgCodeOffset)
+	end 'localRecord'
+
+	// The NAME a `typeId` resolves to, or empty for an id past the table. A field or a local carrying a
+	// dangling id is a defect of the writer, and a renderer that printed some unrelated entry's name for
+	// one would hide it behind a plausible answer.
+	export function typeName(typeId MxdbgIndex) returns String
+		if typeId >= self.typeTally 'noSuchType'
+			return ""
+		end 'noSuchType'
+
+		return self.typeRecord(typeId).name
+	end 'typeName'
 
 	export function fileName(fileId MxdbgIndex) returns String
 		if fileId >= self.fileTally 'noSuchFile'
