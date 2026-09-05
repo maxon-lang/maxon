@@ -215,11 +215,12 @@ The two bitcast intrinsics are each other's inverse, so their argument types are
 not interchangeable. Passing the wrong one is always a mistake, and is rejected
 rather than reinterpreted.
 
-<!-- disabled-test: builtins-type.error.bits-to-float-float-arg -->
-<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
-     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
-     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
-     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
+<!-- test: builtins-type.error.bits-to-float-float-arg -->
+⚠ **shv2 KEEPS ITS OWN SENTENCE (ruling, 2026-09-04).** The bootstrap words a `__Builtins.*` operand
+rejection per ARGUMENT, naming the ABI type and the argument index and anchoring on the argument; shv2 has
+one sentence for the whole surface, naming the callee and the two SOURCE types and anchoring on the callee.
+Every `__Builtins.*` operand refusal in this suite is worded that way — grep `but its argument is` — so the
+divergence is the consistency, not an oversight.
 A `float` argument to `bitsToFloat` is almost always a `floatToBits` that was
 meant instead.
 ```maxon
@@ -229,14 +230,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-float-arg.test:3:33: type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'float'
+error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its argument is float
 ```
 
-<!-- disabled-test: builtins-type.error.bits-to-float-managed-arg -->
-<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
-     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
-     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
-     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
+<!-- test: builtins-type.error.bits-to-float-managed-arg -->
+The wording divergence is `bits-to-float-float-arg`'s, one case up.
 A managed value is a heap pointer, and a heap pointer is not a float's bit
 pattern. This one matters most: the pointer shares the integer representation,
 so before the check existed this program compiled clean and bitcast the String's
@@ -248,14 +246,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-managed-arg.test:3:33: type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'String'
+error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its argument is String
 ```
 
-<!-- disabled-test: builtins-type.error.bits-to-float-bool-arg -->
-<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
-     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
-     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
-     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
+<!-- test: builtins-type.error.bits-to-float-bool-arg -->
+The wording divergence is `bits-to-float-float-arg`'s, one case up.
 ```maxon
 function main() returns ExitCode
 	let v = __Builtins.bitsToFloat(true)
@@ -263,14 +258,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-bool-arg.test:3:33: type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'bool'
+error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its argument is bool
 ```
 
-<!-- disabled-test: builtins-type.error.float-to-bits-int-arg -->
-<!-- MEASURED 2026-09-04. shv2 REFUSES this correctly and in its own words — `'__Builtins.bitsToFloat' requires a
-     int, but its argument is float` against the pinned `type mismatch: __Builtins.bitsToFloat argument 0 expects
-     'i64' but got 'float'` — and anchors on the CALLEE where the pin anchors on the argument. Which of the two the
-     language keeps is a ruling over every `__Builtins.*` operand diagnostic at once, not this file's to take. -->
+<!-- test: builtins-type.error.float-to-bits-int-arg -->
+The wording divergence is `bits-to-float-float-arg`'s, one case up.
 The mirror rejection: `floatToBits` takes the float, not the pattern.
 ```maxon
 function main() returns ExitCode
@@ -279,7 +271,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtins-type/builtins-type.error.float-to-bits-int-arg.test:3:33: type mismatch: __Builtins.floatToBits argument 0 expects 'f64' but got 'int'
+error E3005: <fragment>:3:21: '__Builtins.floatToBits' requires a float, but its argument is int
 ```
 
 <!-- test: builtins-type.direct-write-stdout -->

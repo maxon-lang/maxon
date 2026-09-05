@@ -2151,9 +2151,12 @@ doing so *"would need a hardcoded second copy of the stdlib's declarations insid
 what listing a module exists to avoid"*; that argument was already false when written, because
 `ArrayError` is that copy and R4.4 accepted it deliberately.
 
-⚠ **The bill, and it is the same one `ArrayError` carries:** the name is now RESERVED program-wide, so a
-user program declaring its own `enum StringError` meets `E2015 … a declaration of the type name
-'StringError', which the compiler owns`. `throws-a-stdlib-error-has-a-user-declared-spelling` below is
+⚠ **AND THE BILL `ArrayError` CARRIES IS NOT CHARGED HERE.** `ArrayError` is reserved program-wide
+(`TypeResolution.isCompilerOwnedTypeName`) because `verifyManagedMemoryRuntimeOrdinals` holds a runtime's
+literal error flags against its declared case order, and a user declaration displacing it would reroute every
+handler arm. Nothing transcribes `StringError`'s ordinals, so it is an ordinary library nominal name: a user
+program may declare its own, and `SignatureIndex.contestStdlibTypeName` shadows the library's to `__StringError`
+exactly as it does for any other contested one. `throws-a-stdlib-error-has-a-user-declared-spelling` below is
 still the control and still answers 2 — an author's own error enum remains the spelling that can be
 `match`ed.
 ```maxon
@@ -2207,6 +2210,44 @@ end 'main'
 ```
 ```exitcode
 2
+```
+
+<!-- test: a-user-declared-string-error-shadows-the-library-one -->
+⭐⭐ **THE PROOF THAT LIFTING `StringError`'S RESERVATION DID NOT OPEN THE HOLE THE RESERVATION WAS FOR.**
+The name is a library nominal one, so the user declaration below shadows `stdlib/String.maxon`'s to
+`__StringError` (`SignatureIndex.contestStdlibTypeName`) rather than DISPLACING it. Two enums stand at once
+and neither can see the other, which is the third of `Project.typeNamePairMayCoexist`'s coexistence routes.
+
+⚠ **THE DISCRIMINATING HALF IS THE `otherwise`, NOT THE DECLARATION.** A program that merely declares the
+name proves nothing — it would compile under a displacement too. Here `findFirst` throws the LIBRARY's enum
+and the clause names the USER's, so the two must be different types for `otherwise throw` to be the required
+conversion; and the miss path has to reach `another` rather than whichever case ordinal 0 lands on. Both
+compilers answer **9** = 2 (the space in `"ab cd"`) + 7 (the miss).
+
+⚠ `ArrayError` keeps its reservation and this is not an argument against it: a runtime transcribes that
+enum's ordinals as literal error flags and `verifyManagedMemoryRuntimeOrdinals` holds them to the declared
+case order, so a displacement there reroutes handler arms. Nothing transcribes `StringError`'s.
+```maxon
+typealias Num = int(0 to 1000)
+
+enum StringError implements Error
+	somethingElse
+	another
+end 'StringError'
+
+function firstSpace(s String) returns Num throws StringError
+	let idx = try s.findFirst(" ") otherwise throw StringError.another
+	return idx.bytePos() as Num
+end 'firstSpace'
+
+function main() returns ExitCode
+	let hit = try firstSpace("ab cd") otherwise 99
+	let miss = try firstSpace("abcd") otherwise 7
+	return hit + miss
+end 'main'
+```
+```exitcode
+9
 ```
 
 <!-- test: error.throw-a-boxed-union-under-a-scalar-clause -->

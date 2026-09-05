@@ -126,6 +126,12 @@ export enum TypeClass
 	// dispatches by numbering `Base`'s: MEASURED before that arm existed, a program that compiled clean and
 	// returned 2 where the answer is 1.
 	interfaceValue
+	// ⭐ **The class of a `cstring` — a NUL-terminated byte POINTER.** Its OWN class, agreeing with nothing
+	// but another `cstring`, which is the rule the tag exists for: a `__Builtins.*` parameter declared
+	// `cstring` must refuse an ordinary int, and an `i64` one must refuse a `cstring`. It converts to
+	// nothing and nothing converts to it — the two doors that PRODUCE one (`String.cstr()`,
+	// `__ManagedMemory.toCString()`) are the only way a program gets one at all.
+	cstring
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -177,6 +183,7 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		// An EXISTENTIAL — a value at its interface type. NOT `structRef`, even though its VALUE half is a
 		// struct pointer: see TypeClass's `interfaceValue` for why a conformer must not simply agree.
 		interfaceRef gives TypeClass.interfaceValue
+		cstring gives TypeClass.cstring
 	end 'k'
 end 'typeClassOf'
 
@@ -313,6 +320,11 @@ function typeClassIsAggregate(c TypeClass) returns bool
 		// interface-typed value and `42 as Backend` are both E3009 rather than a silent reinterpretation of
 		// the value half.
 		interfaceValue gives true
+		// ⭐ **A `cstring` IS AN AGGREGATE HERE, WHICH IS WHAT REFUSES `p as Age` AND `42 as cstring`.** It is a
+		// pointer and not a scalar, so a cast across the boundary describes no conversion — `text`'s answer,
+		// for `text`'s reason. That the two lower to the same machine word is exactly why the rule has to be
+		// stated rather than left to the width.
+		cstring gives true
 	end 'c'
 end 'typeClassIsAggregate'
 
@@ -333,6 +345,8 @@ function typeClassIsScalar(c TypeClass) returns bool
 		typeParameter gives false
 		// An existential is a pointer pair, not a register-sized number — `structRef`'s answer.
 		interfaceValue gives false
+		// A `cstring` is an address, not a register-sized NUMBER — `text`'s answer.
+		cstring gives false
 	end 'c'
 end 'typeClassIsScalar'
 
@@ -697,6 +711,9 @@ export function tagAdmitsNoAggregate(tag ValueTypeTag) returns bool
 		// An existential's VALUE half is an aggregate reference (every conformer shv2 admits is a declared
 		// struct), so this tag admits one — `false`, with `structRef`'s reason.
 		interfaceRef gives false
+		// A `cstring` is a raw pointer and no aggregate name is derivable from it, so it is not in the
+		// narrow four this predicate is `true` for — `structRef`'s reason, one pointer kind over.
+		cstring gives false
 	end 'k'
 end 'tagAdmitsNoAggregate'
 
@@ -750,6 +767,10 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// An existential is a fat pointer, not a magnitude — `structRef`'s answer, and the statement
 		// "an interface value is not an integer" rather than a claim about reachability.
 		interfaceRef gives false
+		// ⭐ **`false`, AND THIS IS THE WHOLE POINT OF THE TAG.** A `cstring` erased to `integer` meant a
+		// `cstring` parameter accepted an ordinary int and an `i64` one accepted a `cstring` — two programs
+		// the bootstrap refuses, compiling clean here.
+		cstring gives false
 	end 'k'
 end 'tagIsIntegral'
 
@@ -808,6 +829,8 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// interface off the declared type it holds (`Parser.interfaceNameOfType`), because "does not implement
 		// interface 'Runnable'" is the message the corpus pins and it needs the name.
 		interfaceRef gives "interface"
+		// The keyword the author wrote, which is also what `stdlib/Builtins.maxon` declares the parameter as.
+		cstring gives "cstring"
 	end 'k'
 end 'typeTagName'
 
@@ -1081,6 +1104,8 @@ export function tagRidesAsyncGprChannel(tag ValueTypeTag) returns bool
 		genericInstance gives true
 		character gives true
 		interfaceRef gives false
+		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
+		cstring gives true
 	end 'k'
 end 'tagRidesAsyncGprChannel'
 
@@ -3112,6 +3137,7 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// `not x` has no reading on an existential — the struct/String/function arm's reason, one level of
 		// indirection up: complementing a fat pointer's value half is not a question.
 		interfaceRef gives NotOperator.nonIntegralOperand
+		cstring gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'
 

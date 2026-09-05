@@ -82,6 +82,9 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		// that turns out to be an interface. Its width here is the VALUE half's machine word — the witness
 		// half is a SEPARATE value with its own Std type, never a widening of this one.
 		interfaceRef then break 'residue'
+		// A `cstring` is concrete: `parseTypeReference` mints it directly for the keyword, and its width is
+		// the machine word every other address gets from the table one line down.
+		cstring then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -153,6 +156,8 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		// value carrying its own (integer) tag, which is what keeps the collapse a scalar-to-scalar table
 		// rather than something that would have to answer with a width of 16.
 		interfaceRef then return StdType.i64
+		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
+		cstring then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 

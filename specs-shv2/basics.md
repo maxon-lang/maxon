@@ -67,13 +67,3 @@ end 'main'
 ```maxoncstderr
 error E3002: Function 'main' must return ExitCode
 ```
-
-<!-- disabled-test: disabled-marker-is-honored -->
-```maxon
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```exitcode
-1
-```

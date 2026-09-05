@@ -346,6 +346,10 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 		boolean to float then return ""
 		exitCode to string then return ""
 		genericInstance to character then return ""
+		// ⭐ **A `cstring` MAY NOT CROSS A SEND.** It is a raw address into a buffer the SENDER owns, with no
+		// length and no ownership — the receiving green thread would read bytes another may free or grow.
+		// The cure is to send the value the pointer came out of, which does carry its own storage.
+		cstring then return "a `cstring`, a raw pointer into a buffer the sender owns — it carries no length and no ownership, so the receiving green thread would be reading bytes another may free. Send the `String` or `__ManagedMemory` it came out of instead"
 	end 'tag'
 end 'untransferableParameterNoun'
 

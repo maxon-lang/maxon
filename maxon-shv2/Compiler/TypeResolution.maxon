@@ -748,6 +748,8 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSig
 		// An EXISTENTIAL is nominal in its INTERFACE: a `Base`-typed place and a `Derived`-typed value are
 		// two different types, so the ids must match. Compared for `named`/`structRef`'s reason.
 		interfaceRef gives true
+		// A `cstring` carries no name — every one of them is the same type, exactly as every `String` is.
+		cstring gives false
 	end 'k'
 
 	return not identifiedByName or typeNameIdOf(declared) == typeNameIdOf(got)
@@ -979,6 +981,7 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 		// whole-program interface registry knows, and `denotedNamedType` mints one for a swept `named` that
 		// turns out to be an interface. Resolution leaves it untouched, as it leaves `structRef`.
 		interfaceRef then return t
+		cstring then return t
 	end 'r'
 end 'resolveType'
 
@@ -1095,15 +1098,20 @@ end 'resolveType'
 // including the same two synthesized impls under `Character.hash`/`Character.equals`; it is reserved with
 // `String` rather than after the next measurement, because the two are one fact and finding out which of a
 // pair is enforced by measuring the other is how this list grew in the first place.
-// ⭐ **`StringError` JOINS THE LIST FOR `ArrayError`'S EXACT REASON — IT IS SEEDED BY `createEnumRegistry`
-// UNDER A BARE NAME**, and a bare seed with no entry here is the displaceable-seed hole the `ArrayError`
-// paragraph above measured (`upsertDeclaredEnum` would let a user `enum StringError` win, and every
-// `try s.findFirst(…) otherwise (e)` would then route the runtime's ordinal-0 `notFound` into whichever case
-// the user happened to write first). The reservation is over a DECLARATION only; `throws StringError` is a
-// type REFERENCE and stays legal, which is the whole reason the name is bare.
-// ⭐ **`MapError` JOINS FOR THE SAME REASON AS THE OTHER TWO** — `createEnumRegistry` seeds it under a bare
-// name (`Project.builtinMapErrorEnum`), and a bare seed with no entry here is the displaceable-seed hole.
-// ⭐ **`IterationError` JOINS FOR THAT REASON TOO**, and its stake is the plainest of the four: the ordinals
+// ⛔⛔ **`StringError` AND `MapError` ARE NOT ON THIS LIST, AND THEY ARE THE CASE THAT SHOWS A RESERVATION
+// CAN OUTLIVE ITS REASON.** Both joined for `ArrayError`'s — each was SEEDED by `createEnumRegistry` under a
+// bare name, and a bare seed a user declaration can displace is the hole the paragraph above measured. Both
+// seeds are gone: `stdlib/String.maxon:6` and `stdlib/Map.maxon:6` are the declarations now, no runtime
+// transcribes either enum's ordinals (`Compiler.compileToCodeResult` retired both claims at W49 wave 3 and
+// W105), and `Project.builtinStringErrorEnum`/`builtinMapErrorEnum` no longer exist. What was left was a
+// reservation with nothing behind it, refusing an ordinary program — `enum StringError … end` in a user file,
+// which the runnable oracle compiles and runs — for a collision the compiler can no longer have.
+// ⇒ **A LIBRARY NOMINAL NAME A USER CONTESTS IS ALREADY ANSWERED, AND NOT BY THIS LIST**:
+// `SignatureIndex.contestStdlibTypeName` moves the library's declaration to `__Name`, which is the third of
+// `Project.typeNamePairMayCoexist`'s four coexistence routes. That door SKIPS a compiler-owned name, so an
+// entry here is what turns "shadow the library's" into "refuse the user's" — a name belongs here only while
+// something OTHER than the declaration reads its ordinals or its identity.
+// ⭐ **`IterationError` IS ON THE LIST FOR `ArrayError`'S REASON**, and its stake is the plainest of the four: the ordinals
 // under this name are the ones a user's OWN `throw IterationError.exhausted` and the `match` that catches it
 // are both resolved against, so a displaceable entry would let one program hold two numberings of one enum.
 //
@@ -1139,7 +1147,7 @@ end 'resolveType'
 // not over whether one exists. `HashValue` is the same shape one registry over: `stdlib/Interfaces.maxon:6`
 // declares the ranged alias and its bounds are now the program's, while the name stays reserved here.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
-	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(StringErrorTypeName) or name.equals(MapErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(CharacterErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName)
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(CharacterErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName)
 end 'isCompilerOwnedTypeName'
 
 // The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it

@@ -258,6 +258,11 @@ let TypeShapeCharacter = 41 as HashDigest
 // serve every other file a stale parse whose dispatch is a witness slot rather than a direct call.
 let TypeShapeInterfaceRef = 43 as HashDigest
 
+// The shape byte a `cstring` mixes. Its own, and NOT `TypeShapeInteger`: the two lower to one machine word
+// and are two types, which is the whole reason the tag exists — a signature hash that conflated them would
+// make `f(p cstring)` and `f(n i64)` one function.
+let TypeShapeCstring = 47 as HashDigest
+
 // A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
 // struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
 // of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
@@ -2323,6 +2328,9 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// and there is none. Were one ever admitted, the honest answer is still not a width — a `.data` slot
 		// for a fat pointer is TWO words, which neither single-width door can express.
 		interfaceRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — an interface-typed value is a two-word fat pointer, and a folded global's inferred type comes from a scalar constant")
+		// A `cstring` is produced by a CALL (`String.cstr()`), and a call is not a constant initializer — so
+		// a global's inferred type is never one.
+		cstring then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a `cstring` comes out of a call, which is not a constant initializer")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -2640,6 +2648,9 @@ export function slotStorageType(signatures ProgramSignatures, declared MaxonType
 		// ⚠ A CAPTURED interface binding — this function's other caller, a closure env slot — is still
 		// refused by the capture path's own E2015, so no env slot reaches this arm.
 		interfaceRef then return MaxonType.integer
+		// A `cstring` slot stores the raw address — already concrete, so `maxonTypeToStdType` gives it the
+		// machine word directly, exactly as a String slot's pointer.
+		cstring then return declared
 		named then break 'kind'
 	end 'kind'
 
@@ -2734,6 +2745,9 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// classifier serves both, so the refusal lives at the payload's own lowering gate
 		// (`requirePayloadLowerable`) rather than here.
 		interfaceRef then return PayloadClass.existential
+		// A `cstring` payload owns nothing — it is a borrowed address — so it is a SCALAR slot: stored
+		// verbatim, moved out verbatim, and released by nobody.
+		cstring then return PayloadClass.scalar(fieldType)
 		named then break 'kind'
 	end 'kind'
 
@@ -5546,24 +5560,11 @@ export let VectorBuiltinBaseName = b"Vector"
 // door (`containerElementType`, `arrayElementSize`, `containerElementIsManaged`) serves it unchanged.
 let VectorTypeParamCount = 1 as FieldIndex
 
-// ⭐⭐ **`MapError` — WHAT A MISSING-KEY `Map.get` THROWS, AND IT WEARS THE BARE NAME FOR `ArrayError`'S
-// EXACT REASON.** `stdlib/Map.maxon:6-9` declares it and that module is listed, so the DECLARATION is what a
-// program resolves — what the name is doing here is being RESERVED program-wide
-// (`TypeResolution.isCompilerOwnedTypeName`), so no other file may take it.
-//
-// ⚠ It is NOT `__MapError`, because a user function that PROPAGATES a `map.get` failure writes
-// `throws MapError` in its own source; under a reserved spelling every one of those would meet
-// `E3059: try propagates '__MapError' but enclosing function throws 'MapError'` — one error type under two
-// spellings, the very confusion the prefix exists to prevent. ⇒ It is RESERVED PROGRAM-WIDE instead
-// (`TypeResolution.isCompilerOwnedTypeName`), exactly as `ArrayError` is.
-export let MapErrorTypeName = b"MapError"
-
-// ⚠ **`MapErrorKeyNotFoundCaseName` / `MapErrorKeyAlreadyExistsCaseName` STOOD HERE AND WENT WITH THE
-// ORDINAL CLAIM THAT READ THEM (W105).** `MapRuntime.verifyMapErrorOrdinals` held `stdlib/Map.maxon:7-8`'s
-// declaration ORDER against the literal error flags `__map_get` and `__map_insert` wrote into the
-// error-flag register. Both graphs are deleted, so nothing transcribes an ordinal and the claim would be a
-// dead one — the state `StringError`'s reached at W49 wave 3. A corpus `throw MapError.keyNotFound` resolves
-// its ordinal from the declaration itself; there is no second half left to drift from.
+// ⚠ **NO `MapError` CONSTANT STANDS HERE, AND THE COMPILER NAMES THAT ENUM NOWHERE.** `stdlib/Map.maxon:6-9`
+// declares it; nothing transcribes its ordinals (`__map_get`/`__map_insert` went with the synthesized hash
+// table, so a corpus `throw MapError.keyNotFound` resolves its tag from the declaration and there is no second
+// half to drift from); and it is not compiler-owned, so a user file declaring its own meets
+// `contestStdlibTypeName` like any other library nominal name rather than a reservation.
 
 // ⭐⭐ **`IterationError` — WHAT A CURSOR'S `advance()` THROWS (conditional extensions).** Unlike the four
 // error enums above it, the COMPILER never throws this one: it is thrown and caught entirely by USER code
@@ -6607,37 +6608,12 @@ module let ManagedMemoryErrorTypeName = b"__ManagedMemoryError"
 // synthesizes what `stdlib/Array.maxon` declares, so it owes that file's exported names.
 export let ArrayErrorTypeName = b"ArrayError"
 
-// ⭐⭐ **`StringError` — WHAT EVERY THROWING `String` OPERATION THROWS, AND IT WEARS THE BARE NAME FOR
-// `ArrayError`'S EXACT REASON.** `stdlib/String.maxon:6-9` declares it with exactly two cases, and its
-// provenance is `ArrayError`'s to the letter: a module the stdlib loader does not list, so there is no
-// declaration to be read and the compiler synthesizes what that file declares
-// (`Project.builtinStringErrorEnum`).
-//
-// ⚠ **"UNLISTABLE BY CONSTRUCTION AND NOT MERELY UNLISTED" is what this paragraph used to claim, on the
-// ground that `String` is compiler-owned — and W16 measured that false.** Compiler-ownership reserves a name
-// against a USER declaration and has never barred the corpus. What is UNLISTED and what is UNLISTABLE were
-// one word apart here, and the difference decides whether this synthesis is permanent or scaffolding: it is
-// scaffolding, and it retires when String's representation converges with the corpus declaration's.
-//
-// ⚠ It cannot be `__StringError` for the reason `ArrayError` cannot be `__ArrayError`: SOURCE ALREADY SPELLS
-// THE BARE NAME in a `throws` clause — `stdlib/CommandLine.maxon:29,39` write `throws StringError` and
-// `throw StringError.notFound` — and a reserved spelling would meet every one of them as
-// `E3059: try propagates '__StringError' but enclosing function throws 'StringError'`.
-//
-// ⚠⚠ **THE SPELLING WAS ALREADY WRITTEN DOWN HERE-BUT-ELSEWHERE, AS A `String`.** `StringIndexRuntime` held
-// `let StringErrorTypeName = "StringError"` for the `throws` clause it stamps on the two searches; that was
-// the same fact in a second home and a second TYPE, so it now reads this one.
-export let StringErrorTypeName = b"StringError"
-
-// ⚠ **`StringErrorNotFoundCaseName` / `StringErrorInvalidIndexCaseName` STOOD HERE AND ARE DELETED — THEY
-// HAD NO READER LEFT.** They named `stdlib/String.maxon:6-9`'s two cases for two consumers, and both are
-// gone: the ordinal drift GUARD was retired when nothing was found to transcribe those ordinals
-// (`Compiler.maxon`'s `StringError WAS THE SIXTH` note — the corpus's own `throw StringError.notFound`
-// resolves its tag from the declaration), and `land-the-listing` retired the last one, the
-// `builtinStringErrorEnum` seed that restated the case list a listed module already declares. A constant
-// whose only remaining mention is its own declaration is a third copy of the case order waiting to
-// disagree with the other two, which is the defect this whole neighbourhood exists to prevent — so it is
-// removed rather than kept warm for a guard that has no ordinal to check.
+// ⚠ **NO `StringError` CONSTANT STANDS HERE EITHER, FOR `MapError`'S REASON ABOVE, AND IT IS THE SHARPER
+// CASE OF THE TWO.** `stdlib/String.maxon:6-9` declares it; `__strix_first`/`__strix_last`/`__strix_after`
+// stopped transcribing its ordinals when their members retired onto that module, so no literal error flag
+// stands against the declared case order; and neither the case names nor the type name has a reader left. A
+// constant whose only mention is its own declaration is a second copy of the case order waiting to disagree
+// with the first, which is the defect this whole neighbourhood exists to prevent.
 
 // ⭐ **`ArrayError`'s TWO CASES ARE `__ManagedMemoryError`'s FIRST TWO, IN THE SAME ORDER, AND THAT IS THE
 // REFERENCE'S OWN ARRANGEMENT** (`stdlib/Array.maxon:6-9` against `stdlib/Builtins.maxon:151-153`). So ONE pair
@@ -16580,6 +16556,7 @@ export type ProgramSignatures
 			character then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a character literal is not folded to a top-level constant")
 			// Unreachable for `structRef`'s reason: an existential is only ever built by widening a value the
 			// const evaluator cannot fold, so none is ever a top-level constant to hash.
+			cstring then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a `cstring` comes out of a call and no constant evaluator folds one")
 			interfaceRef then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — an interface-typed value is built by widening a conformer, which is not a constant initializer")
 		end 'k'
 	end 'mixValueTag'
@@ -19452,6 +19429,7 @@ export type ProgramSignatures
 			// An existential carries the INTERFACE's per-file interner id, so it arrives by NAME exactly as
 			// `named`/`structRef`/`function` do.
 			interfaceRef(id) gives MaxonType.interfaceRef(self.typeNames.intern(foreignNameOf(from, id: id)))
+			cstring gives t
 		end 'r'
 	end 'adoptTypeFrom'
 
@@ -24809,6 +24787,7 @@ export type ProgramSignatures
 			// An interface type is refused as a generic ARGUMENT at the front end (`Parser.checkGenericArgType`
 			// rule 4), because an element slot is one machine word and a fat pointer is two. This arm is that
 			// refusal's backstop, exactly as `primitiveTypeTagName`'s is.
+			cstring then return EmptySourceText
 			interfaceRef then panic("typeArgAggregateName: an interface type reached a generic type ARGUMENT — `Parser.checkGenericArgType` refuses a container of existentials, because an element slot is one machine word and a fat pointer is two")
 		end 'k'
 	end 'typeArgAggregateName'
@@ -28821,6 +28800,7 @@ export type ProgramSignatures
 			// `named`. This is the crossing that makes `let p = f.make()` in another file name the same
 			// interface the declaring file did — which is what the result's dispatch resolves its slot against.
 			interfaceRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
+			cstring gives rt
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -28868,6 +28848,7 @@ export type ProgramSignatures
 			// what lets a field declared at an interface type and a call returning one cross into a reader's
 			// own interner and still name the interface the dispatch resolves against.
 			interfaceRef(id) gives MaxonType.interfaceRef(into.intern(self.nameOfId(id)))
+			cstring gives t
 		end 'r'
 	end 'adoptType'
 
@@ -28970,6 +28951,7 @@ export type ProgramSignatures
 			// reason). A signature declaring `returns Producer` must hash apart from one declaring
 			// `returns Consumer`: the two pick different witness slots at every dispatch of the result.
 			interfaceRef(id) gives mixBytes(Hasher.combined(state, value: TypeShapeInterfaceRef), bytes: self.nameOfId(id))
+			cstring gives Hasher.combined(state, value: TypeShapeCstring)
 		end 'r'
 	end 'mixType'
 

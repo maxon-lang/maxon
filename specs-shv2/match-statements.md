@@ -1900,10 +1900,7 @@ end 'main'
 
 ### Default Throws on Non-Enum Match
 
-<!-- disabled-test: match-statements.default-throws-non-enum -->
-<!-- MEASURED 2026-09-04: `E2015 — a declaration of the type name 'StringError', which the compiler owns`. The case
-     declares its own `StringError`, and shv2 has no namespace to tell a user declaration of a compiler-owned name
-     apart from the compiler's. -->
+<!-- test: match-statements.default-throws-non-enum -->
 ```maxon
 typealias Integer = int(0 to 100)
 

@@ -585,6 +585,8 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		// used to claim they already did while the carve-out was a literal `2`; it is true now because the
 		// division landed, not because it was asserted.
 		interfaceRef then return InterfaceValueBytes
+		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
+		cstring then return MachineWordBytes
 	end 'size'
 end 'primitiveTypeByteSize'
 
@@ -613,6 +615,7 @@ export function primitiveTypeTagName(tag ValueTypeTag) returns String
 		// ways a type reaches a slot, which is exactly why nobody guarded the one that did not: a TUPLE
 		// element is interned through `internTupleType` and reached this panic on a program the front end had
 		// accepted. Stating the RULE rather than one of its enforcers is what makes the assertion honest.
+		cstring then return "cstring"
 		interfaceRef then panic("primitiveTypeTagName: an interface type reached descriptor labelling. A descriptor labels a TYPE ARGUMENT, and an existential is a 16-byte fat pointer `(value, witness)` where every slot named here is one machine word — so `checkGenericArgType` refuses one, as do the other positions `Parser.DeclaredStoragePosition` enumerates. A struct FIELD is the one place that DOES take an existential (a two-slot carve-out, P1.7a-existentials slice 2), and it reaches no descriptor: descriptors are minted per generic instance. Reaching here means a way to write a type into a type-argument slot exists that asks neither door")
 	end 'name'
 end 'primitiveTypeTagName'

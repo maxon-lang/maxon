@@ -272,6 +272,20 @@ export union MaxonType
 	// ⚠ APPENDED AT THE END, past `character`, per the band-append invariant — the same range arms
 	// (`boolean to float`, `exitCode to unresolved`) that guard every arm above guard this one.
 	interfaceRef(id TypeNameId)
+	// ⭐⭐ **`cstring` — A NUL-TERMINATED BYTE POINTER, AND ITS OWN TYPE BECAUSE A `__Builtins.*` PARAMETER
+	// DECLARES IT AND MUST REJECT AN ORDINARY INT.** It is a raw address — no length, no capacity, no
+	// ownership — and it LOWERS to the same machine word every other address does, so nothing about its
+	// representation asks for an arm. What asks is the TYPE RULE: `stdlib/Subprocess.maxon` declares
+	// `__Builtins.subprocessResolveOnPath(path cstring)` and `__Builtins.subprocessGetPid(pid i64)`, and
+	// while both erased to `integer` each accepted the other's argument — MEASURED, two programs the
+	// bootstrap refuses compiling clean here.
+	//
+	// ⚠ **IT IS PRODUCED BY EXACTLY TWO DOORS** — `String.cstr()` and `__ManagedMemory.toCString()` — and
+	// consumed by a `__Builtins.*` parameter that immediately `strlen`s it. Nothing else in the language
+	// names one, which is why one arm per exhaustive match is the whole cost.
+	//
+	// ⚠ APPENDED AT THE END, past `interfaceRef`, per the band-append invariant.
+	cstring
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
@@ -359,6 +373,9 @@ export enum ValueTypeTag
 	// (`Parser.valueWitnessIds`). APPENDED AT THE END, past `character`, for the reason every other append
 	// here is.
 	interfaceRef
+	// The tag of a `cstring` value — a NUL-terminated byte POINTER (see MaxonType's `cstring` arm for why it
+	// is not `integer`). APPENDED AT THE END, past `interfaceRef`, for the reason every other append here is.
+	cstring
 end 'ValueTypeTag'
 
 export typealias ValueTypeTagArray = Array with ValueTypeTag
@@ -381,6 +398,7 @@ export function maxonTypeTag(t MaxonType) returns ValueTypeTag
 		genericInstance gives ValueTypeTag.genericInstance
 		character gives ValueTypeTag.character
 		interfaceRef gives ValueTypeTag.interfaceRef
+		cstring gives ValueTypeTag.cstring
 	end 'k'
 end 'maxonTypeTag'
 
@@ -419,6 +437,8 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 		// what the dispatch resolves its method slot against. NOT collapsed into a range: other arms sit
 		// between it and every other id-bearing arm.
 		interfaceRef(id) gives id
+		// A `cstring` is a raw address and names no type — it carries no id, exactly as `string` does.
+		cstring gives UnnamedTypeId
 	end 'k'
 end 'typeNameIdOf'
 
@@ -567,6 +587,7 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// `s` types the binding from this, and the binding's type is the only record of WHICH interface `t`
 		// is held at — which is what the merge phi and the dispatch both read.
 		interfaceRef then return MaxonType.interfaceRef(nameId)
+		cstring then return MaxonType.cstring
 	end 'k'
 end 'maxonTypeOfTag'
 
