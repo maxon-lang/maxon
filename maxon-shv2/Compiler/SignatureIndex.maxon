@@ -26083,19 +26083,39 @@ export type ProgramSignatures
 	// header names this exact `WithIterIterator` instantiation).
 	export function instanceArgsAreFullyConcrete(gid GenericInstanceId) returns bool
 		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
-			let arg = self.substitutedInstanceArg(gid, position: position)
-			let tag = maxonTypeTag(arg)
-			if tag == ValueTypeTag.typeParameter 'stillOpaque'
+			if not self.argIsFullyConcrete(self.substitutedInstanceArg(gid, position: position)) 'stillOpaque'
 				return false
 			end 'stillOpaque'
-
-			if tag == ValueTypeTag.genericInstance and not self.instanceArgsAreFullyConcrete(genericInstanceIdOf(arg)) 'aNestedParametricInstance'
-				return false
-			end 'aNestedParametricInstance'
 		end 'eachArg'
 
 		return true
 	end 'instanceArgsAreFullyConcrete'
+
+	// ⭐⭐ **THE SAME QUESTION OF AN ARGUMENT LIST NOTHING HAS INTERNED YET, and it exists because interning
+	// to ask it is not free of consequence.** `genericInstances.intern` MINTS a row on a miss and, on a hit,
+	// CLEARS the speculative mark a candidate walk left — *"the guess has since been confirmed by the
+	// source"*. A caller that may DISCARD its answer confirms nothing, so it must decide before it interns;
+	// `Parser.spawnFactoryConstructorInstance` is the one that must.
+	export function argsAreFullyConcrete(args MaxonTypeArray) returns bool
+		for arg in args 'eachArg'
+			if not self.argIsFullyConcrete(arg) 'stillOpaque'
+				return false
+			end 'stillOpaque'
+		end 'eachArg'
+
+		return true
+	end 'argsAreFullyConcrete'
+
+	// ONE argument's half of both walks above — see `instanceArgsAreFullyConcrete` for why the recursion is
+	// deep rather than shallow.
+	function argIsFullyConcrete(arg MaxonType) returns bool
+		let tag = maxonTypeTag(arg)
+		if tag == ValueTypeTag.typeParameter 'stillOpaque'
+			return false
+		end 'stillOpaque'
+
+		return tag != ValueTypeTag.genericInstance or self.instanceArgsAreFullyConcrete(genericInstanceIdOf(arg))
+	end 'argIsFullyConcrete'
 
 	// ⭐⭐ **THE BASE A GENERIC-INSTANCE ALIAS DENOTES WHEN IT IS A NESTED PARAMETERISED ONE, or
 	// `EmptySourceText` (W161).** `EChain` inside `type Bag uses Element`, on a

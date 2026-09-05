@@ -1392,18 +1392,19 @@ xx
 
 ```
 
-<!-- test: error.bare-generic-constructor-unbound-t -->
-⭐ **A generic type's constructor called on the BASE rather than on an instance alias is REFUSED, and
-that closes a LEAK.** `Box.create(…)` binds no type argument, so `T` is never bound: there is no
-concrete instance, therefore no layout descriptor, therefore no synthesized `__destruct_<instance>` —
-and the value it builds is never dropped. Before this rung the program compiled and **exited 101**
-(both this form and the `let a = Box.create(…)` / `takes(a)` form). The reference compiler agrees the
-construct is ill-formed, and says why more directly: it resolves `a.value` as bare `int`
-(`E4006: Primitive type 'int' has no method named 's'`) — `T` unbound.
+<!-- test: a-bare-generic-factory-binds-t-from-its-argument -->
+⭐⭐ **A REFUSAL STOOD HERE, AND ITS STATED BASIS WAS THAT `T` IS NEVER BOUND.** `Box.create(…)` on the BASE
+rather than on an instance alias was refused because an unbound `T` yields no concrete instance, hence no
+layout descriptor, hence no synthesized `__destruct_<instance>` — and the record it built was never dropped.
+The measured symptom was **exit 101**, and the refusal was standing in for that leak; its own note recorded
+that the diagnostic it landed on was the ordinary argument-identity mismatch and *"deliberately NOT a code of
+its own"*.
 
-The diagnostic it lands on is the ordinary argument-identity mismatch, `got 'Box'` being the base
-rather than an instance. That is defensible and is recorded here as the code this construct gets; it
-is deliberately NOT a code of its own.
+⇒ **`T` IS BOUND NOW, FROM THE FACTORY'S OWN ARGUMENT**, which closes the leak at its cause instead of
+forbidding the program. The instance is `Box with S0`, so the descriptor exists and the destructor is
+synthesized. **The exit code is the whole assertion twice over**: `3` says `T` really bound to `S0` — the
+body reads `b.value.s`, which is a `String` field reachable only through the binding — and NOT `101` says the
+record is dropped.
 ```maxon
 type S0
 	export var s as String
@@ -1418,21 +1419,20 @@ type Box uses T
 	end 'create'
 end 'Box'
 typealias N0 = Box with S0
-function takes(_ N0) returns ExitCode
-	return 0
+function takes(b N0) returns ExitCode
+	return b.value.s.byteLength() as ExitCode
 end 'takes'
 function main() returns ExitCode
-	return takes(Box.create(S0.make("x")))
+	return takes(Box.create(S0.make("xyz")))
 end 'main'
 ```
-```maxoncstderr
-error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'N0', got 'Box'
+```exitcode
+3
 ```
 
-<!-- test: error.bare-generic-constructor-unbound-t-bound-first -->
-The same unbound-`T` construct reached through a binding rather than inline — it leaked identically
-(exit 101) and is refused identically, so the rejection does not depend on the argument being a
-temporary.
+<!-- test: a-bare-generic-factory-binds-t-through-a-binding -->
+The same construct reached through a BINDING rather than inline. It leaked identically and was refused
+identically, so neither the leak nor its cure depended on the argument being a temporary.
 ```maxon
 type S0
 	export var s as String
@@ -1447,16 +1447,16 @@ type Box uses T
 	end 'create'
 end 'Box'
 typealias N0 = Box with S0
-function takes(_ N0) returns ExitCode
-	return 0
+function takes(b N0) returns ExitCode
+	return b.value.s.byteLength() as ExitCode
 end 'takes'
 function main() returns ExitCode
-	let a = Box.create(S0.make("x"))
+	let a = Box.create(S0.make("wxyz"))
 	return takes(a)
 end 'main'
 ```
-```maxoncstderr
-error E3005: <fragment>:20:9: argument type mismatch for '_': expected 'N0', got 'Box'
+```exitcode
+4
 ```
 
 <!-- test: per-instance-alias-decays-at-a-type-parameter-argument -->

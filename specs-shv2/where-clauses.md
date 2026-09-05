@@ -671,6 +671,43 @@ end 'main'
 error E3017: <fragment>:22:11: Type 'Plain' does not satisfy constraint 'Digest' required by type parameter 'T' of 'Box'
 ```
 
+<!-- test: error.a-where-constraint-is-checked-at-an-INFERRED-instantiation -->
+⭐⭐ **AN INSTANTIATION NEED NOT BE SPELLED, AND THE ONE THAT IS NOT WAS GOING UNCHECKED.**
+`checkWhereConstraints` walks the instantiation SITES a program records, and a `typealias` is only one of
+the provenances that mints one — a bare generic factory binding `T` from its own argument mints another.
+An instance with no recorded site is invisible to this check, and the measured consequence was not a
+missed diagnostic but a COMPILER PANIC two tiers down: *"witnessSlotImpl: no conformance selected a member
+for slot 'int.Sized.size' — this table is being built for a conformance that was never validated"*. The
+same program spelled `typealias IntBox = Box with Whole` was refused correctly all along, which is what
+makes this case about the PROVENANCE and not about the rule.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Whole
+end 'Sized'
+
+type Box uses T where T is Sized
+	export var item as T
+
+	static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+
+	export function measure() returns Whole
+		return self.item.size()
+	end 'measure'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(5 as Whole)
+	return b.measure() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3017: <fragment>:21:14: Type 'int' does not satisfy constraint 'Sized' required by type parameter 'T' of 'Box'
+```
+
 <!-- test: where-clauses.error.witness-arg-missing-label -->
 The label grammar is the SAME rule at a witness dispatch as anywhere else: arguments 2 and later must carry
 a `name:` label. `parseWitnessMethodOnValue` used to parse its arguments with a bare comma loop that consulted

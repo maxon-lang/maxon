@@ -4860,6 +4860,164 @@ typealias Real = float(f64.min to f64.max)
 error E3140: <fragment>:15:10: the message `Box.peek` declares a reply whose value is float, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and a value held at an interface type or an opaque type parameter is released through a companion the cell does not carry, and this `spawn` makes `Box` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
 ```
 
+<!-- test: error.awaiting-shutdown-is-refused -->
+`shutdown` carries no reply, so there is nothing for a `try await` to resolve — the same answer a void
+MESSAGE gets one rule over (`error.void-message-sent-for-its-value`), and it must be a refusal because the
+alternative measured is a COMPILER PANIC: `emitServiceShutdown` mints a reply cell for the `__shutdown` pill
+under the name `<T>.shutdown`, and `serviceTypeOfMessage` then looks that name up on the message roster,
+where the compiler's own pill is not and never was.
+```maxon
+type Calc
+	var count as Whole
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump() returns Whole
+		self.count = self.count + 1
+		return self.count
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let n = try await h.bump() otherwise 0
+	try await h.shutdown() otherwise return 1 as ExitCode
+	return n as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E2015: <fragment>:18:14: Unsupported: the value of `Calc.shutdown()` — `shutdown` is the HANDLE's own method and not a message of `Calc`, so no declaration says what it hands back and an expression has nothing to bind. Write `<handle>.shutdown()` as a statement: the pill goes in behind everything already queued, and dropping the last handle starts the same drain
+```
+
+<!-- test: a-spawn-inside-a-generic-body-over-an-inferred-instance -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+⭐ **THE OTHER HALF OF `error.a-spawn-inside-a-generic-body-is-refused`, AND THE HALF THAT MUST WORK.** That
+case refuses a `spawn` whose type arguments fix to the enclosing declaration's own type parameters, which
+name no layout. Here they fix to a CONCRETE type, so there is nothing to refuse and the service is ordinary.
+⚠ **The instantiation is INFERRED** (`Outer.create(1 as Whole)`) rather than spelled by a `typealias`, and
+that is the whole discrimination: the same program with `typealias WholeOuter = Outer with Whole` compiles,
+and this one PANICKED at `forwardCallerLayout: caller 'main' has no layout descriptor to forward to
+'Outer.go'` — whose own sentence says the parser's transitive reservation should make it unreachable.
+Removing the `spawn` also compiles, so it takes both to reach it.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Calc
+	var n as Whole
+
+	static function create(n Whole) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Calc'
+
+type Outer uses U
+	var seed as U
+
+	static function create(seed U) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function go() returns Whole
+		let h = spawn Calc.create(3)
+		return try await h.peek() otherwise 0
+	end 'go'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(1 as Whole)
+	return o.go() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: a-spawn-inside-a-generic-body-whose-factory-fixes-nothing -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+The third corner of the enclosing-generic family, and the one that PANICKED. `error.a-spawn-inside-a-generic-body-is-refused`
+covers arguments fixed to the enclosing declaration's type parameters;
+`a-spawn-inside-a-generic-body-over-an-inferred-instance` covers arguments fixed to a concrete type. Here
+the enclosing factory fixes **nothing at all**, so `Outer` stands at its bare base and `main` has no
+descriptor to forward — which the lowering is right to refuse and wrong to reach. The cure is that the
+enclosing body no longer RESERVES a descriptor slot no call site could ever fill.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Calc
+	var n as Whole
+
+	static function create(n Whole) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Calc'
+
+type Outer uses U
+	export var seed as Whole
+
+	static function create() returns Self
+		return Self{seed: 4}
+	end 'create'
+
+	export function go() returns Whole
+		let h = spawn Calc.create(3)
+		return try await h.peek() otherwise 0
+	end 'go'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create()
+	return o.go() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.a-spawn-of-an-overloaded-generic-factory-is-refused -->
+A `spawn` reads its type arguments off the factory's own argument list, and an OVERLOADED factory has no
+single list to read: which overload the arguments resolve to is settled after the point where the
+instantiation must already be known. Refused rather than guessed — reading the first declaration would fix
+`T` from a parameter the resolved overload does not have, and the instance, its layout and its destructor
+would all be the wrong ones with no diagnostic.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Box uses T
+	export var n as Whole
+
+	static function create(x T) returns Self
+		return Self{n: 1}
+	end 'create'
+
+	static function create(a Whole, x T) returns Self
+		return Self{n: 2}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(7 as Whole, x: 9 as Whole)
+	return try await h.peek() otherwise 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:20: Unsupported: `spawn Box.create(…)` — `Box` is generic and `create` is declared 2 times, so its type arguments cannot be read off the call: which overload the arguments resolve to is settled after this point, and the parameter list they must be matched against is that overload's. Give the factories distinct names, or spawn a type whose factory is declared once
+```
+
 <!-- test: error.a-value-sent-through-a-parameter-is-refused -->
 ⭐⭐ **THE `String` HALF OF `error.a-borrowed-parameter-may-not-be-sent`, AND THE CASE THAT MADE THE RULE
 UNIFORM.** `buf` arrived as a borrowed parameter and the caller still holds it — the identical fact the

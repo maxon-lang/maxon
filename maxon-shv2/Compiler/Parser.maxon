@@ -3178,6 +3178,27 @@ type GenericBaseName
 	end 'create'
 end 'GenericBaseName'
 
+// ⭐ **WHAT A FACTORY'S ARGUMENTS FIX ONE TYPE PARAMETER TO, or nothing.** A verdict rather than a throw
+// because the two roads that read it disagree about what a miss MEANS: a `spawn` has no other source for
+// the instantiation and refuses, while an ordinary static call keeps the base `structRef` it always had.
+union InferredTypeArgument
+	found(argument MaxonType)
+	absent
+end 'InferredTypeArgument'
+
+// ⭐ **WHY AN INFERENCE FIXED NOTHING** — the two shapes, carried to the one door that decides between a
+// refusal and the base `structRef`. A verdict and not a sentence, so the road that discards it renders
+// nothing.
+union UninferredFactoryReason
+	// No factory parameter is declared at this type parameter, so no argument can carry it.
+	noParameterFixesIt(paramName ByteArray)
+	// Every parameter was found and an argument still names a type parameter — a `spawn` written inside
+	// another generic body, whose enclosing parameters name no layout.
+	theArgumentsAreStillOpaque
+	// The factory is declared more than once, so which parameter list the arguments fill is not settled here.
+	theFactoryIsOverloaded(declarationCount FieldIndex)
+end 'UninferredFactoryReason'
+
 // ⭐ **THE CONCRETE GENERIC INSTANCE A STATIC CONSTRUCTOR CALL BUILDS (P1.6-B2)**, or `none`. Only a
 // generic-alias constructor (`StrBox.create(…)`) carries one — it is what tells the caller-side consume
 // which argument OWNS its box's managed content and must be MOVED in. Every other call (a plain free call,
@@ -17260,6 +17281,17 @@ export type Parser
 				// token separates a body that will store one from a body that will not. Over-reserving costs
 				// one ignored parameter; missing one aborts the compiler.
 				//
+				// ⛔⛔ **"ONE IGNORED PARAMETER" HOLDS ONLY WHERE EVERY CALLER CAN SOURCE A DESCRIPTOR, AND
+				// THAT IS NOT EVERY CALLER.** A receiver standing at the BARE generic base fixes no type
+				// argument, so `materializeLayoutArg` forwards — and a caller outside the generic body has
+				// nothing to forward, which is `forwardCallerLayout`'s panic rather than a spare slot.
+				// `parseDeclaredStaticCall` binds the type argument from the factory's own arguments, which
+				// removes the common source of such a receiver — but the shape is UNREACHED rather than
+				// impossible: a factory that fixes NO type argument (`Outer.create()` on `type Outer uses U`)
+				// still yields an instance-less value, and a body of `Outer` that reserves still panics at it.
+				// The other cure is to narrow these signals; what that costs is unmeasured for THIS arm, and
+				// the sibling measurement one arm down prices a different gate on a different signal.
+				//
 				// ⛔ **`instantiated` IS THE WEAKEST GATE THAT SEPARATES THE TWO SHAPES, AND A STRONGER ONE WAS
 				// MEASURED AS A REFUSAL ON A LEGAL PROGRAM** — `genericTypeIsInstantiated` carries the argument
 				// in full: "is some instantiation MANAGED" cannot be asked here, because a CONCRETE instance is
@@ -17337,7 +17369,26 @@ export type Parser
 				// what keeps a `.create(` — a name everything wears — from reserving across the whole corpus.
 				let staticCanSourceADescriptor = not self.functionDeclIsStatic(q) or self.signatures.calleeReturnsItsDeclaringType(qualified)
 				let forwardsBorrowedOpaqueToAFeed = scan.forwardsToATypeParamFeed and not self.enclosingTypeParams.isEmpty() and staticCanSourceADescriptor and self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName)
-				let adoptsOpaqueResult = scan.adoptsOpaqueCallResult and not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q)
+				// ⭐⭐ **AND IT CARRIES `instantiated`, WHICH ITS SIBLINGS ALREADY DO — because the reference this
+				// signal reserves for is taken through THE ENCLOSING INSTANCE'S descriptor, and a type no
+				// `with` in the program ever names has no call site that can supply one.** The reservation is
+				// name-keyed and whole-program (`methodNameEverReturnsBareTypeParameter`), so a body that
+				// merely CALLS `.get(`/`.peek(`/`.create(` on something concrete trips it — and for an
+				// uninstantiated enclosing type the slot it reserves has no supplier at all.
+				//
+				// ⛔⛔ **UNGATED, THAT IS A COMPILER PANIC AND NOT A SPARE PARAMETER.** A receiver standing at
+				// the bare generic base sends `materializeLayoutArg` to `forwardCallerLayout`, and a caller
+				// outside the generic body has nothing to forward: MEASURED as `forwardCallerLayout: caller
+				// 'main' has no layout descriptor to forward to 'Outer.go'` on a `type Outer uses U` whose
+				// factory fixes no argument, whose body's only opaque signal was a name every corpus type
+				// wears. `buildsRecordFromOpaqueSource` states the gate's own argument in full; this signal
+				// answers to it for the same reason.
+				//
+				// ⚠ **`returnsBorrowableOpaque` CANNOT TAKE THIS GATE AND SAYS SO** — its emission side asks a
+				// question the pre-scan cannot answer the same way, which cost 38 `map/*` cases when it was
+				// tried. That argument is about a RETURN the body itself makes; this signal is about a value
+				// the body ADOPTS from elsewhere, which is exactly the shape the gate describes.
+				let adoptsOpaqueResult = scan.adoptsOpaqueCallResult and instantiated and not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q)
 				// ⭐⭐ **A method that STORES INTO A CONTAINER may store a BORROWED opaque `T`, and that store
 				// takes its reference through the descriptor's `retainFunc@64` (W60), so it needs the
 				// descriptor.** `stdlib/Array.maxon`'s `appendMemory` — `push(try source.get(i) otherwise …)`,
@@ -51039,7 +51090,7 @@ export type Parser
 		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT is
 		// this reader's. `notMinted` because both halves of the name are the author's own bytes;
 		// `inferInstanceOf` because a generic target's type arguments exist nowhere but this argument list.
-		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted, inferInstanceOf: typeTok.value)
+		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted, inferInstanceOf: typeTok.value, refuseUninferred: true)
 		let instance = self.serviceStateInstanceOf(state)
 
 		// The deferred half, asked only where something was deferred: a monomorphic service has no type
@@ -59378,13 +59429,34 @@ export type Parser
 	function parseDeclaredStaticCall(func IrFunction, callee ByteArray, aliasName ByteArray, typeTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
 		let constructed = self.constructorInstanceOf(aliasName)
 		try self.requireConstructedVectorElementType(constructed, aliasTok: typeTok)
-		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
+		// ⭐⭐ **A BARE GENERIC BASE NAMED FROM A NON-GENERIC SCOPE HAS NO OTHER SOURCE FOR ITS TYPE
+		// ARGUMENTS.** `constructorInstanceOf` answers from a generic ALIAS or from the enclosing type's
+		// parameters, and `Outer.create(1 as Whole)` written in `main` has neither — so only the factory's own
+		// arguments can fix them. A value at the base `structRef` fixes nothing, which means no layout
+		// descriptor and no synthesized `__destruct_<instance>` for what it builds.
+		//
+		// ⚠ **A MISS KEEPS THE SUPPLIED ANSWER.** An inference that cannot fix every parameter hands
+		// `constructed` back untouched, so this road adds information and never a refusal; the `spawn` road is
+		// the only one that turns a miss into a diagnostic, because there the instantiation is the whole point.
+		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted, inferInstanceOf: self.bareGenericFactoryBase(constructed, typeTok: typeTok), refuseUninferred: false)
 		match constructed 'constructed'
 			none then break 'constructed'
 			instance(gid) then self.retypeGenericAliasConstructorResult(result, gid: gid, aliasName: aliasName)
 		end 'constructed'
 		return result
 	end 'parseDeclaredStaticCall'
+
+	// The base an ordinary static call may INFER an instantiation for: a written type name that declares type
+	// parameters and that no alias or enclosing scope has already fixed. Empty for every other call, which is
+	// what keeps the inference off every road that already has an answer.
+	function bareGenericFactoryBase(constructed ConstructorInstance, typeTok Token) returns ByteArray
+		match constructed 'constructed'
+			instance then return EmptySourceText
+			none then break 'constructed'
+		end 'constructed'
+
+		return typeTok.value if self.signatures.structDeclaresTypeParams(typeTok.value) else EmptySourceText
+	end 'bareGenericFactoryBase'
 
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
@@ -59450,77 +59522,120 @@ export type Parser
 		return self.bareGenericInstanceInScope(baseName)
 	end 'constructorInstanceOf'
 
-	// ⭐⭐ **THE INSTANTIATION A `spawn <T>.<factory>(…)` STARTS, READ OFF THE FACTORY'S ARGUMENTS — the one
-	// call site in the language whose type arguments are INFERRED rather than spelled.** A `spawn` names a
-	// bare generic type and cannot name an alias: the whole-program walk that decides which types are
-	// services reads raw tokens with no scope to resolve one (`Queries.noteServiceSpawnFollowing`), so what
-	// the factory was called with is the only thing that can fix `T`.
+	// ⭐⭐ **THE INSTANTIATION A FACTORY CALL ON A BARE GENERIC BASE STARTS, READ OFF ITS ARGUMENTS.** Two
+	// roads reach it and they differ only in what a MISS means: a `spawn` names a bare generic type and
+	// cannot name an alias — the whole-program walk that decides which types are services reads raw tokens
+	// with no scope to resolve one (`Queries.noteServiceSpawnFollowing`) — so there the arguments are the
+	// only thing that can fix `T` and a miss is a refusal; an ordinary static call keeps the base `structRef`
+	// it would otherwise have had.
 	//
 	// `constructorInstanceOf`'s third road, and deliberately not an arm of it: that door answers from the
 	// BASE NAME alone and is asked before any argument exists.
-	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf ByteArray, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token) returns ConstructorInstance throws ParseError
-		if inferInstanceOf.isEmpty() 'notASpawnFactory'
+	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf ByteArray, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token, refuseUninferred bool) returns ConstructorInstance throws ParseError
+		if inferInstanceOf.isEmpty() 'notAFactoryOfAGenericBase'
 			return supplied
-		end 'notASpawnFactory'
+		end 'notAFactoryOfAGenericBase'
 
 		let params = self.signatures.structTypeParamsOf(inferInstanceOf)
 		if params.isEmpty() 'aPlainType'
 			return supplied
 		end 'aPlainType'
 
-		// ⛔⛔ **THIS READS A THIRD FACT OFF THE FIRST DECLARATION, AND THE LICENCE COVERS TWO.**
-		// `ServiceCompanions.classifyServiceTarget` argues an overloaded factory may be read off its first
-		// member for the RECEIVER and the RETURN TYPE — every member agrees about those, because they are
-		// what make it a factory at all. PARAMETER TYPES are not in that argument: with
-		// `create(n Whole, item T)` declared ahead of `create(item T)`, the call resolves to the second while
-		// the inference below reads the first, and `T` would be fixed from the wrong argument.
+		// ⛔⛔ **AN OVERLOADED FACTORY FIXES NOTHING, BECAUSE THE PARAMETER LIST TO MATCH AGAINST IS NOT
+		// SETTLED YET.** `ServiceCompanions.classifyServiceTarget` may read an overloaded factory off its
+		// FIRST member for the receiver and the return type — every member agrees about those, since they are
+		// what make it a factory at all. Parameter types are a third fact with no such argument: with
+		// `make(x T)` declared ahead of `make(a Whole, x T)`, `Box.make(2 as Whole, x: "hi")` resolves to the
+		// second while a first-declaration read matches argument 0 against `x T` and fixes `T` to `int` —
+		// a legal program refused, or, once the value is used, a wrong instance and a wrong destructor with
+		// no diagnostic at all. Which member a call resolves to is `SemanticCheck.resolveOverloadedCalls`'
+		// answer, and it is settled after this point.
 		//
-		// ⚠ **UNREACHABLE TODAY, AND BY A RULE IN ANOTHER FILE.** An opaque `T` parameter counts as managed,
-		// so any such overload set is refused as an overloaded CONSUME before a `spawn` can reach here. That
-		// is the premise: widen the overload-consume rule and this silently starts reading the wrong
-		// declaration, with no diagnostic and a type argument taken from a parameter the call never filled.
-		let decl = serviceFirstDeclOf(self.signatures.overloadedDeclsOf(callee), key: callee)
+		// ⇒ **REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says so with a sentence; the ordinary road
+		// keeps the base `structRef` it had before this inference existed, so nothing legal is lost either way.
+		let decls = self.signatures.overloadedDeclsOf(callee)
+		if decls.count() > 1 'anOverloadedFactory'
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(decls.count()), typeName: inferInstanceOf, callee: callee, anchor: anchor, refuseUninferred: refuseUninferred)
+		end 'anOverloadedFactory'
+
+		let decl = serviceFirstDeclOf(decls, key: callee)
 		var typeArgs = MaxonTypeArray.create()
 		for position in 0 upto params.count() 'eachTypeParam'
-			typeArgs.push(try self.spawnTypeArgumentAt(inferInstanceOf, params: params, position: position, decl: decl, callee: callee, args: args, argLabels: argLabels, anchor: anchor))
+			let paramName = try params.get(position) otherwise panic("spawnFactoryConstructorInstance: params.get OOB at {position} on a list walked to its own count")
+			match self.factoryTypeArgumentAt(inferInstanceOf, paramName: paramName, decl: decl, args: args, argLabels: argLabels) 'argument'
+				found(t) then typeArgs.push(t)
+				// ⭐ **A MISS IS A REFUSAL ONLY AT A `spawn`.** There the instantiation is the whole point and
+				// nothing else can supply it; at an ORDINARY static call the value keeps the base `structRef`
+				// it has always had, so this road adds information and never a new refusal.
+				absent then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: inferInstanceOf, callee: callee, anchor: anchor, refuseUninferred: refuseUninferred)
+			end 'argument'
 		end 'eachTypeParam'
 
-		let gid = self.signatures.internGenericInstanceOf(inferInstanceOf, args: typeArgs)
+		// ⛔⛔ **THE CONCRETENESS TEST IS ASKED OF THE ARGUMENTS, NOT OF AN INTERNED ID, AND THAT IS A
+		// CORRECTNESS RULE.** `internGenericInstanceOf` MINTS a row on a miss and CLEARS the speculative mark
+		// on a hit — *"the guess has since been confirmed by the source"*. This road may DISCARD its answer
+		// two lines down, and a rejected inference confirms nothing: interning to ask would promote a
+		// candidate walk's guess and grow the registry for an instantiation no source names.
+		//
 		// ⛔ **A `spawn` INSIDE ANOTHER GENERIC BODY FIXES NOTHING**, and the instance it would name is the
 		// one shape `ServiceLoop` cannot build a loop for: `materializeLayoutArg` would forward a descriptor
-		// the synthesized body has no slot for. Refused here, where the instance is known, rather than
-		// aborting the compiler two tiers down.
-		if not self.signatures.instanceArgsAreFullyConcrete(gid) 'stillOpaque'
-			throw ParseError.unsupported(spawnOpaqueTypeArgumentRefusal(inferInstanceOf, member: spawnFactoryMemberOf(callee)), line: anchor.line, column: anchor.column)
+		// the synthesized body has no slot for. Refused here rather than aborting the compiler two tiers down.
+		if not self.signatures.argsAreFullyConcrete(typeArgs) 'stillOpaque'
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: inferInstanceOf, callee: callee, anchor: anchor, refuseUninferred: refuseUninferred)
 		end 'stillOpaque'
 
+		let gid = self.signatures.internGenericInstanceOf(inferInstanceOf, args: typeArgs)
+		// ⭐⭐ **AN INFERRED INSTANTIATION IS A SITE, AND `where` CONSTRAINTS ARE CHECKED SITE BY SITE.**
+		// `ConformanceCheck.checkWhereConstraints` walks the lists a provenance is recorded on — a declared
+		// alias, a bracketed literal, a file-scope constant — and an instantiation on none of them is checked
+		// by nobody: E3017 goes unraised and the program reaches `witnessSlotImpl` with no conformance
+		// selected. That door's header records the same hole closing twice already, each time because a NEW
+		// way to mint an instance did not record one.
+		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(gid, nameLine: anchor.line, nameColumn: anchor.column, filePath: self.filePath))
 		return ConstructorInstance.instance(gid)
 	end 'spawnFactoryConstructorInstance'
 
-	// One type parameter's argument: the FIRST factory parameter declared at that parameter decides, and the
-	// argument standing in its position carries the type. Labels are mapped through `argSlotPosition`, the one
-	// home of the label-to-position rule, so `create(item: x)` fixes `T` exactly as `create(x)` does.
-	function spawnTypeArgumentAt(typeName ByteArray, params ByteArrayArray, position TypeParamPosition, decl OverloadedDecl, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token) returns MaxonType throws ParseError
-		let paramName = try params.get(position) otherwise panic("spawnTypeArgumentAt: params.get OOB at {position} on a list walked to its own count")
+	// ⭐ **WHAT AN INFERENCE THAT FIXED NOTHING ANSWERS — ONE HOME, because both misses answer identically on
+	// the ordinary road and differ only in the sentence the `spawn` road raises.** The reason travels as a
+	// verdict rather than a rendered sentence so the ordinary road builds no String it will not use.
+	function uninferredFactoryInstance(supplied ConstructorInstance, reason UninferredFactoryReason, typeName ByteArray, callee ByteArray, anchor Token, refuseUninferred bool) returns ConstructorInstance throws ParseError
+		if not refuseUninferred 'anOrdinaryStaticCall'
+			return supplied
+		end 'anOrdinaryStaticCall'
+
+		let member = spawnFactoryMemberOf(callee)
+		let refusal = match reason 'why'
+			noParameterFixesIt(paramName) gives spawnUninferrableTypeArgumentRefusal(typeName, member: member, paramName: paramName)
+			theArgumentsAreStillOpaque gives spawnOpaqueTypeArgumentRefusal(typeName, member: member)
+			theFactoryIsOverloaded(declarationCount) gives spawnOverloadedFactoryRefusal(typeName, member: member, declarationCount: declarationCount)
+		end 'why'
+		throw ParseError.unsupported(refusal, line: anchor.line, column: anchor.column)
+	end 'uninferredFactoryInstance'
+
+	// What the arguments fix one type parameter to, or `absent`. The FIRST factory parameter declared at that
+	// parameter decides, and the argument standing in its position carries the type; labels are mapped
+	// through `argSlotPosition`, the one home of the label-to-position rule, so `create(item: x)` fixes `T`
+	// exactly as `create(x)` does.
+	function factoryTypeArgumentAt(typeName ByteArray, paramName ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels ByteArrayArray) returns InferredTypeArgument
 		let token = typeParamTokenFor(typeName, paramName: paramName)
 		for p in 0 upto decl.paramTypes.count() 'eachFactoryParam'
-			let declared = try decl.paramTypes.get(p) otherwise panic("spawnTypeArgumentAt: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(callee)}'")
+			let declared = try decl.paramTypes.get(p) otherwise panic("factoryTypeArgumentAt: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
 			if maxonTypeTag(declared) != ValueTypeTag.typeParameter or typeParamIdOf(declared) != token 'notThisParameter'
 				continue
 			end 'notThisParameter'
 
 			for i in 0 upto args.count() 'eachArgument'
-				let label = try argLabels.get(i) otherwise panic("spawnTypeArgumentAt: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
+				let label = try argLabels.get(i) otherwise panic("factoryTypeArgumentAt: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
 				if argSlotPosition(decl.paramNames, argIndex: i, label: label) != p 'anotherPosition'
 					continue
 				end 'anotherPosition'
 
-				return self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("spawnTypeArgumentAt: args.get OOB at {i}"))
+				return InferredTypeArgument.found(self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("factoryTypeArgumentAt: args.get OOB at {i}")))
 			end 'eachArgument'
 		end 'eachFactoryParam'
 
-		throw ParseError.unsupported(spawnUninferrableTypeArgumentRefusal(typeName, member: spawnFactoryMemberOf(callee), paramName: paramName), line: anchor.line, column: anchor.column)
-	end 'spawnTypeArgumentAt'
+		return InferredTypeArgument.absent
+	end 'factoryTypeArgumentAt'
 
 	// The factory's own name out of the qualified callee both spawn refusals quote. A `spawn` always names
 	// `<Type>.<factory>`, so the unqualified arm answers a callee no `spawn` can build.
@@ -59615,7 +59730,7 @@ export type Parser
 		end 'notBaseStruct'
 
 		let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
-		let resultNameId = try self.valueNameIds.get(result) otherwise panic("retypeGenericAliasConstructorResult: result v{result} has no name-id — the two type columns are dense and in lockstep")
+		let resultNameId = try self.valueNameIds.get(result) otherwise panic("retypeConstructorResultToInstance: result v{result} has no name-id — the two type columns are dense and in lockstep")
 		if resultNameId != baseId 'notThisBase'
 			return
 		end 'notThisBase'
@@ -60894,6 +61009,10 @@ export type Parser
 	// ⚠ **VARIANT 0 IS THE COMPILER'S `__shutdown` AND IS NOT A MESSAGE.** It is `__`-prefixed, so no source
 	// may declare it and no author may name it (E2051) — the arm below is the structural backstop for a
 	// spelling that reaches here anyway, and it answers the same way an absent member does.
+	//
+	// ⚠ **`shutdown` IS THE HANDLE'S OWN METHOD TOO, AND THAT IS NOT WHY ITS ARM REFUSES A VALUE.** So is
+	// `clone`, whose whole point is the value it hands back. What separates them is that nothing DECLARES
+	// what `shutdown` returns — see `emitServiceShutdown`, which carries the argument.
 	function dispatchOnServiceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
 		let typeName = self.signatures.serviceOfHandle(base.layout.name)
 		let request = try serviceRequestLayoutOf(self.signatures, typeName: typeName) otherwise panic("dispatchOnServiceHandle: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it beside the handle, and this caller reached a handle")
@@ -60904,7 +61023,7 @@ export type Parser
 		end 'aMessage'
 
 		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
-			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request)
+			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, resultUsed: resultUsed)
 		end 'thePoisonPill'
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
@@ -61061,12 +61180,27 @@ export type Parser
 	// only its reply slot, so the box is built through the same `emitEnumBox` an author's message goes
 	// through and the drain behind it is the loop's.
 	//
-	// ⭐⭐ **IT TAKES NO `resultUsed`, AND THAT IS THE PILL'S OWN RULE RATHER THAN AN OMISSION (SV2).** Variant
-	// 0 ALWAYS carries a reply slot — `ServiceCompanions.buildServiceRequestUnion` gives it one to every
-	// request union there will ever be, because a graceful drain that could not be waited on would be a race
-	// written into the language — so `await h.shutdown()` is legal for every service and there is no
-	// value-position refusal left to make.
-	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout) returns ValueId throws ParseError
+	// ⛔⛔ **THE PILL IS A STATEMENT, AND THE VALUE POSITION IS REFUSED — which is the OPPOSITE of what
+	// carrying a reply slot suggests, so read this before restoring it.** Variant 0 does carry one
+	// (`ServiceCompanions.buildServiceRequestUnion` gives it to every request union there will ever be) and
+	// the loop really does complete it, through `MboxOffShutdownReply` at `__mbox_service_exit`. What it has
+	// no DECLARATION for is what comes back: `shutdown` is the HANDLE's own method rather than a message of
+	// the type (`serviceMessageOwnerOf` answers `notAMessage`), so nothing types its reply and no roster
+	// entry names it.
+	//
+	// ⛔ **UNGATED, THAT WAS A COMPILER PANIC ON A PROGRAM A USER CAN WRITE.** `try await h.shutdown()` minted
+	// the cell, and the await's own bookkeeping asked the message roster for `<T>.shutdown` —
+	// `serviceTypeOfMessage`, whose lookup is TOTAL and correctly so. The cure is here, at the value
+	// position, and not there: making the roster tolerant would give every reader of it a second answer for
+	// a name that is genuinely not on it.
+	//
+	// ⚠ **IT REFUSES BEFORE IT EMITS**, `emitBinOp`'s ordering rule, which is why the gate precedes even the
+	// argument list's two tokens.
+	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, resultUsed bool) returns ValueId throws ParseError
+		if resultUsed 'usedForItsValue'
+			throw ParseError.unsupported(serviceShutdownHasNoValueRefusal(typeName), line: memberTok.line, column: memberTok.column)
+		end 'usedForItsValue'
+
 		try self.consumeNameToken(NamePosition.declaration)
 		try self.consume(TokenKind.leftParen)
 		let rparenTok = try self.consume(TokenKind.rightParen)
@@ -78733,7 +78867,7 @@ export type Parser
 	// `spelling` is threaded straight through to `emitCall`'s reserved-space door and read nowhere else:
 	// every caller but ONE hands it the author's own bytes, and the exception is the primitive-static mint
 	// (`parseQualifiedCall`). See `CalleeMint`.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf ByteArray = EmptySourceText) returns ValueId throws ParseError
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf ByteArray = EmptySourceText, refuseUninferred bool = false) returns ValueId throws ParseError
 		// The callee's final name token may be a KEYWORD (D8) — `FilePath.from(path)`, `c.to()`, `from(41)`.
 		// The `callee` bytes the caller passed were read off this very token, so refusing it here would have
 		// refused every call to a name the declaration now accepts.
@@ -79430,7 +79564,7 @@ export type Parser
 			end 'text'
 		end 'debugStreamMember'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint, inferInstanceOf: inferInstanceOf)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint, inferInstanceOf: inferInstanceOf, refuseUninferred: refuseUninferred)
 	end 'parseCallNamed'
 
 	// ⭐ **THE ONE `__DebugStream` MEMBER THAT ANSWERS A VALUE — the SOURCE-LEVEL half of the run-time gate.**
@@ -80842,7 +80976,7 @@ export type Parser
 	//
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
-	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf ByteArray = EmptySourceText) returns ValueId throws ParseError
+	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf ByteArray = EmptySourceText, refuseUninferred bool = false) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
 		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
 		// ALL** (`specs-shv2/constant-string-slice.md`). Asked FIRST, ahead of the mint, the default fill and
@@ -80872,10 +81006,10 @@ export type Parser
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
-		// ⭐ **A `spawn`'S FACTORY IS THE ONE CALL WHOSE GENERIC INSTANCE ITS ARGUMENTS FIX**, and this is the
+		// ⭐ **A FACTORY CALL ON A BARE GENERIC BASE HAS ITS INSTANCE FIXED BY ITS ARGUMENTS**, and this is the
 		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
 		// type parameter exactly as a written one does. Every other caller gets back what it supplied.
-		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor)
+		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, refuseUninferred: refuseUninferred)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 		let opaqueWordReading = try self.retypeOpaqueMethodResult(result, callee: callee, args: args, anchor: anchor)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit

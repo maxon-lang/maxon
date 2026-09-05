@@ -550,6 +550,14 @@ module function serviceReplyInstanceUnknownRefusal(typeName ByteArray, methodNam
 	return "`{String.from(typeName)}.{String.from(methodName)}` replies at `{String.from(typeName)}`'s own type parameter `{String.from(paramName)}`, and this handle stands at the bare `{String.from(serviceHandleCompanionName(typeName))}` — the ONE handle companion every instantiation of `{String.from(typeName)}` shares — so it names no instantiation and the reply has no type. SPELL the instantiation: `{String.from(serviceHandleCompanionName(typeName))} with <the type argument>` is a generic instance like any other, and a `typealias` over it carries the reply's type through a parameter, a struct field or an array element. Or send `{String.from(methodName)}` where the `spawn {String.from(typeName)}.{String.from(member)}(…)` binding is, which carries the instantiation already"
 end 'serviceReplyInstanceUnknownRefusal'
 
+// ⭐⭐ **THE WORDS FOR A `spawn` WHOSE FACTORY IS OVERLOADED.** Which member a call resolves to is
+// `SemanticCheck.resolveOverloadedCalls`' answer and it is not available here, so the arguments cannot be
+// matched against a parameter list without guessing which one — and a guess binds the type argument from
+// the wrong position.
+module function spawnOverloadedFactoryRefusal(typeName ByteArray, member ByteArray, declarationCount FieldIndex) returns String
+	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` — `{String.from(typeName)}` is generic and `{String.from(member)}` is declared {declarationCount} times, so its type arguments cannot be read off the call: which overload the arguments resolve to is settled after this point, and the parameter list they must be matched against is that overload's. Give the factories distinct names, or spawn a type whose factory is declared once"
+end 'spawnOverloadedFactoryRefusal'
+
 // ⭐⭐ **THE WORDS FOR A `spawn` WHOSE TYPE ARGUMENT IS STILL OPAQUE.** Written inside another generic
 // body, `spawn Box.create(item)` fixes `T` to the ENCLOSING declaration's parameter — a type the loop would
 // have to be handed a dictionary for, and a synthesized body carries none.
@@ -681,6 +689,13 @@ module function serviceSendHasNoValueRefusal(typeName ByteArray, member ByteArra
 	return "the value of `{String.from(typeName)}.{String.from(member)}` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Give it a `returns` clause or a `throws` clause and `try await <handle>.{String.from(member)}(…)` resolves through a reply cell; otherwise send it as a statement"
 end 'serviceSendHasNoValueRefusal'
 
+// ⭐ **THE WORDS FOR THE POISON PILL USED FOR ITS VALUE.** Why it is refused at all — and why the reason is
+// NOT the void-message sibling's — is `Parser.emitServiceShutdown`'s to state, and it does. What this owes
+// is only that the SENTENCE not borrow the sibling's "it carries no reply slot", which is false of the pill.
+module function serviceShutdownHasNoValueRefusal(typeName ByteArray) returns String
+	return "the value of `{String.from(typeName)}.{String.from(ServiceShutdownMethodName)}()` — `{String.from(ServiceShutdownMethodName)}` is the HANDLE's own method and not a message of `{String.from(typeName)}`, so no declaration says what it hands back and an expression has nothing to bind. Write `<handle>.{String.from(ServiceShutdownMethodName)}()` as a statement: the pill goes in behind everything already queued, and dropping the last handle starts the same drain"
+end 'serviceShutdownHasNoValueRefusal'
+
 // ⭐ **THE WORDS FOR A `try` ON A SEND**, and it is a SENTENCE rather than a rejection for the reason
 // `Parser.rewriteLastCallToTryCall`'s arm gives: the author who wrote one is asking for the awaitable form,
 // and `try` is exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
@@ -736,9 +751,13 @@ module function buildServiceRequestUnion(signatures ProgramSignatures, typeName 
 	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
 
 	// ⭐ **VARIANT 0 IS THE COMPILER'S, SO ADDING A MESSAGE NEVER RENUMBERS IT** — see
-	// `ServiceShutdownCaseName`. It always carries a reply slot: `shutdown()` is the one message whose
-	// completion an author can await, and a graceful drain that could not be waited on would be a race
-	// written into the language.
+	// `ServiceShutdownCaseName`. It carries a reply slot like any reply-bearing variant, which is what lets
+	// the pill be built through the same `emitEnumBox` every message takes and completed by the same
+	// `__gt_cell_complete` at `__mbox_service_exit`.
+	//
+	// ⚠ **NOTHING IN SOURCE AWAITS IT.** `Parser.emitServiceShutdown` refuses the pill in value position —
+	// nothing declares what `shutdown` hands back — so the slot is filled and completed and never read. See
+	// there for the argument; a uniform variant shape is what this file owes, not a reachable reply.
 	var shutdownPayloads = PayloadFieldArray.create()
 	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
 	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: shutdownPayloads)

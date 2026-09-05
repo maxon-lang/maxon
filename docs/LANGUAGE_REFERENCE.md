@@ -1288,9 +1288,21 @@ end 'Array'
 
 **Behavior:**
 
-When a concrete type alias is created (e.g., `typealias IntArr = Array with Integer`), the compiler checks whether the element type satisfies the `where` constraints. If `Integer` implements both `Hashable` and `Equatable`, then `IntArr` automatically conforms to `Hashable` and `Equatable`, enabling it to be used as a `Map` key or `Set` element.
+The compiler checks the `where` constraints wherever an instantiation is created, not only where one is
+spelled. If `Integer` implements both `Hashable` and `Equatable`, then `Array with Integer` conforms to
+`Hashable` and `Equatable`, enabling it to be used as a `Map` key or `Set` element; if it implements neither,
+the instantiation is `E3017` at the site that created it.
 
-This applies both to explicit `typealias` declarations and to auto-generated type aliases created during monomorphization.
+An instantiation is created by any of:
+
+- an explicit `typealias` (`typealias IntArr = Array with Integer`);
+- a bracketed literal, whose first element or pair fixes the arguments (`[1, 2]`, `["a": 1]`), at file scope
+  as well as in a body;
+- a **static factory call on a bare generic base**, whose arguments fix the type parameters
+  (`Box.create("hi")` on `type Box uses T` with `static function create(item T) returns Self` creates
+  `Box with String`). A factory that declares no parameter at a type parameter fixes nothing and yields the
+  base type; an OVERLOADED factory fixes nothing either, because which parameter list the arguments fill is
+  settled after the call is read.
 
 ---
 
