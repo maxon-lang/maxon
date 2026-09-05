@@ -1,0 +1,24 @@
+// Test: error.if-try-pure-result-is-not-saved-by-discard
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function pureFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'pureFail'
+
+function main() returns ExitCode
+	if let _ = try pureFail(true) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3064: <fragment>:17:9: result of pure function 'pureFail' must be used

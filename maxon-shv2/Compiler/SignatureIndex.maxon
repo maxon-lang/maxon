@@ -2612,6 +2612,16 @@ union ExistentialOwnershipProtocol
 	// `byteRecord to greenThread`, and a case placed inside it would silently join a set that is about
 	// something else.
 	bufferRecord
+	// ⭐⭐ **A SERVICE'S `<T>.handle` — RELEASED THROUGH MORE THAN ITS BOX, SO RETAINED THROUGH MORE THAN AN
+	// INCREF.** `__mbox_handle_drop_box` steps a mailbox `handles` share, a mailbox `refs` share AND the box;
+	// the `aggregate` retain steps only the box, so a handle reaching that arm makes the two sides of one
+	// ownership asymmetric — the mailbox's handle count reaches zero under a live handle, the service drains,
+	// and the next send is answered `ServiceError.stopped`. It earns an arm here rather than at each door
+	// because a descriptor's `retainFunc@64` and a witness table's `retainFunc@16` are stamped from this
+	// answer, and their drop twins already route a handle to the mailbox entry.
+	//
+	// ⚠ APPENDED, for the reason the arm above states.
+	serviceHandle
 end 'ExistentialOwnershipProtocol'
 
 // ⭐⭐ **THE ONE SPELLING OF "HOW DO I TAKE A REFERENCE UNDER THIS PROTOCOL" (W41-opaque).** Two runtime words
@@ -2629,6 +2639,9 @@ function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns 
 		aggregate then return MmRetainName
 		// The one arm whose answer is neither a copy nor a plain incref: see the case's own note.
 		bufferRecord then return ManagedRetainName
+		// The mailbox entry, which is `__mbox_handle_drop_box` read backwards — see the case's own note for
+		// the drain a plain box retain costs.
+		serviceHandle then return MboxHandleRetainBoxName
 		// A green thread is never co-owned — see the arm's own note. EMPTY here is the complete answer, not a
 		// sentinel, exactly as it is for `none`: both readers stamp nothing and the zero word is inert.
 		greenThread then return EmptySourceText
@@ -5127,6 +5140,12 @@ function instanceCascadeStrategy(signatures ProgramSignatures, id GenericInstanc
 	if signatures.isManagedListInstance(id) 'theChain'
 		return elementRecordCascadeStrategy(signatures, id: id, entries: chainCascadeEntries(action), asElement: asElement, action: action)
 	end 'theChain'
+	// The drop twin's service-handle arm. A handle's clone is a SECOND HANDLE to the same service, never a
+	// duplicated box: `__clone_<mangled>` would copy the mailbox pointer while stepping neither count. It
+	// sits with the other compiler-owned records rather than at the top, so the containers above pay nothing.
+	if signatures.instanceBaseIsServiceHandle(id) 'serviceHandle'
+		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action))
+	end 'serviceHandle'
 	// ⛔ A base-layout-less instance with no runtime copy of its own (a `Vector`, a cursor) has no field list to
 	// cascade over either, so nothing synthesizes its cloner — `declaredInstanceSupportsDeepClone` refuses it at
 	// the SAME tier, which is what keeps this strategy from naming a symbol `installGenericInstanceCascades` never
@@ -10777,6 +10796,15 @@ export type ProgramSignatures
 	export function declaresACompanionType() returns bool
 		return self.serviceHandleOwners.count() > 0
 	end 'declaresACompanionType'
+
+	// ⭐⭐ **IS THIS INSTANCE'S BASE A SERVICE HANDLE? — THE INSTANCE ROAD'S ONE HOME, and it exists for the
+	// reason `compilerOwnedAggregateOf` exists one tier over.** The drop, the clone and the retain of a value
+	// are TAG-routed: a `genericInstance` reaches none of the name-routed doors, so each of the three had to
+	// ask this for itself — and they came apart exactly once, with retain answering a plain box incref while
+	// drop answered `__mbox_handle_drop_box`, which steps two mailbox shares as well as the box.
+	export function instanceBaseIsServiceHandle(id GenericInstanceId) returns bool
+		return self.isServiceHandle(self.genericInstanceBaseName(id))
+	end 'instanceBaseIsServiceHandle'
 
 	export function isServiceHandle(name ByteArray) returns bool
 		return self.serviceHandleOwners.contains(name)
@@ -23560,14 +23588,63 @@ export type ProgramSignatures
 	// because the service can be gone whatever the message declares, and `promiseStorageThrows` keys
 	// throwing-ness on the ARGUMENT COUNT (`PromiseType.maxon`). A one-argument reply instance would hand
 	// `try await` a promise the type says cannot fail.
-	export function internPromiseInstanceForReply(messageKey ByteArray) returns GenericInstanceId
+	// ⭐ **AND THE RESULT IS THE INSTANTIATION'S, NOT THE DECLARATION'S.** A generic service's
+	// `peek() returns T` declares an opaque word; what comes back is whatever the `spawn` fixed `T` to, and
+	// the cell is the only thing the AWAIT still holds when it needs to know — so the substitution happens
+	// here, once, where the promise type is minted.
+	export function internPromiseInstanceForReply(messageKey ByteArray, serviceInstance ServiceStateInstance) returns GenericInstanceId
 		// An undeclared MESSAGE is the compiler's own `<T>.__shutdown` pill — a legal send whose reply really
 		// does carry nothing — which is the one arm where the reply road and the spawn road part.
 		// `Parser.serviceReplyResultType` states the same split in the parser's own interner.
 		var args = self.promiseInstanceArgsFor(messageKey, undeclaredResult: self.promiseResultArgFor(MaxonReturnType.void))
+		try args.set(PromiseResultArgPosition, value: self.replyResultArgThrough(try args.get(PromiseResultArgPosition) otherwise panic("internPromiseInstanceForReply: `promiseInstanceArgsFor` always pushes the result argument first"), messageKey: messageKey, serviceInstance: serviceInstance)) otherwise panic("internPromiseInstanceForReply: args.set OOB at the result position of a list that just answered it")
 		args.push(MaxonType.named(self.typeNames.intern(self.serviceReplyErrorName(messageKey))))
 		return self.genericInstances.intern(self.typeNames.intern(PromiseTypeName), args: args)
 	end 'internPromiseInstanceForReply'
+
+	// The result argument as the spawned instantiation fixes it. `promiseAggregateArgAsName` is re-applied
+	// because the substitution can hand back a `structRef` where the opaque parameter was neither — see its
+	// own header for the duplicate-definition that tag split cost.
+	function replyResultArgThrough(arg MaxonType, messageKey ByteArray, serviceInstance ServiceStateInstance) returns MaxonType
+		return self.promiseAggregateArgAsName(self.instanceResolvedSlotType(arg, declFilePath: self.recordedReturnDeclFileOf(messageKey), instance: serviceInstance))
+	end 'replyResultArgThrough'
+
+	// ⭐⭐⭐ **A DECLARED SLOT TYPE AS ONE INSTANTIATION FIXES IT — THE ONE HOME, because THREE sites read it
+	// and each of them types one end of a service's reply.** The cell the send mints
+	// (`internPromiseInstanceForReply`), the handler result the loop calls for
+	// (`ServiceLoop.serviceHandlerReturnType`) and the value the await hands back
+	// (`Parser.fixedReplyResultType`) are one type seen from three tiers; a depth this answered differently
+	// at any of them is a reply the awaiter reads at a type the handler did not produce.
+	//
+	// ⛔⛔ **IT RESOLVES BEFORE IT SUBSTITUTES, AND THAT ORDER IS THE WHOLE OF WHAT WAS MISSING.**
+	// `substituteThroughInstance` rewrites a `typeParameter` and recurses into a `genericInstance`'s
+	// arguments — and passes a `named` LEAF through untouched, which is exactly how an INNER ALIAS arrives
+	// (`export function all() returns TArray`, on `typealias TArray = Array with T`, is recorded as
+	// `named("Box.TArray")`). MEASURED: the reply's own promise type rendered as
+	// `Promise with (Box.TArray, ServiceError)` — an instantiation-free spelling no caller can name, which
+	// made the correct storage type `E3005` against a type the source cannot write.
+	//
+	// ⚠ **A MONOMORPHIC SERVICE IS THE IDENTITY, DELIBERATELY.** There is no instantiation to fix anything,
+	// so resolving here would move a type on a road this rung does not own — every reply of every
+	// non-generic service is typed exactly as it was.
+	export function instanceResolvedSlotType(t MaxonType, declFilePath FilePath, instance ServiceStateInstance) returns MaxonType
+		return match instance 'i'
+			monomorphic gives t
+			at(id) gives self.substituteThroughInstanceInterned(self.declaredSlotType(t, into: self.typeNames, slotScopeFilePath: declFilePath), id: id, interner: self.typeNames)
+		end 'i'
+	end 'instanceResolvedSlotType'
+
+	// ⭐ **ONE INSTANCE OVER ANOTHER'S TYPE ARGUMENTS** — how a service's `<T>.handle` and its state box come
+	// to name the same instantiation without either deriving it a second time from the source.
+	export function internInstanceOverArgsOf(baseName ByteArray, likeInstance GenericInstanceId) returns GenericInstanceId
+		return self.internGenericInstanceOf(baseName, args: self.genericInstances.instanceArgs(likeInstance))
+	end 'internInstanceOverArgsOf'
+
+	// The instance a bare generic base takes over `args` — the door a `spawn` interns its target through,
+	// where a `typealias` reaches `recordGenericAlias` instead.
+	export function internGenericInstanceOf(baseName ByteArray, args MaxonTypeArray) returns GenericInstanceId
+		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
+	end 'internGenericInstanceOf'
 
 	// The RESULT half of either instance — the half the two roads share, so a reply and a spawn cannot come
 	// to disagree about how a declared or a void thunk is typed. That equality is what
@@ -23743,7 +23820,7 @@ export type ProgramSignatures
 	// ⚠ **A TUPLE'S `structRef` IS THE CANONICAL ONE AND IS LEFT ALONE** — `namedElementType`'s own split,
 	// read back through the same `isTupleTypeName` predicate so the two cannot drift. A synthesized tuple has
 	// no declaration to resolve `named` from, which is exactly why it is spelled `structRef` there.
-	function canonicalInstanceArg(arg MaxonType) returns MaxonType
+	export function canonicalInstanceArg(arg MaxonType) returns MaxonType
 		if maxonTypeTag(arg) != ValueTypeTag.structRef 'notAResolvedStruct'
 			return arg
 		end 'notAResolvedStruct'
@@ -26078,7 +26155,7 @@ export type ProgramSignatures
 	export function instanceArgOwesDrop(id GenericInstanceId, position TypeParamPosition) returns bool
 		return match self.typeOwnershipProtocol(self.canonicalInstanceArg(id, position: position)) 'protocol'
 			none gives false
-			byteRecord to greenThread or bufferRecord gives true
+			byteRecord to greenThread or bufferRecord or serviceHandle gives true
 		end 'protocol'
 	end 'instanceArgOwesDrop'
 
@@ -26861,6 +26938,16 @@ export type ProgramSignatures
 			return ListNodeDecrefName
 		end 'managedListNode'
 
+		// ⭐⭐ **A SERVICE HANDLE RELEASES THE MAILBOX, AND A GENERIC SERVICE'S HANDLE REACHES THIS ROUTER
+		// RATHER THAN THE NAME ONE** — it carries its instantiation, so the TAG decides and no name is ever
+		// asked. `__mm_decref` here would free the 8-byte box while stepping neither mailbox count, leaving
+		// the service's green thread parked for ever: the process that never exits `managedNameDropCallee`'s
+		// handle arm exists to prevent. Placed below the container arms so the common `Array` drop pays no
+		// extra probe for it.
+		if self.instanceBaseIsServiceHandle(id) 'serviceHandle'
+			return MboxHandleDropBoxName
+		end 'serviceHandle'
+
 		// ⭐ **THE OMISSION THIS ROUTER USED TO SWALLOW, MADE LOUD** — its two sibling routers
 		// (`builtinGenericTypeParamCount`, `genericInstanceBoxSize`) already panic on a builtin they have no arm
 		// for, and this one silently did not. A builtin base has NO layout, so `genericInstanceHasManagedField`
@@ -27442,6 +27529,11 @@ export type ProgramSignatures
 		if not self.declaredNameIsManaged(typeName) 'ownsNothing'
 			return ExistentialOwnershipProtocol.none
 		end 'ownsNothing'
+		// Asked through `denotedAggregateName` because the destroy door below resolves the name that way, and
+		// the two words come off this one answer.
+		if self.isServiceHandle(self.denotedAggregateName(typeName)) 'aServiceHandle'
+			return ExistentialOwnershipProtocol.serviceHandle
+		end 'aServiceHandle'
 
 		return ExistentialOwnershipProtocol.aggregate
 	end 'existentialOwnershipProtocol'
@@ -27462,7 +27554,7 @@ export type ProgramSignatures
 			// (`LowerMaxonToStd.witnessRetainCallee`), so an `Array with X` reaches `instanceDropCallee` and
 			// this door sees only non-generic names. The arms share a body rather than one panicking, because
 			// what an Array record's drop IS is exactly what an aggregate's is.
-			aggregate or bufferRecord then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
+			aggregate or bufferRecord or serviceHandle then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
 			// A conformer whose value half is a green thread releases it the one way a green thread is
 			// released. Its `retainFunc@16` twin is 0 — see the protocol arm for why that pair is uneven here.
 			greenThread then return GtPromiseDropName
@@ -27526,7 +27618,7 @@ export type ProgramSignatures
 			// instance through `genericInstanceBoxDropCallee`, whose FIRST arm is the promise, so the callee
 			// this hands back is already `__gt_promise_drop`. `bufferRecord` joins it for the same reason from
 			// the other end: an Array record's drop is an aggregate's, and only its RETAIN is its own.
-			byteRecord to greenThread or bufferRecord gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
+			byteRecord to greenThread or bufferRecord or serviceHandle gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
 		end 'protocol'
 	end 'instanceDropCallee'
 
@@ -27597,7 +27689,7 @@ export type ProgramSignatures
 			none gives EmptySourceText
 			// See `instanceDropCallee` — the promise routes itself through `genericInstanceBoxDropCallee`, and
 			// an Array record's drop is an aggregate's.
-			byteRecord to greenThread or bufferRecord gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
+			byteRecord to greenThread or bufferRecord or serviceHandle gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
 		end 'protocol'
 	end 'typeParamDropCallee'
 
@@ -27665,13 +27757,32 @@ export type ProgramSignatures
 		// ALIAS — `ByteArray` is a `named` leaf, not a `genericInstance` — and the tag test MEASURED as an
 		// access violation on exactly that spelling: the compiler's own `TypeNameInterner`'s `Map with
 		// (ByteArray, TypeNameId)` retained a `.rdata` key through `__retain_type_param` during a rehash.
-		let denoted = try self.denotedInstance(t) otherwise return ExistentialOwnershipProtocol.aggregate
+		let denoted = try self.denotedInstance(t) otherwise return ExistentialOwnershipProtocol.serviceHandle if self.declaredTypeNamesAServiceHandle(t) else ExistentialOwnershipProtocol.aggregate
+		// ⭐ **BOTH SPELLINGS OF A SERVICE HANDLE NARROW THE AGGREGATE ANSWER, AND FOR THE `Array` ARM'S
+		// REASON**: the record is a box, and what it OWNS beyond that box is what its retain has to step. A
+		// generic service's handle stands at `<T>.handle with <Args>` and reaches here as an instance; a
+		// monomorphic one names the companion and reaches the `otherwise` above.
+		if self.instanceBaseIsServiceHandle(denoted) 'aServiceHandle'
+			return ExistentialOwnershipProtocol.serviceHandle
+		end 'aServiceHandle'
 		if self.isArrayInstance(denoted) 'aBufferRecord'
 			return ExistentialOwnershipProtocol.bufferRecord
 		end 'aBufferRecord'
 
 		return ExistentialOwnershipProtocol.aggregate
 	end 'typeOwnershipProtocol'
+
+	// Does `t` NAME a service's handle companion outright — the monomorphic spelling, which denotes no
+	// instance for the road above to read it off? `<T>.handle` is a declared struct like any other, so it
+	// arrives `structRef`, or as a `named` alias resolved through the door the drop twin resolves at.
+	function declaredTypeNamesAServiceHandle(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
+		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'namesNoDeclaration'
+			return false
+		end 'namesNoDeclaration'
+
+		return self.isServiceHandle(self.denotedAggregateName(self.nameOfId(typeNameIdOf(t))))
+	end 'declaredTypeNamesAServiceHandle'
 
 	// Is `t` a value held at an INTERFACE type — a two-word fat pointer whose retain and release are its
 	// WITNESS's and not any name a descriptor word can hold? BOTH spellings, because a generic type ARGUMENT

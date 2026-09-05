@@ -55,11 +55,128 @@
 // A program that spawns nothing builds NOTHING here: `serviceTypeRoster` is empty, which is every program
 // that never writes `spawn`.
 export function installServiceLoops(module MaxonModule, project Project, signatures ProgramSignatures)
-	for typeName in serviceTypeRoster(signatures) 'eachService'
-		buildServiceLoop(module, project: project, signatures: signatures, typeName: typeName)
+	let services = serviceTypeRoster(signatures)
+	// ⭐ **ONE WALK OF THE MODULE FOR EVERY SERVICE, NOT ONE PER SERVICE.** The walk is Θ(program), so
+	// driving it from inside the roster loop would multiply the whole module by the number of service types
+	// — the one place in this file where a per-type constant would become a per-type PASS.
+	let spawned = spawnedInstancesByService(module, services: services)
+	for i in 0 upto services.count() 'eachService'
+		let typeName = try services.get(i) otherwise panic("installServiceLoops: services.get OOB at {i} on a list walked to its own count")
+		buildServiceLoops(module, project: project, signatures: signatures, typeName: typeName, instances: try spawned.get(i) otherwise panic("installServiceLoops: spawned.get OOB at {i} — one bucket is pushed per service before the walk"))
 		buildServiceAbandon(module, project: project, signatures: signatures, typeName: typeName)
 	end 'eachService'
 end 'installServiceLoops'
+
+// ⭐⭐ **THE LOOP IS MONOMORPHIC WHERE THE COMPANIONS ARE NOT, AND THAT IS THE WHOLE OF WHAT A GENERIC
+// SERVICE COSTS.** One `<T>.request` and one `<T>.handle` serve every instantiation — neither carries a type
+// argument — but the loop CALLS the handlers and DROPS the state, and both of those are per-instance facts:
+// a `returns T` handler takes the instance's layout descriptor, and the state releases through
+// `__destruct_<mangled>`. A shared body has nothing to source either from (a synthesized function carries no
+// dictionary of its own), so there is one loop per instantiation the program spawns.
+//
+// ⚠ **`<T>.__abandon` STAYS PER-TYPE**, and can: it walks the request UNION, whose payloads can never name a
+// type parameter — `ServiceCompanions.untransferableParameterNoun` refuses one at the `spawn`.
+function buildServiceLoops(module MaxonModule, project Project, signatures ProgramSignatures, typeName ByteArray, instances GenericInstanceIdArray)
+	if not signatures.structDeclaresTypeParams(typeName) 'monomorphic'
+		buildServiceLoop(module, project: project, signatures: signatures, typeName: typeName, instance: ServiceStateInstance.monomorphic)
+		return
+	end 'monomorphic'
+
+	// ⛔⛔ **AN EMPTY BUCKET BUILDS NOTHING AND IS NOT AN ASSERTION FAILURE** — the discipline
+	// `ServiceCompanions.mintServiceReplyErrorType` states for the sweep, and for its reason. The ROSTER is
+	// built from the discovery walk's raw token candidates, which know nothing of any refusal; a `ParseError`
+	// anywhere in a file discards that file's whole artifact (`Queries.queryFileParse`), so a doomed program
+	// reaches here with its type on the roster and not one `serviceSpawn` op behind it. There is nothing to
+	// build a loop for and nothing that could call one.
+	for gid in instances 'eachInstantiation'
+		buildServiceLoop(module, project: project, signatures: signatures, typeName: typeName, instance: ServiceStateInstance.at(gid))
+	end 'eachInstantiation'
+end 'buildServiceLoops'
+
+// One bucket of spawned instantiations per entry of `services`, in that order.
+typealias SpawnedInstanceBuckets = Array with GenericInstanceIdArray
+
+// Which instantiations the walk has already bucketed. A gid determines its own base, so one set serves
+// every service and no gid can land in two buckets.
+typealias SpawnedInstanceSet = Set with GenericInstanceId
+
+// ⭐⭐ **EVERY INSTANTIATION THIS PROGRAM ACTUALLY SPAWNS, READ OFF THE OPS, IN ONE WALK.** The index knows
+// every instance the program NAMES, which is a larger set — an instance nothing spawns would get a loop
+// whose handler calls and state drop nothing ever reaches, and whose reply the `spawn` road never judged
+// (`ServiceCompanions.uncarriableReplyResultNoun` refuses a reply the cell cannot carry, and it is asked at
+// the `spawn`). The `serviceSpawn` ops are the exact set, and their state values are read through the same
+// classifier `LowerMaxonToStd.spawnedStateInstance` uses, so the loop that is BUILT is the loop that is
+// CALLED.
+//
+// ⚠ **THE ROSTER LOOKUP INSIDE THE WALK IS OVER DISTINCT SERVICE TYPES**, which is a count an author writes
+// by hand (`serviceTypeRoster`'s own bound) — unlike the INSTANTIATIONS, which grow with the program and are
+// therefore deduped through a set rather than a scan.
+function spawnedInstancesByService(module MaxonModule, services ByteArrayArray) returns SpawnedInstanceBuckets
+	var buckets = SpawnedInstanceBuckets.create()
+	for _ in services 'eachService'
+		buckets.push(GenericInstanceIdArray.create())
+	end 'eachService'
+
+	var seen = SpawnedInstanceSet.create()
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("spawnedInstancesByService: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				noteSpawnedInstance(try module.ops.get(opIdx) otherwise panic("spawnedInstancesByService: opIdx {opIdx} not in module.ops"), func: func, services: services, buckets: buckets, seen: seen)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return buckets
+end 'spawnedInstancesByService'
+
+function noteSpawnedInstance(op MaxonOp, func IrFunction, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
+	match op 'op'
+		serviceSpawn(_, spawnedType, state) then bucketSpawnedInstance(func, spawnedType: spawnedType, state: state, services: services, buckets: buckets, seen: seen)
+		// Every other op starts no service. Two ranges rather than one because `serviceSpawn` sits between
+		// `errorFlagEncode` and `serviceSend` in the dialect's own order, and the second runs to the union's
+		// LAST variant — a variant appended past it would otherwise land outside both ranges, which is the
+		// band-append invariant doing its job rather than a range to widen without reading.
+		call to errorFlagEncode then break 'op'
+		serviceSend to immortalStructRecord then break 'op'
+	end 'op'
+end 'noteSpawnedInstance'
+
+// One `serviceSpawn`'s instantiation, into its service's bucket. A state standing at NO instantiation is a
+// monomorphic service's plain box and is bucketed by nobody — `buildServiceLoops` is where that is judged.
+function bucketSpawnedInstance(func IrFunction, spawnedType ByteArray, state ValueId, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
+	let tag = try func.valueTags.get(state) otherwise panic("bucketSpawnedInstance: v{state} is not in '{String.from(func.name)}'s dense value-tag column")
+	let nameId = try func.valueNameIds.get(state) otherwise panic("bucketSpawnedInstance: v{state} is not in '{String.from(func.name)}'s dense value-name column")
+	match serviceStateInstanceOfValueType(tag, nameId: nameId) 'stands'
+		monomorphic then return
+		at(gid) then noteDistinctInstance(gid, spawnedType: spawnedType, services: services, buckets: buckets, seen: seen)
+	end 'stands'
+end 'bucketSpawnedInstance'
+
+function noteDistinctInstance(gid GenericInstanceId, spawnedType ByteArray, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
+	if seen.contains(gid) 'alreadyBucketed'
+		return
+	end 'alreadyBucketed'
+
+	for i in 0 upto services.count() 'eachService'
+		let listed = try services.get(i) otherwise panic("noteDistinctInstance: services.get OOB at {i} on a list walked to its own count")
+		if not listed.equals(spawnedType) 'anotherService'
+			continue
+		end 'anotherService'
+
+		var bucket = try buckets.get(i) otherwise panic("noteDistinctInstance: buckets.get OOB at {i} — one bucket is pushed per service before the walk")
+		seen.insert(gid)
+		bucket.push(gid)
+		return
+	end 'eachService'
+
+	// ⭐⭐ **FALLING OUT IS THE ANSWER FOR A SPAWN OF A TYPE THE ROSTER DOES NOT CARRY, AND IT IS NOT THE
+	// LINK FAILURE THIS FILE'S HEADER WARNS OF.** That warning is about a type on ONE of the two lists: a
+	// handle whose loop nothing built. This is the other direction — an op whose type the roster declined —
+	// and the roster declines exactly the targets `Parser.parseSpawn` refuses at the source
+	// (`serviceTypeRoster` skips every verdict but `startsAService`). A program holding such an op is one
+	// the parse has already rejected, so building nothing for it is what leaves the author with their own
+	// diagnostic instead of a second finding about its wreckage.
+end 'noteDistinctInstance'
 
 // The loop's two parameters, by the ValueId the parameter numbering reserves for each — `ModuleInit`'s
 // `ExitCodeParam` shape, and for its reason: a synthesized function has no parameter NAMES, so argument `n`
@@ -91,12 +208,19 @@ let ServiceMailboxParam = 1 as ValueId
 // ⚠ **THE `__shutdown` ARM DROPS THE PILL AND LEAVES; IT DOES NOT DRAIN.** Draining is the exit path's, and
 // both roads into `exit` go through it — so "shutdown drains what was queued behind the pill" and "the last
 // handle drop drains what was queued" are one piece of code rather than two that could disagree.
-function buildServiceLoop(module MaxonModule, project Project, signatures ProgramSignatures, typeName ByteArray)
-	let stateType = MaxonType.structRef(project.typeNames.intern(typeName))
+function buildServiceLoop(module MaxonModule, project Project, signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance)
+	// ⭐ **THE STATE PARAMETER'S TYPE IS WHERE THE WHOLE PER-INSTANCE ABI COMES FROM.** A `genericInstance`
+	// here is what makes `MaxonToStdLowering.materializeLayoutArg` hand each handler `__layout_<mangled>` and
+	// `managedFieldDropCallee` hand the drain `__destruct_<mangled>` — both read argument 0's own type, so
+	// naming the instantiation once here supplies every dictionary this body needs.
+	let stateType = match instance 'i'
+		monomorphic gives MaxonType.structRef(project.typeNames.intern(typeName))
+		at(id) gives MaxonType.genericInstance(id)
+	end 'i'
 	var paramTypes = MaxonTypeArray.create()
 	paramTypes.push(stateType)
 	paramTypes.push(MaxonType.integer)
-	var fn = SynthesizedFunction.open(module, project: project, name: serviceLoopSymbol(typeName), returnType: MaxonReturnType.void, paramTypes: paramTypes)
+	var fn = SynthesizedFunction.open(module, project: project, name: serviceLoopSymbolFor(signatures, typeName: typeName, instance: instance), returnType: MaxonReturnType.void, paramTypes: paramTypes)
 
 	let range = SourceRange.none()
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
@@ -120,7 +244,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 
 	var armIds = BlockIdArray.create()
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		armIds.push(buildServiceArm(fn, signatures: signatures, typeName: typeName, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, range: range).id)
+		armIds.push(buildServiceArm(fn, signatures: signatures, typeName: typeName, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, range: range).id)
 	end 'eachVariant'
 
 	// ⚠ **THE DEFAULT IS THE EXIT, NOT AN ABORT, AND THAT IS A CHOICE ABOUT A CASE THAT CANNOT HAPPEN.** The
@@ -252,7 +376,7 @@ let ServiceAbandonBoxParam = 0 as ValueId
 
 // ⭐ **ONE DISPATCH ARM.** Variant 0 is the compiler's `__shutdown` pill and stops the loop; every other is a
 // message, and runs its handler.
-function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
+function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
 	let arm = fn.openBlock(request.caseNameAt(caseIndex))
 	let payloads = request.payloadsAt(caseIndex)
 	if request.caseNameAt(caseIndex).equals(ServiceShutdownCaseName) 'thePoisonPill'
@@ -295,8 +419,12 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 		args.push(loaded)
 	end 'eachParam'
 
+	// ⭐ **THE HANDLER'S RETURN TYPE IS DERIVED ONCE AND THREADED.** The call and the completion must agree
+	// about a type this instantiation SUBSTITUTED, and two derivations of one substitution are two chances
+	// to disagree about which register the reply's value word came back in.
+	let returned = serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames())
 	let reply = serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, range: range)
-	let outcome = emitServiceHandlerCall(fn, signatures: signatures, callee: callee, args: args, range: range)
+	let outcome = emitServiceHandlerCall(fn, callee: callee, returned: returned, signatures: signatures, args: args, range: range)
 
 	// ⛔⛔⛔ **EVERY RELEASE THIS GREEN THREAD OWES HAPPENS BEFORE THE PUBLISH, AND THAT ORDER IS THE WHOLE
 	// REASON THE CALL AND THE COMPLETION ARE TWO FUNCTIONS (SV2 review).** `__gt_cell_complete` stores
@@ -326,7 +454,7 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 	// the drops release are the values `args` already holds.
 	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), range: range)
 
-	emitServiceReplyCompletion(fn, signatures: signatures, callee: callee, outcome: outcome, reply: reply, range: range)
+	emitServiceReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, outcome: outcome, reply: reply, range: range)
 	// ⛔⛔ **THE CURRENT BLOCK, NOT `arm` — AND THE TWO ARE NOT THE SAME BLOCK FOR EVERY MESSAGE.** A THROWING
 	// handler is a `tryCall` whose error edge is a diamond (`emitServiceReplyCompletion`), so by this line the
 	// ops above have landed in that diamond's MERGE and `arm` was terminated by its `condBranch` several lines
@@ -403,8 +531,7 @@ end 'ServiceHandlerOutcome'
 //
 // A plain `call` to a throwing callee is **E3057** at `SemanticCheck.validatePlainCall` (which walks this
 // synthesized body like any other), so the `tryCall` is FORCED.
-function emitServiceHandlerCall(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, args ValueIdArray, range SourceRange) returns ServiceHandlerOutcome
-	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: signatures.indexTypeNames())
+function emitServiceHandlerCall(fn SynthesizedFunction, callee ByteArray, returned MaxonReturnType, signatures ProgramSignatures, args ValueIdArray, range SourceRange) returns ServiceHandlerOutcome
 	let resultTag = match returned 'r'
 		void gives ValueTypeTag.void
 		value(inner) gives maxonTypeTag(inner)
@@ -428,8 +555,7 @@ end 'emitServiceHandlerCall'
 // review).** `__gt_cell_complete` publishes `completed`, which is the instant the awaiter may resume on
 // another M; `buildServiceArm` states what that costs when a release comes after it, and why every one of
 // them is emitted above this call.
-function emitServiceReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, range SourceRange)
-	let returned = serviceHandlerReturnType(signatures, callee: callee, typeNames: signatures.indexTypeNames())
+function emitServiceReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, range SourceRange)
 	match outcome 'o'
 		answered(result) then completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
 		routed(result, errorFlag) then emitRoutedReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, result: result, errorFlag: errorFlag, reply: reply, range: range)
@@ -506,10 +632,9 @@ end 'emitFusedHandlerFlag'
 // The sweep reads every declaration's parameters, an instance method's included, but only three doors can
 // mark one consumed and a message handler can hold none of them: a direct `Self{f: p}` store in an instance
 // method is co-ownership rather than a move (`Parser.scanBodyFacts`, `detectFieldStores: false`); a
-// type-parameter feed needs a generic type, and a service is never one
-// (`ServiceTargetVerdict.typeIsGeneric` refuses it at the `spawn`); and a promise reclaim needs a `Promise`
-// payload, which `untransferableParameterNoun` refuses at the `spawn` reading the handler's declared slot
-// type (E3135) — a promise owns a green thread, so it never crosses a send.
+// type-parameter feed needs a payload typed at one, and a promise reclaim needs a `Promise` payload — and
+// `untransferableParameterNoun` refuses BOTH at the `spawn` (E3135), reading the handler's declared slot
+// type: a send cannot know an opaque `T`'s layout, and a promise owns a green thread its awaiter holds.
 // Asking the ONE door rather than hard-coding that costs a map lookup per payload at compile time and is
 // what keeps this correct the day a fourth door opens; hard-coding it would be a double free that day.
 //
@@ -545,11 +670,14 @@ function requireServiceRequestLayout(signatures ProgramSignatures, typeName Byte
 	return try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise panic("requireServiceRequestLayout: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
 end 'requireServiceRequestLayout'
 
-// A handler's declared return type, `void` for an undeclared callee — which is a program SemanticCheck
-// rejects with E3004, reached here only because this synthesis runs over a module that may still be doomed.
-function serviceHandlerReturnType(signatures ProgramSignatures, callee ByteArray, typeNames TypeNameInterner) returns MaxonReturnType
+// A handler's return type AS THIS LOOP'S INSTANTIATION FIXES IT, `void` for an undeclared callee — which is
+// a program SemanticCheck rejects with E3004, reached here only because this synthesis runs over a module
+// that may still be doomed. The substitution is what gives a `returns T` handler's result the same concrete
+// tag the awaiter reads it back at; the reply cell's own type was substituted through the same instance at
+// the send (`SignatureIndex.internPromiseInstanceForReply`).
+function serviceHandlerReturnType(signatures ProgramSignatures, callee ByteArray, instance ServiceStateInstance, typeNames TypeNameInterner) returns MaxonReturnType
 	return match signatures.returnTypeOf(callee, into: typeNames) 'r'
-		declared(declaredReturn) gives declaredReturn
+		declared(declaredReturn) gives serviceInstanceResolvedReturn(signatures, returnType: declaredReturn, declFilePath: signatures.recordedReturnDeclFileOf(callee), instance: instance)
 		undeclared gives MaxonReturnType.void
 	end 'r'
 end 'serviceHandlerReturnType'

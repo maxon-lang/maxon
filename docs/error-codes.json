@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "653a0d2a9ab1b4d8",
+  "sourceHash": "d744c18a2289521a",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1623,6 +1623,15 @@
       "stage": "semantic",
       "doc": "A union case's payload argument carries a `name:` label naming no payload of that case --\n`TwoParts.values(10, z: 20)` where the case declares `a` and `b`.\nNOT E3018, which is about a FIELD: a payload is a positional slot of one case, not a member of\nthe union, and a message calling it a field names a thing the program does not have. The two\nmistakes also have different cures -- a field typo is fixed against the type, a payload label\nagainst the CASE -- so the diagnostic names the case rather than the union alone.",
       "emittedBy": {"shv2": "semanticUnknownPayloadName"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3145,
+      "tag": "E3145",
+      "name": "SemanticServiceReplyInstanceUnknown",
+      "stage": "semantic",
+      "doc": "A message whose reply is typed at a GENERIC service's own type parameter is sent through a handle that\nno longer says which instantiation it was started at.\nA generic service has ONE `<T>.handle` companion, whatever it is instantiated at -- one union and one\nhandle struct per service, never a pair per instantiation -- so which instantiation a handle belongs to\nis carried on its TYPE. `<T>.handle with <Args>` is a generic instantiation like any other and can be\nwritten; the BARE `<T>.handle` is the base, which fixes nothing, so a slot spelled that way has dropped\nthe very fact the reply needs.\nThat matters for exactly one shape. A reply typed at the type parameter is produced inside the handler,\nwhere the instantiation's layout descriptor says what the type parameter is; the awaiting frame has only\nthe handle, so a handle that names no instantiation gives the awaited value no type any member,\nconversion or `otherwise` branch can be checked against.\nEvery OTHER message through such a handle is unaffected and stays legal: a reply typed at a concrete\ntype, and a message with no reply at all, need nothing from the instantiation.\nThe cure is to spell the instantiation -- a `typealias` over `<T>.handle with <Args>` carries the\nreply's type through a parameter, a struct field or an array element -- or to send the message where the\nbinding the `spawn` produced is, which carries it already.",
+      "emittedBy": {"shv2": "semanticServiceReplyInstanceUnknown"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

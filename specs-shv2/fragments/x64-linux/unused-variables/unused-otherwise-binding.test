@@ -1,0 +1,22 @@
+// Test: unused-otherwise-binding
+
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Score throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var x = 0
+	try mayFail() otherwise (e) 'handler'
+		x = 42
+	end 'handler'
+	return x
+end 'main'
+---
+CompilerError:
+error E3012: <fragment>:15:27: unused variable: 'e'

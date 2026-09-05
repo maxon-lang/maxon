@@ -1,0 +1,21 @@
+// Test: error.a-generic-factory-that-fixes-no-type-argument-is-refused
+type Box uses T
+	var count as Whole
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.count
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create()
+	return 0
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+---
+CompilerError:
+error E2015: <fragment>:15:20: Unsupported: `spawn Box.create(…)` fixes nothing for the type parameter `T` of `type Box` — a `spawn` names the type outright, so its type arguments are read off the factory's own arguments and `create` declares no parameter typed at `T`. Give the factory a parameter of that type, or spawn a type that fixes it

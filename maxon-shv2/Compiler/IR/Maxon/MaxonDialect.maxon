@@ -607,6 +607,15 @@ export function maxonReturnTypeIsVoid(ref MaxonReturnType) returns bool
 	end 'check'
 end 'maxonReturnTypeIsVoid'
 
+// Does this return type name the declaring type's own opaque type parameter — the one shape a CONCRETE
+// instantiation still has to fix before any caller can read the value?
+export function maxonReturnTypeIsATypeParameter(ref MaxonReturnType) returns bool
+	return match ref 'check'
+		void gives false
+		value(inner) gives maxonTypeTag(inner) == ValueTypeTag.typeParameter
+	end 'check'
+end 'maxonReturnTypeIsATypeParameter'
+
 // The `ValueTypeTag` of a function's declared return type — what a `return <expr>` must agree
 // with (TypeRules' `typesAgree`). Void has NO tag: void is not a type, so there is nothing for
 // a value to agree with, and manufacturing a tag for it would be exactly the sentinel this

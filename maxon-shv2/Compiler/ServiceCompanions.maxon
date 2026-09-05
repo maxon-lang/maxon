@@ -28,7 +28,8 @@
 // deliberate. A program whose service takes an untransferable message parameter is refused at its `spawn`;
 // if the companions were withheld as well, a `Calc.handle` named in another file would ALSO report
 // `Unknown type`, and the author would read a cascade instead of the one finding. Only a target that cannot
-// HAVE companions — a generic type, whose pair would have to be per-instantiation — is skipped.
+// HAVE companions — a CONSTRAINED generic, whose handlers take witness pointers the synthesized loop holds
+// none of — is skipped.
 
 // ⭐⭐ **ONE SPAWN TARGET AS THE DISCOVERY WALK READS IT — a TYPE and the FACTORY named on it.** Both halves
 // are needed to decide whether the type is a service: `spawn Calc.bump()` names a declared type and is not a
@@ -80,10 +81,81 @@ module union ServiceTargetVerdict
 	// and the sentence therefore says what the TEST is rather than asserting the author's factory returns
 	// something it does not.
 	memberDoesNotReturnTheType
-	// `type <T> uses …` — the companions are monomorphic by construction (one union, one handle struct), so
-	// a generic service would need a pair per instantiation. E2015: not built, not refused forever.
-	typeIsGeneric
+	// `type <T> uses … where <T> is <Interface>` — an instance method of a CONSTRAINED generic carries one
+	// hidden witness pointer per constraint, and `<T>.__loop` is synthesized with no `self` of its own to
+	// source one from. E2015: not built, not refused forever.
+	typeIsAConstrainedGeneric
 end 'ServiceTargetVerdict'
+
+// ⭐⭐ **WHICH INSTANTIATION OF A GENERIC SERVICE A `spawn` STARTED — the fact every per-instance decision
+// downstream reads.** A non-generic service is `monomorphic`; a generic one carries the `Box with String`
+// the factory's arguments fixed, and that instance is what resolves a `T` reply, names the per-instance
+// `<T>.__loop` and selects the state's own destructor. The companions are NOT among those decisions: one
+// `<T>.request` and one `<T>.handle` serve every instantiation.
+module union ServiceStateInstance
+	monomorphic
+	at(id GenericInstanceId)
+end 'ServiceStateInstance'
+
+// ⭐⭐ **WHICH INSTANTIATION A VALUE STANDS AT — THE ONE READING, over the two dense columns every tier
+// carries a value's type in.** Three tiers ask it and none of them can share code with the others: the
+// parser reads its own columns, the lowering reads the function's, and `ServiceLoop` reads them off an
+// `IrFunction` it is walking. What they CAN share is the classification, and they must — the loop that is
+// BUILT (`ServiceLoop.spawnedInstancesByService`) and the loop that is CALLED
+// (`LowerMaxonToStd.emitServiceSpawn`) are named from this answer, and two readings that drifted would be a
+// link failure against a `__loop` symbol nobody built.
+//
+// ⚠ **IT HAS NO MISS BEHAVIOUR, DELIBERATELY.** Whether a `monomorphic` answer is legal is a fact about the
+// SERVICE, not about the value, so each caller asserts it where that fact is in hand
+// (`ServiceLoop.buildServiceLoops`) rather than here, where it is not.
+module function serviceStateInstanceOfValueType(tag ValueTypeTag, nameId TypeNameId) returns ServiceStateInstance
+	return ServiceStateInstance.at(nameId as GenericInstanceId) if tag == ValueTypeTag.genericInstance else ServiceStateInstance.monomorphic
+end 'serviceStateInstanceOfValueType'
+
+// ⭐⭐ **HOW MUCH OF A SERVICE'S ROSTER CAN BE JUDGED YET.** A `spawn` asks the roster TWICE, and the two
+// asks differ only in what is known: the first is made before the factory call — so it emits nothing and
+// refuses every message a DECLARATION alone condemns — and the second only for a generic service, once the
+// arguments have fixed the instantiation. One function, asked with more knowledge, can only refuse MORE; two
+// functions could disagree, which is why this is a parameter rather than a second classifier.
+module union ServiceRosterKnowledge
+	// Before the factory call. A reply declared at a type parameter is neither carriable nor uncarriable
+	// yet, so it is DEFERRED rather than judged against an opaque type.
+	declarationOnly
+	// After it. Every type parameter is fixed, and the deferred question is answered.
+	atInstance(instance ServiceStateInstance)
+end 'ServiceRosterKnowledge'
+
+// A declared RETURN type as this instantiation fixes it — `ProgramSignatures.instanceResolvedSlotType` at
+// the return position, so the loop's handler result, the reply cell's own type and the roster's
+// carriability rule read ONE substitution at ONE depth.
+module function serviceInstanceResolvedReturn(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, instance ServiceStateInstance) returns MaxonReturnType
+	return match returnType 'r'
+		void gives returnType
+		value(inner) gives MaxonReturnType.value(signatures.instanceResolvedSlotType(inner, declFilePath: declFilePath, instance: instance))
+	end 'r'
+end 'serviceInstanceResolvedReturn'
+
+// ⭐ **DOES A CONCRETE INSTANTIATION STILL FIX ANYTHING IN THIS TYPE?** A bare `T`, and an instance whose
+// arguments still mention one (`Array with T`). Asked of a RESOLVED type: an inner alias is a `named` leaf
+// and answers for what it denotes rather than for itself.
+function typeIsFixedByAnInstantiation(signatures ProgramSignatures, t MaxonType) returns bool
+	if maxonTypeTag(t) == ValueTypeTag.typeParameter 'opaqueFormal'
+		return true
+	end 'opaqueFormal'
+
+	return maxonTypeTag(t) == ValueTypeTag.genericInstance and not signatures.instanceArgsAreFullyConcrete(genericInstanceIdOf(t))
+end 'typeIsFixedByAnInstantiation'
+
+// ⭐⭐ **THE SYMBOL OF THE LOOP THAT SERVES ONE INSTANTIATION.** `<T>.__loop` while the service is
+// monomorphic, `<T with Args>.__loop` per instantiation once it is generic — read here by the BUILDER
+// (`ServiceLoop.buildServiceLoop`) and by the SPAWN'S LOWERING, which derives the instance from the state
+// value's own type. One function, so a loop that is built is a loop that is called.
+module function serviceLoopSymbolFor(signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance) returns ByteArray
+	return match instance 'i'
+		monomorphic gives serviceLoopSymbol(typeName)
+		at(id) gives serviceLoopSymbol(signatures.mangleGenericInstance(id))
+	end 'i'
+end 'serviceLoopSymbolFor'
 
 // ⭐ **WHY A SERVICE'S MESSAGE ROSTER CANNOT BE DISPATCHED.** Split from `ServiceTargetVerdict` because the
 // two answer about different declarations — the target is about the FACTORY, this is about the messages —
@@ -111,7 +183,11 @@ end 'ServiceRosterVerdict'
 
 // ⭐⭐ **IS THIS A SPAWN TARGET? — the whole rule, in one place.** The order of the arms is the order the
 // questions can be ASKED: a member cannot be classified before its type is known to be a struct, and a
-// generic type is refused ahead of its member because the refusal is about the type either way.
+// constrained generic is refused ahead of its member because the refusal is about the type either way.
+//
+// ⭐ **A PLAIN GENERIC IS A SPAWN TARGET.** One `<T>.request` and one `<T>.handle` serve every
+// instantiation — nothing about either names a type argument — and what does vary per instantiation is the
+// LAYOUT, which `Parser.parseSpawn` fixes from the factory's arguments and carries on the handle's own type.
 //
 // ⚠ **THE RETURN TYPE IS MATCHED AS `structRef` OR `named`, AND BOTH ARE REQUIRED AT THIS MOMENT.** The
 // sweep resolves `returns Self` to a `structRef` from the tokens alone, but a factory written
@@ -121,11 +197,11 @@ end 'ServiceRosterVerdict'
 // Accepting only `structRef` here would make `returns Self` a service and `returns Calc` not one, which is
 // the same declaration written two ways.
 module function classifyServiceTarget(signatures ProgramSignatures, typeName ByteArray, member ByteArray) returns ServiceTargetVerdict
-	var declared = try serviceLayoutOf(signatures, typeName: typeName) otherwise return ServiceTargetVerdict.typeIsNotAStruct
+	let declared = try serviceLayoutOf(signatures, typeName: typeName) otherwise return ServiceTargetVerdict.typeIsNotAStruct
 
-	if declared.typeParamCount() > 0 'generic'
-		return ServiceTargetVerdict.typeIsGeneric
-	end 'generic'
+	if not declared.whereConstraints.isEmpty() 'constrainedGeneric'
+		return ServiceTargetVerdict.typeIsAConstrainedGeneric
+	end 'constrainedGeneric'
 
 	let factoryKey = qualifiedMethodName(typeName, methodName: member)
 	let decls = signatures.overloadedDeclsOf(factoryKey)
@@ -201,7 +277,7 @@ end 'spawnTargetLayoutOf'
 // ⭐⭐ **CAN EVERY MESSAGE BECOME A VARIANT? — the roster's own rule, asked in declaration order so the
 // FIRST offending message is the one named.** A stable answer matters: this decides the text of a
 // diagnostic that fires at a `spawn` in a different file from the method it names.
-module function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray) returns ServiceRosterVerdict
+module function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray, knowledge ServiceRosterKnowledge) returns ServiceRosterVerdict
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
 		let methodName = layout.messageMethodAt(i)
@@ -212,7 +288,7 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		end 'overloaded'
 
 		let decl = serviceFirstDeclOf(decls, key: messageKey)
-		let replyNoun = uncarriableReplyNoun(signatures, messageKey: messageKey, decl: decl, declFilePath: layout.declFilePath)
+		let replyNoun = uncarriableReplyNoun(signatures, messageKey: messageKey, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge)
 		if not replyNoun.isEmpty() 'replyCannotBeCarried'
 			return ServiceRosterVerdict.messageReplyIsNotCarriable(methodName, noun: replyNoun)
 		end 'replyCannotBeCarried'
@@ -235,12 +311,12 @@ end 'classifyServiceRoster'
 // ⚠ **A MESSAGE WITH NO REPLY IS ASKED NOTHING**, which is what keeps a fire-and-forget roster unchanged: a
 // message that returns nothing and throws nothing has no reply slot, mints no cell, and reaches none of the
 // machinery below.
-function uncarriableReplyNoun(signatures ProgramSignatures, messageKey ByteArray, decl OverloadedDecl, declFilePath FilePath) returns String
+function uncarriableReplyNoun(signatures ProgramSignatures, messageKey ByteArray, decl OverloadedDecl, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns String
 	if not serviceMessageHasAReply(signatures, key: messageKey, decl: decl) 'fireAndForget'
 		return ""
 	end 'fireAndForget'
 
-	let resultNoun = uncarriableReplyResultNoun(signatures, returnType: decl.returnType, declFilePath: declFilePath)
+	let resultNoun = uncarriableReplyResultNoun(signatures, returnType: decl.returnType, declFilePath: declFilePath, knowledge: knowledge)
 	if not resultNoun.isEmpty() 'theValueWord'
 		return resultNoun
 	end 'theValueWord'
@@ -251,18 +327,36 @@ end 'uncarriableReplyNoun'
 // The VALUE word. It is one i64 the trampoline never touches — `__gt_cell_complete` writes it and
 // `__gt_try_await` reads it back — so exactly what an `async` result may be, asked through the same
 // predicate (`tagRidesAsyncGprChannel`) rather than through a second list of the same three shapes.
-function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath) returns String
+function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns String
 	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
 		return ""
 	end 'nothingComesBack'
 
-	let resolved = signatures.declaredSlotType(serviceReturnedType(returnType), into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+	let declared = signatures.declaredSlotType(serviceReturnedType(returnType), into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+	match knowledge 'known'
+		atInstance(instance) then return uncarriableReplyNounOfType(signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance))
+		declarationOnly then break 'known'
+	end 'known'
+
+	// ⭐ **A `returns T` IS NOT YET AN ANSWER.** What the cell can carry is a fact about the CONCRETE type,
+	// and the arguments that fix it have not been read; judging the opaque parameter here would refuse every
+	// generic service, since a type parameter rides no register at all.
+	if maxonTypeTag(declared) == ValueTypeTag.typeParameter 'deferredToTheInstantiation'
+		return ""
+	end 'deferredToTheInstantiation'
+
+	return uncarriableReplyNounOfType(declared)
+end 'uncarriableReplyResultNoun'
+
+// The verdict itself, over a type nothing can still fix. Split out because the two knowledge arms reach it
+// with types resolved to different depths and the SENTENCE must be one.
+function uncarriableReplyNounOfType(resolved MaxonType) returns String
 	if tagRidesAsyncGprChannel(maxonTypeTag(resolved)) 'fitsTheWord'
 		return ""
 	end 'fitsTheWord'
 
 	return "a reply whose value is {maxonTypeTag(resolved).name}, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and a value held at an interface type or an opaque type parameter is released through a companion the cell does not carry"
-end 'uncarriableReplyResultNoun'
+end 'uncarriableReplyNounOfType'
 
 // The ERROR word. It holds the FUSED ORDINAL of the reply's two-member dispatch line, so a payload-carrying
 // union (whose flag is a box POINTER) will not fit — and neither will an error enum whose own tags cannot be
@@ -310,7 +404,7 @@ end 'serviceReturnedType'
 //   • an **interface value** is a fat pointer whose witness half is `.rdata` and whose value half is
 //     released through `__drop_existential`; the request union's payload cascade cannot express the pair;
 //   • an **opaque type parameter** has no layout at the send, so the sender cannot know whether it is even
-//     managed — and a generic service is refused outright one rule up.
+//     managed — nor does an `Array with T` or any other instance whose arguments still name one.
 //
 // ⚠ **IT IS ASKED OF THE RESOLVED TYPE.** A parameter written `Promise with (int, E)` is recorded by the
 // sweep as a bare `named` naming its alias, so testing the swept type directly would let every aliased
@@ -326,12 +420,11 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 	match maxonTypeTag(resolved) 'tag'
 		function then return "a function value, whose captured environment is a box a second thread would share"
 		interfaceRef then return InterfaceParameterNoun
-		// ⚠ **UNREACHABLE TODAY AND STILL THE RIGHT ANSWER.** Only a GENERIC type's method can declare a
-		// type-parameter-typed parameter, and a generic type is refused as a spawn target one rule earlier
-		// (`ServiceTargetVerdict.typeIsGeneric`) — so no roster reaching here holds one. It answers rather
-		// than returning "" because the day a service can be generic, "transferable" would be the wrong
-		// default for the one shape whose layout the send site cannot know.
-		typeParameter then return "an opaque type parameter, whose layout is not known at the send"
+		// ⭐⭐ **THE ASYMMETRY A GENERIC SERVICE IS BUILT ON: a `T` RETURN IS LEGAL AND A `T` PARAMETER IS
+		// NOT.** The reply is produced inside the handler, where the instance's descriptor says what `T` is;
+		// the send is written where the handle stands and MOVES its argument, and an opaque `T` does not tell
+		// that site whether what it is moving owns heap at all.
+		typeParameter then return TypeParameterParameterNoun
 		// ⭐⭐ **A BARE `named` MAY STILL BE AN INTERFACE, AND THIS IS WHERE THAT IS ASKED (MEASURED).**
 		// `ProgramSignatures.normalizeSweptInterfaceTypes` re-tags a swept `named` that denotes an interface —
 		// but only in a struct's FIELD column and in the RETURN column, never in `OverloadedDecl.paramTypes`.
@@ -345,7 +438,11 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 		// exit code, a struct box, a String, a container instance, a character. Each MOVES.
 		boolean to float then return ""
 		exitCode to string then return ""
-		genericInstance to character then return ""
+		// An instance whose arguments still name a type parameter (`Array with T` inside `type Box uses T`)
+		// is the SAME opacity one arm up wearing a container: the send knows neither the element's layout
+		// nor whether the record owns one. A fully concrete instance is an ordinary owned box and MOVES.
+		genericInstance then return TypeParameterParameterNoun if typeIsFixedByAnInstantiation(signatures, t: resolved) else ""
+		character then return ""
 		// ⭐ **A `cstring` MAY NOT CROSS A SEND.** It is a raw address into a buffer the SENDER owns, with no
 		// length and no ownership — the receiving green thread would read bytes another may free or grow.
 		// The cure is to send the value the pointer came out of, which does carry its own storage.
@@ -364,6 +461,10 @@ module let InterfaceParameterNoun = "a value held at an interface type, which is
 // its value is a bare INTEGER handle, so `keep(n Integer)` accepts one without a word from the type checker.
 // `Parser.moveIntoGreenThread` therefore asks about the VALUE, and it says the same thing this does.
 module let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
+
+// ⭐ **THE OPAQUE-LAYOUT NOUN, shared by the bare `T` and by any instance whose arguments still name one** —
+// one finding about one shape, exactly as `InterfaceParameterNoun` is.
+let TypeParameterParameterNoun = "an opaque type parameter, whose layout is not known at the send"
 
 // ⭐ **THE WORDS FOR A VALUE WHOSE TYPE MAY NOT CROSS, refused at the SEND rather than at the declaration.**
 // `serviceRosterRefusalMessage`'s twin one tier down: that one names a parameter the author DECLARED, this
@@ -425,9 +526,36 @@ module function serviceTargetRefusalMessage(verdict ServiceTargetVerdict, typeNa
 		memberIsNotDeclared then return "{written} does not start a service: `type {String.from(typeName)}` declares no `{String.from(member)}`. {SpawnTeachingSentence}"
 		memberTakesAReceiver then return "{written} does not start a service: `{String.from(typeName)}.{String.from(member)}` is an INSTANCE method, and a `spawn` calls its factory directly — there is no service yet for a message to reach. {SpawnTeachingSentence}"
 		memberDoesNotReturnTheType then return "{written} does not start a service: `{String.from(typeName)}.{String.from(member)}` does not hand back a `{String.from(typeName)}` the service can own — a service's state is the BOX of a declared `type`, and this factory's recorded return type is not one. {SpawnTeachingSentence}"
-		typeIsGeneric then return "{written} — `type {String.from(typeName)}` is generic, and a service's companions (`{String.from(serviceRequestCompanionName(typeName))}`, `{String.from(serviceHandleCompanionName(typeName))}`) are monomorphic: ONE union and ONE handle struct per service, not one pair per instantiation. Spawn a non-generic type, or declare a concrete wrapper around the generic one"
+		typeIsAConstrainedGeneric then return "{written} — `type {String.from(typeName)}` constrains its type parameters, and an instance method of a constrained generic takes one hidden witness pointer per constraint, which the synthesized `{String.from(serviceLoopSymbol(typeName))}` has no `self` to source. Spawn an UNCONSTRAINED generic or a plain type, or move the constrained work behind a message that takes concrete arguments"
 	end 'why'
 end 'serviceTargetRefusalMessage'
+
+// ⭐⭐ **THE WORDS FOR A GENERIC SPAWN TARGET WHOSE TYPE ARGUMENT NOTHING FIXES.** A `spawn` cannot name an
+// alias — the walk that decides which types are services reads raw tokens with no scope to resolve one — so
+// the factory's own arguments are the only place a type argument can come from, and a parameter typed at it
+// is what carries one.
+module function spawnUninferrableTypeArgumentRefusal(typeName ByteArray, member ByteArray, paramName ByteArray) returns String
+	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` fixes nothing for the type parameter `{String.from(paramName)}` of `type {String.from(typeName)}` — a `spawn` names the type outright, so its type arguments are read off the factory's own arguments and `{String.from(member)}` declares no parameter typed at `{String.from(paramName)}`. Give the factory a parameter of that type, or spawn a type that fixes it"
+end 'spawnUninferrableTypeArgumentRefusal'
+
+// ⭐⭐ **THE WORDS FOR A `T`-TYPED REPLY SENT THROUGH A HANDLE THAT NAMES NO INSTANTIATION.**
+// A generic service has ONE `<T>.handle`, so which instantiation a handle belongs to rides its TYPE — and a
+// slot spelled at the bare companion has dropped it.
+//
+// ⚠ **THE CURE IS A SPELLING, AND IT IS THE ONE THE LANGUAGE ALREADY HAS.** `<T>.handle with <Args>` is a
+// generic instantiation like any other, so a `typealias` over it carries the reply's type through a
+// parameter, a field or an element. The sentence names that first and the `spawn` binding second, because
+// the binding is the fallback rather than the fix.
+module function serviceReplyInstanceUnknownRefusal(typeName ByteArray, methodName ByteArray, paramName ByteArray, member ByteArray) returns String
+	return "`{String.from(typeName)}.{String.from(methodName)}` replies at `{String.from(typeName)}`'s own type parameter `{String.from(paramName)}`, and this handle stands at the bare `{String.from(serviceHandleCompanionName(typeName))}` — the ONE handle companion every instantiation of `{String.from(typeName)}` shares — so it names no instantiation and the reply has no type. SPELL the instantiation: `{String.from(serviceHandleCompanionName(typeName))} with <the type argument>` is a generic instance like any other, and a `typealias` over it carries the reply's type through a parameter, a struct field or an array element. Or send `{String.from(methodName)}` where the `spawn {String.from(typeName)}.{String.from(member)}(…)` binding is, which carries the instantiation already"
+end 'serviceReplyInstanceUnknownRefusal'
+
+// ⭐⭐ **THE WORDS FOR A `spawn` WHOSE TYPE ARGUMENT IS STILL OPAQUE.** Written inside another generic
+// body, `spawn Box.create(item)` fixes `T` to the ENCLOSING declaration's parameter — a type the loop would
+// have to be handed a dictionary for, and a synthesized body carries none.
+module function spawnOpaqueTypeArgumentRefusal(typeName ByteArray, member ByteArray) returns String
+	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` fixes `type {String.from(typeName)}`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `{String.from(serviceLoopSymbol(typeName))}` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type"
+end 'spawnOpaqueTypeArgumentRefusal'
 
 // ⭐ **THE WORDS FOR A `spawn` WHOSE SHAPE IS NOT `<Type>.<factory>(…)` AT ALL** — a bare `spawn f()`, a
 // `spawn x.y` with no call. It shares `SpawnTeachingSentence` with the verdicts above rather than restating
@@ -795,6 +923,12 @@ end 'addServiceRequestCase'
 module function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
 	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
 	var handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
+	// ⭐⭐ **THE COMPANION TAKES ITS SERVICE'S `uses` LIST, WHICH IS WHAT MAKES `<T>.handle with <Args>`
+	// WRITABLE.** One companion still serves every instantiation — this adds no second declaration — but a
+	// base with no parameters admits no `with`, so an author had no spelling for the instance a `spawn`
+	// produces and no declared slot could hold one. It changes nothing about the LAYOUT: the one field is
+	// the mailbox pointer at every instantiation, which is why the geometry audit below still holds.
+	handle.recordTypeParams(owner.typeParamNames)
 	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
 
 	// ⭐⭐ **THE AUDIT THAT KEEPS THE RUNTIME'S TWO NUMBERS HONEST.** `__mbox_handle_clone_box` allocates
@@ -820,9 +954,10 @@ end 'buildServiceHandleStruct'
 // invalid memory access`"*. Copying the names first ends the aliasing before any write happens.
 // ⭐⭐ **EVERY TYPE THIS PROGRAM SPAWNS, DEDUPED, IN FIRST-SPAWN ORDER — THE ONE ROSTER OF "WHAT IS A
 // SERVICE HERE?".** Two askers, and a disagreement between them is not a diagnostic: the SWEEP mints the
-// companions from it (below), and `Runtime/ServiceLoop.installServiceLoops` builds one `<T>.__loop` from it.
-// A type on one list and not the other is a handle whose loop nothing built (a link failure) or a loop for a
-// type with no request union (a panic inside the synthesis) — so it is derived once.
+// companions from it (below), and `Runtime/ServiceLoop.installServiceLoops` builds the loops from it — one
+// for a monomorphic service, one per spawned INSTANTIATION for a generic one. A type on one list and not the
+// other is a handle whose loop nothing built (a link failure) or a loop for a type with no request union (a
+// panic inside the synthesis) — so it is derived once.
 //
 // ⚠ It DEDUPES, because two `spawn`s of one type through two different factories are two CANDIDATES and one
 // service. The mint below still asks the registry as well, for the reason its own comment gives; this makes
@@ -914,7 +1049,7 @@ module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArra
 		match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
 			// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
 			// minted for any of them — see this file's header for why the sweep never reports.
-			typeIsNotAStruct to typeIsGeneric then continue
+			typeIsNotAStruct to typeIsAConstrainedGeneric then continue
 			startsAService then break 'verdict'
 		end 'verdict'
 

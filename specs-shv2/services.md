@@ -532,9 +532,108 @@ typealias Integer = int(i64.min to i64.max)
 error E2015: <fragment>:19:10: Unsupported: `Calc.add` is a message of the service `Calc` and is declared 2 times. A message becomes ONE variant of the synthesized `Calc.request` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names
 ```
 
-<!-- test: error.generic-service-refused -->
-The companions are monomorphic by construction — one union and one handle struct per service, not one
-pair per instantiation.
+<!-- test: error.message-param-type-parameter-not-transferable -->
+A generic service is spawnable, and a message PARAMETER typed at the type parameter is still refused: a send
+MOVES its argument, and the send site cannot know from an opaque `T` whether what it is moving is managed at
+all. The RETURN road is the asymmetry that makes this a rule rather than a gap — `peek() returns T` is legal
+in `a-generic-service-is-supported`, because the value is produced where the descriptor is.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function put(x T)
+		self.item = x
+	end 'put'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3135: <fragment>:15:10: parameter `x` of the message `Box.put` is an opaque type parameter, whose layout is not known at the send, and this `spawn` makes `Box` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+```
+
+<!-- test: error.a-constrained-generic-service-is-refused -->
+Lifting the generic gate did not lift it for a CONSTRAINED generic, and the refusal is a mechanism rather
+than caution: an instance method of a constrained generic takes one hidden witness pointer per constraint,
+and `Box.__loop` is synthesized with no `self` to source one from. Compare
+`a-generic-service-is-supported`, whose only difference is the `where`.
+```maxon
+interface Peekable
+	function tag() returns Whole
+end 'Peekable'
+
+type Box uses T where T is Peekable
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.item.tag()
+	end 'peek'
+end 'Box'
+
+type Coin
+	var n as Whole
+
+	static function create(n Whole) returns Self
+		return Self{n: n}
+	end 'create'
+
+	public function tag() returns Whole
+		return self.n
+	end 'tag'
+end 'Coin'
+
+function main() returns ExitCode
+	let h = spawn Box.create(Coin.create(3))
+	return 0
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E2015: <fragment>:31:10: Unsupported: `spawn Box.create(…)` — `type Box` constrains its type parameters, and an instance method of a constrained generic takes one hidden witness pointer per constraint, which the synthesized `Box.__loop` has no `self` to source. Spawn an UNCONSTRAINED generic or a plain type, or move the constrained work behind a message that takes concrete arguments
+```
+
+<!-- test: error.a-generic-factory-that-fixes-no-type-argument-is-refused -->
+A `spawn` names its type outright and cannot spell a type argument — the discovery walk reads raw tokens — so
+the instantiation is read off the FACTORY'S OWN ARGUMENTS. A factory taking none fixes nothing, and there is
+no instance to synthesize a loop against.
+```maxon
+type Box uses T
+	var count as Whole
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.count
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create()
+	return 0
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E2015: <fragment>:15:20: Unsupported: `spawn Box.create(…)` fixes nothing for the type parameter `T` of `type Box` — a `spawn` names the type outright, so its type arguments are read off the factory's own arguments and `create` declares no parameter typed at `T`. Give the factory a parameter of that type, or spawn a type that fixes it
+```
+
+<!-- test: error.a-spawn-inside-a-generic-body-is-refused -->
+The same rule one level out: a `spawn` inside another generic's body fixes the service's type arguments to
+the ENCLOSING declaration's type parameters, which name no layout. `Box.__loop` is synthesized per
+instantiation and has no dictionary to read one from.
 ```maxon
 type Box uses T
 	var item as T
@@ -548,13 +647,27 @@ type Box uses T
 	end 'peek'
 end 'Box'
 
+type Outer uses U
+	var seed as U
+
+	static function create(seed U) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function go() returns Whole
+		let h = spawn Box.create(self.seed)
+		return 0
+	end 'go'
+end 'Outer'
+
 function main() returns ExitCode
-	let h = spawn Box.create(1)
+	let o = Outer.create(1 as Whole)
 	return 0
 end 'main'
+typealias Whole = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:10: Unsupported: `spawn Box.create(…)` — `type Box` is generic, and a service's companions (`Box.request`, `Box.handle`) are monomorphic: ONE union and ONE handle struct per service, not one pair per instantiation. Spawn a non-generic type, or declare a concrete wrapper around the generic one
+error E2015: <fragment>:22:21: Unsupported: `spawn Box.create(…)` fixes `type Box`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `Box.__loop` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type
 ```
 
 <!-- test: a-private-method-is-not-a-message -->
@@ -4375,11 +4488,15 @@ end 'main'
 error E3098: <fragment>:21:5: a reply from 'Slow.value' always carries 'ServiceError' — the service can be gone, whatever the message declares — so 'BarePromise' would erase it; declare the storage as 'Promise with (T, ServiceError)' so 'try await' can bind it
 ```
 
-<!-- disabled-test: error.a-generic-service-is-supported -->
-<!-- MEASURED 2026-09-04: `E2015 — `spawn Box.create(…)` where `type Box` is generic`. A service's companions are
-     monomorphic (ONE union and ONE handle struct per service), so a generic service needs a companion pair per
-     instantiation. -->
-The monomorphic-companion limitation is a v1 limit, not a rule of the design.
+<!-- test: a-generic-service-is-supported -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+A generic type may be spawned, and ONE companion pair serves every instantiation of it. A `T`-typed message
+payload is an opaque 8-byte slot carrying the layout descriptor, which is the same dictionary-passing model
+every generic body in shv2 already compiles under — the companions never needed to be monomorphic, only the
+LAYOUTS do.
+
+⚠ Neither reference compiler answers this: services are shv2's, and `maxon-selfhosted` declares no `spawn`
+token at all.
 ```maxon
 type Box uses T
 	var item as T
@@ -4401,6 +4518,346 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: two-instantiations-of-one-generic-service-coexist -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+TWO instantiations of one generic service in one program, under one `Box.request` and one `Box.handle`.
+Nothing about a companion names a type argument, so this is the case that would break first if the payload
+slot were typed rather than opaque — and it is the reason a per-instantiation companion pair is not needed.
+`Small` and `Large` are two TYPES over two ranges, so the two spawns are two `GenericInstanceId`s.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+typealias Small = int(0 to 100)
+typealias Large = int(0 to 100000)
+
+function main() returns ExitCode
+	let a = spawn Box.create(7 as Small)
+	let b = spawn Box.create(35 as Large)
+	let x = try await a.peek() otherwise 0
+	let y = try await b.peek() otherwise 0
+	return (x as Integer + y as Integer) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-generic-service-over-a-managed-element-does-not-leak -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+The `T` that crosses the mailbox is MANAGED. The send moves it and the reply moves it back, and neither end
+knows its layout statically — only the descriptor does, which is what the per-instance destructor cascade is
+already synthesized against. **The assertion is as much the exit code as the answer**: a reply that forgot to
+transfer its reference leaks, and a leak is exit 101.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create("ok")
+	let s = try await h.peek() otherwise ""
+	return s.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-generic-service-handle-reaches-a-parameter-through-its-spelling -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+`spawn` hands back a handle at the INSTANTIATION (`Box.handle with String`), and a `typealias` over that is
+what carries it anywhere else — the companion is a generic instance like any other, so it is spelled the way
+`Array with Byte` is. ⚠ There is no INLINE spelling here or anywhere: `function f(xs Array with Whole)` is
+E2010 for every generic in the language, so the alias is not a service quirk.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+typealias StringBoxHandle = Box.handle with String
+
+function readIt(h StringBoxHandle) returns Whole
+	let s = try await h.peek() otherwise ""
+	return s.byteLength() as Whole
+end 'readIt'
+
+function main() returns ExitCode
+	let h = spawn Box.create("wxyz")
+	return readIt(h) as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```exitcode
+4
+```
+
+<!-- test: a-generic-service-handle-lives-in-a-struct-field -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+A handle in a FIELD, which co-owns it. ⭐ **This case caught a wrong answer during its own implementation**:
+the retain router read every handle as `structRef`-tagged after its companion's name, and a generic one is
+`genericInstance`-tagged, so a co-owning store fell through to `__mm_incref` — which steps the box while the
+release still steps a `handles` share, a `refs` share AND the box. The mailbox handle count reached zero
+under a live handle, the service drained, and the next send answered `stopped`. **Exit 0 is the failure
+here**, not a crash.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+typealias StringBoxHandle = Box.handle with String
+
+type Holder
+	var h as StringBoxHandle
+
+	static function create(h StringBoxHandle) returns Self
+		return Self{h: h}
+	end 'create'
+
+	function ask() returns Whole
+		let s = try await self.h.peek() otherwise ""
+		return s.byteLength() as Whole
+	end 'ask'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create(spawn Box.create("abcde"))
+	return holder.ask() as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```exitcode
+5
+```
+
+<!-- test: a-generic-service-handle-lives-in-an-array -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+The third road the spelling opens, and the one that proves the element type survives a container: `Array with
+StringBoxHandle` holds a real 8-byte handle box, and `get` hands back something a `T`-replying message can
+still be sent through.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+typealias StringBoxHandle = Box.handle with String
+typealias HandleArray = Array with StringBoxHandle
+
+function main() returns ExitCode
+	var hs = HandleArray.create()
+	hs.push(spawn Box.create("abcdef"))
+	let h = try hs.get(0) otherwise return 1 as ExitCode
+	let s = try await h.peek() otherwise ""
+	return s.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: error.a-type-parameter-reply-through-a-bare-handle-slot-is-refused -->
+The boundary the three cases above sit inside. A slot typed at the BARE `Box.handle` names no instantiation —
+there is one handle companion and every instantiation shares it — so a message replying at `T` has no type to
+reply with. The refusal names the cure the cases above use.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+typealias StringBoxHandle = Box.handle with String
+
+function readIt(h Box.handle) returns Whole
+	let s = try await h.peek() otherwise ""
+	return s.byteLength() as Whole
+end 'readIt'
+
+function main() returns ExitCode
+	let h = spawn Box.create("ok")
+	return readIt(h) as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3145: <fragment>:17:22: `Box.peek` replies at `Box`'s own type parameter `T`, and this handle stands at the bare `Box.handle` — the ONE handle companion every instantiation of `Box` shares — so it names no instantiation and the reply has no type. SPELL the instantiation: `Box.handle with <the type argument>` is a generic instance like any other, and a `typealias` over it carries the reply's type through a parameter, a struct field or an array element. Or send `peek` where the `spawn Box.create(…)` binding is, which carries the instantiation already
+```
+
+<!-- test: a-generic-handle-is-an-opaque-element-of-another-generic -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+⭐⭐ **THE RED GATE FOR THE FOURTH DECIDER.** A handle reaches a shared generic body as an OPAQUE element
+here, so its retain is chosen from the layout descriptor's `retainFunc` rather than from the value's tag — a
+fourth road, and one only the handle's `with` spelling opens. MEASURED with the protocol classifier blind to
+a service handle: the element retained through `__mm_retain`, which steps the box, while the release still
+stepped a `handles` share, a `refs` share AND the box; the mailbox handle count reached zero under a live
+handle, the service drained, and the SECOND ask answered `stopped`. **This case answers 6 and answered 3**,
+with a concrete-typed field unchanged in both directions as the control.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+typealias StringBoxHandle = Box.handle with String
+
+type Cell uses E
+	var slot as E
+
+	static function create(slot E) returns Self
+		return Self{slot: slot}
+	end 'create'
+
+	function grab() returns E
+		return self.slot
+	end 'grab'
+end 'Cell'
+
+typealias HandleCell = Cell with StringBoxHandle
+
+function main() returns ExitCode
+	let c = HandleCell.create(spawn Box.create("abc"))
+	let first = c.grab()
+	let a = try await first.peek() otherwise ""
+	let second = c.grab()
+	let b = try await second.peek() otherwise ""
+	return (a.byteLength() + b.byteLength()) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: a-monomorphic-handle-is-co-owned-in-a-struct-field -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+⚠ **NOT A GENERIC PROGRAM, AND THAT IS THE POINT.** `a-generic-service-handle-lives-in-a-struct-field`
+above looks like it pins co-ownership and does not: its `String` payload independently roots `__mm_incref`,
+so it stayed green while the thing it names was broken. `__mbox_handle_retain_box` increfs the handle box
+inside its own Std body, which the Maxon-module usage scan cannot see, so a program whose ONLY incref comes
+from a handle retain died at `resolveCallFixups: call to unknown function '__mm_incref'`. Nothing here
+allocates but the handle, which is what makes the case discriminating.
+```maxon
+type Calc
+	var count as Whole
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump() returns Whole
+		self.count = self.count + 1
+		return self.count
+	end 'bump'
+end 'Calc'
+
+type Holder
+	var h as Calc.handle
+
+	static function create(h Calc.handle) returns Self
+		return Self{h: h}
+	end 'create'
+
+	function ask() returns Whole
+		return try await self.h.bump() otherwise 0
+	end 'ask'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create(spawn Calc.create())
+	let a = holder.ask()
+	let b = holder.ask()
+	return (a + b) as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```exitcode
+3
+```
+
+<!-- test: error.a-generic-reply-the-cell-cannot-carry-is-refused-at-the-instantiation -->
+⭐ **THE ONLY CASE THAT PROVES THE SECOND ASK IS REACHABLE.** `classifyServiceRoster` is asked twice —
+`declarationOnly` before the factory call, `atInstance` after — and every other refusal it can reach is
+settled at the first ask. A reply declared at a type parameter is DEFERRED there, because judging it on the
+declaration would refuse every generic service: a type parameter rides no register until an instantiation
+fixes one. `float` is what it fixes here, and E3140 is the deferred verdict arriving. Without this case the
+`atInstance` arm is dead code that reads as live.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(1.5 as Real)
+	return 0
+end 'main'
+typealias Real = float(f64.min to f64.max)
+```
+```maxoncstderr
+error E3140: <fragment>:15:10: the message `Box.peek` declares a reply whose value is float, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and a value held at an interface type or an opaque type parameter is released through a companion the cell does not carry, and this `spawn` makes `Box` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
 ```
 
 <!-- test: error.a-value-sent-through-a-parameter-is-refused -->

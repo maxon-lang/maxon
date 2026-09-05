@@ -1,0 +1,28 @@
+// Test: error.a-type-parameter-reply-through-a-bare-handle-slot-is-refused
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+typealias StringBoxHandle = Box.handle with String
+
+function readIt(h Box.handle) returns Whole
+	let s = try await h.peek() otherwise ""
+	return s.byteLength() as Whole
+end 'readIt'
+
+function main() returns ExitCode
+	let h = spawn Box.create("ok")
+	return readIt(h) as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+---
+CompilerError:
+error E3145: <fragment>:17:22: `Box.peek` replies at `Box`'s own type parameter `T`, and this handle stands at the bare `Box.handle` — the ONE handle companion every instantiation of `Box` shares — so it names no instantiation and the reply has no type. SPELL the instantiation: `Box.handle with <the type argument>` is a generic instance like any other, and a `typealias` over it carries the reply's type through a parameter, a struct field or an array element. Or send `peek` where the `spawn Box.create(…)` binding is, which carries the instantiation already

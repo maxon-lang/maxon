@@ -1684,6 +1684,12 @@ export union ParseError implements Error
 	// as not, and it is the one arm of this union that does — which is why it threads the note rather than
 	// widening every other arm with a field they would all answer `none` to.
 	serviceReplyAliasesState(explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
+	// ⭐ **THE SEVENTH, AND IT IS THE ONLY ONE ABOUT THE HANDLE'S OWN TYPE RATHER THAN ABOUT A DECLARATION.**
+	// Every arm above is decided from what the source declares; this one is decided from what the VALUE at a
+	// send still knows — a generic service's instantiation, which rides the handle because one `<T>.handle`
+	// serves them all and no slot can spell one. It fires at the SEND and not at the `spawn`, because the
+	// `spawn` is exactly the site where the fact is still present.
+	serviceReplyInstanceUnknown(explanation String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -3159,6 +3165,18 @@ function receiverArgSubjectName(receiver ReceiverArg) returns ByteArray
 		value(_, _, subjectName, _) gives subjectName
 	end 'subject'
 end 'receiverArgSubjectName'
+
+// ⭐⭐ **THE BASE OF A GENERIC INSTANTIATION — the NAME the registry is keyed by, and the TOKEN a diagnostic
+// blames.** The two differ for a QUALIFIED base (`Box.handle with String`, a service's handle companion),
+// where no single token spells the whole name and the first one is still the word an author would change.
+type GenericBaseName
+	export let anchor as Token
+	export let written as ByteArray
+
+	export static function create(anchor Token, written ByteArray) returns GenericBaseName
+		return Self{anchor: anchor, written: written}
+	end 'create'
+end 'GenericBaseName'
 
 // ⭐ **THE CONCRETE GENERIC INSTANCE A STATIC CONSTRUCTOR CALL BUILDS (P1.6-B2)**, or `none`. Only a
 // generic-alias constructor (`StrBox.create(…)`) carries one — it is what tells the caller-side consume
@@ -9755,7 +9773,6 @@ typealias NascentSelfCheckArray = Array with NascentSelfCheck
 // The prefix a deferred field's hidden slot is named under. A `__` name, so `requireUnreservedName` already
 // keeps every user declaration out of the space and no program can spell one.
 let NascentSelfSlotPrefix = "__self_"
-
 
 // What `Parser.enumAccessorReadOf` found. A union rather than a bool-plus-out-parameter for the ordinary
 // reason: the MEMBER only exists when there was a read, and the two answers must not be representable apart.
@@ -22691,7 +22708,7 @@ export type Parser
 		// A GENERIC-INSTANCE typealias (P1.6-A) — `IntBox = Box with Integer`. Recognized by a base
 		// identifier followed by `with`. It records its own registry (`GenericAliasEntry`), not the
 		// ranged one, and (in the REAL parse) checks the instantiation's arity and managed arguments.
-		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'genericAlias'
+		if self.atGenericBaseName(self.pos) 'genericAlias'
 			// ⭐⭐ **THE ONE FORM WHOSE MEANING HAS TO BE *READ* BEFORE THE COMPILER-OWNED RULE CAN BE ASKED**
 			// (spec-port `lazy-static`). A generic-instance alias mints no identity — it NAMES the instance its
 			// base and arguments intern to (`resolveNamedAlias` re-tags a `named` reference to
@@ -23320,7 +23337,7 @@ export type Parser
 	// rule needs the alias's MEANING — its base and its arguments — and must be able to refuse the
 	// declaration after reading it, which a reader that had already filed it could not allow.
 	function readGenericInstanceAlias(aliasTok Token, visibility Visibility) returns GenericAliasEntry throws ParseError
-		let baseTok = try self.consume(TokenKind.identifier)
+		let base = try self.consumeGenericBaseName()
 		try self.consume(TokenKind.with)
 		// ⭐ **ARGUMENT 0's PRE-ERASURE SPELLING (A2m)**, read with the cursor still on it — `parseGenericArgNodes`
 		// below reaches `parseTypeReference`, whose generic-alias arm folds `__ManagedMemory` into the very
@@ -23332,21 +23349,51 @@ export type Parser
 		// reads the ONE type argument `builtinGenericTypeParamCount` validates against. Read in the SWEEP as
 		// well as the real parse, because the sweep is what interns the instance and the size is half of that
 		// instance's identity — a sweep that skipped it would file every `Vector with N Int` under one gid.
-		let fixedSize = try self.readSizedBaseElementCount(baseTok)
+		let fixedSize = try self.readSizedBaseElementCount(base.written)
 		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
 		// ⭐ **`__ManagedMemory with T` INTERNS AS `Array with T` (W43)** — one record, one instance; see
 		// `canonicalGenericBaseName`. The SPELLING is kept only as `baseIsBuffer`, which decides the member
 		// surface every declared position naming this alias takes.
-		let baseIsBuffer = baseTok.value.equals(ManagedMemoryTypeName)
-		let baseName = self.canonicalGenericBaseNameInThisFile(baseTok.value)
+		let baseIsBuffer = base.written.equals(ManagedMemoryTypeName)
+		let baseName = self.canonicalGenericBaseNameInThisFile(base.written)
 		var args = GenericArgNodeArray.create()
 		let argsStart = self.pos
 		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.genericArgSlotOf(baseName))
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
-		self.checkGenericInstance(baseTok, argCount: argCount)
+		self.checkGenericInstance(base, argCount: argCount)
 
 		return GenericAliasEntry.create(aliasTok.value, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column)
 	end 'readGenericInstanceAlias'
+
+	// ⭐⭐ **A GENERIC BASE MAY BE A QUALIFIED NAME, AND A SERVICE'S `<T>.handle` IS THE ONE THAT IS.** The
+	// companion is minted under the dotted name an author writes, so an instantiation of it
+	// (`Box.handle with String`) has to read both halves — and it is what gives a declared slot something to
+	// say. Asked at an INDEX rather than at the cursor because both gates that admit a base are lookaheads.
+	function atGenericBaseName(at TokenIndex) returns bool
+		if self.kindAt(at) != TokenKind.identifier 'notAName'
+			return false
+		end 'notAName'
+
+		if self.kindAt(at + 1) == TokenKind.with 'anUnqualifiedBase'
+			return true
+		end 'anUnqualifiedBase'
+
+		return self.kindAt(at + 1) == TokenKind.dot and self.kindAt(at + 2) == TokenKind.identifier and self.kindAt(at + 3) == TokenKind.with
+	end 'atGenericBaseName'
+
+	// The base itself, cursor left ON the `with`. Written once because the TOP-LEVEL alias and a NESTED
+	// argument each read one, and a gate that admitted a qualified base at only one of them would parse half
+	// the spellings of one type.
+	function consumeGenericBaseName() returns GenericBaseName throws ParseError
+		let baseTok = try self.consume(TokenKind.identifier)
+		if not self.at(TokenKind.dot) 'unqualified'
+			return GenericBaseName.create(baseTok, written: baseTok.value)
+		end 'unqualified'
+
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consume(TokenKind.identifier)
+		return GenericBaseName.create(baseTok, written: joinQualifiedName(baseTok.value, member: memberTok.value))
+	end 'consumeGenericBaseName'
 
 	// ⭐ **THE TOKEN AT WHICH THIS DECLARATION NAMES ITSELF** — the second `A` of `typealias A = Array with A`.
 	// It is the word the author has to change, and it is the anchor `specs/type-checking.md` blames a
@@ -23440,8 +23487,8 @@ export type Parser
 		return self.signatures.arrayRecordBaseNameIn(self.isStdlibSource)
 	end 'canonicalGenericBaseNameInThisFile'
 
-	function readSizedBaseElementCount(baseTok Token) returns FixedElementCount throws ParseError
-		if not self.signatures.isVectorBaseName(baseTok.value) 'unsizedBase'
+	function readSizedBaseElementCount(baseName ByteArray) returns FixedElementCount throws ParseError
+		if not self.signatures.isVectorBaseName(baseName) 'unsizedBase'
 			return NoFixedSize
 		end 'unsizedBase'
 
@@ -23596,8 +23643,8 @@ export type Parser
 	// (`checkGenericInstance` records, never throws). The header is pushed BEFORE its sub-args (parsed into a
 	// temp so the header's count is known), preserving pre-order.
 	function parseGenericArgNode(nodes GenericArgNodeArray, inlineElement bool, slot GenericArgSlot, position FieldIndex) throws ParseError
-		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'nested'
-			let baseTok = try self.consume(TokenKind.identifier)
+		if self.atGenericBaseName(self.pos) 'nested'
+			let base = try self.consumeGenericBaseName()
 			try self.consume(TokenKind.with)
 			// ⭐ **A NESTED INSTANCE READS ITS SIZE THROUGH THE SAME DOOR THE TOP-LEVEL ONE DOES (review
 			// finding 5).** Without it `typealias X = Box with (Vector with 3 Int)` died as
@@ -23605,13 +23652,13 @@ export type Parser
 			// spelling stopped giving the moment `Vector` existed — instead of reaching E2069 or the element
 			// gate. This arm had already been taught the OTHER `Vector`-specific fact (`inlineElement` below),
 			// so the asymmetry was an omission and not a decision.
-			let subSize = try self.readSizedBaseElementCount(baseTok)
+			let subSize = try self.readSizedBaseElementCount(base.written)
 			// The canonical base, for the top-level arm's reason (W43): a nested `__ManagedMemory with T` must
 			// intern to the same instance a nested `Array with T` does, or one record has two ids.
-			let subBaseName = self.canonicalGenericBaseNameInThisFile(baseTok.value)
+			let subBaseName = self.canonicalGenericBaseNameInThisFile(base.written)
 			var subNodes = GenericArgNodeArray.create()
 			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.genericArgSlotOf(subBaseName))
-			self.checkGenericInstance(baseTok, argCount: subCount)
+			self.checkGenericInstance(base, argCount: subCount)
 			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, fixedSize: subSize))
 			nodes.append(subNodes)
 			return
@@ -23804,7 +23851,7 @@ export type Parser
 	// The P1.6-A managed-argument rejection (E2057) is GONE: B2 owns and drops managed type arguments, so a
 	// String / managed-struct / nested-instance argument is now legal. A nested instance validates itself at
 	// its own `with` (`parseGenericArgNode`), so this checks ONE level.
-	function checkGenericInstance(baseTok Token, argCount FieldIndex)
+	function checkGenericInstance(base GenericBaseName, argCount FieldIndex)
 		if not self.signatures.allFilesFolded 'indexStillBuilding'
 			return
 		end 'indexStillBuilding'
@@ -23822,11 +23869,11 @@ export type Parser
 		// ⭐ **ASKED ABOUT THE CANONICAL BASE AND BLAMED ON THE WRITTEN ONE (W43)** — `__ManagedMemory with T`
 		// is an `Array` instance (`canonicalGenericBaseName`), so it must be checked against `Array`'s arity;
 		// the sentence still quotes the spelling the author actually wrote, because that is the word to change.
-		let baseName = self.canonicalGenericBaseNameInThisFile(baseTok.value)
+		let baseName = self.canonicalGenericBaseNameInThisFile(base.written)
 		if self.signatures.isBuiltinGenericBaseName(baseName) 'builtinGeneric'
 			let expected = self.signatures.builtinGenericTypeParamCount(baseName)
 			if argCount != expected 'wrongArity'
-				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
+				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(base.written)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(base.anchor))
 			end 'wrongArity'
 			return
 		end 'builtinGeneric'
@@ -23846,8 +23893,8 @@ export type Parser
 		// the user-declared ones. The arity is the interface's OWN `uses` list; an inherited `extends` parent
 		// contributes none, because a parent's associated types are bound by the child's own declaration.
 		match lookupInterface(self.signatures.interfaceMap(), name: baseName) 'interfaceBase'
-			found(iface) then self.checkInterfaceGenericArity(iface, baseTok: baseTok, argCount: argCount)
-			notFound then self.checkStructGenericInstance(baseName, baseTok: baseTok, argCount: argCount)
+			found(iface) then self.checkInterfaceGenericArity(iface, base: base, argCount: argCount)
+			notFound then self.checkStructGenericInstance(baseName, base: base, argCount: argCount)
 		end 'interfaceBase'
 	end 'checkGenericInstance'
 
@@ -23858,11 +23905,11 @@ export type Parser
 	// `match` arm is exactly ONE statement, so it could not both check the arity AND leave the function ahead
 	// of this tail. Making the classification TERMINAL is the cure: every arm calls, none falls out, and the
 	// tail takes a name. Second instance of the shape `LowerMaxonToStd`'s residues took, one file over.
-	function checkStructGenericInstance(baseName ByteArray, baseTok Token, argCount FieldIndex)
-		match self.signatures.structFor(baseName, readerFilePath: self.filePath) 'base'
-			undeclared then self.recordBaseNotGeneric(baseTok)
-			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
-		end 'base'
+	function checkStructGenericInstance(baseName ByteArray, base GenericBaseName, argCount FieldIndex)
+		match self.signatures.structFor(baseName, readerFilePath: self.filePath) 'declaration'
+			undeclared then self.recordBaseNotGeneric(base)
+			declared(layout) then self.checkGenericInstanceAgainst(layout, base: base, argCount: argCount)
+		end 'declaration'
 	end 'checkStructGenericInstance'
 
 	// The interface half of `checkGenericInstance` — associated-types-at-all, then arity. It mirrors
@@ -23870,15 +23917,15 @@ export type Parser
 	// declarations (a `StructLayout`'s `uses` list against an `IrInterface`'s associated-type names) and
 	// there is no common handle to pass; both verdicts are the shared `recordBaseNotGeneric` /
 	// `genericArityMismatch` pair, which is where the sentences actually have to agree.
-	function checkInterfaceGenericArity(iface IrInterface, baseTok Token, argCount FieldIndex)
+	function checkInterfaceGenericArity(iface IrInterface, base GenericBaseName, argCount FieldIndex)
 		let expected = iface.associatedTypeNames.count()
 		if expected == 0 'notGeneric'
-			self.recordBaseNotGeneric(baseTok)
+			self.recordBaseNotGeneric(base)
 			return
 		end 'notGeneric'
 
 		if argCount != expected 'wrongArity'
-			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
+			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(base.written)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(base.anchor))
 		end 'wrongArity'
 	end 'checkInterfaceGenericArity'
 
@@ -23886,8 +23933,8 @@ export type Parser
 	// of the base check — a `Base` that is not a declared type at all (`structOf` undeclared) and a `Base`
 	// that is a declared type with an empty `uses` list (`typeParamCount() == 0`) — which are the same
 	// diagnostic. Bound here rather than spelled at each site so the two callers cannot drift the message.
-	function recordBaseNotGeneric(baseTok Token)
-		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(baseTok.value)}' has no associated types", range: SourceRange.ofToken(baseTok))
+	function recordBaseNotGeneric(base GenericBaseName)
+		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(base.written)}' has no associated types", range: SourceRange.ofToken(base.anchor))
 	end 'recordBaseNotGeneric'
 
 	// The declared-base half of `checkGenericInstance` — base-is-generic, then arity. The P1.6-A per-argument
@@ -23899,15 +23946,15 @@ export type Parser
 	// parameter, so neither compiler can read the rule off the declaration: `maxon-sharp` stamps
 	// `OptionalTrailingTypeParamCount` on the completed struct, and shv2 derives it from the base NAME in
 	// `PromiseType.maxon`, which is the one place that has to learn a second such base if one ever appears.
-	function checkGenericInstanceAgainst(layout StructLayout, baseTok Token, argCount FieldIndex)
+	function checkGenericInstanceAgainst(layout StructLayout, base GenericBaseName, argCount FieldIndex)
 		if layout.typeParamCount() == 0 'notGeneric'
-			self.recordBaseNotGeneric(baseTok)
+			self.recordBaseNotGeneric(base)
 			return
 		end 'notGeneric'
 
 		let least = layout.typeParamCount() - promiseOptionalTrailingTypeParams(layout.name)
 		if argCount < least or argCount > layout.typeParamCount() 'wrongArity'
-			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {genericArityPhrase(least, most: layout.typeParamCount())} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
+			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(base.written)}' expects {genericArityPhrase(least, most: layout.typeParamCount())} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(base.anchor))
 			return
 		end 'wrongArity'
 	end 'checkGenericInstanceAgainst'
@@ -38608,9 +38655,10 @@ export type Parser
 	//
 	// ⚠ **THE TAG IS TESTED FIRST AND IT IS NOT A MICRO-OPTIMIZATION.** `valueNameId` is only meaningful for
 	// a value that HAS a declared nominal type; asking it of an integer or a String would be reading a field
-	// that means nothing there. Every handle value is `structRef`-tagged with its companion's name (that is
-	// what `emitOwnedRuntimeResult` stamps at the spawn and at the clone), so the guard costs one dense array
-	// read on the overwhelmingly common path and is exact on the one that matters.
+	// that means nothing there. A handle value carries its companion's name on one of TWO tags — `structRef`
+	// for a monomorphic service, `genericInstance` for a generic one, whose instantiation rides the type — so
+	// both are asked. A scalar or a String settles on the dense read alone; each nominal tag then pays one
+	// name resolution and one map probe, which is what the two nominal routers are.
 	function retainCalleeForValue(value ValueId, result RetainResult) returns ByteArray
 		// ⭐⭐ **AN ARRAY RECORD TAKES THE IMMORTAL-AWARE ENTRY, AND THIS DOOR DECIDES THE RECORD FORMAT
 		// RATHER THAN THE PROVENANCE.** A module-level managed constant's record is `.rdata`
@@ -38624,6 +38672,16 @@ export type Parser
 		if self.signatures.isArrayInstanceAt(self.tagOf(value), nameId: self.valueNameId(value)) 'bufferRecord'
 			return managedRecordRetainCallee(result)
 		end 'bufferRecord'
+
+		// ⭐⭐ **A GENERIC SERVICE'S HANDLE RETAINS THROUGH THE MAILBOX, AND IT REACHES THIS DOOR ON THE OTHER
+		// TAG.** Its instantiation rides the handle's type, so the nominal router below never sees it — while
+		// its DROP is still `__mbox_handle_drop_box`, which steps a `handles` share, a `refs` share and the
+		// box. A plain incref here steps only the box: that is W232's asymmetry wearing the second tag, and
+		// it is a WRONG ANSWER rather than a leak — the mailbox's handle count reaches zero under a live
+		// handle, the service drains, and the next send is answered `ServiceError.stopped`.
+		if self.tagOf(value) == ValueTypeTag.genericInstance and self.signatures.instanceBaseIsServiceHandle(self.valueInstanceId(value)) 'aGenericServicesHandle'
+			return MboxHandleRetainBoxName
+		end 'aGenericServicesHandle'
 
 		if self.tagOf(value) != ValueTypeTag.structRef 'notNominal'
 			return plainBoxRetainCallee(result)
@@ -39941,6 +39999,20 @@ export type Parser
 			return self.emitRetainCall(value, range: range)
 		end 'bufferRecord'
 
+		// ⭐⭐⭐ **A SERVICE HANDLE IS `structRef`-TAGGED AND IS NOT A PLAIN STRUCT BOX — a durable sink takes
+		// a SHARE of it, never a copy.** A handle's identity IS the mailbox it names, and its release
+		// (`__mbox_handle_drop_box`) steps a `handles` share, a `refs` share and the box. `__mm_own`'s copy
+		// arm allocates a second box and blits the mailbox pointer into it, so two handles would name one
+		// mailbox holding ONE share: the original's drop takes that share to zero, the service drains, and
+		// the next send is answered `ServiceError.stopped`. MEASURED as exit 0 where the answer is 3.
+		//
+		// ⚠ It is `emitIncref`, which asks `retainCalleeForValue` — so the reference a sink takes and the
+		// reference a scope-exit drop releases are the SAME answer, and stay duals by construction.
+		if self.valueIsAServiceHandle(value) 'aServiceHandle'
+			self.emitIncref(value, range: range)
+			return value
+		end 'aServiceHandle'
+
 		if self.tagOf(value) == ValueTypeTag.structRef 'plainStructBox'
 			return self.emitOwnBoxForSink(value, range: range)
 		end 'plainStructBox'
@@ -39949,11 +40021,35 @@ export type Parser
 		return value
 	end 'coOwnConcreteRecordForSink'
 
+	// ⭐⭐ **IS THIS VALUE A SERVICE HANDLE? — THE VALUE TIER'S ONE SPELLING, over both tags a handle can
+	// stand at.** A monomorphic service's handle is `structRef` at its companion's name; a generic one's is
+	// `genericInstance`, because the instantiation rides its type. Each half asks the road's OWN home —
+	// `compilerOwnedAggregateOf`'s `isServiceHandle` for the name road, `instanceBaseIsServiceHandle` for the
+	// instance road — so this adds no sixth decider, it spends the two that exist.
+	//
+	// ⚠ **IT ANSWERS A PREDICATE, WHERE `retainCalleeForValue` ANSWERS A CALLEE.** A door that needs to know
+	// WHICH entry to call must ask that one; this is for a door choosing between two SHAPES of ownership
+	// (a share versus a copy), which no callee can express.
+	function valueIsAServiceHandle(value ValueId) returns bool
+		if self.tagOf(value) == ValueTypeTag.genericInstance 'aGenericServicesHandle'
+			return self.signatures.instanceBaseIsServiceHandle(self.valueInstanceId(value))
+		end 'aGenericServicesHandle'
+
+		return tagIsStructRef(self.tagOf(value)) and self.signatures.isServiceHandle(self.internedName(self.valueNameId(value)))
+	end 'valueIsAServiceHandle'
+
 	// ⭐⭐ **THE RETURNING `__mm_own` A STRUCT BOX OWES A DURABLE SINK — and the callee is chosen HERE rather
 	// than in `retainCalleeForValue` because a CLONE is right only where the sink outlives the statement.**
 	// A borrowed aggregate co-owned into a `var` (`var q = p`) must keep ALIASING — `q.x = 100` shows through
 	// to the caller — so that door keeps `__mm_retain`, which hands the same box back. Routing both through
 	// one selector would make the aliasing one clone too.
+	//
+	// ⛔⛔ **AND THAT ARGUMENT IS ABOUT A BOX WHOSE CONTENTS ARE ITS VALUE, WHICH IS NOT EVERY `structRef`.**
+	// A box may instead be a NAME for something the runtime counts — a service handle names a mailbox — and
+	// for one of those a copy is not a private version of the same value, it is a second name holding one
+	// share. The caller gates such a box out before it reaches here (`coOwnConcreteRecordForSink`'s handle
+	// arm); a co-own road added later owes the same gate, because this door cannot tell the two boxes apart
+	// and does not try.
 	//
 	// The result is a distinct ValueId either way, which the sink needs for `emitRetainCall`'s reason.
 	function emitOwnBoxForSink(value ValueId, range SourceRange) returns ValueId
@@ -50881,10 +50977,19 @@ export type Parser
 	// the spawn site satisfies both: the sweep decides, this speaks, and the diagnostic is at the site by
 	// construction rather than by carrying one around.
 	//
-	// ⚠ **IT REFUSES BEFORE IT EMITS, AND WAVE 3 IS WHY.** A `spawn` has no op and no lowering yet, so this
-	// reader consumes the tokens it can classify from and throws. Building the call's arguments first would
-	// leave a rejected program with ops behind it, which is exactly what `emitBinOp`'s ordering rule forbids.
-	// The E2015 at the end is the ONE refusal SV1 wave 3 deletes; every other throw here is permanent.
+	// ⚠ **IT REFUSES BEFORE IT EMITS, AND THE ROSTER IS ASKED TWICE SO THAT STAYS TRUE OF EVERY VERDICT A
+	// DECLARATION DECIDES.** The first ask precedes the factory call and condemns an overloaded message, an
+	// untransferable parameter and a reply the cell cannot carry — every refusal a monomorphic service can
+	// earn, which is every one the corpus pins. That is `emitBinOp`'s ordering rule, which every door that
+	// can throw mid-expression keeps.
+	//
+	// ⚠ **ONE VERDICT CANNOT BE ASKED THERE, AND IT IS THE ONE THIS RUNG ADDED.** Whether a generic
+	// service's `returns T` fits the cell's single integer word is a fact about the CONCRETE type, and
+	// nothing fixes it until the factory's ARGUMENTS have been read — so that question is deferred
+	// (`ServiceRosterKnowledge`) and re-asked below, after the call has emitted its ops. A `spawn` refused
+	// there leaves those ops behind; they reach nothing, because a `ParseError` discards the whole artifact
+	// (`Queries.queryFileParse` returns `abortedParseArtifact`), and `moveIntoGreenThread` on the next line
+	// has always refused on the same terms.
 	function parseSpawn(func IrFunction) returns ValueId throws ParseError
 		let spawnTok = self.current()
 		self.advance()
@@ -50920,32 +51025,56 @@ export type Parser
 		let target = classifyServiceTarget(self.signatures, typeName: typeTok.value, member: memberTok.value)
 		match target 'target'
 			startsAService then break 'target'
-			// ⚖ A generic service is E2015 — the companions are monomorphic and a per-instantiation pair is a
+			// ⚖ A constrained generic is E2015 — the witness threading a synthesized loop would need is a
 			// thing that could be built. Every other refusing arm is E3134: not what `spawn` means, ever, so
 			// they share one throw.
 			typeIsNotAStruct to memberDoesNotReturnTheType then throw ParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
-			typeIsGeneric then throw ParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
+			typeIsAConstrainedGeneric then throw ParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'target'
 
-		let roster = classifyServiceRoster(self.signatures, typeName: typeTok.value)
-		match roster 'roster'
-			rosterIsDispatchable then break 'roster'
-			// An overloaded message is a v1 limitation of the dispatch UNION, so E2015; a parameter that cannot
-			// cross a green thread is a rule that will never relax, so E3135.
-			messageIsOverloaded then throw ParseError.unsupported(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
-			messageParameterIsNotTransferable then throw ParseError.serviceValueNotTransferable(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
-			// A reply the cell cannot carry is neither of those: it is about what comes BACK, and it has its
-			// own code (E3140) so a corpus can pin each separately.
-			messageReplyIsNotCarriable then throw ParseError.serviceReplyNotCarriable(serviceRosterRefusalMessage(roster, typeName: typeTok.value), line: spawnTok.line, column: spawnTok.column)
-		end 'roster'
+		try self.requireServiceRosterIsDispatchable(typeTok.value, knowledge: ServiceRosterKnowledge.declarationOnly, spawnTok: spawnTok)
 
 		// ⭐⭐ **THE FACTORY IS CALLED DIRECTLY, THROUGH THE ORDINARY STATIC-CALL DOOR.** `spawn Calc.create(…)`
 		// is `Calc.create(…)` plus a transfer: the arguments, the labels, the defaults, the overload
 		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT is
-		// this reader's. `notMinted` because both halves of the name are the author's own bytes.
-		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
-		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, spawnTok: spawnTok, memberTok: memberTok)
+		// this reader's. `notMinted` because both halves of the name are the author's own bytes;
+		// `inferInstanceOf` because a generic target's type arguments exist nowhere but this argument list.
+		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted, inferInstanceOf: typeTok.value)
+		let instance = self.serviceStateInstanceOf(state)
+
+		// The deferred half, asked only where something was deferred: a monomorphic service has no type
+		// parameter for the first ask to have left open, so it is judged once and exactly as it always was.
+		match instance 'fixed'
+			monomorphic then break 'fixed'
+			at then try self.requireServiceRosterIsDispatchable(typeTok.value, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
+		end 'fixed'
+
+		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
 	end 'parseSpawn'
+
+	// ⭐ **THE ROSTER'S REFUSALS, IN ONE PLACE BECAUSE THE `spawn` ASKS TWICE.** Both asks raise the same
+	// three diagnostics at the same site; a second copy of these arms would be a second chance for the two
+	// asks to report one verdict two ways.
+	function requireServiceRosterIsDispatchable(typeName ByteArray, knowledge ServiceRosterKnowledge, spawnTok Token) throws ParseError
+		let roster = classifyServiceRoster(self.signatures, typeName: typeName, knowledge: knowledge)
+		match roster 'roster'
+			rosterIsDispatchable then return
+			// An overloaded message is a v1 limitation of the dispatch UNION, so E2015; a parameter that cannot
+			// cross a green thread is a rule that will never relax, so E3135.
+			messageIsOverloaded then throw ParseError.unsupported(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
+			messageParameterIsNotTransferable then throw ParseError.serviceValueNotTransferable(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
+			// A reply the cell cannot carry is neither of those: it is about what comes BACK, and it has its
+			// own code (E3140) so a corpus can pin each separately.
+			messageReplyIsNotCarriable then throw ParseError.serviceReplyNotCarriable(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
+		end 'roster'
+	end 'requireServiceRosterIsDispatchable'
+
+	// ⭐ **WHICH INSTANTIATION A VALUE OF A SERVICE'S OWN SHAPE NAMES** — this tier's two columns, handed to
+	// the ONE classifier the lowering and `ServiceLoop` also read (`serviceStateInstanceOfValueType`), so the
+	// loop that is built is the loop that is called.
+	function serviceStateInstanceOf(value ValueId) returns ServiceStateInstance
+		return serviceStateInstanceOfValueType(self.tagOf(value), nameId: self.valueNameId(value))
+	end 'serviceStateInstanceOf'
 
 	// ⭐⭐ **THE SPAWN'S EMIT: MOVE THE STATE ACROSS, START THE SERVICE, AND WRAP ITS MAILBOX IN A HANDLE
 	// BOX.** Three acts, in an order that is not free:
@@ -50959,7 +51088,7 @@ export type Parser
 	//      `trackOwnedTemp` is what makes a handle an ORDINARY owned value: `let h = …` binds it, a second
 	//      read after a move is E3102, an array element drop reaches it, and its scope-exit drop is what
 	//      shuts the service down. A runtime-minted box would need every one of those taught to it.
-	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, spawnTok Token, memberTok Token) returns ValueId throws ParseError
+	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId throws ParseError
 		let range = SourceRange.between(spawnTok, last: memberTok)
 		let moved = try self.moveIntoGreenThread(state, blame: serviceSpawnStateBlame(typeName, member: member), anchor: memberTok)
 
@@ -50967,11 +51096,24 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved), range: range)
 
 		let handle = self.serviceHandleLayout(typeName)
-		let box = self.emitBoxAlloc(self.emitLiteral(handle.sizeBytes() as ParsedInt, valueType: MaxonType.integer, range: range), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(handle.name), range: range)
+		let handleType = self.serviceHandleValueType(handle, instance: instance)
+		let box = self.emitBoxAlloc(self.emitLiteral(handle.sizeBytes() as ParsedInt, valueType: MaxonType.integer, range: range), resultTag: maxonTypeTag(handleType), resultNameId: typeNameIdOf(handleType), range: range)
 		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
 		self.emitIndirectStore(box, offset: ServiceHandleMailboxOffset, value: mailbox, storageType: MaxonType.integer, range: range)
 		return box
 	end 'emitServiceSpawn'
+
+	// ⭐⭐ **THE TYPE A HANDLE VALUE CARRIES — AND FOR A GENERIC SERVICE IT IS AN INSTANCE OF THE ONE
+	// COMPANION, NOT A SECOND COMPANION.** `<T>.handle` is minted once, whatever `<T>` is instantiated at;
+	// the value stands at `<T>.handle with <Args>` so that a send can resolve a `returns T` reply against
+	// the very instantiation the `spawn` started. The layout has ONE integer field either way, so the box is
+	// the same eight bytes and `ProgramSignatures.isServiceHandle` still recognises it by base name.
+	function serviceHandleValueType(handle StructLayout, instance ServiceStateInstance) returns MaxonType
+		return match instance 'i'
+			monomorphic gives MaxonType.structRef(self.artifact.typeNames.intern(handle.name))
+			at(id) gives MaxonType.genericInstance(self.signatures.internInstanceOverArgsOf(handle.name, likeInstance: id))
+		end 'i'
+	end 'serviceHandleValueType'
 
 	// The `<T>.handle` layout, or a panic: the companions were minted for every ACCEPTED spawn target inside
 	// `queryProgramSignatures`, and every caller here has just been through `classifyServiceTarget`.
@@ -59308,6 +59450,100 @@ export type Parser
 		return self.bareGenericInstanceInScope(baseName)
 	end 'constructorInstanceOf'
 
+	// ⭐⭐ **THE INSTANTIATION A `spawn <T>.<factory>(…)` STARTS, READ OFF THE FACTORY'S ARGUMENTS — the one
+	// call site in the language whose type arguments are INFERRED rather than spelled.** A `spawn` names a
+	// bare generic type and cannot name an alias: the whole-program walk that decides which types are
+	// services reads raw tokens with no scope to resolve one (`Queries.noteServiceSpawnFollowing`), so what
+	// the factory was called with is the only thing that can fix `T`.
+	//
+	// `constructorInstanceOf`'s third road, and deliberately not an arm of it: that door answers from the
+	// BASE NAME alone and is asked before any argument exists.
+	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf ByteArray, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token) returns ConstructorInstance throws ParseError
+		if inferInstanceOf.isEmpty() 'notASpawnFactory'
+			return supplied
+		end 'notASpawnFactory'
+
+		let params = self.signatures.structTypeParamsOf(inferInstanceOf)
+		if params.isEmpty() 'aPlainType'
+			return supplied
+		end 'aPlainType'
+
+		// ⛔⛔ **THIS READS A THIRD FACT OFF THE FIRST DECLARATION, AND THE LICENCE COVERS TWO.**
+		// `ServiceCompanions.classifyServiceTarget` argues an overloaded factory may be read off its first
+		// member for the RECEIVER and the RETURN TYPE — every member agrees about those, because they are
+		// what make it a factory at all. PARAMETER TYPES are not in that argument: with
+		// `create(n Whole, item T)` declared ahead of `create(item T)`, the call resolves to the second while
+		// the inference below reads the first, and `T` would be fixed from the wrong argument.
+		//
+		// ⚠ **UNREACHABLE TODAY, AND BY A RULE IN ANOTHER FILE.** An opaque `T` parameter counts as managed,
+		// so any such overload set is refused as an overloaded CONSUME before a `spawn` can reach here. That
+		// is the premise: widen the overload-consume rule and this silently starts reading the wrong
+		// declaration, with no diagnostic and a type argument taken from a parameter the call never filled.
+		let decl = serviceFirstDeclOf(self.signatures.overloadedDeclsOf(callee), key: callee)
+		var typeArgs = MaxonTypeArray.create()
+		for position in 0 upto params.count() 'eachTypeParam'
+			typeArgs.push(try self.spawnTypeArgumentAt(inferInstanceOf, params: params, position: position, decl: decl, callee: callee, args: args, argLabels: argLabels, anchor: anchor))
+		end 'eachTypeParam'
+
+		let gid = self.signatures.internGenericInstanceOf(inferInstanceOf, args: typeArgs)
+		// ⛔ **A `spawn` INSIDE ANOTHER GENERIC BODY FIXES NOTHING**, and the instance it would name is the
+		// one shape `ServiceLoop` cannot build a loop for: `materializeLayoutArg` would forward a descriptor
+		// the synthesized body has no slot for. Refused here, where the instance is known, rather than
+		// aborting the compiler two tiers down.
+		if not self.signatures.instanceArgsAreFullyConcrete(gid) 'stillOpaque'
+			throw ParseError.unsupported(spawnOpaqueTypeArgumentRefusal(inferInstanceOf, member: spawnFactoryMemberOf(callee)), line: anchor.line, column: anchor.column)
+		end 'stillOpaque'
+
+		return ConstructorInstance.instance(gid)
+	end 'spawnFactoryConstructorInstance'
+
+	// One type parameter's argument: the FIRST factory parameter declared at that parameter decides, and the
+	// argument standing in its position carries the type. Labels are mapped through `argSlotPosition`, the one
+	// home of the label-to-position rule, so `create(item: x)` fixes `T` exactly as `create(x)` does.
+	function spawnTypeArgumentAt(typeName ByteArray, params ByteArrayArray, position TypeParamPosition, decl OverloadedDecl, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token) returns MaxonType throws ParseError
+		let paramName = try params.get(position) otherwise panic("spawnTypeArgumentAt: params.get OOB at {position} on a list walked to its own count")
+		let token = typeParamTokenFor(typeName, paramName: paramName)
+		for p in 0 upto decl.paramTypes.count() 'eachFactoryParam'
+			let declared = try decl.paramTypes.get(p) otherwise panic("spawnTypeArgumentAt: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(callee)}'")
+			if maxonTypeTag(declared) != ValueTypeTag.typeParameter or typeParamIdOf(declared) != token 'notThisParameter'
+				continue
+			end 'notThisParameter'
+
+			for i in 0 upto args.count() 'eachArgument'
+				let label = try argLabels.get(i) otherwise panic("spawnTypeArgumentAt: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
+				if argSlotPosition(decl.paramNames, argIndex: i, label: label) != p 'anotherPosition'
+					continue
+				end 'anotherPosition'
+
+				return self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("spawnTypeArgumentAt: args.get OOB at {i}"))
+			end 'eachArgument'
+		end 'eachFactoryParam'
+
+		throw ParseError.unsupported(spawnUninferrableTypeArgumentRefusal(typeName, member: spawnFactoryMemberOf(callee), paramName: paramName), line: anchor.line, column: anchor.column)
+	end 'spawnTypeArgumentAt'
+
+	// The factory's own name out of the qualified callee both spawn refusals quote. A `spawn` always names
+	// `<Type>.<factory>`, so the unqualified arm answers a callee no `spawn` can build.
+	function spawnFactoryMemberOf(callee ByteArray) returns ByteArray
+		return match splitQualifiedName(callee) 'factory'
+			notQualified gives callee
+			parts(_, member) gives member
+		end 'factory'
+	end 'spawnFactoryMemberOf'
+
+	// An argument's type as a TYPE ARGUMENT of the SIGNATURE INDEX's registry. A name crosses interners as a
+	// NAME — the value's id belongs to this file's table — and the canonical `structRef`/`named` split is the
+	// index's own, asked through its door so an inferred instantiation and a spelled one intern once.
+	function spawnTypeArgumentOfValue(value ValueId) returns MaxonType
+		let declared = self.valueMaxonType(value)
+		let tag = maxonTypeTag(declared)
+		if tag != ValueTypeTag.named and not tagIsStructRef(tag) 'carriesNoName'
+			return declared
+		end 'carriesNoName'
+
+		return self.signatures.canonicalInstanceArg(maxonTypeOfTag(tag, nameId: self.signatures.indexTypeNames().intern(self.internedName(self.valueNameId(value)))))
+	end 'spawnTypeArgumentOfValue'
+
 	// ⭐ **A GENERIC CONSTRUCTOR'S RESULT IS THE INSTANCE, not the base struct (P1.6-B1).**
 	// `BoolSizer.create(…)` links to `Sizer.create`, which returns `Self` — the BASE struct `Sizer`
 	// (`structRef`) — because the shared body is compiled once against the opaque `T`. But the VALUE is a
@@ -60692,6 +60928,8 @@ export type Parser
 	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, resultUsed bool) returns ValueId throws ParseError
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
 		try self.requireServiceSendResultUnused(resultUsed, request: request, caseIndex: caseIndex, typeName: typeName, memberTok: memberTok)
+		let instance = self.serviceInstanceOfHandle(base.box, typeName: typeName)
+		try self.requireServiceReplyInstanceIsKnown(callee, typeName: typeName, instance: instance, memberTok: memberTok)
 
 		let memberIndex = self.pos
 		try self.consumeNameToken(NamePosition.declaration)
@@ -60723,12 +60961,59 @@ export type Parser
 		self.seedMessageSlots(payloads.count(), anchor: memberIndex, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 
 		try self.slotMessageArgs(callee, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
-		let reply = self.fillMessageReplySlot(payloads, callee: callee, slotValues: slotValues, filled: filled, range: range)
+		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: instance, slotValues: slotValues, filled: filled, range: range)
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
 
 		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
 	end 'emitServiceSend'
+
+	// ⭐⭐ **A `returns T` REPLY NEEDS THE HANDLE'S INSTANTIATION, AND A DECLARED SLOT CANNOT CARRY ONE
+	// (E3145).** One `<T>.handle` companion serves every instantiation — nothing about it names a type
+	// argument — so a `spawn` puts the instantiation on the VALUE, and a parameter, field or element typed
+	// `<T>.handle` drops it. The reply is produced where the descriptor is and awaited where the handle is,
+	// so a handle that names no instantiation leaves the awaited value with no type to check anything
+	// against.
+	//
+	// ⚠ **THE TEST IS THE RETURN TYPE, NOT THE HANDLE**, because this rule is about the one shape whose
+	// answer is missing: a concrete reply and a fire-and-forget message need nothing from the instantiation
+	// and stay legal through a bare-companion slot. What has no answer is a `T`-typed reply, and the cure is
+	// to spell the slot at `<T>.handle with <Args>` — an instantiation like any other generic's, which
+	// carries the type through a parameter, a field or an element.
+	//
+	// ⚠ It is asked before a single argument is read, so a refused send leaves no ops behind it — that is
+	// `emitBinOp`'s ordering rule, and on this road it holds without residue.
+	function requireServiceReplyInstanceIsKnown(callee ByteArray, typeName ByteArray, instance ServiceStateInstance, memberTok Token) throws ParseError
+		match instance 'known'
+			at then return
+			monomorphic then break 'known'
+		end 'known'
+
+		if not self.signatures.structDeclaresTypeParams(typeName) 'aMonomorphicService'
+			return
+		end 'aMonomorphicService'
+
+		let declaredReturn = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
+			declared(returnType) gives returnType
+			undeclared gives MaxonReturnType.void
+		end 'r'
+		if not maxonReturnTypeIsATypeParameter(declaredReturn) 'theInstantiationFixesNothingHere'
+			return
+		end 'theInstantiationFixesNothingHere'
+
+		throw ParseError.serviceReplyInstanceUnknown(serviceReplyInstanceUnknownRefusal(typeName, methodName: memberTok.value, paramName: self.replyTypeParamName(declaredReturn), member: serviceSpawnSiteOf(self.signatures, typeName: typeName).member), line: memberTok.line, column: memberTok.column)
+	end 'requireServiceReplyInstanceIsKnown'
+
+	// The SOURCE NAME of the type parameter a reply is declared at — `T`, the spelling the author wrote,
+	// where the type carries only its digest token. A reply this is asked of has already been matched
+	// `typeParameter`, and every such token was filed by `recordStruct` against the declaration it came from.
+	function replyTypeParamName(declaredReturn MaxonReturnType) returns ByteArray
+		let token = match declaredReturn 'r'
+			void panic("replyTypeParamName: asked for the type-parameter name of a VOID reply — the caller matches `maxonReturnTypeIsATypeParameter` first")
+			value(inner) gives typeParamIdOf(inner)
+		end 'r'
+		return (try self.signatures.typeParamOwnerOf(token) otherwise panic("replyTypeParamName: type-parameter token {token} names no declaration's parameter — every token was filed by `ProgramSignatures.recordStruct` from the `uses` list that minted it")).paramName
+	end 'replyTypeParamName'
 
 	// ⭐ **THE FOUR LAYOUT-PARALLEL COLUMNS A REQUEST BOX IS FILLED THROUGH, SEEDED FOR ONE VARIANT.** Both
 	// doors that build one need all four and neither may seed three — `emitEnumBox` indexes every one of them
@@ -60798,7 +61083,7 @@ export type Parser
 		var slotAnchors = TokenIndexArray.create()
 		self.seedMessageSlots(payloads.count(), anchor: self.pos, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
-		let reply = self.fillMessageReplySlot(payloads, callee: callee, slotValues: slotValues, filled: filled, range: range)
+		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: self.serviceInstanceOfHandle(base.box, typeName: typeName), slotValues: slotValues, filled: filled, range: range)
 
 		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
@@ -60813,7 +61098,10 @@ export type Parser
 		self.advance()
 		try self.consumeEmptyArgList()
 
-		return self.emitOwnedRuntimeResult(MboxHandleCloneBoxName, args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: SourceRange.between(baseTok, last: memberTok))
+		// The receiver's OWN type, not the layout's name: a generic service's handle stands at
+		// `<T>.handle with <Args>`, and a clone that decayed to the base would leave the second handle unable
+		// to resolve a `returns T` reply.
+		return self.emitOwnedRuntimeResult(MboxHandleCloneBoxName, args: singletonArgs(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: SourceRange.between(baseTok, last: memberTok))
 	end 'emitServiceHandleClone'
 
 	// ⭐ **A FIRE-AND-FORGET SEND STILL DELIVERS NO REPLY, SO THERE IS STILL NOTHING TO BIND (SV2).** A
@@ -60872,12 +61160,22 @@ export type Parser
 	// spawn's: `markValuePromise` makes `await`/`try await`/E3100 see it, and `pendingTempDrops` makes an
 	// UNBOUND send (`h.say("a")` as a statement) drop it at statement end through `__gt_promise_drop` — the
 	// abandoned-cell road `services.reply-discarded-is-dropped-clean` pins.
-	function fillMessageReplySlot(payloads PayloadFieldArray, callee ByteArray, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
+	function fillMessageReplySlot(payloads PayloadFieldArray, callee ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
 		match serviceReplySlotIndex(payloads) 'reply'
 			absent then return ServiceReplyValue.fireAndForget
-			at(slot) then return self.mintServiceReplyCell(slot, callee: callee, slotValues: slotValues, filled: filled, range: range)
+			at(slot) then return self.mintServiceReplyCell(slot, callee: callee, instance: instance, slotValues: slotValues, filled: filled, range: range)
 		end 'reply'
 	end 'fillMessageReplySlot'
+
+	// ⭐ **THE SERVICE'S INSTANTIATION, READ OFF THE HANDLE STANDING AT THE SEND.** `<T>.handle with <Args>`
+	// and `<T> with <Args>` are two instances over ONE argument list, so the service's is RE-BASED from the
+	// handle's rather than derived a second time from a source this site cannot see.
+	function serviceInstanceOfHandle(box ValueId, typeName ByteArray) returns ServiceStateInstance
+		return match self.serviceStateInstanceOf(box) 'handle'
+			monomorphic gives ServiceStateInstance.monomorphic
+			at(id) gives ServiceStateInstance.at(self.signatures.internInstanceOverArgsOf(typeName, likeInstance: id))
+		end 'handle'
+	end 'serviceInstanceOfHandle'
 
 	// The mint itself, split out because a `match` arm is ONE statement and this is five.
 	//
@@ -60891,8 +61189,8 @@ export type Parser
 	// ⚠ **`markValuePromise` STAYS, AND IT IS NOT REDUNDANT WITH THE TYPE.** The mark answers *"does THIS
 	// frame owe a `__gt_promise_drop`?"* (`decrefCalleeFor`, `storedPromiseValue`), which a type cannot: a
 	// promise read back out of a container carries the very same type and owes nothing.
-	function mintServiceReplyCell(slot CaseIndex, callee ByteArray, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
-		let cell = self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForReply(callee) as TypeNameId)
+	function mintServiceReplyCell(slot CaseIndex, callee ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
+		let cell = self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForReply(callee, serviceInstance: instance) as TypeNameId)
 		self.markValuePromise(cell)
 		self.pendingTempDrops.push(cell)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceReplyCell(cell, messageName: callee), range: range)
@@ -70326,7 +70624,7 @@ export type Parser
 		end 'alreadyStored'
 
 		let source = try self.promiseSourceStoredHere(func, value: value, storage: storage, anchor: anchor)
-		try self.requirePromiseStorageDescribesSource(source, storage: storage, anchor: anchor)
+		try self.requirePromiseStorageDescribesSource(source, cell: value, storage: storage, anchor: anchor)
 		// `notConsumed` for `moveInPayload`'s reason: the CONTAINER takes ownership of a thread that is still
 		// running, so the source's later use is E3102 rather than E3142.
 		self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
@@ -70361,10 +70659,10 @@ export type Parser
 	// `ServiceError`, which that signature does not mention and never will — which is exactly why
 	// `AsyncCalleeLookup` keeps them as two arms. Everything after this point is one comparison over a
 	// `(returns, throws)` pair, so the storage rule cannot come to mean two different things by road.
-	function requirePromiseStorageDescribesSource(source AsyncCalleeLookup, storage GenericInstanceId, anchor Token) throws ParseError
+	function requirePromiseStorageDescribesSource(source AsyncCalleeLookup, cell ValueId, storage GenericInstanceId, anchor Token) throws ParseError
 		match source 'road'
 			found(callee) then try self.requirePromiseStorageDescribes(self.calleeReturnType(callee), throwsClause: self.signatures.throwsOf(callee), subject: PromiseStorageSubjectIsTheCallee, storage: storage, anchor: anchor)
-			serviceReply(messageName) then try self.requirePromiseStorageDescribesReply(messageName, storage: storage, anchor: anchor)
+			serviceReply(messageName) then try self.requirePromiseStorageDescribesReply(messageName, cell: cell, storage: storage, anchor: anchor)
 			none then panic("requirePromiseStorageDescribesSource: `promiseSourceStoredHere` throws on `none` and is this function's only caller")
 		end 'road'
 	end 'requirePromiseStorageDescribesSource'
@@ -70381,7 +70679,7 @@ export type Parser
 	// `ProgramSignatures.serviceReplyErrorName`'s — never `throwsOf(<message>)`, which is the HANDLER's
 	// clause and says nothing about the transport a reply always carries. A storage type that names only the
 	// handler half is therefore an ordinary name mismatch at `requirePromiseStorageErrorMatches`.
-	function requirePromiseStorageDescribesReply(messageName ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+	function requirePromiseStorageDescribesReply(messageName ByteArray, cell ValueId, storage GenericInstanceId, anchor Token) throws ParseError
 		// The subject and the reply's error type are each spelled ONCE and read by both sentences below: two
 		// copies of *"a reply from 'X'"* is two places for one phrase to drift, and `serviceReplyErrorName` is
 		// the one home of *what a reply throws* either way.
@@ -70399,7 +70697,7 @@ export type Parser
 			none then throw ParseError.promiseStorageMismatch("{subject} always carries '{replyThrows}' — the service can be gone, whatever the message declares — so '{String.from(self.signatures.instanceDisplayName(storage))}' would erase it; declare the storage as 'Promise with (T, {replyThrows})' so 'try await' can bind it", line: anchor.line, column: anchor.column)
 		end 'storageNamesAnError'
 
-		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName), throwsClause: ThrowsClause.throwing(replyThrows), subject: subject, storage: storage, anchor: anchor)
+		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName, cell: cell), throwsClause: ThrowsClause.throwing(replyThrows), subject: subject, storage: storage, anchor: anchor)
 	end 'requirePromiseStorageDescribesReply'
 
 	// The two comparisons `storedPromiseValue`'s header sets out, in the order an author most wants to hear
@@ -78425,7 +78723,7 @@ export type Parser
 	// `spelling` is threaded straight through to `emitCall`'s reserved-space door and read nowhere else:
 	// every caller but ONE hands it the author's own bytes, and the exception is the primitive-static mint
 	// (`parseQualifiedCall`). See `CalleeMint`.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf ByteArray = EmptySourceText) returns ValueId throws ParseError
 		// The callee's final name token may be a KEYWORD (D8) — `FilePath.from(path)`, `c.to()`, `from(41)`.
 		// The `callee` bytes the caller passed were read off this very token, so refusing it here would have
 		// refused every call to a name the declaration now accepts.
@@ -79122,7 +79420,7 @@ export type Parser
 			end 'text'
 		end 'debugStreamMember'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint, inferInstanceOf: inferInstanceOf)
 	end 'parseCallNamed'
 
 	// ⭐ **THE ONE `__DebugStream` MEMBER THAT ANSWERS A VALUE — the SOURCE-LEVEL half of the run-time gate.**
@@ -80534,7 +80832,7 @@ export type Parser
 	//
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
-	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
+	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf ByteArray = EmptySourceText) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
 		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
 		// ALL** (`specs-shv2/constant-string-slice.md`). Asked FIRST, ahead of the mint, the default fill and
@@ -80564,6 +80862,10 @@ export type Parser
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+		// ⭐ **A `spawn`'S FACTORY IS THE ONE CALL WHOSE GENERIC INSTANCE ITS ARGUMENTS FIX**, and this is the
+		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
+		// type parameter exactly as a written one does. Every other caller gets back what it supplied.
+		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 		let opaqueWordReading = try self.retypeOpaqueMethodResult(result, callee: callee, args: args, anchor: anchor)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
@@ -80623,7 +80925,17 @@ export type Parser
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
-		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
+		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed)
+		// ⭐ An INFERRED instance is stamped on the result for the reason `retypeGenericAliasConstructorResult`
+		// states about a spelled one: the value IS a `Box with String`, and the handle's own type, the state's
+		// destructor and the loop's layout descriptor are all read off that identity. No brand goes with it —
+		// a bare generic base has no spelling to carry (see that door).
+		if not inferInstanceOf.isEmpty() 'aSpawnFactory'
+			match constructed 'inferred'
+				none then break 'inferred'
+				instance(gid) then self.retypeConstructorResultToInstance(result, gid: gid)
+			end 'inferred'
+		end 'aSpawnFactory'
 		// ⭐ The provenance mark's second half (BATCH41 review): the arguments are settled, so the flag
 		// `referenceOrMarkOpaqueFeed` armed now has a RESULT to travel on. Cleared whether or not it was set, so
 		// one call's answer cannot stand in for the next's.
@@ -80633,7 +80945,7 @@ export type Parser
 		end 'thisCallReferencedASlot'
 
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
-		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
+		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructed)
 		let opIdx = self.artifact.module.ops.count()
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		// ⭐ **AND WHERE THAT OP LANDED, WHEN IT IS ONE A LATER FOLD MAY DROP.** Only the two index accessors
@@ -81827,7 +82139,7 @@ export type Parser
 		// `(result, throws)` pair either way, and only the SUBJECT of the sentence differs.
 		match source 'reply'
 			found then break 'reply'
-			serviceReply(messageName) then return AwaitedPromise.create(self.serviceReplyResultType(messageName), tryTarget: TryTarget.serviceReply(messageName))
+			serviceReply(messageName) then return AwaitedPromise.create(self.serviceReplyResultType(messageName, cell: promise), tryTarget: TryTarget.serviceReply(messageName))
 			none then break 'reply'
 		end 'reply'
 
@@ -81853,12 +82165,46 @@ export type Parser
 	// `<T>.shutdown` pill rather than a doomed program. That is the one place the two differ:
 	// `calleeReturnType`'s undeclared arm is an `integer` PLACEHOLDER for a program SemanticCheck is about to
 	// reject with E3004, and the pill is a legal send whose reply really does carry nothing.
-	function serviceReplyResultType(messageName ByteArray) returns MaxonReturnType
+	function serviceReplyResultType(messageName ByteArray, cell ValueId) returns MaxonReturnType
 		return match self.signatures.returnTypeOf(messageName, into: self.artifact.typeNames) 'r'
-			declared(declaredReturn) gives self.repairSweptReturnType(declaredReturn, scopeFilePath: self.signatures.recordedReturnDeclFileOf(messageName))
+			declared(declaredReturn) gives self.fixedReplyResultType(declaredReturn, messageName: messageName, cell: cell)
 			undeclared gives MaxonReturnType.void
 		end 'r'
 	end 'serviceReplyResultType'
+
+	// ⭐⭐ **A RETURN THE INSTANTIATION FIXES IS READ OFF THE CELL, WHICH IS WHERE THE SEND RECORDED IT.**
+	// `SignatureIndex.internPromiseInstanceForReply` substituted the result when the send minted the cell —
+	// the one moment the handle was in hand — so reading it back is what makes `try await h.peek()` a
+	// `String` on a `Box with String` rather than a word no member resolves against.
+	//
+	// ⛔⛔ **THE CONDITION IS WHOSE SERVICE IT IS, NOT WHAT THE RETURN LOOKS LIKE — AND THAT IS THE WHOLE OF
+	// KEEPING ONE DEPTH.** A shape test here was one depth short and could not be repaired into one: an
+	// INNER ALIAS (`returns TArray`, on `typealias TArray = Array with T`) is recorded as a `named` leaf,
+	// and re-resolving it in THIS tier's interner does not reach it — the alias is qualified by a generic
+	// BASE, which no per-instance alias registry is keyed by. Asking the question again in a second table is
+	// how a reply came to be typed `Box.TArray`, a spelling no caller can write.
+	//
+	// ⇒ **A GENERIC SERVICE'S REPLY IS READ OFF THE CELL, ALWAYS.** `internPromiseInstanceForReply` computed
+	// it through `ProgramSignatures.instanceResolvedSlotType` — the one home — at the one moment the handle
+	// was in hand and in the table those types live in. Reading it back is the only way this tier can hold
+	// the same answer rather than a second derivation of it. A MONOMORPHIC service fixes nothing, so its
+	// reply is repaired as written, exactly as it always was.
+	function fixedReplyResultType(declaredReturn MaxonReturnType, messageName ByteArray, cell ValueId) returns MaxonReturnType
+		if self.replyServiceIsGeneric(messageName) 'fixedByTheInstance'
+			return MaxonReturnType.value(self.resolvedSlotType(self.signatures.substitutedInstanceArg(self.valueInstanceId(cell), position: PromiseResultArgPosition)))
+		end 'fixedByTheInstance'
+
+		return self.repairSweptReturnType(declaredReturn, scopeFilePath: self.signatures.recordedReturnDeclFileOf(messageName))
+	end 'fixedReplyResultType'
+
+	// Does this message belong to a service whose instantiation fixes anything at all? Asked of the ROSTER,
+	// which is what knows a qualified name is a message and whose it is.
+	function replyServiceIsGeneric(messageName ByteArray) returns bool
+		return match serviceMessageOwnerOf(self.signatures, callee: messageName) 'owner'
+			notAMessage gives false
+			ofService(typeName, _) gives self.signatures.structDeclaresTypeParams(typeName)
+		end 'owner'
+	end 'replyServiceIsGeneric'
 
 	// **THE OPERAND'S TYPE AS THE `await` DIAGNOSTIC NAMES IT** — the value-KIND vocabulary (`integer`,
 	// `boolean`, `float`, `string`), which is NOT `typeTagName`'s ABI vocabulary (`int`, `bool`). The two

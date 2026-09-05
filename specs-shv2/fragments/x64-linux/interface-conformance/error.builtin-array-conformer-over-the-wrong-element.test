@@ -1,0 +1,15 @@
+// Test: error.builtin-array-conformer-over-the-wrong-element
+type MyCollection uses Element implements BuiltinArrayLiteral
+	var managed as __ManagedMemory
+
+	static function init(managed __ManagedMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+end 'MyCollection'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:6:10: Unsupported: the field 'managed' of `MyCollection`, which declares itself the compiler's array record — such a literal IS its buffer and is handed back as `Self`, so the field's element must be the type parameter `MyCollection` is generic over, and this one's is not. The value would wear an identity its bytes do not have. Declare the field through an inner `typealias` over the parameter, which is `stdlib/Array.maxon`'s own spelling

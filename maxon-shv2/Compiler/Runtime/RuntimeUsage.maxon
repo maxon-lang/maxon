@@ -980,6 +980,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesStrCopy = true
 		usage.usesHeap = true
 	end 'own'
+	// ⛔ **`__mbox_handle_retain_box` INCREFS THE HANDLE BOX INSIDE ITS OWN Std BODY**
+	// (`MailboxRuntime.buildMboxHandleRetainBox`), which this Maxon-module scan cannot see — the shape the
+	// list arm below carries. MEASURED as a compiler PANIC and not a miscompile: a service handle co-owned
+	// into a struct field, in a program whose only other allocation is the handle box, died at
+	// `resolveCallFixups: call to unknown function '__mm_incref'`.
+	if callee.equals(MboxHandleRetainBoxName) 'mailboxHandleRetain'
+		usage.usesIncref = true
+		usage.usesHeap = true
+	end 'mailboxHandleRetain'
 	// Any `__managed_*` call carries the whole managed-memory runtime, and the heap under it: `__managed_create`/`__managed_grow`
 	// `__mm_alloc` the record and the element buffer, `__managed_decref` `__mm_free`s them — none of which this
 	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference

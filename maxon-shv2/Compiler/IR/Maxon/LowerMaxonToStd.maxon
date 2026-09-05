@@ -4346,9 +4346,16 @@ type MaxonToStdLowering
 		end 's'
 	end 'lowerServiceSpawn'
 
+	// ⭐ **WHICH INSTANTIATION THE SPAWNED STATE STANDS AT** — this tier's two columns, handed to the ONE
+	// classifier `ServiceLoop.spawnedInstancesByService` also reads, so the loop this takes the address of
+	// is the loop that was built.
+	function spawnedStateInstance(state ValueId) returns ServiceStateInstance
+		return serviceStateInstanceOfValueType(self.valueTagOf(state), nameId: try self.valueNameIds.get(state) otherwise panic("spawnedStateInstance: v{state} is not in '{String.from(self.currentFuncName)}'s dense value-name column"))
+	end 'spawnedStateInstance'
+
 	function emitServiceSpawn(result ValueId, typeName ByteArray, state ValueId, dstBlock IrBlock)
 		let loopPtr = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(loopPtr, funcName: serviceLoopSymbol(typeName)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(loopPtr, funcName: serviceLoopSymbolFor(self.signatures, typeName: typeName, instance: self.spawnedStateInstance(state))))
 		let abandonPtr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(abandonPtr, funcName: serviceAbandonSymbol(typeName)))
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: threeArgs(loopPtr, second: state, third: abandonPtr)))

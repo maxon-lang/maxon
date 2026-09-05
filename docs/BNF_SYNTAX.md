@@ -410,7 +410,8 @@ sized_type_ref
 - `byte` ranges must have bounds within 0 to u8.max
 
 ```
-generic_type  = IDENTIFIER 'with' type_args
+generic_type  = generic_base 'with' type_args
+generic_base  = IDENTIFIER [ '.' IDENTIFIER ]
 
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```
