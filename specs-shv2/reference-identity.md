@@ -350,3 +350,49 @@ end 'main'
 ```stdout
 red green blue | green | 3
 ```
+
+<!-- test: a-durable-store-of-a-constant-copies-it -->
+⭐ **BINDING A CONSTANT KEEPS ITS IDENTITY; STORING ONE INTO A CONTAINER DOES NOT, AND THE DIFFERENCE IS
+THE POINT.** A module-level `let` is image data on a read-only page. `let b = A` is a borrow and shares
+the one record, so `b is A` — that is `assignment-creates-alias` and it holds here unchanged. But a
+container OUTLIVES the statement and may be written through later, and a write through it would land on
+the image. So a durable store takes a private copy, and a copy is a different object.
+
+**The copy is not a cost the identity pays for; it is the thing that makes the store safe.** Push a
+constant into an array, take the element back out and `push` to it: without the copy that write reaches
+`.rdata` and faults on x64, or — with no read-only section — silently rewrites the constant on
+wasm32-wasi. The seven `*-detaches-from-rdata` cases in `byte-string-literal.md` pin the mutation half;
+this pins what the reader sees.
+
+⚠ **THE BOOTSTRAP ANSWERS `2` HERE AND THAT IS NOT A BUG IN EITHER.** Its constant is an ordinary heap
+record, so it can co-own where shv2 must copy, and identity survives its store. The two compilers make
+different representation choices and `is` is where the difference becomes visible; nothing in `specs/`
+pins a store, and this case is where shv2 says which answer is its own. `self-identity`,
+`assignment-creates-alias` and `byte-array-constant-identity` are unaffected and agree on both.
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+typealias Holder = Array with NumArray
+
+let Anchor = NumArray.create()
+
+function main() returns ExitCode
+	var result = 0
+	let bound = Anchor
+	if bound is Anchor 'bindingBorrows'
+		result = result + 1
+	end 'bindingBorrows'
+
+	var h = Holder.create()
+	h.push(Anchor)
+	let stored = try h.get(0) otherwise NumArray.create()
+	if stored is not Anchor 'storeCopies'
+		result = result + 2
+	end 'storeCopies'
+
+	return result
+end 'main'
+```
+```exitcode
+3
+```
