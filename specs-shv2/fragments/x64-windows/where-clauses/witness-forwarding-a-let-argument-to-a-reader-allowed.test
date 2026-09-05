@@ -1,0 +1,160 @@
+// Test: witness-forwarding-a-let-argument-to-a-reader-allowed
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Reader
+	function total(src IntArray) returns Integer
+end 'Reader'
+
+type Summer implements Reader
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{ n: n }
+	end 'create'
+	export function total(src IntArray) returns Integer
+		return src.count() as Integer
+	end 'total'
+end 'Summer'
+
+type Box uses T where T is Reader
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function run(src IntArray) returns Integer
+		return self.item.total(src)
+	end 'run'
+end 'Box'
+
+typealias SummerBox = Box with Summer
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let b = SummerBox.create(Summer.create(1))
+	return b.run(a) as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Summer.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Summer.total {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rdx + 8]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rax
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect Summer.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rdx, [rip + __witness_Summer.Reader]
+    x64.movRegReg rcx, r12
+    x64.callDirect Box.create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.leaRegRdata rax, [rip + __witness_Summer.Reader]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect Box.run
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at witness-forwarding-a-let-argument-to-a-reader-allowed.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Box_Summer
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

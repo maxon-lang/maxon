@@ -1,0 +1,39 @@
+// Test: witness-mutation-of-let-argument-refused
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Grower
+	function grow(dest IntArray)
+end 'Grower'
+
+type Pusher implements Grower
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{ n: n }
+	end 'create'
+	export function grow(dest IntArray)
+		dest.push(9)
+	end 'grow'
+end 'Pusher'
+
+type Box uses T where T is Grower
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function run(dest IntArray)
+		self.item.grow(dest)
+	end 'run'
+end 'Box'
+
+typealias PusherBox = Box with Pusher
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let b = PusherBox.create(Pusher.create(1))
+	b.run(a)
+	return try a.get(0) otherwise 55
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:34:4: cannot pass 'a' to function that mutates parameter 'dest' (in main)

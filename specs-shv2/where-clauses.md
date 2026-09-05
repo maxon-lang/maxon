@@ -1039,9 +1039,21 @@ end 'main'
 error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be constrained with 'where T is Comparable'
 ```
 
-<!-- disabled-test: witness-mutation-of-let-argument-refused -->
-<!-- MEASURED 2026-09-04: shv2 COMPILES the program CLEAN where the case expects a refusal. A witness-dispatched
-     method that mutates through a `let` argument is not caught. -->
+<!-- test: witness-mutation-of-let-argument-refused -->
+⭐⭐ **E3019 REACHES THE GENERIC ROUTE, AND THAT IS A WHOLE-PROGRAM CLAIM RATHER THAN A LOCAL ONE.**
+`Box.run(dest)` forwards `dest` into `self.item.grow(dest)`, which names no callee — the body is compiled ONCE
+against the opaque `T` and the jump goes through a witness table. What it DOES name is a REQUIREMENT, and
+which bodies fill that slot is fixed whole-program by the conformance check, so the mutation summary closes
+over the union of `Grower`'s conformers (`SemanticCheck.addWitnessParamEdges`). `Pusher.grow` writes its
+`dest`, therefore `Box.run` writes its `dest`, therefore `b.run(a)` over a `let`-bound array is refused.
+
+⚠ **THE TWO NON-GENERIC SPELLINGS OF THE SAME PUSH WERE ALREADY REFUSED, IDENTICALLY ON BOTH COMPILERS** —
+a free `grow(a)` and an interface-method `p.grow(a)` both answer this diagnostic. This case is the third
+route to it, and it was the one that compiled clean and silently pushed into an immutable array.
+
+⚠ The runnable oracle has no answer here to agree with: it refuses the PROGRAM, at `self.item.grow(dest)`,
+with `E4006 Cannot access nested field on non-struct field 'item'`. The anchor is shv2's own method-call
+column, the one its `p.grow(a)` refusal uses.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1080,7 +1092,98 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:33:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
+error E3019: <fragment>:34:4: cannot pass 'a' to function that mutates parameter 'dest' (in main)
+```
+
+<!-- test: witness-mutation-of-var-argument-allowed -->
+⭐ **THE FIRST CONTROL FOR THE REFUSAL ABOVE, AND THE ONE THAT MATTERS: THE SAME PROGRAM WITH `var a`.**
+E3019 is about the BINDING, never about the route — a refusal that fired on the dispatch rather than on the
+subject would take this program with it, and nothing else in this file would notice. Answers 9: the push
+happened, through the witness table, into an array the program declared mutable.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Grower
+	function grow(dest IntArray)
+end 'Grower'
+
+type Pusher implements Grower
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{ n: n }
+	end 'create'
+	export function grow(dest IntArray)
+		dest.push(9)
+	end 'grow'
+end 'Pusher'
+
+type Box uses T where T is Grower
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function run(dest IntArray)
+		self.item.grow(dest)
+	end 'run'
+end 'Box'
+
+typealias PusherBox = Box with Pusher
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	let b = PusherBox.create(Pusher.create(1))
+	b.run(a)
+	return try a.get(0) otherwise 55
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: witness-forwarding-a-let-argument-to-a-reader-allowed -->
+⭐ **THE SECOND CONTROL: A `let` ARRAY FORWARDED THROUGH THE IDENTICAL SHAPE TO A CONFORMER THAT ONLY
+READS.** The summary is a UNION over conformers, so this is what says the union is over what the bodies
+actually do rather than over the fact that a dispatch happened at all. `Summer.total` writes nothing, so
+`Box.run` writes nothing, so the `let` is fine. Answers 0 — an empty array's count.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Reader
+	function total(src IntArray) returns Integer
+end 'Reader'
+
+type Summer implements Reader
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{ n: n }
+	end 'create'
+	export function total(src IntArray) returns Integer
+		return src.count() as Integer
+	end 'total'
+end 'Summer'
+
+type Box uses T where T is Reader
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function run(src IntArray) returns Integer
+		return self.item.total(src)
+	end 'run'
+end 'Box'
+
+typealias SummerBox = Box with Summer
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let b = SummerBox.create(Summer.create(1))
+	return b.run(a) as ExitCode
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: where-clauses.constraint-interface-declared-below -->

@@ -61,7 +61,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// interprocedural summaries below propagate, differing only in their SEED. Built here rather than inside
 	// either builder because a second walk over every call in the program, to derive the same relation, is the
 	// duplication `buildParamMutationSummary`'s header refuses.
-	let callEdges = collectCallParamEdges(project, module: module, funcIndexByName: funcNames.byName)
+	let callEdges = collectCallParamEdges(project, signatures: signatures, module: module, funcIndexByName: funcNames.byName)
 	let edgesByCallee = callEdges.byCallee(funcNames.functions.count())
 	// The interprocedural closure-escape summary (P1.5-A2b-2, W58) — built once, read at every call site to
 	// refuse a capturing closure passed to a callee that persists the parameter.
@@ -1821,8 +1821,16 @@ end 'addStorageReachEdges'
 // Walk every call in the program and record one edge per argument that IS one of the caller's own
 // parameters. A caller with no parameters contributes none (nothing of its own can be passed on), which is
 // the cheap gate that keeps `main` and every top-level driver out of the graph entirely.
-function collectCallParamEdges(project Project, module MaxonModule, funcIndexByName FuncIndexByName) returns CallParamEdges
+// The conformer list of one interface, memoized across the walk. ⚠ **`ProgramSignatures.conformersOf` IS A
+// FULL WALK OF EVERY DECLARED TYPE, and its own header sizes that against a handful of EXTENSION sites.** The
+// witness-dispatch arm below asks it once per DISPATCH OP, which is a different quantity entirely — memoized
+// here rather than inside that function so its callers keep the walk they were sized for and this one pays
+// for each interface once.
+typealias ConformersByInterface = Map with (ByteArray, ByteArrayArray)
+
+function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, funcIndexByName FuncIndexByName) returns CallParamEdges
 	var edges = CallParamEdges.create()
+	var conformers = ConformersByInterface.create()
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectCallParamEdges: functions.get OOB at {i}")
 		if func.paramCount == 0 'passesNothingOfItsOwn'
@@ -1832,19 +1840,20 @@ function collectCallParamEdges(project Project, module MaxonModule, funcIndexByN
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectCallParamEdges: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				collectCallParamEdgesAt(project, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges)
+				collectCallParamEdgesAt(project, signatures: signatures, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 	return edges
 end 'collectCallParamEdges'
 
-// The per-op arm of the edge walk. Only a call with a callee NAME can propagate: an `indirectCall` chooses
-// its callee at run time and a `witnessDispatch` chooses it from a witness table, so neither has a summary
-// to reach — see `checkImmutableArgToMutatingParam` for what that costs and why it is not refused instead.
-// The non-call bands range to `break`, so a newly appended op fails to compile here rather than silently
-// dropping out of the call graph (the band-append invariant).
-function collectCallParamEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges)
+// The per-op arm of the edge walk. An `indirectCall` chooses its callee at run time and has no summary to
+// reach — see `checkImmutableArgToMutatingParam` for what that costs and why it is not refused instead. A
+// WITNESS DISPATCH is not that case: it names a REQUIREMENT, and the set of bodies it can land on is the
+// interface's conformers, which is a whole-program fact this pass already holds. The non-call bands range to
+// `break`, so a newly appended op fails to compile here rather than silently dropping out of the call graph
+// (the band-append invariant).
+function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface)
 	match op 'op'
 		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		literal to stringLiteral then break 'op'
@@ -1860,7 +1869,8 @@ function collectCallParamEdgesAt(project Project, op MaxonOp, func IrFunction, c
 		sizeofType then break 'op'
 		constArrayLiteral then break 'op'
 		switch then break 'op'
-		witnessDispatch to witnessTryDispatch then break 'op'
+		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers)
+		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers)
 		// A panic calls no user function, so it carries no mutation edge.
 		panicAbortValue then break 'op'
 		// The error-flag encode calls no user function, so it carries no mutation edge.
@@ -1900,6 +1910,70 @@ function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray,
 		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: paramPositionOfValueId(argId), calleeParam: pos)
 	end 'eachArg'
 end 'addCallParamEdges'
+
+// ⭐⭐ **A WITNESS DISPATCH'S EDGES ARE ITS REQUIREMENT'S CONFORMERS' — ONE EDGE SET PER BODY THE JUMP
+// CAN LAND ON.** `self.item.grow(dest)` inside a shared generic body names no callee, but it does name a
+// REQUIREMENT, and which bodies fill that slot is decided whole-program by `checkConformance` before this pass
+// runs. Reading them here is what closes the least fixpoint over the generic route: without it a
+// `Box uses T where T is Grower` whose `run(dest)` forwards `dest` into `Grower.grow` was summarised as
+// writing nothing, and `let a = IntArray.create()` handed to `b.run(a)` compiled clean while the DIRECT
+// spelling and the INTERFACE-METHOD spelling of the same push were both E3019 on both compilers.
+//
+// ⚠ **THE UNION OVER CONFORMERS IS THE ONLY HONEST MASK, because the body is compiled ONCE against the
+// opaque `T`.** `Box.run`'s summary has to hold for every `T` the program can bind, so a parameter it forwards
+// is written if ANY conformer's implementation writes it. That is over-approximate against a single
+// instantiation and exact against the signature the shared body actually publishes.
+//
+// ⚠ **THE IMPL NAMES COME FROM `project.witnessSlotImpls`, THE SELECTION `checkConformance` ALREADY MADE**,
+// never from a join re-derived here: an overloaded or granted conformer's chosen member is that map's answer,
+// and a second derivation could name a body the witness table does not hold.
+//
+// ⚠ A BUILTIN conformer (`int.hash` and its siblings) has no `implements` clause and so is not in
+// `conformersOf`'s walk. Those impls are compiler-synthesized to the requirement's shape and write no
+// parameter, so no edge is lost — and if one ever could, `witnessSlotImpl`'s own gate is where that set is
+// decided, not here.
+function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface)
+	if func.paramCount == 0 'passesNothingOfItsOwn'
+		return
+	end 'passesNothingOfItsOwn'
+
+	let dispatched = dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex)
+	let slots = interfaceWitnessSlots(signatures.interfaceMap(), iface: dispatched)
+	let slot = try slots.get(methodIndex) otherwise panic("addWitnessParamEdges: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
+	let requirement = slot.method.name
+	let sourceInterface = slot.sourceInterfaceName
+
+	for conformer in conformersOfMemoized(signatures, interfaceName: sourceInterface, memo: conformers) 'eachConformer'
+		let impl = try project.witnessSlotImpls.get(witnessSlotImplKey(conformer, interfaceName: sourceInterface, methodName: requirement)) otherwise continue
+		let calleeIndex = try funcIndexByName.get(impl) otherwise continue
+		addWitnessConformerEdges(args, calleeIndex: calleeIndex, func: func, callerIndex: callerIndex, edges: edges)
+	end 'eachConformer'
+end 'addWitnessParamEdges'
+
+// `conformersOf`, asked once per interface per compile — see `ConformersByInterface`.
+function conformersOfMemoized(signatures ProgramSignatures, interfaceName ByteArray, memo ConformersByInterface) returns ByteArrayArray
+	if let memoized = try memo.get(interfaceName) 'alreadyWalked'
+		return memoized
+	end 'alreadyWalked'
+
+	let walked = signatures.conformersOf(interfaceName)
+	memo.upsert(interfaceName, value: walked)
+	return walked
+end 'conformersOfMemoized'
+
+// One conformer's edges. The argument list is POSITIONAL and its position 0 is the receiver
+// (`witnessDispatchReceiver`), which is the implementation's own `self` — so argument `i` fills parameter `i`
+// with no slotting to do, where a named call needs `argSlotPosition` to undo a label permutation.
+function addWitnessConformerEdges(args ValueIdArray, calleeIndex FuncIndex, func IrFunction, callerIndex FuncIndex, edges CallParamEdges)
+	for i in 0 upto args.count() 'eachArg'
+		let argId = try args.get(i) otherwise panic("addWitnessConformerEdges: args.get OOB at {i} below its own count")
+		if argId >= valueIdAtParamPosition(func.paramCount) 'notOneOfOurParameters'
+			continue
+		end 'notOneOfOurParameters'
+
+		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: paramPositionOfValueId(argId), calleeParam: i)
+	end 'eachArg'
+end 'addWitnessConformerEdges'
 
 // The least-fixpoint sweep. Seeded with every function that already writes something, it pulls a callee off
 // the worklist, propagates its mask across its incoming edges, and re-enqueues a caller only when a bit
@@ -4812,12 +4886,16 @@ end 'reportConditionalExtensionWithheld'
 // mapping `slotCallArgs` used to produce the `argIds` the other checks read; inverting the permutation by
 // hand would be the second slotting this rung exists to not have.
 //
-// ⚠ **AN INDIRECT CALL AND A WITNESS DISPATCH ARE NOT CHECKED, and that is measured agreement rather than
-// an oversight.** Neither names a callee a summary could be keyed on. Refusing them conservatively would
-// refuse `let a = …` handed to ANY function value — and BOTH reference compilers accept `let f = grow` then
-// `f(a)` (measured: the oracle compiles it and the push takes effect), so a conservative refusal would
-// break agreement on a legal program rather than close a hole. `parameter-mutation.md` pins the acceptance
-// so the gap is visible instead of assumed.
+// ⚠ **AN INDIRECT CALL IS NOT CHECKED, and that is measured agreement rather than an oversight.** It names
+// no callee a summary could be keyed on, and refusing it conservatively would refuse `let a = …` handed to
+// ANY function value — BOTH reference compilers accept `let f = grow` then `f(a)` (measured: the oracle
+// compiles it and the push takes effect), so a conservative refusal would break agreement on a legal program
+// rather than close a hole. `parameter-mutation.md` pins the acceptance so the gap is visible instead of
+// assumed.
+//
+// ⭐ **A WITNESS DISPATCH *IS* CHECKED, and it is not the same case.** It names a REQUIREMENT, whose set of
+// implementations `checkConformance` fixed whole-program — so the summary reaches it through real edges
+// rather than through a blanket refusal. See `addWitnessParamEdges`.
 // ⭐⭐ **AND SINCE W117 IT IS ALSO THE DOOR FOR A `let`-DECLARED GLOBAL'S RECORD, THROUGH THE SAME ONE
 // REPORTER.** An argument that ALIASES an immutable global (the parser's per-value mark, published as
 // `IrFunction.immutableGlobalAliasValues`) is judged against a WIDER mask than an ordinary immutable binding
