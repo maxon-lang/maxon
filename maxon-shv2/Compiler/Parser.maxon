@@ -16247,6 +16247,9 @@ export type Parser
 		// than an existential one — and it is published only alongside `bodySpellsAReturn`, so a body with no
 		// `return` at all (a `void` function, a diverging one) states nothing rather than vacuously everything.
 		var everyReturnIsAFreshRecord = true
+		// The callees a forwarding `return` hands its answer straight back from, one per such return. Empty on
+		// every body that returns only record literals, which is every body this fact reached before the hop.
+		var freshReturnForwards = ByteArrayArray.create()
 		var atStatementStart = false
 		var lastTopLevelStatement = bodyStart
 		var sawATopLevelStatement = false
@@ -16302,7 +16305,13 @@ export type Parser
 				self.noteReturnedGlobalOrForward((q + 1) as TokenIndex, regionEnd: sharedSweptValueLineEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
 				// SV1's probe rides the same `return` token W117's does, for that probe's reason: this walk already
 				// stands on it, and a second walk would rebuild the block-depth state to reach the same tokens.
-				if not self.noteFreshReturnShape((q + 1) as TokenIndex) 'notAFreshRecord'
+				//
+				// ⚡ **ASKED ONLY WHILE THE CLAIM IS STILL ALIVE.** It is UNIVERSAL over the body's returns and only
+				// ever cleared, so one unreadable return settles the declaration and every later probe is a token
+				// walk whose answer nothing reads — and the probe is not free: it scans a record literal's or a
+				// call's whole argument region looking for the match. Most bodies return something that is
+				// neither, and they now pay one token compare each.
+				if everyReturnIsAFreshRecord and not self.noteFreshReturnShape((q + 1) as TokenIndex, funcName: funcName, takesReceiver: takesReceiver, forwards: freshReturnForwards) 'notAFreshRecord'
 					everyReturnIsAFreshRecord = false
 				end 'notAFreshRecord'
 			end 'returnStatement'
@@ -16492,7 +16501,17 @@ export type Parser
 		// hands back a fresh record on the path that returns one, and the caller adopting it is the only party
 		// that reaches this fact — the error edge carries no value for it to be wrong about.
 		if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFreshRecord 'returnsAFreshRecord'
-			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecord))
+			// ⭐ **AN UNCONDITIONAL CLAIM ONLY WHEN NO RETURN FORWARDED.** With a forward in the list the body's
+			// freshness is the CALLEE's, and the entries below say so — one per forwarding return, closed
+			// whole-program by `ProgramSignatures.closeFreshReturnForwards`. Publishing both would be a claim and
+			// a condition on the same declaration, and the unconditional one would win.
+			if freshReturnForwards.count() == 0 'everyReturnBuiltItsOwn'
+				bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecord))
+			end 'everyReturnBuiltItsOwn' else 'someReturnHandedTheCalleesBack'
+				for forwarded in freshReturnForwards 'eachForward'
+					bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecordIfCalleeDoes, forwardCallee: forwarded))
+				end 'eachForward'
+			end 'someReturnHandedTheCalleesBack'
 		end 'returnsAFreshRecord'
 
 		if any 'consumes'
@@ -16587,6 +16606,19 @@ export type Parser
 	// the whole-program aliasing analysis this compiler has deferred. The shape test is what keeps the claim
 	// derivable from tokens alone.
 	//
+	// ⭐⭐ **`return f(…)` IS RECOGNISED — AS A CONDITION, NOT A CLAIM — AND IT IS THE HOP `String.clone` NEEDED.**
+	// `stdlib/String.maxon:269` is `return sliceBytes(…)`, whose callee IS fresh by the literal criterion one
+	// line down, so the claim died one hop short: **MEASURED, `h.keep(s.clone())` and `let c = s.clone()` +
+	// `h.keep(c)` were BOTH E3138** — a send refusing the very cure its own diagnostic named. The forward is
+	// pushed and the caller ANDs it with the rest; `ProgramSignatures.closeFreshReturnForwards` decides it
+	// whole-program, where the callee's own fact is known.
+	//
+	// ⚠ **ONLY A BARE `name(…)`, BECAUSE ONLY A BARE NAME HAS A DERIVABLE KEY HERE.** Inside a method it is
+	// `<enclosing type>.<name>`; in a free function it is the bare name. A qualified `Foo.make(…)` or a
+	// receiver call `x.m(…)` states nothing — the first needs the contest's mint and the second needs `x`'s
+	// TYPE, neither of which this token scan holds — so both resolve toward recording nothing, which is this
+	// family's rule and the direction whose cost is a refusal rather than a moved box.
+	//
 	// ⚠⚠ **THE MATCHING `}` MUST END THE LINE, AND THAT TEST IS NOT DECORATION.** `return Self{…} if c else s`
 	// hands back the record on one path and a bound name on the other; `return wrap(Self{…})` hands back
 	// whatever `wrap` chose to do with it. Both open with the admitted tokens and neither is fresh, so the
@@ -16596,16 +16628,47 @@ export type Parser
 	// ⚠ It answers about ONE return; the caller ANDs it across every return in the body, so an unreadable
 	// shape costs the whole declaration its claim. That is this family's rule (*"every ambiguity resolves
 	// toward recording NOTHING"*) and here the wrong direction is a heap-corrupting move rather than a refusal.
-	function noteFreshReturnShape(valueStart TokenIndex) returns bool
+	function noteFreshReturnShape(valueStart TokenIndex, funcName ByteArray, takesReceiver bool, forwards ByteArrayArray) returns bool
 		// `tokenCanBeAName` admits `Self` along with every keyword-spelled type name (D8), which is the SAME
 		// admission the two `spawn` halves make — a factory writing `return Self{…}` and one writing
 		// `return Calc{…}` are one declaration spelled two ways.
-		if not tokenCanBeAName(self.tokenAt(valueStart)) or self.kindAt((valueStart + 1) as TokenIndex) != TokenKind.leftBrace 'notARecordLiteral'
+		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'
 			return false
-		end 'notARecordLiteral'
+		end 'notANameAtAll'
 
-		return self.recordLiteralEndsTheLine((valueStart + 1) as TokenIndex)
+		if self.kindAt((valueStart + 1) as TokenIndex) == TokenKind.leftBrace 'aRecordLiteral'
+			return self.recordLiteralEndsTheLine((valueStart + 1) as TokenIndex)
+		end 'aRecordLiteral'
+
+		if self.kindAt((valueStart + 1) as TokenIndex) != TokenKind.leftParen 'notACallEither'
+			return false
+		end 'notACallEither'
+
+		if not self.groupEndsTheLine((valueStart + 1) as TokenIndex, closer: TokenKind.rightParen) 'somethingFollowsTheCall'
+			return false
+		end 'somethingFollowsTheCall'
+
+		forwards.push(freshReturnForwardKey(self.tokenAt(valueStart).value, funcName: funcName, takesReceiver: takesReceiver))
+		return true
 	end 'noteFreshReturnShape'
+
+	// The registration key a bare `name(…)` forward names. Inside a METHOD it is the enclosing type's member —
+	// an implicit-self call resolves there — and in a free function it is the bare name. Both are the key the
+	// merge files a declaration under, so `closeFreshReturnForwards` compares like with like.
+	//
+	// ⚠ A method whose enclosing type cannot be read off its own qualified name states the BARE name instead,
+	// which is a key that either names a free function (right) or names nothing (a miss, and a missed `true`).
+	// Neither can name the wrong body: a key that resolves to no declaration publishes nothing.
+	function freshReturnForwardKey(callee ByteArray, funcName ByteArray, takesReceiver bool) returns ByteArray
+		if not takesReceiver 'aFreeFunction'
+			return callee
+		end 'aFreeFunction'
+
+		return match splitQualifiedName(funcName) 'q'
+			parts(typeName, _) gives qualifiedMethodName(typeName, methodName: callee)
+			notQualified gives callee
+		end 'q'
+	end 'freshReturnForwardKey'
 
 	// Walk from a record literal's opening `{` to its match, and answer whether the token after it ends the
 	// line. Split from the shape test above so the bracket bookkeeping is one loop rather than a condition
@@ -16615,8 +16678,16 @@ export type Parser
 	// A literal left unclosed by a malformed body runs to the file's `eof` and answers `false`, which is the
 	// safe direction: the tolerant sweep must never publish a fact about tokens the real parse will reject.
 	function recordLiteralEndsTheLine(openBrace TokenIndex) returns bool
+		return self.groupEndsTheLine(openBrace, closer: TokenKind.rightBrace)
+	end 'recordLiteralEndsTheLine'
+
+	// The walk itself, over whichever bracket the caller opened. ⚠ **THE CLOSER IS CHECKED AND NOT ASSUMED,
+	// which is the whole reason it is a parameter**: a `return f(…)` forward's match is a `)` and a record
+	// literal's is a `}`, and a walk that asserted one closer for both would answer `false` for every call —
+	// MEASURED, as `String.clone` staying unfresh after the hop was built and its forward pushed.
+	function groupEndsTheLine(openBracket TokenIndex, closer TokenKind) returns bool
 		var depth = 0
-		var q = openBrace
+		var q = openBracket
 		while self.kindAt(q) != TokenKind.eof 'scanForTheMatch'
 			let kind = self.kindAt(q)
 			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensGroup'
@@ -16625,7 +16696,7 @@ export type Parser
 			if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closesGroup'
 				depth = depth - 1
 				if depth == 0 'theMatch'
-					return kind == TokenKind.rightBrace and self.kindAt((q + 1) as TokenIndex) == TokenKind.newline
+					return kind == closer and self.kindAt((q + 1) as TokenIndex) == TokenKind.newline
 				end 'theMatch'
 			end 'closesGroup'
 
@@ -16633,7 +16704,7 @@ export type Parser
 		end 'scanForTheMatch'
 
 		return false
-	end 'recordLiteralEndsTheLine'
+	end 'groupEndsTheLine'
 
 	function noteReturnedGlobalOrForward(valueStart TokenIndex, regionEnd SweptValueRegionEnd, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray)
 		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'

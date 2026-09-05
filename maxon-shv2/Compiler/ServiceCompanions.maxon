@@ -462,19 +462,21 @@ end 'serviceRosterRefusalMessage'
 // and for its reason: the two differ in WHY this frame is not the value's only owner, and not at all in what a
 // send requires or in what the author does about it. Two copies would be free to drift into two rules.
 //
-// ⛔⛔ **IT NAMED `.clone()` FIRST AND THAT CURE DOES NOT WORK — MEASURED, AT EVERY SEND AND FOR EVERY
-// SHAPE.** `h.keep(s.clone())` and `let c = s.clone()` + `h.keep(c)` are BOTH refused, because a send
-// requires a value this frame provably solely owns and `ProgramSignatures.returnsFreshValue` answers `false`
-// for `String.clone`: `Parser.noteFreshReturnShape` publishes the fresh-record claim only for
-// `return <Name>{ … }` ending the line, and `stdlib/String.maxon:269` writes `return sliceBytes(…)` — a call
-// to a function that IS fresh by that criterion, one hop away. Closing the claim over such a hop is a
-// whole-program fixpoint (`closeByRefForwarding`'s shape) and is NOT built; until it is, the sentence must
-// not send an author to a spelling the next diagnostic refuses.
+// ⛔⛔ **IT NAMED `.clone()` AND THAT CURE DID NOT WORK — MEASURED, AT EVERY SEND AND FOR EVERY SHAPE.**
+// `h.keep(s.clone())` and `let c = s.clone()` + `h.keep(c)` were BOTH E3138, because a send requires a value
+// this frame provably solely owns and `ProgramSignatures.returnsFreshValue` answered `false` for
+// `String.clone`: the fresh-record claim was published only for `return <Name>{ … }` ending the line, and
+// `stdlib/String.maxon:269` writes `return sliceBytes(…)` — a call to a function that IS fresh by that
+// criterion, ONE HOP away. `ProgramSignatures.closeFreshReturnForwards` is that hop, so both spellings
+// compile now and the name is back in the sentence.
 //
-// ⚠ The cure that DOES work is the second one, so it is the only one named: an interpolation builds a
-// record at the send site that nothing else can name (`h.keep("{buf}")`, or bound first). `specs-shv2/
-// services.md`'s `a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation` is that program.
-let ServiceTransferLesson = "A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one"
+// ⚠ **BOTH CURES ARE NAMED AND BOTH ARE PINNED**, because they are not interchangeable: `.clone()` needs the
+// type to have one, and building at the send needs nothing. `specs-shv2/services.md`'s
+// `a-borrowed-parameter-may-be-sent-as-a-clone` and
+// `a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation` are the two programs — a refusal that names a
+// spelling the next diagnostic also refuses leaves an author with nothing to write, which is what this
+// sentence was until the hop was built.
+let ServiceTransferLesson = "A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name"
 
 // The BORROWED half: this frame does not own the value at all.
 // ⚠ **IT NAMES NO TYPE, AND IT USED TO.** The sentence ended *"and its type has no owning copy a send could

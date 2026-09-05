@@ -417,6 +417,11 @@ let DeclShapeAlwaysThrows = 108 as HashDigest
 // fresh-returning declaration is recorded, so every ordinary function costs no hash movement.
 let DeclShapeReturnsFreshRecord = 109 as HashDigest
 
+// The shape a CONDITIONAL fresh-return claim mixes, and its own rather than `DeclShapeReturnsFreshRecord`'s:
+// a body that stops building its record and starts forwarding to a callee is a different program, and a memo
+// that could not tell the two apart would serve the old answer.
+let DeclShapeFreshReturnForward = 113 as HashDigest
+
 // ⭐ A declared RETURN TYPE's pre-erasure SPELLING (A2j / A2m) — the `DeclaredSurface` word `mixDeclaration`
 // folds in beside the return type. It is the one declaration fact `mixReturnType` structurally cannot carry:
 // `__ManagedMemory` resolves to the SAME `genericInstance` a `ByteArray` does, so an edit between the two
@@ -4431,22 +4436,38 @@ export enum SweptBodyFact
 	// `+1` is that allocation's SOLE owner. See `Parser.noteFreshReturnShape` for why the shape is exactly
 	// that and nothing wider.
 	returnsAFreshRecord
+	// ⭐⭐ SV1's HOP: every `return` in the body hands back a record literal OR the result of a bare call to
+	// `forwardCallee`, and at least one is the call. The claim is CONDITIONAL — it becomes
+	// `returnsAFreshRecord` exactly when every callee forwarded to publishes that fact itself, which only the
+	// whole-program close can decide (`ProgramSignatures.closeFreshReturnForwards`). A frame that returns a
+	// fresh record it did not build still hands its caller the sole reference: it bound the value to nothing,
+	// so no statement stands between the callee's hand-off and its own.
+	returnsAFreshRecordIfCalleeDoes
 end 'SweptBodyFact'
 
 export type SweptBodyFactEntry
 	export let name as ByteArray
 	export let takesReceiver as bool
-	// Which of the three the sweep proved. See the header — each is read by a different door and no two share
+	// Which of the four the sweep proved. See the header — each is read by a different door and no two share
 	// a registry.
 	export let fact as SweptBodyFact
+	// The callee a `returnsAFreshRecordIfCalleeDoes` entry is conditional on, ALREADY KEYED as the target's own
+	// registration name. Empty for every other fact, which state no condition. One entry per forwarding
+	// `return`, so a body with two of them pushes two.
+	export let forwardCallee as ByteArray
 
-	export static function create(name ByteArray, takesReceiver bool, fact SweptBodyFact) returns SweptBodyFactEntry
-		return Self{name: name, takesReceiver: takesReceiver, fact: fact}
+	export static function create(name ByteArray, takesReceiver bool, fact SweptBodyFact, forwardCallee ByteArray = EmptySourceText) returns SweptBodyFactEntry
+		return Self{name: name, takesReceiver: takesReceiver, fact: fact, forwardCallee: forwardCallee}
 	end 'create'
 end 'SweptBodyFactEntry'
 
 export typealias SweptBodyFactEntryArray = Array with SweptBodyFactEntry
 typealias DeclaredBodyFactNameSet = Set with ByteArray
+
+// Declaration key → the callee keys its forwarding `return`s depend on. A LIST and not a single name because
+// a body may return through two different callees and the claim is universal over its returns: every one of
+// them must be fresh, so one unfresh target retracts the whole declaration's claim.
+typealias FreshReturnForwardMap = Map with (ByteArray, ByteArrayArray)
 
 // The `<T>.handle` names one program mints (SV1) — see `ProgramSignatures.serviceHandleNames`. Keyed by NAME
 // for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
@@ -9829,6 +9850,16 @@ export type ProgramSignatures
 	// is what a SEND asks before it may MOVE a call's result to another green thread. Empty for a program with
 	// no service in it, and for every declaration whose returns the sweep could not read that exactly.
 	var funcReturnsFreshRecord as DeclaredBodyFactNameSet
+	// ⭐⭐ **THE CONDITIONAL HALF OF THAT FACT: declaration key → the callees its forwarding `return`s hand
+	// their answer straight back from** (see `SweptBodyFact.returnsAFreshRecordIfCalleeDoes`). Written by the
+	// merge, READ ONCE by `closeFreshReturnForwards`, and empty for every program whose bodies build every
+	// record they return — which is nearly all of them, so the close's own guard is this map's count.
+	var funcFreshReturnForwards as FreshReturnForwardMap
+	// Has the close run? It is a least fixpoint over the map above and its answer is memoized into
+	// `funcReturnsFreshRecord` itself, so a second run would re-publish facts already published and bump every
+	// tally a second time — which reads as "not every declaration publishes it" and would silently retract the
+	// answer. `byRefForwardingClosed`'s discipline, one map over.
+	var freshReturnForwardsClosed as bool
 	// How many declarations of a name PROVED it, against `funcDeclarationCounts`' how many there were —
 	// `funcAlwaysThrowingDeclarationCounts`' twin, one registry over and for exactly its reason. Here the
 	// tally is what stops one overload's provable freshness answering for a sibling's unread returns.
@@ -10309,7 +10340,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -11237,6 +11268,7 @@ export type ProgramSignatures
 				leavesByPanicking then self.recordSweptBodyFact(factKey, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts, shape: DeclShapeDiverges)
 				leavesByThrowing then self.recordSweptBodyFact(factKey, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts, shape: DeclShapeAlwaysThrows)
 				returnsAFreshRecord then self.recordSweptBodyFact(factKey, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts, shape: DeclShapeReturnsFreshRecord)
+				returnsAFreshRecordIfCalleeDoes then self.recordFreshReturnForward(factKey, forwardCallee: entry.forwardCallee)
 			end 'which'
 		end 'eachProvedBodyFact'
 
@@ -12722,12 +12754,90 @@ export type ProgramSignatures
 	// second green thread while this one still holds it, which the plain refcount cannot survive. Every
 	// uncertainty in `Parser.noteFreshReturnShape` therefore resolves to recording nothing.
 	//
-	// ⚠ **IT IS A ONE-LEVEL SUMMARY AND NOT AN ORACLE.** `return other()` states nothing here even when
-	// `other` is itself fresh-returning — that is the transitive fixpoint this compiler has deferred for the
-	// consume analysis as well, and the SEND's guarantee stops at the frame boundary for the same reason.
+	// ⭐⭐ **IT CLOSES OVER A HOP, AND IT DID NOT UNTIL THE COST WAS MEASURED.** `return other()` used to state
+	// nothing here even where `other` is itself fresh-returning, on the ground that a transitive fixpoint was
+	// deferred — and one hop is exactly what `stdlib/String.maxon`'s `clone` needs (`return sliceBytes(…)`).
+	// The paragraph above priced a missed `true` as *"a SEND the refusal E3138 already teaches the cure for
+	// (`.clone()`)"*, and that was the same gap read from the other side: **MEASURED, `.clone()` at a send was
+	// itself E3138**, so the cure the refusal named cost exactly this claim. `closeFreshReturnForwards` is the
+	// fixpoint; the SEND's guarantee still stops where a body binds what it returns.
 	export function returnsFreshValue(callee ByteArray) returns bool
+		self.closeFreshReturnForwards()
 		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts)
 	end 'returnsFreshValue'
+
+	// One forwarding `return`'s dependency, appended to its declaration's list. The hash rides for
+	// `recordSweptBodyFact`'s reason: a body that starts forwarding somewhere else is a different program.
+	function recordFreshReturnForward(name ByteArray, forwardCallee ByteArray)
+		var targets = try self.funcFreshReturnForwards.get(name) otherwise ByteArrayArray.create()
+		targets.push(forwardCallee)
+		self.funcFreshReturnForwards.upsert(name, value: targets)
+		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeFreshReturnForward), bytes: name), bytes: forwardCallee)
+	end 'recordFreshReturnForward'
+
+	// ⭐⭐⭐ **THE LEAST FIXPOINT THAT CLOSES `returnsAFreshRecord` OVER A HOP.** A declaration whose every
+	// `return` hands back a record literal OR the result of a bare call publishes a CONDITION rather than the
+	// fact; this is where the condition is discharged, against callees whose own answer the whole-program
+	// merge finally knows. Seeded implicitly: the unconditional publishers are already in
+	// `funcReturnsFreshRecord` when this runs, so the first sweep resolves every one-hop forwarder, the second
+	// every two-hop one, and so on until a sweep changes nothing.
+	//
+	// ⛔⛔ **A WRONG `true` HERE IS A MOVED BOX A SECOND OWNER STILL HOLDS, NOT A REFUSAL** — the direction
+	// `everyDeclarationOfThisNamePublishes`' header names. What makes the hop sound is that the forwarding
+	// frame BINDS NOTHING: `return f(…)` with the call ending the line has no statement between the callee's
+	// hand-off and its own, so the reference it passes on is the one it received and nobody else names it.
+	// That is the identical argument the record-literal criterion rests on, one frame out.
+	//
+	// ⚠ **A KEY THAT FORWARDS FROM TWO DECLARATIONS PUBLISHES ONCE**, so its tally falls one short of its
+	// declaration count and `everyDeclarationOfThisNamePublishes` answers `false`. That is a missed `true` —
+	// the safe direction — and it is stated rather than fixed because the shape (two overloads of one name,
+	// both forwarding, both fresh) buys a refusal at worst.
+	//
+	// ⚡ The map is empty for every program whose bodies build the records they return, so the guard is one
+	// `count()` and no sweep runs at all.
+	function closeFreshReturnForwards()
+		if self.freshReturnForwardsClosed 'alreadySettled'
+			return
+		end 'alreadySettled'
+		self.freshReturnForwardsClosed = true
+
+		if self.funcFreshReturnForwards.count() == 0 'nothingForwards'
+			return
+		end 'nothingForwards'
+
+		var changed = true
+		while changed 'sweepUntilStable'
+			changed = false
+			for (name, targets) in self.funcFreshReturnForwards 'eachForwarder'
+				if self.funcReturnsFreshRecord.contains(name) 'alreadyPublished'
+					continue
+				end 'alreadyPublished'
+
+				if not self.everyForwardTargetIsFresh(targets) 'notYet'
+					continue
+				end 'notYet'
+
+				self.recordSweptBodyFact(name, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts, shape: DeclShapeReturnsFreshRecord)
+				changed = true
+			end 'eachForwarder'
+		end 'sweepUntilStable'
+	end 'closeFreshReturnForwards'
+
+	// Does every callee this declaration forwards to publish the fact? Asked through the SAME door a call site
+	// asks — including its every-declaration-of-this-name half — so a forwarder can never be admitted on a
+	// claim a caller would then be refused on.
+	//
+	// ⚠ It reads `funcReturnsFreshRecord` DIRECTLY rather than through `returnsFreshValue`, whose first act is
+	// to run this close: the recursion would re-enter mid-fixpoint and the memo flag would stop the inner run
+	// having any effect. The two halves are the same test with the close removed.
+	function everyForwardTargetIsFresh(targets ByteArrayArray) returns bool
+		for target in targets 'eachTarget'
+			if not self.everyDeclarationOfThisNamePublishes(target, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts) 'thisOneIsNot'
+				return false
+			end 'thisOneIsNot'
+		end 'eachTarget'
+		return true
+	end 'everyForwardTargetIsFresh'
 
 	// The shared body of the three doors above — somebody published the fact for this key, and EVERY
 	// declaration wearing the key did. Written once for `recordSweptBodyFact`'s reason: the collide half is the

@@ -1622,7 +1622,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one
+error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: error.a-borrowed-parameter-may-not-be-sent -->
@@ -1669,7 +1669,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one
+error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: error.a-service-is-rejected-on-wasm -->
@@ -4443,7 +4443,55 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one
+error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: a-borrowed-parameter-may-be-sent-as-a-clone -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+⭐⭐ **THE CURE THE REFUSALS NAME FIRST, AND IT DID NOT WORK UNTIL THE FRESH-RETURN CLAIM CLOSED OVER A
+HOP.** `String.clone`'s body is `return sliceBytes(…)` — a call to a function that IS fresh by
+`Parser.noteFreshReturnShape`'s record-literal criterion — so the claim died one frame short and
+`returnsFreshValue` answered `false`. MEASURED before `ProgramSignatures.closeFreshReturnForwards`:
+`h.keep(buf.clone())` and `let c = buf.clone()` + `h.keep(c)` were BOTH E3138, on a program whose only fault
+was following the diagnostic's own advice.
+
+⚠ **WHAT MAKES THE HOP SOUND IS THAT THE FORWARDING FRAME BINDS NOTHING.** `return f(…)` with the call
+ending the line has no statement between the callee's hand-off and its own, so the reference it passes on is
+the one it received and nobody else names it — the identical argument the record-literal criterion rests on,
+one frame out. A body that BINDS what it returns still states nothing, because statements can run in between.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s} ({self.n})\n")
+	end 'keep'
+end 'Store'
+
+function forward(h Store.handle, buf String)
+	h.keep(buf.clone())
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let s = "hello"
+	forward(h, buf: s)
+	print("caller still has {s}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+caller still has hello
+kept hello (1)
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation -->
@@ -4454,12 +4502,13 @@ without this case would be. An interpolation ALLOCATES: the record it builds is 
 can name it, and the send moves it — so `buf` stays readable in the caller and the service owns a record of
 its own.
 
-⛔⛔ **`.clone()` IS NOT THAT SPELLING, AND IT NEVER WAS — MEASURED at every send and for every shape.**
-`h.keep(buf.clone())` and `let c = buf.clone()` + `h.keep(c)` are both E3138: a send needs a value this frame
-provably solely owns, and `returnsFreshValue` answers `false` for `String.clone`, whose body is
-`return sliceBytes(…)` — a call to a function that IS fresh by `noteFreshReturnShape`'s criterion, one hop
-away. Closing the claim over that hop is a whole-program fixpoint and is not built. The lesson sentence named
-`.clone()` first until 2026-09-04.
+⚠ **THE OTHER CURE IS `.clone()`, AND THE TWO ARE NOT INTERCHANGEABLE**: a clone needs the type to have
+one, building at the send needs nothing. `a-borrowed-parameter-may-be-sent-as-a-clone` is that program.
+
+⛔⛔ **`.clone()` DID NOT WORK AT ANY SEND UNTIL 2026-09-04, FOR ANY SHAPE — the refusal named a spelling
+the next diagnostic also refused.** `returnsFreshValue` answered `false` for `String.clone`, whose body is
+`return sliceBytes(…)`: a call to a function that IS fresh by `noteFreshReturnShape`'s criterion, ONE HOP
+away. `ProgramSignatures.closeFreshReturnForwards` is that hop.
 ```maxon
 type Store
 	var n as Integer
