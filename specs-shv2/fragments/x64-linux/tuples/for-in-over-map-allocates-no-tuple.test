@@ -1,0 +1,149 @@
+// Test: for-in-over-map-allocates-no-tuple
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function sum(m IntMap) returns Integer
+	var total = 0
+	for (_, v) in m 'loop'
+		total = total + v
+	end 'loop'
+	return total
+end 'sum'
+
+function main() returns ExitCode
+	let m = [1: 10, 2: 20, 3: 30]
+	return sum(m)
+end 'main'
+---
+ExitCode: 60
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __ds_base@40 = i64 0
+  __ds_buf_size@48 = i64 0
+  __ds_buf_mask@56 = i64 0
+  __ds_start_ts@64 = i64 0
+  __ds_lock@72 = i64 0
+  __mm_alloc_id@80 = i64 0
+}
+
+func @sum {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Map.createIterator
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, forempty
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forexit
+  loop:
+    x64.leaRegRdata rdx, [rip + __layout_MapIterator_Integer_Integer]
+    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r12
+    x64.callDirect MapIterator.current
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  forstep:
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r12
+    x64.callDirect MapIterator.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_MapIterator_Integer_Integer
+    x64.movRegReg r8, rbx
+    x64.jmp forjoin
+  forempty:
+    x64.movRegReg r8, rbx
+  forjoin:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 10
+    x64.leaRegRdata rcx, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Map.create
+    x64.movRegReg r13, r8
+    x64.leaRegRdata r9, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rsi, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 20
+    x64.leaRegRdata r9, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rsi, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 30
+    x64.leaRegRdata r9, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rsi, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Map.upsert
+    x64.movRegReg rcx, r13
+    x64.callDirect sum
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at for-in-over-map-allocates-no-tuple.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_int_int
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

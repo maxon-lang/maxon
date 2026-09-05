@@ -290,8 +290,9 @@ export enum OsImportSlot
 	// `shm_open` stores 0600 at `[sp]` and passes only the first two in registers.
 	//
 	// ⚠ **NEITHER HAS A LINUX TWIN THIS ENUM COULD SERVE**, for `sysconf`'s reason: `shm_open` is a libc
-	// FUNCTION there (it opens a path under `/dev/shm` itself), so a libc-less static image re-answers the
-	// question rather than re-spelling this call.
+	// FUNCTION there rather than a syscall — all it does is prepend `/dev/shm/` and `open` the result — so a
+	// libc-less static image re-answers the question with `openat`/`unlinkat` over a path it builds itself
+	// (`LinuxRuntime.LinuxShmCreateName`) rather than re-spelling this call.
 	shmOpen
 	shmUnlink
 	ftruncate

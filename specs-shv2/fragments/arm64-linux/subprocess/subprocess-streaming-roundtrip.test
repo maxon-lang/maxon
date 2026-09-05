@@ -1,0 +1,579 @@
+// Test: subprocess-streaming-roundtrip
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+
+	try child.writeStdinLine("alpha") otherwise return 4
+	try child.writeStdinLine("beta") otherwise return 4
+	try child.writeStdinLine("gamma") otherwise return 4
+	// Signal EOF so the child drains its input and exits.
+	child.closeStdin()
+
+	let lineA = try child.readStdoutLine() otherwise return 5
+	let lineB = try child.readStdoutLine() otherwise return 5
+	let lineC = try child.readStdoutLine() otherwise return 5
+
+	if lineA != "alpha" 'check-a'
+		child.release()
+		return 6
+	end 'check-a'
+	if lineB != "beta" 'check-b'
+		child.release()
+		return 7
+	end 'check-b'
+	if lineC != "gamma" 'check-c'
+		child.release()
+		return 8
+	end 'check-c'
+
+	print("{lineA}\n")
+	print("{lineB}\n")
+	print("{lineC}\n")
+
+	child.release()
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_errno@248 = i64 0
+  __mrt_envp@256 = i64 0
+  __mrt_tls_next_key@264 = i64 0
+  __io_iocp@272 = i64 0
+  __io_done_event@280 = i64 0
+  __io_init_done@288 = i64 0
+  __io_pending@296 = i64 0
+  __io_pipe_seq@304 = i64 0
+  __subp_table@312 = i64 0
+  __subp_last_error@320 = i64 0
+  __slab_arena_list@328 = i64 0
+  __slab_arena_map_l1@336 = i64 0
+  __slab_state@344 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 128
+    arm64.storeSlotReg slot12, x28
+    arm64.storeSlotReg slot11, x27
+    arm64.storeSlotReg slot10, x26
+    arm64.storeSlotReg slot9, x25
+    arm64.storeSlotReg slot8, x24
+    arm64.storeSlotReg slot7, x23
+    arm64.storeSlotReg slot6, x22
+    arm64.storeSlotReg slot5, x21
+    arm64.storeSlotReg slot4, x20
+    arm64.storeSlotReg slot3, x19
+    arm64.leaRdata x0, __str_rec_35  ; "/bin/cat"
+    arm64.bl FilePath.from
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#1:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot0, x20
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot1, x19
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl StreamingSubprocess.spawn
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x21, 3
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#3:
+    arm64.leaRdata x1, __str_rec_36  ; "alpha"
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.writeStdinLine
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x22, 4
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#5:
+    arm64.leaRdata x1, __str_rec_37  ; "beta"
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.writeStdinLine
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.movImm x22, 4
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#7:
+    arm64.leaRdata x1, __str_rec_38  ; "gamma"
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.writeStdinLine
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#9
+  tryerr#10:
+    arm64.movImm x22, 4
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#9:
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.closeStdin
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.readStdoutLine
+    arm64.movRegReg x22, x0
+    arm64.storeSlotReg slot2, x22
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#11
+  tryerr#12:
+    arm64.movImm x22, 5
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#11:
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.readStdoutLine
+    arm64.movRegReg x23, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#13
+  tryerr#14:
+    arm64.movImm x23, 5
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#13:
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.readStdoutLine
+    arm64.movRegReg x24, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#15
+  tryerr#16:
+    arm64.movImm x24, 5
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x24
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  tryok#15:
+    arm64.leaRdata x1, __str_rec_36  ; "alpha"
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#18
+  check-a:
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.release
+    arm64.movImm x25, 6
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x25
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  ifcont#18:
+    arm64.leaRdata x1, __str_rec_37  ; "beta"
+    arm64.movRegReg x0, x23
+    arm64.bl __str_eq
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#20
+  check-b:
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.release
+    arm64.movImm x25, 7
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x25
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  ifcont#20:
+    arm64.leaRdata x1, __str_rec_38  ; "gamma"
+    arm64.movRegReg x0, x24
+    arm64.bl __str_eq
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#22
+  check-c:
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.release
+    arm64.movImm x25, 8
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x25
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  ifcont#22:
+    arm64.loadRegBaseDisp.word64 x19, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x22 + 8]
+    arm64.leaRdata x0, __str_rec_39  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x20, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x19, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x23 + 8]
+    arm64.leaRdata x0, __str_rec_39  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x20, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x19, [x24 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x24 + 8]
+    arm64.leaRdata x0, __str_rec_39  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x20, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl StreamingSubprocess.release
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+}

@@ -1,0 +1,22 @@
+// Test: error.union-payload-across-brands
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+union Slot
+	held(v Ys)
+	empty
+end 'Slot'
+
+function main() returns ExitCode
+	var xs = Xs.create()
+	xs.push(1)
+	let s = Slot.held(xs)
+	match s 'go'
+		held(v) then return v.count() as ExitCode
+		empty then return 1
+	end 'go'
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:14:22: type mismatch: 'expected Ys, got Xs'

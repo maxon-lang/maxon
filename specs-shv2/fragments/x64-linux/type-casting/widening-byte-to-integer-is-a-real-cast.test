@@ -1,0 +1,26 @@
+// Test: widening-byte-to-integer-is-a-real-cast
+
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+
+function asInteger(x Integer) returns Integer
+	return x
+end 'asInteger'
+
+function main() returns ExitCode
+	let b = 42 as Byte
+	let i = b as Integer
+	return asInteger(i)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __rc_ok:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,17 @@
+// Test: as-exitcode-is-legal-and-guard-free-where-it-fits
+typealias Byte = int(0 to u8.max)
+
+function main() returns ExitCode
+	let b = 7 as Byte
+	return b as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}

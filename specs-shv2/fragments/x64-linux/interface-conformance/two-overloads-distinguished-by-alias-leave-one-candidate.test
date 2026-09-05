@@ -1,0 +1,145 @@
+// Test: two-overloads-distinguished-by-alias-leave-one-candidate
+typealias Code = int(0 to u32.max)
+typealias Small = int(0 to 100)
+
+interface Labeled
+	function label(v Code) returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(v Code) returns Code
+		return v
+	end 'label'
+
+	export function label(v Small) returns Code
+		return 7
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.label(t.x)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Tag.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at two-overloads-distinguished-by-alias-leave-one-candidate.test:12: Range check failed: value outside typealias 'Code'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Tag.label {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rdx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at two-overloads-distinguished-by-alias-leave-one-candidate.test:16: Range check failed: value outside typealias 'Code'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 42
+    x64.callDirect Tag.create
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+  __il_body:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#7:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rdx, rax
+    x64.jcc lessEqual, __rc_ok#6
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Tag.label
+    x64.movRegReg r12, r8
+    x64.jmp __il_cont
+  __rc_ok#6:
+    x64.movRegReg r12, rdx
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#3:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at two-overloads-distinguished-by-alias-leave-one-candidate.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

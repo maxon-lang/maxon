@@ -1,0 +1,31 @@
+// Test: error.a-self-result-keeps-the-receivers-brand
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var item as T
+
+	export static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+
+	export function bump() returns Self
+		return Self{item: self.item}
+	end 'bump'
+end 'Box'
+
+typealias A = Box with Integer
+typealias B = Box with Integer
+
+function takesB(b B) returns Integer
+	return b.item
+end 'takesB'
+
+function main() returns ExitCode
+	let a = A.create(4)
+	let r = takesB(a.bump())
+	print("{r}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:25:10: argument type mismatch for 'b': expected 'B', got 'A'

@@ -283,5 +283,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:22: this construct is x64-windows only at this rung: it lowers to the runtime entry '__con_read_stdin', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:22: this construct lowers to the runtime entry '__con_read_stdin', which has no wasm32-wasi implementation
 ```

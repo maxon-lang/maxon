@@ -947,8 +947,9 @@ end 'arm64EmitCmpReg'
 // A magnitude with NO single-field form is the ISEL's obligation (`StdToArm64Conversion.lowerCmpImm`
 // asks `arm64ImmIsEncodableCmp` and materialises the constant into the IP scratch, comparing
 // register-to-register), so this PANICS rather than truncate — a masked field would compare against a
-// different constant with nothing anywhere to notice. The materialisation used to live HERE, invisible
-// to the register allocator and the liveness model that must see every write of x16.
+// different constant with nothing anywhere to notice. It belongs to the ISEL rather than to this encoder
+// because a materialisation here writes x16 where neither the register allocator nor the liveness model
+// can see it.
 export function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm Imm32)
 	let magnitude = arm64AddSubImmMagnitude(imm)
 	if not arm64MagnitudeFitsOneImm12(magnitude) 'noForm'
@@ -2695,9 +2696,8 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// step here — the stub is a chunk, not a module function, so it cannot be prepended to the module
 	// the way x64's is; it is assembled in the encode phase alongside the user chunks.
 	//
-	// ⚠ It is no longer the WHOLE arm64 runtime: the panic runtime below is the rest of it, and this
-	// comment said "the scalar core needs no panic handler" until A3n landed one three lines away.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: posixReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, os: target.os, entryFunction: project.entryFunctionName)
+	// ⚠ It is not the WHOLE arm64 runtime: the panic runtime appended three lines below is the rest of it.
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, os: target.os, entryFunction: project.entryFunctionName)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target))
 	end 'eachFunc'

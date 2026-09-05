@@ -573,5 +573,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:14:25: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_await_any', which has no wasm32-wasi implementation
+error E3104: <fragment>:14:25: this construct lowers to the runtime entry '__gt_await_any', which has no wasm32-wasi implementation
 ```

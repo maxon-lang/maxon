@@ -211,9 +211,9 @@ error E3036: <fragment>:3:20: '__Builtins.currentProcessId' takes exactly 0 argu
 
 <!-- test: process-id.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The introspection substrate is x64-windows only at this rung. On any other target the call is
-refused at its source span with `E3104`, naming the runtime entry that has no lowering there — never
-a panic from inside the wasm backend.
+wasm32-wasi has no process-introspection substrate, so the call is refused at its source span with
+`E3104`, naming the runtime entry that has no lowering there — never a panic from inside the wasm
+backend.
 ```maxon
 function main() returns ExitCode
 	let pid = __Builtins.currentProcessId()
@@ -221,5 +221,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:23: this construct is x64-windows only at this rung: it lowers to the runtime entry '__proc_pid', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:23: this construct lowers to the runtime entry '__proc_pid', which has no wasm32-wasi implementation
 ```

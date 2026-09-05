@@ -217,6 +217,7 @@ let DebugStreamFlag = "--debugstream"
 // ⚠ Only `build` acts on it. Every other command leaves the compiler's own default (off), so a spec-test
 // or a `maxon test` compile pays nothing for a sidecar nothing would read.
 module let NoDebugInfoFlag = "--no-debug-info"
+
 let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
 // `--metrics=<path>`, exported because the SCALE runner spawns one build per rung with it
@@ -1253,12 +1254,11 @@ function printUsage()
 	// and nothing would say so.
 	print("{padRight("  --color={reportColorChoices()}", width: UsageFlagColumnWidth)}(test) Colour the report; `auto` means only when stdout is a\n")
 	print("                                terminal: not redirected, NO_COLOR unset, TERM not `dumb`.\n")
-	// ⚠ The last two lines are not decoration: only x64-windows can ask the host what KIND of object a
-	// handle is, so on every other lane `auto` is answered "not a terminal" and prints nothing. Saying so
-	// here is what keeps this text from being the documented lie it was before the intrinsic existed —
-	// `docs/CLI_REFERENCE.md` carries which lanes those are and what each still owes.
-	print("                                Only x64-windows detects a terminal; on every other target\n")
-	print("                                `auto` degrades to `never` — use `always` to force colour.\n")
+	// ⚠ The last two lines are not decoration: wasm32-wasi cannot ask the host what KIND of object a
+	// handle is, so `auto` is answered "not a terminal" there and prints nothing. `docs/CLI_REFERENCE.md`
+	// carries the same fact at length.
+	print("                                Only wasm32-wasi cannot detect a terminal; there `auto`\n")
+	print("                                degrades to `never` — use `always` to force colour.\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.

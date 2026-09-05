@@ -31,7 +31,15 @@
 // compares the monitor's version, and caches `buffer_size` and `start_timestamp` before it arms
 // `__ds_base` — so a child that starts against a half-written header attaches to nothing and traces
 // nothing, silently. `create` seeds; `MonitorCommand` spawns after it returns.
-#if compiler(shv2) and (os(Windows) or os(Macos))
+// ⛔ **THE GATE NAMES A COMPILER AND NO HOST, AND THE SECOND HALF IS THE DELIBERATE ONE.** Every OS shv2
+// self-hosts on provides the named section and the millisecond stopwatch this file rides, so an `os()` list
+// here would be a restatement of `TargetFacilities` that nothing checks against it — and one that, on a host
+// it forgot, silently orphans the 95 constants `Compiler/Runtime/DebugStreamRuntime` exports for this file
+// alone (E3092, raised against a file whose own exports are correct). A host that does not provide the
+// facility is answered where the answer lives instead: E3104 at the `__shm_*` call's own span. The
+// `compiler(shv2)` half stands because the BOOTSTRAP surfaces no `__shm_*` at all, and it is the bootstrap
+// that compiles the seed.
+#if compiler(shv2)
 
 	// One byte of the wire's `event_type` field.
 	typealias EventCode = int(0 to 255)
@@ -73,8 +81,15 @@
 		let SegmentCreateCallName = "CreateFileMappingA"
 		let SegmentMapCallName = "MapViewOfFile"
 	#else
-		let SegmentCreateCallName = "shm_open"
 		let SegmentMapCallName = "mmap"
+	#endif
+	#if os(Macos)
+		let SegmentCreateCallName = "shm_open"
+	#endif
+	// ⚠ **`shm_open` IS A libc FUNCTION ON LINUX AND THIS COMPILER LINKS NO LIBC**, so the call to look up is
+	// the one the runtime actually makes: the open of the path that function would have built.
+	#if os(Linux)
+		let SegmentCreateCallName = "openat under /dev/shm"
 	#endif
 
 	// The stem of the segment name. It carries this process's id and a nonce, because twelve spec-test workers

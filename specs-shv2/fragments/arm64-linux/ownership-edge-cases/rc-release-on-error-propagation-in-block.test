@@ -1,0 +1,120 @@
+// Test: rc-release-on-error-propagation-in-block
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Wrapper'
+
+enum LookupError
+	case missing
+end 'LookupError'
+
+function failingLookup() returns Integer throws LookupError
+	throw LookupError.missing
+end 'failingLookup'
+
+function compute(flag Integer) returns Integer throws LookupError
+	let w = Wrapper.create(flag)
+
+	if w.val > 0 'positive'
+		let inner = Wrapper.create(w.val * 2)
+		let result = try failingLookup()
+		return result + inner.val
+	end 'positive'
+
+	return 0
+end 'compute'
+
+function main() returns ExitCode
+	let result = try compute(5) otherwise 'err'
+		return 77
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 77
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @failingLookup {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 2
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @compute {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x19
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.cmp x0, 0
+    arm64.b.le ifcont
+  positive:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.lsl x0, x0, 1
+    arm64.leaRegSlot x19, slot1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.bl failingLookup
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.add x0, x0, x1
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.bl compute
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x0, 77
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-release-on-error-propagation-in-block.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

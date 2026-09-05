@@ -1,0 +1,141 @@
+// Test: runtime-yield.sibling-runs
+typealias Integer = int(i64.min to i64.max)
+
+var flag = 0
+
+function setter() returns Integer
+	flag = 1
+	Runtime.yield()
+	return 2
+end 'setter'
+
+function spinner() returns Integer
+	for _ in 0 upto 1000 'spin'
+		Runtime.yield()
+	end 'spin'
+	return flag
+end 'spinner'
+
+function main() returns ExitCode
+	let p1 = async setter()
+	let p2 = async spinner()
+	let seen = await p2
+	let ack = await p1
+	return (seen + ack) as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __data_flag@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_errno@248 = i64 0
+  __mrt_envp@256 = i64 0
+  __mrt_tls_next_key@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @setter {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.leaGlobal x1, __data_flag
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.bl Runtime.yield
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @spinner {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+  forhdr:
+    arm64.cmp x19, 1000
+    arm64.b.ge forexit
+  spin:
+    arm64.bl Runtime.yield
+  forstep:
+    arm64.add x19, x19, 1
+    arm64.b forhdr
+  forexit:
+    arm64.leaGlobal x0, __data_flag
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x0, setter
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.leaFuncAddr x0, spinner
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await
+    arm64.add x0, x20, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at runtime-yield.sibling-runs.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1665,7 +1665,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:9:21: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_attached_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:9:21: this construct lowers to the runtime entry '__gt_subp_attached_spawn', which has no wasm32-wasi implementation
 ```
 
 <!-- test: subprocess-builtins.streaming-rejected-off-its-substrate -->
@@ -1709,7 +1709,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:10: this construct lowers to the runtime entry '__gt_subp_spawn', which has no wasm32-wasi implementation
 ```
 
 <!-- test: subprocess-builtins.the-stdlib-api-compiles-on-arm64 -->

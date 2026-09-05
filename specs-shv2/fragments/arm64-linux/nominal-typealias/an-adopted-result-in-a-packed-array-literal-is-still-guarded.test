@@ -1,0 +1,30 @@
+// Test: an-adopted-result-in-a-packed-array-literal-is-still-guarded
+typealias Small = int(0 to 255)
+
+function main() returns ExitCode
+	let s = 255 as Small
+	let xs = [s + 1, s + 2]
+	let first = try xs.get(0) otherwise 99
+	print("{first}")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-adopted-result-in-a-packed-array-literal-is-still-guarded.test:6: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

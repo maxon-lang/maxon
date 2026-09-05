@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "76105f3c0391d4ef",
+  "sourceHash": "0ad3e4e259c7df99",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1261,7 +1261,7 @@
       "tag": "E3104",
       "name": "SemanticTargetUnsupportedConstruct",
       "stage": "semantic",
-      "doc": "A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled\nfor another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are\nx64-windows only at this rung, so `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins and\nthe `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can\nemit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.\nDistinct from E3074, the subprocess-specific WASI rejection BOTH self-hosted compilers now\nraise: that one says subprocess can NEVER exist on wasm32-wasi, while this one says the\nsubstrate is x64-windows only AT THIS RUNG -- so a subprocess call on arm64/linux is still\nthis code, and only wasm32-wasi is handed to E3074.\nBefore it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file\nand no line -- a compiler crash where a diagnostic was owed.",
+      "doc": "A construct is reached by a program compiled for a target whose backend has not lowered the\nruntime entry it needs. Which host facility each entry needs and which targets provide it are\nthe two halves of `TargetFacilities`; wasm32-wasi is the lane that still lacks facilities, so\n`sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins, the `__Builtins` clock\nintrinsics and the file/socket/argv/stdin surfaces are all refused there. The call is refused\nat ITS SOURCE SPAN, naming the runtime entry that has no lowering.\nDistinct from E3074, the subprocess-specific WASI rejection BOTH self-hosted compilers now\nraise: that one says subprocess can NEVER exist on wasm32-wasi -- a permanent property of the\nplatform -- while this one says the target has not lowered the entry, a statement about this\ncompiler's progress.\nBefore it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file\nand no line -- a compiler crash where a diagnostic was owed.",
       "emittedBy": {"shv2": "targetUnsupportedConstruct"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },

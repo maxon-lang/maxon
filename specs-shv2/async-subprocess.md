@@ -610,7 +610,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:28: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:28: this construct lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
 ```
 
 <!-- test: async-subprocess.rejected-on-wasm-when-unreached -->
@@ -634,7 +634,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:24: this construct lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
 ```
 
 <!-- test: async-subprocess.the-bare-name-is-an-ordinary-declaration -->

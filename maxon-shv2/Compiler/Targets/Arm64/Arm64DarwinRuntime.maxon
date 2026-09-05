@@ -1908,28 +1908,25 @@ function emitArm64DarwinChildDup2(asm Arm64RuntimeAsm, startupSlot StackSize, ac
 end 'emitArm64DarwinChildDup2'
 
 // ==========================================================================
-// The NAMED SHARED SECTION — `mrt_darwin_shm_create` / `_open` / `_map` / `_unmap`
+// The NAMED SHARED SECTION — `mrt_darwin_shm_create` / `mrt_darwin_shm_open`
 // ==========================================================================
 
-// The four chunk symbols the isel branches to. EXPORTED because `StdToArm64Conversion` names them, and
-// `mrt_darwin_`-infixed because they exist on this lane alone: `shm_open` is a libc FUNCTION on Linux, so a
-// raw static image re-answers the question rather than re-spelling this call (`OsImportSlot.shmOpen`).
+// The two chunk symbols the isel branches to on this lane. EXPORTED because `StdToArm64Conversion` names
+// them, and `mrt_darwin_`-infixed because these two BODIES exist here alone: `shm_open` is a libc FUNCTION on
+// Linux, so that lane opens the `/dev/shm` path the function would have built
+// (`LinuxRuntime.LinuxShmCreateName`). The MAP and the UNMAP are one body on both lanes and wear the
+// shared prefix (`Arm64PosixRuntime.buildArm64PosixShmMapChunk`).
 export let DarwinShmCreateName = b"mrt_darwin_shm_create"
 export let DarwinShmOpenName = b"mrt_darwin_shm_open"
-export let DarwinShmMapName = b"mrt_darwin_shm_map"
-export let DarwinShmUnmapName = b"mrt_darwin_shm_unmap"
 
 // ⭐ **`O_RDWR|O_CREAT|O_EXCL` AS DARWIN NUMBERS THEM, AND THE `O_EXCL` IS LOAD-BEARING.** The create side
 // unlinks the name first, so the object cannot already exist — and if it somehow does, this refuses rather
 // than adopting a segment whose contents another process is still writing.
 //
 // ⚠ **DARWIN'S OWN NUMBERS: `O_CREAT` is 0x200 and `O_EXCL` 0x800 here, where Linux spells them 0x40 and
-// 0x80.** MEASURED on this host with `otool -tV` over a clang-compiled probe, which emits `mov w1, #0xa02`.
+// 0x80 (`LinuxRuntime.LinuxShmCreateFlags`).** MEASURED on this host with `otool -tV` over a clang-compiled
+// probe, which emits `mov w1, #0xa02`.
 let DarwinShmCreateFlags = 0xA02
-
-// The permission bits a fresh segment is created with: owner read/write, nobody else. A trace ring carries
-// a program's allocation history, and the two processes that share it run as the same user.
-let DarwinSharedSegmentMode = 0o600
 
 // How far a descriptor is shifted to discard the unspecified upper half of a C `int` return. A shift PAIR
 // zero-extends the low 32 bits, which is what leaves the handle's kind field (`PosixHandleKindShift`) clear
@@ -1967,7 +1964,7 @@ function buildArm64DarwinShmCreateChunk() returns FunctionCodeChunk
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotName)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinShmCreateFlags)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinSharedSegmentMode)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixSharedSegmentMode)
 	arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x2), byteOffset: 0)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.shmOpen)
 	arm64DarwinCaptureDescriptor(asm, slot: SlotFd, failed: refused)
@@ -2046,64 +2043,6 @@ function arm64DarwinCaptureDescriptor(asm Arm64RuntimeAsm, slot StackSize, faile
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
 end 'arm64DarwinCaptureDescriptor'
 
-// `mrt_darwin_shm_map(x0 = fd, x1 = bytes) -> x0 = base | 0` — `MapViewOfFile`'s POSIX twin.
-//
-// ⭐ **`MAP_SHARED` IS WHAT MAKES IT A CHANNEL RATHER THAN A COPY**, and it is the only difference from the
-// `mmap` the slab's page source already calls: a `MAP_PRIVATE` mapping of the same descriptor would take
-// every write copy-on-write and neither process would ever see the other's.
-//
-// A zero descriptor maps nothing and answers zero, so a failed create or attach flows through here untested
-// — exactly as `OpenFileMappingA`'s NULL flows into `MapViewOfFile` on the other lane.
-function buildArm64DarwinShmMapChunk() returns FunctionCodeChunk
-	let SlotFd = 0 as StackSize
-	let SlotBytes = 1 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(2)
-
-	let refused = asm.newLabel()
-	let answered = asm.newLabel()
-
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: refused)
-
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: MmapShared)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotFd)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.mmap)
-
-	// `MAP_FAILED` is -1, not NULL, so the test is against that word and never against zero.
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: MmapFailed)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
-
-	asm.placeLabel(refused)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
-
-	asm.placeLabel(answered)
-	return asm.finishFunction(DarwinShmMapName)
-end 'buildArm64DarwinShmMapChunk'
-
-// `mrt_darwin_shm_unmap(x0 = base, x1 = bytes)` — `UnmapViewOfFile`'s twin, and the reason
-// `StdOp.osUnmapNamedSegment` carries a LENGTH: `munmap` needs one and Win32's call does not.
-//
-// The status is discarded for `mrt_host_file_close`'s reason: an unmap that fails leaves a caller nothing
-// to do. A zero base is the no-op `UnmapViewOfFile(0)` is, which is what lets `__shm_close` run without a
-// test on a segment whose map never succeeded.
-function buildArm64DarwinShmUnmapChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
-
-	let unmapped = asm.newLabel()
-
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: unmapped)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.munmap)
-
-	asm.placeLabel(unmapped)
-	return asm.finishFunction(DarwinShmUnmapName)
-end 'buildArm64DarwinShmUnmapChunk'
-
 // Append the arm64-macOS host-surface chunks a program actually reaches.
 //
 // ⚠ **CALLED ONLY FOR `Os.macos`** — the caller (`buildArm64Backend`) makes that test, because arm64-Linux
@@ -2138,23 +2077,13 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinHandleFileTypeChunk())
 	end 'terminalDetection'
 
-	// ⭐⭐ **THE ENVIRONMENT READ RIDES A UNION, BECAUSE `osEnvRead` HAS TWO PRODUCERS.**
-	// `SchedRuntime.emitResolveMaxProcs` reads `MAXON_MAX_PROCS` in every green-thread program, and
-	// `TerminalRuntime.buildTerminalStdoutWantsColor` reads `NO_COLOR` and `TERM` in every program that asks
-	// whether stdout wants colour — which need not have a scheduler. Gated on `usesGt` alone it was a `bl` to
-	// a symbol nothing laid out, MEASURED as `arm64ResolveCallFixups: bl to unknown function
-	// 'mrt_host_env_read'` on the first such program built for this lane.
 	if posixReadsEnvironment(usage) 'envRead'
 		chunks.push(buildArm64DarwinEnvReadChunk())
 	end 'envRead'
 
-	// ⭐⭐ **THE THREE HOST-OBJECT CHUNKS, AND THEIR GATE IS WIDER THAN THE SCHEDULER'S.** `__ds_init` guards
-	// the ring with `osLockInit`/`osLockEnter`/`osLockLeave` and closes the section descriptor the moment the
-	// mapping exists, and `__shm_close` closes one with no lock and no scheduler anywhere — so both ends of a
-	// named segment reach this band without a green thread. The reap comes with the close rather than on a
-	// gate of its own: `mrt_host_wait_close` branches to it for the process KIND of handle, and a `bl` to an
-	// absent symbol is a link failure rather than a diagnostic.
-	if usage.usesGt or usage.usesDebugStream or usage.usesSharedMemory 'hostObjects'
+	// ⚠ **THE LOCK IS ONE `pthread_mutex_t` HERE, SO ONLY THE INIT NEEDS A CHUNK** — the enter and the leave
+	// lower to bare import calls, which is why this lane's band is three chunks where a Linux lane's is five.
+	if posixUsesHostObjects(usage) 'hostObjects'
 		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.importCall(OsImportSlot.waitpid)))
 		chunks.push(buildArm64DarwinWaitCloseChunk())
 		chunks.push(buildArm64DarwinLockInitChunk())
@@ -2198,32 +2127,21 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.importCall(OsImportSlot.kill)))
 	end 'childPipes'
 
-	// ⚠ **THE MILLISECOND STOPWATCH HAS THREE PRODUCERS AND ONLY ONE IS IN THE PIPE BAND.** A subprocess
-	// deadline reads it, every DebugStream entry stamps `now - start_timestamp`, and `__uptime_ms` is the
-	// language's own door onto it — so the gate is their union and `TargetFacilities` can claim the facility.
-	let readsUptime = usage.usesIocp or usage.usesDebugStream or usage.usesUptimeClock
-	if readsUptime 'uptimeClock'
+	if posixReadsUptimeClock(usage) 'uptimeClock'
 		chunks.push(buildArm64PosixTickMsChunk())
 	end 'uptimeClock'
 
-	// ⚠ **ONE CLOCK, TWO CALLERS, SO ONE GATE THAT IS THEIR UNION.** `mrt_host_tick_ms` derives its
-	// milliseconds from this chunk rather than reading a second clock, and the scheduler's deadlines come
-	// from it directly — so a program with either reaches it, and gating it on the scheduler alone left a
-	// traced program branching to a symbol nothing laid out.
-	if usage.usesGt or readsUptime 'monotonicClock'
+	if posixReadsMonotonicClock(usage) 'monotonicClock'
 		chunks.push(buildArm64DarwinMonotonicClockChunk())
 	end 'monotonicClock'
 
-	// ⭐⭐ **THE NAMED SHARED SECTION, GATED ON THE UNION OF ITS TWO ENDS.** `usesSharedMemory` is the
-	// CONSUMER's bit (`stdlib/SharedMemory.maxon` reached `__shm_*`), `usesDebugStream` the PRODUCER's — and
-	// the four chunks call each other's vocabulary rather than each other, so the band is laid out whole:
-	// `__ds_init` opens and maps, `__shm_close` unmaps, and splitting the gate would leave one end branching
-	// to a symbol nothing emitted.
-	if usage.usesSharedMemory or usage.usesDebugStream 'namedSection'
+	// ⚠ **FOUR CHUNKS WHERE A LINUX LANE HAS SIX**: `shm_open` NAMES a segment here, so the band needs
+	// neither a `/dev/shm` path builder nor an unlink body — the unpublish is one bare import call.
+	if posixUsesNamedSection(usage) 'namedSection'
 		chunks.push(buildArm64DarwinShmCreateChunk())
 		chunks.push(buildArm64DarwinShmOpenChunk())
-		chunks.push(buildArm64DarwinShmMapChunk())
-		chunks.push(buildArm64DarwinShmUnmapChunk())
+		chunks.push(buildArm64PosixShmMapChunk(PosixHostCall.importCall(OsImportSlot.mmap)))
+		chunks.push(buildArm64PosixShmUnmapChunk(PosixHostCall.importCall(OsImportSlot.munmap)))
 	end 'namedSection'
 
 	// ⭐⭐ **MAC4/5/6/7 — THE FILESYSTEM, STANDARD-INPUT AND argv SURFACE.** Four `RuntimeUsage` bits, and

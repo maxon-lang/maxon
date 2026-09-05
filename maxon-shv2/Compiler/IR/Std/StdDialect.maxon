@@ -1833,10 +1833,10 @@ export union StdOp
 	// `DebugStreamRuntime.maxon`, exactly as the FILETIME arithmetic above stays out of `osReadWallClock`.
 	// These three are the irreducible host calls underneath it.
 	//
-	// ⚠ **ALL THREE ARE x64-WINDOWS ONLY, AND THE GATE IS THE DRIVER'S** (`--debugstream` is refused on any
-	// other target, naming the gap). The panic arms in the arm64 and wasm lowerings are the backstop for a
-	// compiler bug that got one past that refusal, never the user-facing rejection — `osReadWallClock`'s
-	// arrangement exactly.
+	// ⚠ **THE GATE IS THE DRIVER'S** — `targetCanProduceDebugStream` refuses `--debugstream` on a target that
+	// lacks either the named section or the millisecond stopwatch, naming the gap. The wasm lowering's panic
+	// arm is the backstop for a compiler bug that got one past that refusal, never the user-facing rejection —
+	// `osReadWallClock`'s arrangement exactly.
 
 	// `osOpenNamedSegment(result, namePtr, bufPtr, bufLen) -> HANDLE (0 when there is no segment to open)`.
 	// `GetEnvironmentVariableA(namePtr, bufPtr, bufLen)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE,

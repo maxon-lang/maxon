@@ -1466,15 +1466,16 @@ E3103 SemanticDivisionByZero
 
 E3104 SemanticTargetUnsupportedConstruct
 	shv2 targetUnsupportedConstruct
-	doc A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled
-	doc for another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are
-	doc x64-windows only at this rung, so `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins and
-	doc the `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can
-	doc emit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.
+	doc A construct is reached by a program compiled for a target whose backend has not lowered the
+	doc runtime entry it needs. Which host facility each entry needs and which targets provide it are
+	doc the two halves of `TargetFacilities`; wasm32-wasi is the lane that still lacks facilities, so
+	doc `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins, the `__Builtins` clock
+	doc intrinsics and the file/socket/argv/stdin surfaces are all refused there. The call is refused
+	doc at ITS SOURCE SPAN, naming the runtime entry that has no lowering.
 	doc Distinct from E3074, the subprocess-specific WASI rejection BOTH self-hosted compilers now
-	doc raise: that one says subprocess can NEVER exist on wasm32-wasi, while this one says the
-	doc substrate is x64-windows only AT THIS RUNG -- so a subprocess call on arm64/linux is still
-	doc this code, and only wasm32-wasi is handed to E3074.
+	doc raise: that one says subprocess can NEVER exist on wasm32-wasi -- a permanent property of the
+	doc platform -- while this one says the target has not lowered the entry, a statement about this
+	doc compiler's progress.
 	doc Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
 	doc and no line -- a compiler crash where a diagnostic was owed.
 

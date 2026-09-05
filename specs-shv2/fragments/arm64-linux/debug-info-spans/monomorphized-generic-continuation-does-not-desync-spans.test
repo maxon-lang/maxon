@@ -1,0 +1,207 @@
+// Test: monomorphized-generic-continuation-does-not-desync-spans
+typealias Num = int(0 to 1000)
+
+type Cell
+	export var v as Num
+
+	static function init(v Num) returns Self
+		return Self{v: v}
+	end 'init'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Chain uses T
+	export var seed as T
+
+	export static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function churn(d Num) returns Num
+		print("churn\n")
+		let pad = 1
+		var arr = CellArray.create()
+		arr.push(Cell.init(pad))
+		let missed = try arr.get(7) otherwise Cell.init(3)
+		return try (missed.v / d) otherwise 9
+	end 'churn'
+end 'Chain'
+
+typealias NumChain = Chain with Num
+
+function main() returns ExitCode
+	let ch = NumChain.create(1)
+	return ch.churn(0)
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Cell.init {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 1000
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at monomorphized-generic-continuation-does-not-desync-spans.test:7: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Chain.churn {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x19, 1000
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at monomorphized-generic-continuation-does-not-desync-spans.test:21: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#7:
+    arm64.leaRdata x0, __str_rec_1  ; "churn\x0a"
+    arm64.bl print
+    arm64.movImm x20, 1
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl Cell.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movImm x1, 7
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x0, 7
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.add x0, x0, 56
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 40]
+    arm64.cmp x2, 0
+    arm64.b.eq critsplit#17
+  __im_empty:
+    arm64.cmp x20, 0
+    arm64.b.ne critsplit#18
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
+  critsplit#18:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  critsplit#17:
+    arm64.movRegReg x9, x0
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#2:
+    arm64.movImm x0, 3
+    arm64.bl Cell.init
+    arm64.b trycont#3
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+  trycont#3:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x19, 0
+    arm64.cset x2, eq
+    arm64.orr x3, x19, x2
+    arm64.udiv x19, x1, x3
+    arm64.cmp x2, 0
+    arm64.b.eq trycont#6
+  tryerr#5:
+    arm64.movImm x19, 9
+  trycont#6:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#11
+  __rc_chk#12:
+    arm64.cmp x19, 1000
+    arm64.b.le __rc_ok#10
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at monomorphized-generic-continuation-does-not-desync-spans.test:27: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#10:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 1
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Chain_Num
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.bl Chain.churn
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at monomorphized-generic-continuation-does-not-desync-spans.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

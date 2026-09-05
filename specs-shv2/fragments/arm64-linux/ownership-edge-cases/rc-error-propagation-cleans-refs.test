@@ -1,0 +1,133 @@
+// Test: rc-error-propagation-cleans-refs
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
+	let result = try arr.get(0)
+	return result
+end 'getFirst'
+
+function main() returns ExitCode
+	var arr = WrapperArray.create()
+	arr.push(Wrapper.create(99))
+	let w = try getFirst(arr) otherwise Wrapper.create(0)
+	return w.n
+end 'main'
+---
+ExitCode: 99
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Wrapper.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @getFirst {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x9, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#7
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#8
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#8:
+    arm64.movRegReg x0, x2
+    arm64.b __im_cont
+  critsplit#7:
+    arm64.movRegReg x0, x2
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.bl __mm_retain
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 99
+    arm64.bl Wrapper.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl getFirst
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.bl Wrapper.create
+  trycont:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-error-propagation-cleans-refs.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

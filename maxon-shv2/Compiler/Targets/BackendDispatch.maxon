@@ -171,7 +171,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
 	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
 	// never installed does not link.
-	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: posixReadsEnvironment(usage), debugStream: stdModule.debugStream, entryFunction: project.entryFunctionName)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage), debugStream: stdModule.debugStream, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -307,10 +307,9 @@ end 'refuseDuplicateChunkName'
 function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, entryFunction ByteArray)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, entryFunction: entryFunction)
-		// ⛔ The Linux stub takes no `debugStream`: no Linux lane provides the named-section or uptime-clock
-		// facility the producer needs, so `--debugstream` is REFUSED at the command line there (see
-		// `TargetFacilities.targetCanProduceDebugStream`) and this arm cannot be reached with the flag on.
-		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, entryFunction: entryFunction)
+		// The Linux stub brackets the producer exactly as the Windows one does: x64-linux provides both the
+		// named section and the millisecond stopwatch, so `--debugstream` reaches this arm.
+		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, entryFunction: entryFunction)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
 	end 'os'
@@ -467,10 +466,12 @@ end 'appendExitCodePassThroughCall'
 //
 //   [argv capture]      argc from [rsp] and the vector from rsp+8 into their two .data words
 //   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
+//   [call __ds_init]      attach the DebugStream producer to its ring (a --debugstream build only)
 //   [call __module_init]  fill every EAGER managed global's .data slot (P1.7 slice 2a)
 //   call main            main returns its ExitCode in R8 (custom ABI)
 //   [global cleanup]     mov rcx, r8 ; call __maxon_global_cleanup  ->  the same code back in R8
 //   [leak gate]          mov rcx, r8 ; call __mm_leak_check  ->  adjusted code / 101 in R8
+//   [call __ds_shutdown]  clear the producer-alive flag, after the last thing that can free a box
 //   mov edi, r8d         hand R8's low 32 bits to exit_group's rdi (Linux syscall arg 0)
 //   x64Syscall(exit_group)   mov eax, 231 ; syscall  — terminates the process
 //   ret                  dead (exit_group never returns); kept as the block's terminator for
@@ -486,7 +487,7 @@ end 'appendExitCodePassThroughCall'
 // shadow space to reserve (raw syscalls carry no imports, and shv2 functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
-function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, entryFunction ByteArray)
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -497,11 +498,22 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	appendLinuxArgvCapture(module, block: block, captureArgv: captureArgv)
 	appendLinuxEnvpCapture(module, block: block, captureEnvp: captureEnvp)
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+	// ⭐ The producer attaches before `__module_init`, which is the first thing that can allocate — an eager
+	// managed global's box belongs in the trace, and attaching after it would drop exactly the allocations a
+	// program makes before `main`. See `prependEntryStub`, whose bracket this mirrors.
+	appendDebugStreamCall(module, block: block, debugStream: debugStream, callee: DsInitName)
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
+
+	// ⚠ AFTER the leak gate, and it must be: `__ds_shutdown` clears the segment's producer-alive flag, and
+	// the leak check is the last thing that can still free a box — so the trace's final events happen above
+	// this line. The exit code is NOT parked across it, exactly as the Windows stub does not park it: R8 is
+	// written by name only by a function's PRIMARY RETURN move, and a void callee emits none. ⚠ AAPCS64 has
+	// no such spare register — x0 IS its return register — which is why the arm64 stub must park.
+	appendDebugStreamCall(module, block: block, debugStream: debugStream, callee: DsShutdownName)
 
 	// ExitCode (R8, custom ABI) -> EDI (Linux syscall arg 0). A 32-bit move, exactly as the Windows stub
 	// hands R8 to ECX for ExitProcess: an exit status is the low 8 bits, and the zero-extending `mov r32`

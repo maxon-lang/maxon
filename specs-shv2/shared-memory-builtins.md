@@ -32,13 +32,14 @@ read back through this file's own accessors agrees with itself whatever byte ord
 used; only a byte-level reading can say the section holds the little-endian bytes a decoder written
 against the wire format will find there.
 
-**Targets — x64-windows only.** These are Win32 section objects (`CreateFileMapping` /
-`MapViewOfFile`), and they carry the same restriction the DebugStream host primitives beside them do.
+**Targets — every lane that provides the `sharedMemory` host facility.** A section is a Win32 section
+object (`CreateFileMapping` / `MapViewOfFile`) on x64-windows and a `/dev/shm` mapping on the POSIX
+lanes; `wasm32-wasi` has no such object, so the compiler refuses `__shm_*` there with E3104 and these
+cases are reported as skipped rather than run.
 
 ## Tests
 
 <!-- test: shared-memory-builtins.a-word-round-trips-through-a-mapping -->
-<!-- targets: x64-windows -->
 A section is created, one word is written at an offset and read back identical. This is the floor: a
 mapping that could not be created, or one whose writes went somewhere the reads do not, fails here
 before any layout question is asked.
@@ -60,7 +61,6 @@ stored=1234567
 ```
 
 <!-- test: shared-memory-builtins.distinct-offsets-hold-distinct-words -->
-<!-- targets: x64-windows -->
 ⭐ **THE OFFSET IS HONOURED RATHER THAN IGNORED.** Two words are written at two offsets and both are
 read back. An accessor that dropped its offset, or scaled it as a word index on one side only, would
 answer the SAME number twice — which a single round trip cannot see.
@@ -84,7 +84,6 @@ first=11 second=22
 ```
 
 <!-- test: shared-memory-builtins.copy-out-answers-the-bytes-a-write-word-left -->
-<!-- targets: x64-windows -->
 `copyOut` reads the section as BYTES, so it says what `writeWord` actually left there. The word is
 `258` = `0x0102`, whose little-endian first four bytes are `2 1 0 0`; a big-endian store, or a write
 that landed at another offset, changes every one of them.
@@ -110,7 +109,6 @@ count=4 b0=2 b1=1 b2=0 b3=0
 ```
 
 <!-- test: shared-memory-builtins.a-named-segment-closes-without-leaking -->
-<!-- targets: x64-windows -->
 Every section is published under a name a second process can map, so `segmentName()` must answer a
 real one. Four create/close cycles run in a case that exits 0: the suite's leak gate is exit **101**,
 so a `close()` that unmapped nothing, or a segment record the cycle never released, turns this case

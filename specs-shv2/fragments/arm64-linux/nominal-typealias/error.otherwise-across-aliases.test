@@ -1,0 +1,21 @@
+// Test: error.otherwise-across-aliases
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+
+enum Fault implements Error
+	failed
+end 'Fault'
+
+function mayFail() returns Wide throws Fault
+	throw Fault.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let n = 5 as Narrow
+	let v = try mayFail() otherwise n
+	print("{v}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:15:10: type mismatch: 'otherwise type 'Narrow' does not match expected type 'Wide''

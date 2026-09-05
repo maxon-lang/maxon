@@ -1,0 +1,128 @@
+// Test: module-union-two-storing-functions
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.unowned
+
+function seed()
+	hold = Hold.owned(5)
+end 'seed'
+
+function clear()
+	hold = Hold.unowned
+end 'clear'
+
+function main() returns ExitCode
+	clear()
+	seed()
+	return match hold 'm'
+		unowned gives 0
+		owned(v) gives v
+	end 'm'
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __data_hold@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @seed {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 5
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.leaRegGlobal rax, __data_hold
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_decref
+    x64.leaRegGlobal rax, __data_hold
+    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @clear {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.leaRegGlobal rax, __data_hold
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_decref
+    x64.leaRegGlobal rax, __data_hold
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect clear
+    x64.callDirect seed
+    x64.leaRegGlobal rax, __data_hold
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.loadRegBaseDisp.word64 r8, [rax + 8]
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at module-union-two-storing-functions.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

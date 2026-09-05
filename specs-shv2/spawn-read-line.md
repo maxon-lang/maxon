@@ -37,7 +37,7 @@ completion arriving before the park would otherwise cause.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** Reading a line from a spawned child parks the calling green thread on the driver,
-and the interleaving cases additionally reach `__gt_sleep` — both x64-windows only at this rung.
+and the interleaving cases additionally reach `__gt_sleep` — neither of which wasm32-wasi lowers.
 
 ### ⭐ arm64-macOS RUNS THE PROBE, BUT NOT THE PART OF IT THAT PARKS
 

@@ -821,6 +821,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The `.data` slot list assembled from those answers, and the section laid out. Its own phase
 	// because it is the only step in this run whose cost is O(globals) rather than O(module).
 	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
+	// ⛔ **THE TRACE BIT IS RECORDED BEFORE THE FIRST `.data` PRODUCER RUNS, NOT BESIDE THE ONE THAT IS
+	// OBVIOUSLY ITS OWN.** A backend sees only this record, and the producer's synthesized body reaches the
+	// uptime clock, the ring lock and the segment attach — so slots that belong to OTHER families are owed
+	// too: `LinuxRuntime.linuxEnvpGlobals` lays out `__mrt_envp` because the attach reads
+	// `MAXON_DEBUGSTREAM` out of the captured vector on a libc-less lane. Set after that producer, the word
+	// is absent and the backend panics at the relocation rather than diagnosing anything. `usesHeap` is
+	// final by here, which is what makes this the earliest honest place to ask.
+	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
 	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
 	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals(usage) 'each'
@@ -838,11 +846,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	end 'gtGlobals'
 	// The P/M half's `.data` slots (G1). ⚠ **NO OUTER BIT TEST**, because the file it comes from has THREE
 	// gates and asks them itself: the P machinery rides `usesGt`, the two worker counters also serve
-	// `__Builtins.schedMaxActiveWorkers()` in a program that never spawns a green thread, and — since W213-C3
-	// — the system monitor's one-shot rides the TARGET as well (`targetBracketsBlockingSyscalls`), which is why
-	// this call now passes one. A gate spelled here as well would be a second copy of those conditions —
+	// `__Builtins.schedMaxActiveWorkers()` in a program that never spawns a green thread, and the system
+	// monitor's one-shot rides the TARGET as well (`targetBracketsBlockingSyscalls`), which is why this call
+	// passes one. A gate spelled here as well would be a second copy of those conditions —
 	// `slabRuntimeGlobals`'s reasoning, two files over, and `commandLineRuntimeGlobals`' shape one call down.
-	// (It used to name `clockRuntimeGlobals`, which W212 deleted along with the two words it produced.)
 	for entry in schedRuntimeGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
@@ -893,10 +900,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'subpGlobals'
-	// ⚠ **`ClockRuntime` CONTRIBUTES NOTHING HERE SINCE W212, and it used to contribute two words.** Both were
-	// out-param scratch for a host read, and both are FRAME slots now — the multi-M fix `SchedRuntime`'s audit
-	// had listed as its last outstanding item. There is no `clockRuntimeGlobals` to call because there is
-	// nothing for it to answer; the two `usage` bits still gate the two BODIES in `installClockRuntime`.
+	// ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT.** Its host reads take FRAME scratch, which is what a
+	// multi-M runtime requires, so there is no `clockRuntimeGlobals` to call here; the two `usage` bits gate
+	// only the two BODIES `installClockRuntime` builds.
 	// The slab's PAGE-LAYER slots — the arena list head and the reverse map's L1 pointer — and the OBJECT
 	// layer's one slot, the pointer to its lazily-committed state region. Each gate rides inside its producer
 	// (`slabArenaRuntimeGlobals` asks `usesSlabArena`, `slabRuntimeGlobals` asks `usesHeap`) rather than being
@@ -907,15 +913,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	for entry in slabRuntimeGlobals(usage) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
-	// The DebugStream producer's six `.data` slots ride the FLAG rather than a usage bit — nothing in a
-	// program can ask for a trace, so `--debugstream` is the only thing that can. The condition is asked of
-	// `buildCarriesDebugStream`, which is where the four parts that must agree about it read it from.
-	//
-	// ⚠ **RECORDED ON `usage` AT THE SAME MOMENT, BECAUSE A BACKEND SEES ONLY THAT RECORD.** The producer's
-	// synthesized body reaches the uptime clock, the ring lock and the segment attach, and a host surface
-	// emitted family by family owes those chunks — see `RuntimeUsage.usesDebugStream`. `usesHeap` is final
-	// here, which is what makes this the earliest honest place to ask.
-	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
+	// The DebugStream producer's own six `.data` slots, on the bit recorded at the top of this block —
+	// nothing in a program can ask for a trace, so `--debugstream` is the only thing that can set it.
 	if usage.usesDebugStream 'debugStreamGlobals'
 		for entry in debugStreamRuntimeGlobals() 'each'
 			declaredGlobals.push(entry)

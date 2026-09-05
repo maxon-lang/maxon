@@ -370,16 +370,15 @@ error E3004: <fragment>:3:16: call to undefined function '__whatever': the '__' 
 
 <!-- test: builtins-clock.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The clock substrate is x64-windows only at this rung. On any other target the call is refused at
-its source span with `E3104`, naming the runtime entry that has no lowering there — never a panic
-from inside the wasm backend.
+wasm32-wasi has no clock substrate, so the call is refused at its source span with `E3104`, naming
+the runtime entry that has no lowering there — never a panic from inside the wasm backend.
 ```maxon
 function main() returns ExitCode
 	return __Builtins.currentTimeNanos() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
 <!-- test: builtins-clock.wall-clock-rejected-on-wasm -->
@@ -391,7 +390,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__clock_now_unix_s', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__clock_now_unix_s', which has no wasm32-wasi implementation
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-monotonic -->
@@ -529,5 +528,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
 ```

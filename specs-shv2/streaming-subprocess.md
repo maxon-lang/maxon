@@ -44,7 +44,7 @@ buffered for the next call. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** The streaming reader parks its green thread on the driver, and several cases reach
-`__gt_sleep` directly — both x64-windows only at this rung.
+`__gt_sleep` directly — neither of which wasm32-wasi lowers.
 
 ### ⭐ arm64-macOS RUNS THESE BUILTINS, AND THE READ IS WHERE THE TWO LANES GENUINELY PART
 

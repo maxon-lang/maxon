@@ -686,17 +686,17 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// i64 error flag as a second result (`funcSignatureResultValTypes`), which `isThrowing` adds.
 		witnessCall(_, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
 		witnessTryCall(_, _, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: true)
-		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only and pull in no wasm import.
+		// The IOCP ops have no wasm lowering and pull in no wasm import.
 		osPipeCreate to osWriteFile then break 'k'
-		// The wall clock is x64-windows only and makes no indirect call.
+		// The wall clock has no wasm lowering and makes no indirect call.
 		osReadWallClock then break 'k'
-		// R4.1 + R4.2: the file ops are x64-windows only (E3104 at the call site) and pull in no wasm import.
+		// The file ops have no wasm lowering (E3104 at the call site) and pull in no wasm import.
 		osFileOpenRead to osFileAttributes then break 'k'
 		// A rendered panic pulls in no import that `osPanic` does not.
 		osPanicValue then break 'k'
-		// The command line is x64-windows only (E3104 at the call site) and pulls in no wasm import.
+		// The command line has no wasm lowering (E3104 at the call site) and pulls in no wasm import.
 		osCommandLine then break 'k'
-		// W5: x64-windows only too, and neither pulls in a wasm import.
+		// Neither has a wasm lowering, and neither pulls in a wasm import.
 		osStdHandle then break 'k'
 		osExecutablePath then break 'k'
 		// W35: a stream write makes no INDIRECT call — it calls two IMPORTS by index.
@@ -705,7 +705,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		stackRecordAddr then break 'k'
 		osOpenNamedSegment to osTickCountMs then break 'k'
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-		// band, the machine query AND the thread-CPU read — makes no wasm call either: it is x64-windows only.
+		// band, the machine query AND the thread-CPU read — makes no wasm call either: none of it lowers here.
 		osHandleSetInherit to osThreadCpuTicks then break 'k'
 		// F1a: the decommit makes no call of ANY kind on this lane — it emits nothing at all (see `emitBodyOp`),
 		// so there is no signature to intern.
@@ -1277,17 +1277,17 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// always i64, exactly as a direct `tryCall`'s flag is.
 		witnessCall(resultId, _, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
 		witnessTryCall(resultId, errorFlagId, _, _, resultType, _, _) then recordWitnessTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, resultType: resultType)
-		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only — no wasm valtype to record.
+		// The IOCP ops have no wasm lowering — no wasm valtype to record.
 		osPipeCreate to osWriteFile then break 'def'
-		// The wall clock is x64-windows only and defines no value — no wasm valtype to record.
+		// The wall clock has no wasm lowering and defines no value — no wasm valtype to record.
 		osReadWallClock then break 'def'
-		// R4.1 + R4.2: the file ops are x64-windows only, so no wasm valtype is ever recorded for their defs.
+		// The file ops have no wasm lowering, so no wasm valtype is ever recorded for their defs.
 		osFileOpenRead to osFileAttributes then break 'def'
 		// A rendered panic defines no value, exactly as `osPanic` defines none.
 		osPanicValue then break 'def'
-		// x64-windows only, so no wasm valtype is ever recorded for its def.
+		// No wasm lowering, so no wasm valtype is ever recorded for its def.
 		osCommandLine then break 'def'
-		// W5: x64-windows only too, so no wasm valtype is ever recorded for either def.
+		// Neither has a wasm lowering, so no wasm valtype is ever recorded for either def.
 		osStdHandle then break 'def'
 		osExecutablePath then break 'def'
 		// W35: the stderr write defines the byte count at the Std tier width, exactly as its stdout twin does.
@@ -1738,14 +1738,12 @@ type WasmFuncEmitter
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			osPanic(label) then self.emitPanicLabel(label)
-			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
-			// only — its QueryPerformanceCounter clock and Windows `Sleep` have no wasm primitive, and a
-			// `sleep` program is spec-gated to x64-windows, so neither op ever reaches the wasm emitter.
-			osReadClock then panic("emitBodyOp: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
-			osSleepMs then panic("emitBodyOp: `osSleepMs` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
-			// P1.5 subprocess: CreateProcessA and the wait/handle imports are x64-windows only, and an
-			// `async runProcess` program is spec-gated to x64-windows, so none reaches the wasm emitter.
-			osProcessSpawn to osWaitHandle then panic("emitBodyOp: the P1.5 subprocess ops are x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+			// The green-thread sleep substrate (`osReadClock`/`osSleepMs`) has no wasm lowering, and E3104
+			// refuses a program that reaches one at the call's own span, so neither op arrives here.
+			osReadClock then panic("emitBodyOp: `osReadClock` has no wasm32-wasi lowering — the green-thread sleep substrate is refused at the call's own span (E3104)")
+			osSleepMs then panic("emitBodyOp: `osSleepMs` has no wasm32-wasi lowering — the green-thread sleep substrate is refused at the call's own span (E3104)")
+			// WASI has no process-spawn primitive, so the spawn/wait band has nothing to lower to.
+			osProcessSpawn to osWaitHandle then panic("emitBodyOp: the subprocess ops have no wasm32-wasi lowering — WASI has no process-spawn primitive, and the call is refused at its own span (E3104)")
 			// ⭐⭐ **F1a: THE THREE PAGE-LIFECYCLE OPS ARE PERMANENTLY INERT HERE — CORRECT NO-OPS, NOT STUBS AND NOT
 			// GATES.** wasm linear memory only ever GROWS: `memory.grow` is the whole instruction set for it, there
 			// is no shrink, no decommit and nothing to re-back. So "give this region back" translates to the EMPTY
@@ -1787,16 +1785,16 @@ type WasmFuncEmitter
 			// the fused call is a `call_indirect` through a loaded slot. See `emitWitnessCall`.
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
-			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — wasm rejects rather
-			// than inventing an untested lowering (it is emitted only inside the x64-windows-gated IOCP runtime).
-			osPipeCreate to osWriteFile then panic("emitBodyOp: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
+			// The overlapped-read substrate has no wasm lowering, and wasm rejects rather than inventing an
+			// untested one.
+			osPipeCreate to osWriteFile then panic("emitBodyOp: the IOCP ops have no wasm32-wasi lowering — the async-subprocess-stdio substrate is refused at the call's own span (E3104)")
 			// The `__Builtins` WALL clock reads `GetSystemTimeAsFileTime`. WASI has `wasi:clocks/wall-clock.now`,
 			// but its answer is a (seconds, nanoseconds) RECORD rather than a single 64-bit tick count, so a wasm
 			// lowering is a different shape rather than a different import name — a later slice, not a rename.
 			// SemanticCheck refuses a wall-clock program on wasm at its own source span (E3104), so this panic is
 			// the backstop for a compiler bug that got one past that gate, not the user-facing rejection.
-			osReadWallClock then panic("emitBodyOp: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
-			osFileOpenRead to osFileAttributes then panic("emitBodyOp: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osReadWallClock then panic("emitBodyOp: `osReadWallClock` has no wasm32-wasi lowering — the wall clock is refused at the call's own span (E3104)")
+			osFileOpenRead to osFileAttributes then panic("emitBodyOp: the file-IO ops have no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			// The rendered message is a POINTER where the baked form names a label; both reach the one
 			// `mrt_panic` this backend synthesizes (`appendPanicRuntime`), exactly as on x64 and arm64.
 			osPanicValue(messagePtrId) then self.emitPanicValue(messagePtrId)
@@ -1804,7 +1802,7 @@ type WasmFuncEmitter
 			// refused because the wasm lane is SCALAR (no heap, no String, no `print`), and `CommandLine.args()`
 			// answers an `Array with String`. The op could be lowered the day that lane grows those; until then a
 			// lowering would be vocabulary with no reachable consumer.
-			osCommandLine then panic("emitBodyOp: `osCommandLine` is x64-windows only — argv capture is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osCommandLine then panic("emitBodyOp: `osCommandLine` has no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			// ⚠ W5. THE TWO ARE REFUSED FOR DIFFERENT REASONS, and copying argv's sentence onto both would
 			// hide the one that is permanent.
 			//   • `osStdHandle`: WASI DOES have a standard input — `wasi:cli/stdin` plus a `read` on the
@@ -1814,11 +1812,11 @@ type WasmFuncEmitter
 			//   • `osExecutablePath`: WASI has NO analogue AT ALL. A component has no image path to report,
 			//     and `args_get[0]` is whatever the host chose to pass, not a resolved path — answering it
 			//     would be a plausible wrong answer, which is the one thing worse than a refusal.
-			osStdHandle then panic("emitBodyOp: `osStdHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
-			osExecutablePath then panic("emitBodyOp: `osExecutablePath` is x64-windows only — WASI has no executable-path primitive at all, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osStdHandle then panic("emitBodyOp: `osStdHandle` has no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osExecutablePath then panic("emitBodyOp: `osExecutablePath` has no wasm32-wasi lowering — WASI has no executable-path primitive at all — and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			// W35: the same emitter as the stdout write, one `wasi:cli` accessor over. Unlike its two W5
-			// neighbours above this is NOT x64-windows-gated — Preview2 exports `get-stderr` beside
-			// `get-stdout` and the writer is the same method, so `printError` runs on this lane.
+			// neighbours above this one LOWERS here — Preview2 exports `get-stderr` beside `get-stdout` and
+			// the writer is the same method, so `printError` runs on this lane.
 			osWriteStderr(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError)
 			// ⛔ It cannot reach here, and a GUESS would be a wrong ANSWER rather than a missed
 			// optimization: `promoteStackRecords` is gated off for this target because a wasm local has no
@@ -1826,27 +1824,27 @@ type WasmFuncEmitter
 			// index. If this panic ever fires, that gate was removed without giving wasm a shadow stack
 			// first.
 			stackRecordAddr then panic("emitBodyOp: a `stackRecordAddr` reached the wasm backend, which has no addressable frame for its slot to index — `promoteStackRecords` is gated off for wasm32-wasi precisely so this cannot happen")
-			// ⛔ O3: the DebugStream producer opens a Win32 SECTION OBJECT; a WASI component has no such
-			// thing and no route to one. `--debugstream` is refused at the command line for this target, so
-			// this is a backstop for a compiler bug that got one past that gate.
-			osOpenNamedSegment to osTickCountMs then panic("emitBodyOp: the DebugStream host primitives are x64-windows only — `--debugstream` is refused at the command line on every other target")
+			// ⛔ The DebugStream producer attaches to a NAMED SECTION; a WASI component has no such thing and no
+			// route to one. `--debugstream` is refused at the command line for this target, so this is a
+			// backstop for a compiler bug that got one past that gate.
+			osOpenNamedSegment to osTickCountMs then panic("emitBodyOp: the DebugStream host primitives have no WASI spelling — `--debugstream` is refused at the command line on a target that provides no named section")
 			// ⛔ The four attached-subprocess host primitives join the spawn/wait/pipe band above: WASI has no
 			// process-spawn primitive at all, so there is nothing here to lower them to and nothing to fake.
-			// `SemanticCheck.calleeNeedsWin32Substrate` refuses a program that reaches one at its own source
-			// span (E3104), so this is the backstop for a compiler bug that got past that gate.
-			osHandleSetInherit to osProcessTerminate then panic("emitBodyOp: the attached-subprocess host primitives are x64-windows only — WASI has no process-spawn primitive, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
-			osSocketStartup to osSocketClose then panic("emitBodyOp: the socket host primitives are x64-windows only — this slice does not use WASI's `wasi:sockets`, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
+			// `TargetFacilities.calleeNeedsFacilityTargetLacks` refuses a program that reaches one at its own
+			// source span (E3104), so this is the backstop for a compiler bug that got past that gate.
+			osHandleSetInherit to osProcessTerminate then panic("emitBodyOp: the attached-subprocess host primitives have no wasm32-wasi lowering — WASI has no process-spawn primitive, and SemanticCheck refuses such a program at its own source span (E3104)")
+			osSocketStartup to osSocketClose then panic("emitBodyOp: the socket host primitives have no wasm32-wasi lowering — this lane does not use WASI's `wasi:sockets`, and SemanticCheck refuses such a program at its own source span (E3104)")
 			// ⛔ The MACHINE query is the strongest refusal in this match: WASI has no processor-count
 			// primitive AT ALL — a component has no OS-thread concept to count — so unlike the file and
 			// socket bands there is not even a preview API to wire up later. A lowering here could only
 			// invent a number, and an invented core count is a silent WRONG ANSWER rather than a missing
-			// feature. `SemanticCheck.calleeNeedsWin32Substrate` refuses such a program at its own source
-			// span (E3104, `specs-shv2/builtins-cpu-parallel.md`'s two `rejected-on-wasm` cases), so this is
-			// the backstop for a compiler bug that got past that gate.
+			// feature. `TargetFacilities.calleeNeedsFacilityTargetLacks` refuses such a program at its own
+			// source span (E3104, `specs-shv2/builtins-cpu-parallel.md`'s two `rejected-on-wasm` cases), so
+			// this is the backstop for a compiler bug that got past that gate.
 			// ⚠ Its band-mate `__sched_max_active_workers` reaches NO op here at all: its body is a constant
 			// return, so it lowers on this target through `const`/`ret` like any other function.
-			osCpuCount then panic("emitBodyOp: `osCpuCount` is x64-windows only — WASI reports no processor count, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
-			osThreadCpuTicks then panic("emitBodyOp: `osThreadCpuTicks` is x64-windows only — WASI exposes no per-thread CPU clock, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
+			osCpuCount then panic("emitBodyOp: `osCpuCount` has no wasm32-wasi lowering — WASI reports no processor count, and SemanticCheck refuses such a program at its own source span (E3104)")
+			osThreadCpuTicks then panic("emitBodyOp: `osThreadCpuTicks` has no wasm32-wasi lowering — WASI exposes no per-thread CPU clock, and SemanticCheck refuses such a program at its own source span (E3104)")
 			// F2: the atomics and the per-thread identity word — all three lower, and NONE is a stub.
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.emitAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.emitAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode)
@@ -1855,19 +1853,19 @@ type WasmFuncEmitter
 			// lane cannot ask, and there is no event object to signal. That is the same reason `currentThreadToken`
 			// answers a constant here rather than reading anything — but a constant is the RIGHT answer for an
 			// identity and a WRONG one for storage, which would silently hand every reader the same slot.
-			tlsAlloc to osSetEvent then panic("emitBodyOp: the per-OS-thread storage ops and the event signal are x64-windows only — a WASI component has one thread and no kernel event object")
+			tlsAlloc to osSetEvent then panic("emitBodyOp: the per-OS-thread storage ops and the event signal have no wasm32-wasi lowering — a WASI component has one thread and no kernel event object")
 			// ⚠ ITS OWN ARM, and its refusal is STRONGER than "not yet" — the shape `process-id.md` records for
 			// the pid. A WASI component has no process and no scheduler priority at all, so a lowering here
 			// could not be incomplete, only a pretence: it would report success for something that never
 			// happened. Refused at the call's own span with E3104 by the `__proc_` prefix, so this is a backstop.
-			osEnterBackgroundPriority then panic("emitBodyOp: `osEnterBackgroundPriority` is x64-windows only — a WASI component has no process and no scheduler priority, so there is nothing here to lower it to")
-			osFileOpenWriteExecutable then panic("emitBodyOp: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
-			osEnvBlock to osEnvBlockFree then panic("emitBodyOp: the environment-block ops are x64-windows only — their one producer is the attached-subprocess substrate, which a WASI component has no primitive for at all, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osEnterBackgroundPriority then panic("emitBodyOp: `osEnterBackgroundPriority` has no wasm32-wasi lowering — a WASI component has no process and no scheduler priority, so there is nothing here to lower it to")
+			osFileOpenWriteExecutable then panic("emitBodyOp: the file-IO ops have no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osEnvBlock to osEnvBlockFree then panic("emitBodyOp: the environment-block ops have no wasm32-wasi lowering — their one producer is the attached-subprocess substrate, which a WASI component has no primitive for at all, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			// ⚠ REFUSED NOWHERE, unlike every other absent-op arm here: `installTerminalRuntime` reads
 			// `HostFacility.terminalDetection` and gives this lane a `__tty_stdout_wants_color` body that answers
 			// `false` without asking, so the op is never emitted on it and there is nothing for a gate to reject.
 			osHandleFileType then panic("emitBodyOp: `osHandleFileType` has no WASI spelling and is never emitted on this lane — `installTerminalRuntime` reads `HostFacility.terminalDetection` and builds the fallback `__tty_stdout_wants_color` body (answering `false`) instead of asking. Reaching here is a compiler bug, not a program this lane should have rejected")
-			osCreateNamedSegment to osUnpublishNamedSegment then panic("emitBodyOp: the named-section CONSUMER primitives are x64-windows only — `stdlib/SharedMemory.maxon` is refused at the call's own span on every other lane (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
+			osCreateNamedSegment to osUnpublishNamedSegment then panic("emitBodyOp: the named-section CONSUMER primitives have no WASI spelling — `stdlib/SharedMemory.maxon` is refused at the call's own span on a lane that provides no named section (E3104), so this is the backstop for a compiler bug that got one past that gate rather than the user-facing rejection")
 		end 'body'
 	end 'emitBodyOp'
 

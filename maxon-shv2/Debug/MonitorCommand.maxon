@@ -16,7 +16,11 @@
 // version, `buffer_size` and `start_timestamp` and arms itself before `main` runs — so a child spawned
 // against a half-written header attaches to nothing, silently. `DebugStreamDecoder.create` returns with
 // the header complete; the spawn follows it.
-#if compiler(shv2) and (os(Windows) or os(Macos))
+// ⛔ **THE GATE NAMES NO HOST, FOR `DebugStreamDecoder`'s REASON** — every OS shv2 self-hosts on provides
+// the named section, and an `os()` list that forgets one orphans the ring format's shared constants instead
+// of reporting the missing facility. What it still names is the COMPILER: the bootstrap has no `__shm_*`
+// surface of its own, and it is the bootstrap that compiles the seed.
+#if compiler(shv2)
 
 	// The one option this command takes, and the only argument shape that may precede the executable.
 	let FilterOptionPrefix = "--filter="
@@ -343,12 +347,12 @@
 	end 'abandonedNote'
 #else
 
-	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT.** A DebugStream ring rides a named shared section, and the
-	/// decoder is built only on a host that has one. It still EXISTS here: the driver dispatches on a command
-	/// enum whose match is exhaustive, and a caller who typed `monitor` is owed the reason rather than a usage
-	/// listing that says nothing about their host.
+	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT.** A DebugStream ring rides a named shared section, which the
+	/// bootstrap does not surface — and the seed it builds still dispatches on a command enum whose match is
+	/// exhaustive, so a caller who typed `monitor` is owed the reason rather than a usage listing that says
+	/// nothing about why.
 	export function runMonitor(args MaxonArgs) returns ExitCode
-		printError("maxon-shv2 monitor: unavailable on this host. A DebugStream ring rides a named shared section and this compiler was built for a host with no such primitive, so the {args.paths.count()} argument(s) after `monitor` name a target nothing here can watch.\n")
+		printError("maxon-shv2 monitor: unavailable in this build. A DebugStream ring rides a named shared section, and this compiler was built by the bootstrap, which has no such primitive — so the {args.paths.count()} argument(s) after `monitor` name a target it cannot watch.\n")
 		return 1
 	end 'runMonitor'
 #endif

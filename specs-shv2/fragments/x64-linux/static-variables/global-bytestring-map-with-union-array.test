@@ -1,0 +1,279 @@
+// Test: global-bytestring-map-with-union-array
+typealias Kind = int(0 to 100)
+typealias Val = int(i64.min to i64.max)
+
+type KeywordInfo
+	export var kind as Kind
+	export var helpText as String
+
+	export static function create(kind Kind, helpText String) returns KeywordInfo
+		return Self{kind: kind, helpText: helpText}
+	end 'create'
+end 'KeywordInfo'
+
+union Op
+	add(value Val)
+	nop
+end 'Op'
+
+typealias OpArray = Array with Op
+
+var keywordMap = [
+	b"if": KeywordInfo.create(1, helpText: "Conditional statement."),
+	b"else": KeywordInfo.create(2, helpText: "Alternative branch.")
+]
+
+function main() returns ExitCode
+	var ops = OpArray.create()
+	ops.push(Op.add(1))
+	ops.push(Op.nop)
+
+	let info = try keywordMap.get(b"if") otherwise KeywordInfo.create(0, helpText: "")
+	if info.kind != 1 'badLookup'
+		return 1
+	end 'badLookup'
+
+	return 0 if ops.count() == 2 and keywordMap.count() == 2 else 2
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_keywordMap@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @KeywordInfo.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at global-bytestring-map-with-union-array.test:9: Range check failed: value outside typealias 'Kind'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 r12, 1
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegGlobal rax, __data_keywordMap
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __layout_Map_Array_Byte_KeywordInfo]
+    x64.leaRegRdata r9, [rip + __witness_Array_Byte.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_Array_Byte.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Map.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; ""
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegImm32 rcx, 0
+    x64.movRegReg rdx, r14
+    x64.callDirect KeywordInfo.create
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_Array_Byte_KeywordInfo
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, ifcont
+  badLookup:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_KeywordInfo
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.movRegImm32 rax, 0
+    x64.jcc notEqual, scmerge
+  andrhs:
+    x64.leaRegGlobal rax, __data_keywordMap
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __witness_Array_Byte.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_Array_Byte.Equatable]
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 32]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#17:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok#16
+  __il_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect Map.count
+    x64.jmp __il_cont
+  __rc_ok#16:
+    x64.movRegReg r8, rcx
+  __il_cont:
+    x64.cmpRegImm32 r8, 2
+    x64.setccReg equal, r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_Array_Byte_KeywordInfo
+    x64.movRegReg rax, r12
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r12, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r12, 2
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_KeywordInfo
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#13:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok#11
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at global-bytestring-map-with-union-array.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#11:
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

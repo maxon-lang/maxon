@@ -327,7 +327,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:2: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
 ```
 
 <!-- test: async-sleep.taken-as-a-value-rejected-on-wasm -->
@@ -344,7 +344,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:10: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
 ```
 
 <!-- test: async-sleep.unreached-compiles-on-wasm -->

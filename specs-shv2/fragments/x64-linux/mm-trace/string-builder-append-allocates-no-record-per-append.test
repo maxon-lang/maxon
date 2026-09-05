@@ -1,0 +1,81 @@
+// Test: string-builder-append-allocates-no-record-per-append
+function main() returns ExitCode
+	var sb = StringBuilder.create()
+	sb.append("ab")
+	sb.append("cd")
+	let s = sb.build()
+	return s.byteLength() as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __ds_base@40 = i64 0
+  __ds_buf_size@48 = i64 0
+  __ds_buf_mask@56 = i64 0
+  __ds_start_ts@64 = i64 0
+  __ds_lock@72 = i64 0
+  __mm_alloc_id@80 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect StringBuilder.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_2]  ; "ab"
+    x64.movRegReg rcx, rbx
+    x64.callDirect StringBuilder.append
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "cd"
+    x64.movRegReg rcx, rbx
+    x64.callDirect StringBuilder.append
+    x64.movRegReg rcx, rbx
+    x64.callDirect StringBuilder.build
+    x64.movRegReg r12, r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect String.byteLength
+    x64.movRegReg r13, r8
+  __il_cont:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r13, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at string-builder-append-allocates-no-record-per-append.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_StringBuilder
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

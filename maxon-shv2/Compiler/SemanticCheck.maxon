@@ -4475,7 +4475,7 @@ end 'functionTypeDoorSite'
 // `__Builtins.currentTimeMs()`, never `__gt_now_ns`, so there is no name of theirs to quote back at them —
 // the entry is named later in the same sentence, which is where it belongs. A stdlib function is the
 // opposite case and IS quoted: its name is exactly what the user wrote.
-let TargetUnsupportedUnnamedSubject = "it"
+let TargetUnsupportedUnnamedSubject = "this construct"
 
 // ⭐ **REFUSE A CONSTRUCT THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN — OR, FOR A
 // SUBPROCESS CROSSING ON A TARGET WITH NO PROCESS-SPAWN PRIMITIVE, E3074 (see the second arm below).**
@@ -4554,11 +4554,10 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 		end 'targetProvidesIt'
 
 		// ⭐⭐ **E3074 TAKES THE CROSSING AHEAD OF E3104 WHEN THE TARGET CAN NEVER HOST A CHILD PROCESS.**
-		// The two codes are two DIFFERENT facts about one call and both have to survive: E3104 says the
-		// substrate is x64-windows only AT THIS RUNG — true of arm64 and linux, where a child process
-		// exists and shv2 has simply not lowered it yet — while E3074 says subprocess can NEVER exist
-		// here, which is a permanent property of WASI rather than of this compiler's progress, and so
-		// carries advice (`#if not os(Wasi)`) instead of a runtime entry name.
+		// The two codes are two DIFFERENT facts about one call and both have to survive: E3104 says this
+		// target has not lowered the entry yet — a statement about this compiler's progress — while E3074
+		// says subprocess can NEVER exist here, a permanent property of WASI, and so carries advice
+		// (`#if not os(Wasi)`) instead of a runtime entry name.
 		//
 		// ⚠ **IT IS THIS ARM AND NOT THE `compilerOwnedEntry` ONE ABOVE, WHICH IS THE SPEC'S OWN BOUND**:
 		// `specs/subprocess-unsupported.md` scopes the check to *"user call sites into the public
@@ -4630,7 +4629,7 @@ end 'requireTargetSupportsServiceEntry'
 // `SourceRange` and this is the cold path — the gate itself runs over every call op of every function.
 function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex OpIndex, subject String, entry ByteArray)
 	let callRange = project.opRanges.get(opIndex)
-	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "this construct is x64-windows only at this rung: {subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'reportTargetUnsupportedCallee'
 
 // ⚠ **`targetHasWin32Substrate` STOOD HERE AND IS GONE.** It answered *"is this x64-windows?"* under a

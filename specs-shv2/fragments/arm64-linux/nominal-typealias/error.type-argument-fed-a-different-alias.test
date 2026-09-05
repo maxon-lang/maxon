@@ -1,0 +1,23 @@
+// Test: error.type-argument-fed-a-different-alias
+typealias Integer = int(i64.min to i64.max)
+typealias Narrow = int(0 to 16)
+
+type Box uses T
+	export var item as T
+
+	export static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let n = 5 as Narrow
+	let b = IntBox.create(n)
+	print("{b.item}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:17:17: argument type mismatch for 'v': expected 'Integer', got 'Narrow'

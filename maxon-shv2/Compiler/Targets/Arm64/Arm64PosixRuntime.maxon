@@ -990,3 +990,72 @@ export function buildArm64PosixWaitAnyChunk() returns FunctionCodeChunk
 	asm.placeLabel(done)
 	return asm.finishFunction(HostWaitAnyName)
 end 'buildArm64PosixWaitAnyChunk'
+
+// ==========================================================================
+// mrt_host_shm_map(x0 = fd, x1 = bytes) -> x0 = base | 0
+// ==========================================================================
+
+// `MapViewOfFile`'s POSIX twin.
+//
+// ⭐ **`MAP_SHARED` IS WHAT MAKES IT A CHANNEL RATHER THAN A COPY**, and it is the only difference from the
+// `mmap` the slab's page source already calls: a `MAP_PRIVATE` mapping of the same descriptor would take
+// every write copy-on-write and neither process would ever see the other's.
+//
+// A zero descriptor maps nothing and answers zero, so a failed create or attach flows through here untested
+// — exactly as `OpenFileMappingA`'s NULL flows into `MapViewOfFile` on the other lane.
+//
+// ⛔ **THE FAILURE TEST IS THE ANSWER'S SIGN AND NOT A COMPARE AGAINST -1, BECAUSE THE TWO ROUTES SPELL THE
+// FAILURE DIFFERENTLY.** libSystem answers `MAP_FAILED`, which is exactly `(void *) -1`; a raw `svc` answers
+// `-errno`, a different negative per reason. Bit 63 is what both have in common, and a mapping that
+// SUCCEEDED never has it: neither kernel hands a user process an address out of the kernel half. A test for
+// zero would be wrong on both — a failed mapping is negative, never NULL.
+export function buildArm64PosixShmMapChunk(call PosixHostCall) returns FunctionCodeChunk
+	let SlotFd = 0 as StackSize
+	let SlotBytes = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: refused)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: MmapShared)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotFd)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
+	arm64PosixEmitHostCall(asm, call: call)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+
+	asm.placeLabel(refused)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostShmMapName)
+end 'buildArm64PosixShmMapChunk'
+
+// ==========================================================================
+// mrt_host_shm_unmap(x0 = base, x1 = bytes)
+// ==========================================================================
+
+// `UnmapViewOfFile`'s twin, and the reason `StdOp.osUnmapNamedSegment` carries a LENGTH: `munmap` needs one
+// and Win32's call does not.
+//
+// The status is discarded for `mrt_host_file_close`'s reason: an unmap that fails leaves a caller nothing to
+// do. A zero base is the no-op `UnmapViewOfFile(0)` is, which is what lets `__shm_close` run without a test
+// on a segment whose map never succeeded.
+export function buildArm64PosixShmUnmapChunk(call PosixHostCall) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	let unmapped = asm.newLabel()
+
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: unmapped)
+	arm64PosixEmitHostCall(asm, call: call)
+
+	asm.placeLabel(unmapped)
+	return asm.finishFunction(HostShmUnmapName)
+end 'buildArm64PosixShmUnmapChunk'

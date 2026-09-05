@@ -345,7 +345,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: it lowers to the runtime entry '__cpu_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:24: this construct lowers to the runtime entry '__cpu_count', which has no wasm32-wasi implementation
 ```
 
 <!-- test: builtins-cpu-parallel.cpu-count-rejected-on-wasm-when-unreached -->
@@ -364,7 +364,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__cpu_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__cpu_count', which has no wasm32-wasi implementation
 ```
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one -->
@@ -520,7 +520,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_steal_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:4:27: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_retake_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:5:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__slab_remote_free_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:26: this construct lowers to the runtime entry '__sched_steal_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:4:27: this construct lowers to the runtime entry '__sched_retake_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:5:26: this construct lowers to the runtime entry '__slab_remote_free_count', which has no wasm32-wasi implementation
 ```

@@ -186,16 +186,16 @@ reason would be worse than none.
 **IT IS A RUNTIME-SUBSTRATE GATE, AND THE COMPILER — NOT THE MARKER — IS WHAT DECIDES IT.**
 `File.readText` / `writeText` / `readBinary` / `writeBinary` / `exists` / `delete` / `rename` / `info`
 lower to the runtime entries `__mf_open_read`, `__mf_open_write`, `__mf_exists`, `__mf_delete`,
-`__mf_rename` and `__mf_stat`, which are implemented for **x64-windows, arm64-macOS and arm64-Linux**.
-The second lane landed at MAC4, over `open`/`creat`/`read`/`write`/`close`/`fstat`/`unlink`/`rename`; the
-third took the same shape over `openat`/`read`/`write`/`close`/`fstat`/`unlinkat`/`renameat` raw
-syscalls. Both put the errno→Win32 translation inside their own runtime, so the errno classification
-above them is one graph for all three. `SemanticCheck.requireTargetSupportsCallee` refuses every
-reachable one on the REMAINING lanes with **E3104**, naming the entry and the target:
+`__mf_rename` and `__mf_stat`, which every lane but **wasm32-wasi** implements. The POSIX lanes go over
+`open`/`creat`/`read`/`write`/`close`/`fstat`/`unlink`/`rename` — `openat`/`unlinkat`/`renameat` as raw
+syscalls where there is no libc — and each puts the errno→Win32 translation inside its own runtime, so
+the errno classification above them is one graph for all of them.
+`SemanticCheck.requireTargetSupportsCallee` refuses every reachable one on wasm32-wasi with **E3104**,
+naming the entry and the target:
 
 ```
-error E3104: ...: this construct is x64-windows only at this rung: 'File.writeText' lowers to
-the runtime entry '__mf_open_write', which has no x64-linux implementation
+error E3104: ...: 'File.writeText' lowers to the runtime entry '__mf_open_write', which has no
+wasm32-wasi implementation
 ```
 
 A pass elsewhere is not a thing that could be had, and the marker only spares the runner a compile

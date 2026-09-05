@@ -98,6 +98,20 @@ export let HostEnvReadName = b"mrt_host_env_read"
 
 export let HostTlsAllocName = b"mrt_host_tls_alloc"
 
+// ⭐⭐ **WHO REACHES THE HOST-OBJECT BAND — the reap, the close and the lock init — AND IT IS WIDER THAN THE
+// SCHEDULER'S BIT.** `__ds_init` guards the ring with `osLockInit`/`osLockEnter`/`osLockLeave` and closes the
+// section descriptor the moment the mapping exists, and `__shm_close` closes one with no lock and no
+// scheduler anywhere, so both ends of a named segment reach the band without a green thread. The reap rides
+// it rather than a gate of its own: `mrt_host_wait_close` dispatches to it for the process KIND of handle,
+// and a call to an absent symbol is a link failure rather than a diagnostic.
+//
+// ⚠ **ALL THREE POSIX LANES ASK IT AND NONE OWNS IT** — the question is about `RuntimeUsage` and names no
+// instruction set, exactly as `LinuxRuntime`'s four gates record for their bands. A copy beside one
+// assembler is a producer added to one lane's gate and not the others'.
+export function posixUsesHostObjects(usage RuntimeUsage) returns bool
+	return usage.usesGt or usage.usesDebugStream or usage.usesSharedMemory
+end 'posixUsesHostObjects'
+
 // ⭐⭐ **WHO EMITS `StdOp.osEnvRead` — the union both env-read gates on a POSIX lane read.** Two producers
 // and they are independent: `SchedRuntime.emitResolveMaxProcs` reads `MAXON_MAX_PROCS` in every
 // green-thread program, and `TerminalRuntime.buildTerminalStdoutWantsColor` reads `NO_COLOR` and `TERM` in
@@ -122,6 +136,40 @@ export let HostProcExitCodeName = b"mrt_host_proc_exit_code"
 export let HostProcTerminateName = b"mrt_host_proc_terminate"
 export let HostWaitAnyName = b"mrt_host_wait_any"
 export let HostTickMsName = b"mrt_host_tick_ms"
+
+// ⚠ **THE MILLISECOND STOPWATCH HAS THREE PRODUCERS AND ONLY ONE IS IN THE PIPE BAND.** A subprocess
+// deadline reads it, every DebugStream entry stamps `now - start_timestamp`, and `__uptime_ms` is the
+// language's own door onto it — so the gate is their union, which is what lets `TargetFacilities` claim
+// `HostFacility.uptimeClock` on a POSIX lane.
+export function posixReadsUptimeClock(usage RuntimeUsage) returns bool
+	return usage.usesIocp or usage.usesDebugStream or usage.usesUptimeClock
+end 'posixReadsUptimeClock'
+
+// ⚠ **ONE CLOCK, TWO CALLERS, SO ONE GATE THAT IS THEIR UNION.** `mrt_host_tick_ms` derives its
+// milliseconds from `mrt_host_monotonic_clock` rather than reading a second clock, and the scheduler's
+// deadlines come from that chunk directly — so a program with either reaches it, and gating it on the
+// scheduler alone leaves a traced program branching to a symbol nothing laid out. DERIVED from its own
+// subset so the two cannot come apart.
+export function posixReadsMonotonicClock(usage RuntimeUsage) returns bool
+	return usage.usesGt or posixReadsUptimeClock(usage)
+end 'posixReadsMonotonicClock'
+
+// ⭐ **THE TWO MEMBERS OF THE NAMED-SECTION BAND THAT ARE ONE BODY ON EVERY POSIX LANE.** A segment is
+// mapped and unmapped by `mmap`/`munmap` over a descriptor, which differ only in how the call reaches the
+// kernel — so they take a `PosixHostCall` and wear the shared prefix. ⚠ The CREATE and the ATTACH do not:
+// `shm_open` is a libSystem call on Darwin and a libc FUNCTION on Linux, where the substrate opens the
+// `/dev/shm` path that function would have built — two different bodies, so two lane-private names.
+export let HostShmMapName = b"mrt_host_shm_map"
+export let HostShmUnmapName = b"mrt_host_shm_unmap"
+
+// ⭐⭐ **THE BAND IS GATED ON THE UNION OF ITS TWO ENDS.** `usesSharedMemory` is the CONSUMER's bit
+// (`stdlib/SharedMemory.maxon` reaching `__shm_*`), `usesDebugStream` the PRODUCER's — and the band is laid
+// out WHOLE because its members reach each other: `__ds_init` opens and maps where `__shm_close` unmaps and
+// unpublishes, and on a Linux lane all three named bodies call the path builder. Splitting the gate leaves
+// one end branching to a symbol nothing emitted.
+export function posixUsesNamedSection(usage RuntimeUsage) returns bool
+	return usage.usesSharedMemory or usage.usesDebugStream
+end 'posixUsesNamedSection'
 
 // ==========================================================================
 // The POSIX facts every lane reads
@@ -233,6 +281,11 @@ end 'posixNanosPerFileTimeTick'
 // copy of the pattern a search owns for its lifetime, and the directory prefix a glob is split into. One
 // name, because they are one number for one reason.
 export let PosixPathStringCapacity = MaxPathBytes - 1
+
+// The permission bits a fresh named segment is created with: owner read/write, nobody else. A trace ring
+// carries a program's allocation history, and the two processes that share it run as the same user. POSIX
+// numbers the mode bits identically on both lanes, so the create's ONE differing argument is its flag word.
+export let PosixSharedSegmentMode = 0o600
 
 // The mode word an open that CREATES NOTHING must carry. ⛔ It is not merely "unused": Linux REFUSES an
 // `openat` whose mode is non-zero without `O_CREAT` (`build_open_flags`, -EINVAL), so this is a required

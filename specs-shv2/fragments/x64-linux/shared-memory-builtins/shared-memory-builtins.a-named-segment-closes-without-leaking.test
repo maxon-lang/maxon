@@ -1,0 +1,203 @@
+// Test: shared-memory-builtins.a-named-segment-closes-without-leaking
+typealias NameTally = int(0 to u64.max)
+
+function main() returns ExitCode
+	var named = 0 as NameTally
+	for cycle in 0 upto 4 'eachCycle'
+		var segment = try SharedSegment.create("maxon-spec-shm-name-{cycle}", bytes: 4096) otherwise return 3
+		if segment.segmentName().byteLength() > 0 'published'
+			named = named + 1
+		end 'published'
+
+		segment.close()
+	end 'eachCycle'
+
+	print("named={named}\n")
+	return 0 as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rbx, 0
+  forhdr:
+    x64.storeSlotReg slot3, rax
+    x64.storeSlotReg slot1, rbx
+    x64.cmpRegImm32 rbx, 4
+    x64.jcc greaterEqual, forexit
+  eachCycle:
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "maxon-spec-shm-name-"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRegReg rax, r13, rbx
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, rbx
+    x64.loadRegSlot rbx, slot7
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rdx, 4096
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.segmentName
+    x64.movRegReg r12, r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg greater, r13
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, critsplit
+  published:
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegImm32 r12, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.loadRegSlot r12, slot3
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.close
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+  forstep:
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg rbx, rax
+    x64.movRegReg rax, r12
+    x64.jmp forhdr
+  forexit:
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; "named="
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.loadRegSlot rcx, slot3
+    x64.movRegReg rdx, r13
+    x64.callDirect __uint_to_string
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot6
+    x64.loadRegSlot r12, slot4
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot2
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -876,15 +876,16 @@ export enum ErrorCode
 	// `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a bug, rejected
 	// at compile time.
 	semanticDivisionByZero = "E3103"
-	// A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled
-	// for another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are
-	// x64-windows only at this rung, so `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins and
-	// the `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can
-	// emit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.
+	// A construct is reached by a program compiled for a target whose backend has not lowered the
+	// runtime entry it needs. Which host facility each entry needs and which targets provide it are
+	// the two halves of `TargetFacilities`; wasm32-wasi is the lane that still lacks facilities, so
+	// `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins, the `__Builtins` clock
+	// intrinsics and the file/socket/argv/stdin surfaces are all refused there. The call is refused
+	// at ITS SOURCE SPAN, naming the runtime entry that has no lowering.
 	// Distinct from E3074, the subprocess-specific WASI rejection BOTH self-hosted compilers now
-	// raise: that one says subprocess can NEVER exist on wasm32-wasi, while this one says the
-	// substrate is x64-windows only AT THIS RUNG -- so a subprocess call on arm64/linux is still
-	// this code, and only wasm32-wasi is handed to E3074.
+	// raise: that one says subprocess can NEVER exist on wasm32-wasi -- a permanent property of the
+	// platform -- while this one says the target has not lowered the entry, a statement about this
+	// compiler's progress.
 	// Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
 	// and no line -- a compiler crash where a diagnostic was owed.
 	targetUnsupportedConstruct = "E3104"

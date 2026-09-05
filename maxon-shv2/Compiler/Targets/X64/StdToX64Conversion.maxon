@@ -1221,13 +1221,11 @@ type StdToX64Lowering
 			osEnvBlockFree(blockPtrId) then self.lowerOsEnvBlockFree(blockPtrId, dstBlock: dstBlock)
 			osHandleFileType(resultId, handleId) then self.lowerOsHandleFileType(resultId, handleId: handleId, dstBlock: dstBlock)
 			osCreateNamedSegment(resultId, namePtrId, sizeId) then self.lowerOsCreateNamedSegment(resultId, namePtrId: namePtrId, sizeId: sizeId, dstBlock: dstBlock)
-			// The LENGTH the op carries is `munmap`'s and has no place in this call: `UnmapViewOfFile` derives the
-			// extent from the base alone (`StdOp.osUnmapNamedSegment`).
-			osUnmapNamedSegment(baseId, _) then self.lowerOsUnmapNamedSegment(baseId, dstBlock: dstBlock)
-			// ⭐ **EMITS NOTHING, AND THE REASON IS THAT WIN32 REFCOUNTS THE NAME.** A section object dies with
-			// its last handle and view, so the name is already gone by the time this op is reached — there is no
-			// call to make. A stated no-op, the shape `osHandleSetInherit` has on the arm64 lane.
-			osUnpublishNamedSegment then break 'lower'
+			// The LENGTH the op carries is `munmap`'s and is dead on the import route: `UnmapViewOfFile` derives
+			// the extent from the base alone (`StdOp.osUnmapNamedSegment`). Both operands travel here because
+			// the op serves both routes.
+			osUnmapNamedSegment(baseId, sizeId) then self.lowerOsUnmapNamedSegment(baseId, sizeId: sizeId, dstBlock: dstBlock)
+			osUnpublishNamedSegment(namePtrId) then self.lowerOsUnpublishNamedSegment(namePtrId, dstBlock: dstBlock)
 			osProcessTerminate(handleId, exitCodeId) then self.lowerOsProcessTerminate(handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1278,8 +1276,8 @@ type StdToX64Lowering
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpenRead(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			// R4.1: close the handle. `CloseHandle`'s BOOL is discarded, so nothing is captured from RAX.
 			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstBlock: dstBlock)
-			// R4.2: the rest of the file-IO primitives. Each routes through `requireWin64Import` for the
-			// x64-windows gate, then emits its one import call.
+			// The rest of the file-IO primitives. Each routes on `x64OsCallKind` — one import call on Windows,
+			// one host chunk on Linux.
 			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsReadFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			// ⭐ **`openWriteExecutable` REACHES THE SAME LOWERING ON THIS LANE, AND NOW BY A DIFFERENT ROUTE.**
@@ -1293,8 +1291,7 @@ type StdToX64Lowering
 			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
 			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerOsFileFindFirst(resultId, pathPtrId: pathPtrId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osFileFindClose(handleId) then self.lowerOsFileFindClose(handleId, dstBlock: dstBlock)
-			// R4.3: the four directory primitives. Each routes through the same `requireWin64Import` gate
-			// and emits one register-only import call whose RAX answer is captured.
+			// The four directory primitives, routed the same way, each capturing its answer out of RAX.
 			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerOsFileFindNext(resultId, handleId: handleId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osDirCreate(resultId, pathPtrId) then self.lowerOsDirCreate(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osDirCurrentPath(resultId, bufLenId, bufPtrId) then self.lowerOsDirCurrentPath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
@@ -3518,29 +3515,20 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: PosixPriorityWhoIsSelf as MachineWord))
 	end 'emitLinuxPriorityScopeArgs'
 
-	// ⭐ **THE x64-WINDOWS GATE FOR EVERY OP THAT LOWERS TO A WIN32 IMPORT, ASKED ONCE.** All of them are
-	// x64-windows only, and `SemanticCheck.requireTargetSupportsCallee` refuses such a program at its own
-	// source span (E3104) long before lowering — so this is the backstop for a compiler bug that got one
-	// past that gate, never the user-facing rejection. A copy of the same `match x64OsCallKind` wrapper per
-	// op is the duplication this replaces; the op's name is the only thing that differed between them, so
-	// it is the only thing passed in.
-	// ⚠ **THE SENTENCE NAMES THE OP AND NOT A RUNG, BECAUSE THE CALLERS ARE NO LONGER ONE FAMILY.** It read
-	// "file IO is x64-windows-gated at R4.1/R4.2" while every caller was a file or directory primitive;
-	// `osCommandLine` joined and is neither, so that clause became a diagnostic naming a rung the reader's
-	// op has nothing to do with — D12's wrong-noun defect, at the helper that outlived its first family. The
-	// gate itself is one fact for all of them (`SemanticCheck.calleeNeedsWin32Substrate`), so that is what
-	// the message points at.
-	// ⛔ **AND THE NAME OUTLIVED IT TOO, WHICH THAT FIX MISSED.** It was `requireWin64FileIo` until the
-	// machine query joined, by which point MOST of its callers were not file IO at all: the command line,
-	// the standard handles, the executable path, the DebugStream segment, the attached-subprocess
-	// primitives and the whole `ws2_32` socket band all ask it too. (Count them off the call sites, never
-	// off this sentence — a roster in prose has nothing between it and drift.) A helper named for one
-	// caller family is the same wrong-noun defect one level up, and a reader checking "is this op file IO?"
-	// against the name would have been told yes by every one of them.
+	// ⭐ **THE ONE-ROUTE GATE FOR AN OP WHOSE ONLY x64 LOWERING IS A WIN32 IMPORT, ASKED ONCE.** Each
+	// caller's Std PRODUCER forks by shape and emits a DIFFERENT graph on a syscall lane
+	// (`CommandLineRuntime.commandLineShape`, `ManagedSocketRuntime.socketResolveShape`), so the op never
+	// reaches here on Linux and this panic is the backstop for a producer that forgot to fork — never the
+	// user-facing rejection. A copy of the same `match x64OsCallKind` wrapper per op is the duplication this
+	// replaces; the op's name is the only thing that differed between them, so it is the only thing passed in.
+	//
+	// ⚠ **THE SENTENCE NAMES THE OP AND NOT A RUNG, BECAUSE THE CALLERS ARE NOT ONE FAMILY** — the command
+	// line and the two `getaddrinfo` doors have nothing in common but this route. Count them off the call
+	// sites, never off a roster in prose, which has nothing between it and drift.
 	function requireWin64Import(opName String)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then return
-			syscall then panic("lowerStdToX64: `{opName}` lowers to a Win32 import and is therefore x64-windows only. `SemanticCheck.calleeNeedsWin32Substrate` refuses such a program at its own source span (E3104), so reaching here is a compiler bug that got one past that gate rather than the user-facing rejection")
+			syscall then panic("lowerStdToX64: `{opName}`'s only x64 lowering is a Win32 import, and this op's Std producer is supposed to emit a different graph on a syscall lane — reaching here means the producer did not fork")
 		end 'route'
 	end 'requireWin64Import'
 
@@ -3735,10 +3723,23 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(x64PhysReg(X64Register.rax), lhs: x64PhysReg(X64Register.rax), rhs: x64PhysReg(X64Register.rcx)))
 	end 'emitLinuxStdHandle'
 
-	// ⭐ **`GetEnvironmentVariableA(name, buf, len)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, buf)`
-	// — the DebugStream producer's attach, in one op** (Workstream O3). The env value is pure scratch that
-	// no Std value ever reads, which is the whole reason the two calls are one op rather than two: splitting
-	// them would put a buffer pointer into the IR for no consumer.
+	// ⭐⭐ **THE DebugStream PRODUCER'S ATTACH — READ THE VARIABLE, THEN OPEN WHAT IT NAMES, IN ONE OP.** The
+	// env value is pure scratch that no Std value ever reads, which is the whole reason the two calls are one
+	// op rather than two: splitting them would put a buffer pointer into the IR for no consumer. Both routes
+	// read all three operands, so both take the same fused shape.
+	function lowerOsOpenNamedSegment(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsOpenNamedSegmentWin64(namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstBlock: dstBlock)
+			// The chunk reads the variable into the caller's buffer with `mrt_host_env_read` — a static image
+			// has no `getenv` — and opens the `/dev/shm` path built from what it read.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: LinuxShmOpenName, args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId))
+		end 'route'
+
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsOpenNamedSegment'
+
+	// `GetEnvironmentVariableA(name, buf, len)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, buf)`.
+	// Its own function rather than an inline arm because a `match` arm is one expression and this is seven.
 	//
 	// ⭐ **IT IS BRANCH-FREE, AND THE UNSET CASE FALLS OUT.** `__slab_alloc` hands back ZEROED memory, so a
 	// variable that is not set leaves `buf` naming the EMPTY string — and `OpenFileMappingA("")` fails and
@@ -3748,8 +3749,7 @@ type StdToX64Lowering
 	//
 	// ⚠ `bufPtr` is live ACROSS the first `iatCall` and needs no hand-holding: it is a VIRTUAL operand of
 	// this op, so the allocator forces it callee-saved exactly as `CreateProcessA`'s `procInfoPtr` is.
-	function lowerOsOpenNamedSegment(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osOpenNamedSegment")
+	function lowerOsOpenNamedSegmentWin64(namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufLenId)))
@@ -3759,38 +3759,57 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.OpenFileMappingA)))
-		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsOpenNamedSegment'
+	end 'lowerOsOpenNamedSegmentWin64'
 
-	// ⭐ **`MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size)`** — five arguments, four in registers
-	// and the byte count on the stack past the shadow space (the `CreateFileA` stack-arg template).
-	//
-	// A NULL handle maps nothing and returns NULL, so `osOpenNamedSegment`'s failure flows through here
-	// untested for the reason it flowed into it — see that lowering. `size` is the WHOLE segment length,
-	// and it is the CONSUMER's number: a view longer than the section returns NULL, which is why
-	// `DebugStreamRuntime` derives it from the reference's own three parts rather than choosing one.
+	// ⭐ **THE MAPPING TAKES THE DESCRIPTOR WHICHEVER CALL MINTED IT** — `MapViewOfFile` and `mmap` alike
+	// take a section handle from either the open or the create. A NULL handle maps nothing and answers zero,
+	// so `osOpenNamedSegment`'s failure flows through here untested for the reason it flowed into it — see
+	// that lowering. `size` is the WHOLE segment length, and it is the CONSUMER's number: a view longer than
+	// the section fails, which is why `DebugStreamRuntime` derives it from the reference's own three parts
+	// rather than choosing one.
 	function lowerOsMapNamedSegment(resultId ValueId, handleId ValueId, sizeId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osMapNamedSegment")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsMapNamedSegmentWin64(handleId, sizeId: sizeId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostShmMapName, args: twoArgs(handleId, second: sizeId))
+		end 'route'
+
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsMapNamedSegment'
+
+	// `MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size)` — five arguments, four in registers and the
+	// byte count on the stack past the shadow space (the `CreateFileA` stack-arg template). Its own function
+	// rather than an inline arm because a `match` arm is one expression and this is six.
+	function lowerOsMapNamedSegmentWin64(handleId ValueId, sizeId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: TargetVReg.virtual(sizeId), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileMapAllAccess))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.MapViewOfFile)))
-		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsMapNamedSegment'
+	end 'lowerOsMapNamedSegmentWin64'
 
-	// ⭐ **`CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)`** — six
-	// arguments, four in registers and the size and the name on the stack past the shadow space
-	// (`lowerOsMapNamedSegment`'s template, one slot wider).
+	// ⭐ **THE CONSUMER'S HALF: NAME A SECTION AND SIZE IT.** A failure answers zero, which flows into
+	// `osMapNamedSegment` and maps nothing — so the two-step create-then-map needs one test at the caller,
+	// exactly as the producer's open-then-map does.
+	function lowerOsCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsCreateNamedSegmentWin64(namePtrId, sizeId: sizeId, dstBlock: dstBlock)
+			// POSIX takes two calls where Win32 takes one: the open only NAMES, so the chunk sizes what it
+			// opened with `ftruncate` and undoes the name if that fails.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: LinuxShmCreateName, args: twoArgs(namePtrId, second: sizeId))
+		end 'route'
+
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsCreateNamedSegment'
+
+	// `CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)` — six arguments,
+	// four in registers and the size and the name on the stack past the shadow space
+	// (`lowerOsMapNamedSegmentWin64`'s template, one slot wider). Its own function rather than an inline arm
+	// because a `match` arm is one expression and this is seven.
 	//
 	// ⭐ **THE SIZE'S HIGH DWORD IS AN IMMEDIATE ZERO AND THE LOW ONE IS THE OPERAND**, which is exact
 	// rather than a truncation: `SegmentByteCount` tops out at `u32.max` (see `SectionSizeHighDword`).
-	//
-	// A failure answers NULL, which flows into `osMapNamedSegment` and maps nothing — so the two-step
-	// create-then-map needs one test at the caller, exactly as the producer's open-then-map does.
-	function lowerOsCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osCreateNamedSegment")
+	function lowerOsCreateNamedSegmentWin64(namePtrId ValueId, sizeId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: TargetVReg.virtual(sizeId), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(1), src: TargetVReg.virtual(namePtrId), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: InvalidHandleValue))
@@ -3798,15 +3817,31 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PageReadWriteProtection))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: SectionSizeHighDword))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileMappingA)))
-		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsCreateNamedSegment'
+	end 'lowerOsCreateNamedSegmentWin64'
 
 	// ⭐ **`UnmapViewOfFile(base)`** — register-only, and the BOOL is DISCARDED for `lowerOsFileClose`'s
 	// reason: an unmap that fails leaves a caller nothing to do.
-	function lowerOsUnmapNamedSegment(baseId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osUnmapNamedSegment")
-		self.lowerOsWin64Call1(IatSlot.UnmapViewOfFile, arg0: baseId, dstBlock: dstBlock)
+	//
+	// ⚠ The LENGTH reaches the chunk and nowhere else in this file: `munmap` takes one where
+	// `UnmapViewOfFile` derives it from the base (`StdOp.osUnmapNamedSegment`).
+	function lowerOsUnmapNamedSegment(baseId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.UnmapViewOfFile, arg0: baseId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostShmUnmapName, args: twoArgs(baseId, second: sizeId))
+		end 'route'
 	end 'lowerOsUnmapNamedSegment'
+
+	// ⭐ **THE STEP WIN32 GETS FOR FREE, AND POSIX DOES NOT.** A section object dies with its last handle
+	// and view, so the name is already gone there and there is no call to emit; a POSIX shared object
+	// outlives both until its NAME is removed, and this lane's chunk turns that name into a `/dev/shm` path
+	// first. The status is discarded for `mrt_host_file_close`'s reason: a name that could not be removed
+	// leaves a caller nothing to do.
+	function lowerOsUnpublishNamedSegment(namePtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then break 'route'
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: LinuxShmUnlinkName, args: argsOf(namePtrId))
+		end 'route'
+	end 'lowerOsUnpublishNamedSegment'
 
 	// ⭐ **`GetTickCount64()`** — no arguments to marshal, so the `iatCall` IS the whole call and there is
 	// no helper to reach for, exactly as `GetCommandLineA` above states.

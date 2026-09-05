@@ -134,6 +134,11 @@ let Arm64LinuxSyscallGetcwd = 17
 let Arm64LinuxSyscallMkdirat = 34
 let Arm64LinuxSyscallUnlinkat = 35
 let Arm64LinuxSyscallRenameat = 38
+
+// The named section's sizing call — the open only NAMES and `ftruncate` SIZES, which is the two-call shape
+// `CreateFileMappingA` does in one. VERIFIED by invoking 46 on an aarch64 guest against a `/dev/shm` file
+// whose `st_size` then read back as the requested length.
+let Arm64LinuxSyscallFtruncate = 46
 let Arm64LinuxSyscallOpenat = 56
 export let Arm64LinuxSyscallClose = 57
 let Arm64LinuxSyscallGetdents64 = 61
@@ -2544,6 +2549,175 @@ function emitArm64LinuxChildDup3(asm Arm64RuntimeAsm, startupSlot StackSize, han
 end 'emitArm64LinuxChildDup3'
 
 // ==========================================================================
+// The NAMED SHARED SECTION — mrt_linux_shm_path / _create / _open / _unlink
+// ==========================================================================
+
+// ⭐⭐ **`shm_open` IS A libc FUNCTION ON LINUX RATHER THAN A SYSCALL, SO THIS LANE RE-ANSWERS THE QUESTION
+// INSTEAD OF RE-SPELLING THE CALL.** All that function does is prepend `/dev/shm/` to the name and `open` the
+// result, so a libc-less static image builds the path itself and reaches the same `tmpfs` file the Darwin
+// lane's `shm_open` reaches. What is arch-private is therefore the four BODIES alone: their symbols are one
+// Linux fact both lanes read (`LinuxRuntime.LinuxShmCreateName`), and the MAP and the UNMAP are one body on
+// both POSIX lanes under the shared prefix (`Arm64PosixRuntime.buildArm64PosixShmMapChunk`).
+
+// `mrt_linux_shm_path(x0 = namePtr, x1 = destBuf)` — write `/dev/shm/<name>` into `destBuf`, terminated.
+//
+// ⭐ **ITS OWN CHUNK BECAUSE ALL THREE OF THIS LANE'S NAMED-SECTION BODIES ADDRESS THE SEGMENT BY PATH** —
+// the create, the attach and the unpublish — and a path built three times is three chances to build it
+// differently.
+//
+// ⚠ **THE SECOND COPY CONTINUES WHERE THE FIRST STOPPED.** `arm64EmitCopyCStringBounded` steps its `dest`
+// and its `limit` and writes the terminator at both exits, so the name goes straight over the NUL the prefix
+// left behind and the bound is already the remaining capacity.
+//
+// ⚠ **A NAME TOO LONG IS TRUNCATED RATHER THAN REFUSED**, and the refusal still happens: the caller's
+// `openat` then names a file that does not exist and answers the zero every caller here already tests for.
+function buildArm64LinuxShmPathChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotName = 0 as StackSize
+	let SlotDest = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotDest)
+
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: LinuxDevShmPrefix)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotDest)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixPathStringCapacity as MachineWord)
+	arm64EmitCopyCStringBounded(asm, src: Arm64Register.x0, dest: Arm64Register.x1, limit: Arm64Register.x2, scratch: Arm64Register.x3)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotName)
+	arm64EmitCopyCStringBounded(asm, src: Arm64Register.x0, dest: Arm64Register.x1, limit: Arm64Register.x2, scratch: Arm64Register.x3)
+
+	return asm.finishFunction(LinuxShmPathName)
+end 'buildArm64LinuxShmPathChunk'
+
+// `unlinkat(AT_FDCWD, path, 0)` over a path already built in the frame. The status is discarded at both
+// sites: a name that was not there is exactly what the create wants, and a name that could not be removed
+// leaves a caller nothing to do.
+function arm64LinuxEmitShmUnlinkPath(asm Arm64RuntimeAsm, pathSlot StackSize)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: pathSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxUnlinkFileFlags)
+	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallUnlinkat)
+end 'arm64LinuxEmitShmUnlinkPath'
+
+// `mrt_linux_shm_create(x0 = namePtr, x1 = bytes) -> x0 = fd | 0`
+//
+// ⭐⭐ **`CreateFileMappingA` NAMES AND SIZES IN ONE CALL; POSIX TAKES TWO.** The open only names, so the
+// length is an `ftruncate` on the descriptor it answered — and a failure between the two must undo the name,
+// which is why the whole sequence is a chunk rather than an isel line.
+//
+// ⭐ **A ZERO ANSWER IS THE FAILURE, AND fd 0 IS NOT A CASE THIS LANE HAS**: descriptor 0 is standard input
+// and never one the runtime mints, which is what makes `stdlib/SharedMemory.maxon`'s `NoSection` test exact.
+//
+// ⚠ **NOTHING HERE STASHES AN errno.** The Std tier reads `osLastError` only after the FILE surface's calls;
+// a named-section failure reports itself as the zero above, and a stash would leave the next `osLastError`
+// blaming this call for another one's failure.
+//
+// ⚠ **NO VARIADIC FRAME, WHERE THE DARWIN TWIN NEEDS ONE.** libc's `shm_open` takes its mode as a vararg and
+// AAPCS64 passes those on the stack; `openat` takes it in x3 like any other argument.
+function buildArm64LinuxShmCreateChunk() returns FunctionCodeChunk
+	let SlotBytes = 0 as StackSize
+	let SlotFd = 1 as StackSize
+	let SlotPath = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2 + runtimeFrameSlots(MaxPathBytes))
+
+	let unsized = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPath)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxShmPathName)
+
+	// A segment left behind by a monitor that died outlives every process that mapped it, so a fresh run
+	// would otherwise adopt a ring holding another run's entries.
+	arm64LinuxEmitShmUnlinkPath(asm, pathSlot: SlotPath)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPath)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxShmCreateFlags)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixSharedSegmentMode)
+	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: refused)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallFtruncate)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unsized)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitBranchTo(asm, label: answered)
+
+	// A named object outlives its descriptor, so a segment that could not be sized has to lose BOTH.
+	asm.placeLabel(unsized)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
+	arm64LinuxEmitShmUnlinkPath(asm, pathSlot: SlotPath)
+
+	asm.placeLabel(refused)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(LinuxShmCreateName)
+end 'buildArm64LinuxShmCreateChunk'
+
+// `mrt_linux_shm_open(x0 = envNamePtr, x1 = bufPtr, x2 = bufLen) -> x0 = fd | 0` — the PRODUCER's attach.
+//
+// ⭐⭐ **THE SCRATCH BUFFER THE OP CARRIES IS READ HERE, WHERE THE DARWIN TWIN IGNORES IT.** `getenv` answers
+// a POINTER into the environment block that `shm_open` takes directly; this lane has no `getenv` and reads
+// the value into the caller's buffer with `mrt_host_env_read`, which is the shape `GetEnvironmentVariableA`
+// gave the op in the first place (`StdOp.osOpenNamedSegment`).
+//
+// An unset variable answers a zero count, which is "no monitor is listening" — the same answer a refused
+// open gets.
+function buildArm64LinuxShmOpenChunk() returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotPath = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(MaxPathBytes))
+
+	let absent = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostEnvReadName)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: absent)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPath)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxShmPathName)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPath)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixOpenReadWrite)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode)
+	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+
+	asm.placeLabel(absent)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(LinuxShmOpenName)
+end 'buildArm64LinuxShmOpenChunk'
+
+// `mrt_linux_shm_unlink(x0 = namePtr)` — the step Win32 gets for free: a POSIX shared object outlives every
+// descriptor and every mapping until its NAME is removed, so the consumer's teardown ends here. It is a chunk
+// on this lane and a bare import on the Darwin one only because the name has to become a path first.
+function buildArm64LinuxShmUnlinkChunk() returns FunctionCodeChunk
+	let SlotPath = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(MaxPathBytes))
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPath)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxShmPathName)
+	arm64LinuxEmitShmUnlinkPath(asm, pathSlot: SlotPath)
+
+	return asm.finishFunction(LinuxShmUnlinkName)
+end 'buildArm64LinuxShmUnlinkChunk'
+
+// ==========================================================================
 // Assembly
 // ==========================================================================
 
@@ -2602,28 +2776,31 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxHandleFileTypeChunk())
 	end 'terminalDetection'
 
-	// The environment read rides the UNION of `osEnvRead`'s two producers rather than the scheduler's bit
-	// (`posixReadsEnvironment`), because a terminal-detecting program need not have a scheduler.
-	if posixReadsEnvironment(usage) 'envRead'
+	if linuxReadsEnvironment(usage) 'envRead'
 		chunks.push(buildArm64LinuxEnvReadChunk())
 	end 'envRead'
 
-	// ⭐ **L4 — THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated
-	// on, so every body that can `bl` one of these is built under exactly the same condition — one bit, two
-	// tiers, which is what makes a `bl` into an absent chunk unreachable rather than merely unlikely. They are
-	// NOT split finer: the P's wake event, the run-queue lock, the per-thread slot, the monotonic clock, the
-	// OS-thread park and the `MAXON_MAX_PROCS` read are all reached from `__sched_init_procs` and `__gt_init`,
-	// which a green-thread program always installs together.
-	if usage.usesGt 'greenThreadFloor'
-		chunks.push(buildArm64LinuxMonotonicClockChunk())
-		chunks.push(buildArm64LinuxSleepMsChunk())
-		chunks.push(buildArm64LinuxWaitNewChunk(globalData))
-		chunks.push(buildArm64LinuxEventSetChunk())
-		chunks.push(buildArm64LinuxWaitOneChunk(globalData))
+	// ⚠ **THE LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — five chunks here where the Darwin
+	// lane's `pthread_mutex_t` leaves it three.
+	if posixUsesHostObjects(usage) 'hostObjects'
+		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4)))
 		chunks.push(buildArm64LinuxWaitCloseChunk())
 		chunks.push(buildArm64LinuxLockInitChunk())
 		chunks.push(buildArm64LinuxLockEnterChunk())
 		chunks.push(buildArm64LinuxLockLeaveChunk())
+	end 'hostObjects'
+
+	// ⭐ **THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated on,
+	// so every body that can `bl` one of these is built under exactly the same condition — one bit, two
+	// tiers, which is what makes a `bl` into an absent chunk unreachable rather than merely unlikely. They
+	// are NOT split finer: the P's wake event, the per-thread slot, the OS-thread park and the
+	// `MAXON_MAX_PROCS` read are all reached from `__sched_init_procs` and `__gt_init`, which a green-thread
+	// program always installs together.
+	if usage.usesGt 'greenThreadFloor'
+		chunks.push(buildArm64LinuxSleepMsChunk())
+		chunks.push(buildArm64LinuxWaitNewChunk(globalData))
+		chunks.push(buildArm64LinuxEventSetChunk())
+		chunks.push(buildArm64LinuxWaitOneChunk(globalData))
 		chunks.push(buildArm64LinuxThreadCreateChunk(globalData))
 		chunks.push(buildArm64LinuxTlsAllocChunk(globalData))
 		chunks.push(buildArm64LinuxTlsSetChunk(globalData))
@@ -2632,23 +2809,40 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		// exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that never runs
 		// a child — so a narrower gate here is a `bl` to a symbol nothing laid out, which is a link failure
 		// rather than a diagnostic. The Darwin lane measured that twice while MAC8 was written.
-		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4)))
 		chunks.push(buildArm64PosixProcAwaitChunk())
 		chunks.push(buildArm64PosixWaitAnyChunk())
 		chunks.push(buildArm64LinuxSpawnChunk())
 		chunks.push(buildArm64PosixProcExitCodeChunk())
 	end 'greenThreadFloor'
 
-	// ⭐ **THE PIPE SURFACE AND THE DEADLINE, WHICH REALLY ARE NARROWER.** `usesIocp` is the bit
-	// `installGtRuntime` builds the pipe substrate under (`__gt_io_read` and `__gt_subp_yield_read`), and
-	// `usesStreaming` implies it — so a program that spawns a child WITHOUT reading from it pays for none of
-	// these. `osPipePeek`, `osProcessTerminate` and `osTickCountMs` have producers only inside that band.
+	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesIocp` is the bit `installGtRuntime` builds the
+	// pipe substrate under (`__gt_io_read` and `__gt_subp_yield_read`), and `usesStreaming` implies it — so a
+	// program that spawns a child WITHOUT reading from it pays for none of these. `osPipePeek` and
+	// `osProcessTerminate` have producers only inside that band.
 	if usage.usesIocp 'childPipes'
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.syscall(Arm64LinuxSyscallPipe2), flags: LinuxOpenCloseOnExec))
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.ppollSyscall(Arm64LinuxSyscallPpoll, sigsetBytes: LinuxSigsetBytes)))
 		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill)))
-		chunks.push(buildArm64PosixTickMsChunk())
 	end 'childPipes'
+
+	if posixReadsUptimeClock(usage) 'uptimeClock'
+		chunks.push(buildArm64PosixTickMsChunk())
+	end 'uptimeClock'
+
+	if posixReadsMonotonicClock(usage) 'monotonicClock'
+		chunks.push(buildArm64LinuxMonotonicClockChunk())
+	end 'monotonicClock'
+
+	// ⚠ **SIX CHUNKS WHERE THE DARWIN LANE HAS FOUR**: with no `shm_open` to name a segment, this lane builds
+	// the `/dev/shm` path itself and unpublishes through a body of its own.
+	if posixUsesNamedSection(usage) 'namedSection'
+		chunks.push(buildArm64LinuxShmPathChunk(globalData))
+		chunks.push(buildArm64LinuxShmCreateChunk())
+		chunks.push(buildArm64LinuxShmOpenChunk())
+		chunks.push(buildArm64PosixShmMapChunk(PosixHostCall.syscall(Arm64LinuxSyscallMmap)))
+		chunks.push(buildArm64PosixShmUnmapChunk(PosixHostCall.syscall(Arm64LinuxSyscallMunmap)))
+		chunks.push(buildArm64LinuxShmUnlinkChunk())
+	end 'namedSection'
 
 	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM AS OF L5** — `__gt_subp_yield_read` classifies
 	// a failed read with it and every spawn failure publishes through it — and that widening lives inside

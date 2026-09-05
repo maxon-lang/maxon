@@ -1,0 +1,48 @@
+// Test: void-static-member-statement-ok
+typealias Integer = int(i64.min to i64.max)
+var ticks = 0 as Integer
+
+type Clock
+	static function bump()
+		ticks = ticks + 3
+	end 'bump'
+end 'Clock'
+
+function main() returns ExitCode
+	Clock.bump()
+	return ticks as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __data_ticks@0 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.leaGlobal x0, __data_ticks
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 3
+    arm64.leaGlobal x1, __data_ticks
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+  __il_cont:
+    arm64.leaGlobal x0, __data_ticks
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at void-static-member-statement-ok.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

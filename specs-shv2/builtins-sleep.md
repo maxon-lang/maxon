@@ -165,9 +165,9 @@ error E3004: <fragment>:3:13: call to undefined function '__Builtins.nope': the 
 
 <!-- test: builtins-sleep.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The green-thread sleep substrate is x64-windows only at this rung. On any other target the call is
-refused at its source span with `E3104`, naming the runtime entry that has no lowering there — never
-a panic from inside the wasm backend.
+wasm32-wasi has no green-thread sleep substrate, so the call is refused at its source span with
+`E3104`, naming the runtime entry that has no lowering there — never a panic from inside the wasm
+backend.
 ```maxon
 function main() returns ExitCode
 	__Builtins.sleep(1)
@@ -175,7 +175,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:13: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:13: this construct lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
 ```
 
 <!-- test: builtins-sleep.rejected-on-wasm-when-unreached -->
@@ -196,5 +196,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:13: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:13: this construct lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
 ```

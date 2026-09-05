@@ -1,0 +1,33 @@
+// Test: error.two-alias-spellings-of-one-generic-instance-do-not-conform
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias AlsoIntArray = Array with Integer
+
+interface Bag
+	function take(xs IntArray) returns Integer
+end 'Bag'
+
+type Sack implements Bag
+	let n as Integer
+
+	function take(xs AlsoIntArray) returns Integer
+		return n + xs.count()
+	end 'take'
+
+	static function create() returns Self
+		return Self{n: 41}
+	end 'create'
+end 'Sack'
+
+function main() returns ExitCode
+	let s = Sack.create()
+	var f = IntArray.create()
+	f.push(7)
+	print("{s.take(f)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:11:6: Partial interface implementation: type 'Sack' has 1 method(s) with wrong signature:
+  - take(xs AlsoIntArray) returns Integer (expected take(xs IntArray) returns Integer)

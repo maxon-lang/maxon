@@ -1,0 +1,96 @@
+// Test: top-level-var-enum-initializer
+enum Color
+		Red
+		Green
+		Blue
+end 'Color'
+
+var current = Color.Green
+
+function main() returns ExitCode
+	let isGreen = match current 'check'
+		Green gives true
+		Red gives false
+		Blue gives false
+	end 'check'
+	if isGreen 'check'
+		current = Color.Blue
+		let isBlue = match current 'check2'
+			Blue gives true
+			Red gives false
+			Green gives false
+		end 'check2'
+		if isBlue 'check2'
+			return 42
+		end 'check2'
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_current@0 = i64 1
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_current
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#5
+  matcharm#2:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#7
+  matchnext#5:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#6
+  matcharm#1:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#7
+  matchnext#6:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead#4
+  matcharm#3:
+    x64.movRegImm32 rax, 0
+  matchcont#7:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 rax, 2
+    x64.leaRegGlobal rcx, __data_current
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_current
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#13
+  matcharm#10:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#15
+  matchnext#13:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#14
+  matcharm#11:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#15
+  matchnext#14:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead#12
+  matcharm#9:
+    x64.movRegImm32 rax, 1
+  matchcont#15:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  check2:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+  matchdead#12:
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  matchdead#4:
+}

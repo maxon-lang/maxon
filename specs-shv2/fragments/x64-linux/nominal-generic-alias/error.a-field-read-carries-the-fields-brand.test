@@ -1,0 +1,30 @@
+// Test: error.a-field-read-carries-the-fields-brand
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+type Holder
+	export var xs as Xs
+
+	static function create() returns Self
+		return Self{xs: [5, 6]}
+	end 'create'
+end 'Holder'
+
+function sumYs(ys Ys) returns Integer
+	var t = 0
+	for y in ys 'each'
+		t = t + y
+	end 'each'
+	return t
+end 'sumYs'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let r = sumYs(h.xs)
+	print("{r}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:24:10: argument type mismatch for 'ys': expected 'Ys', got 'Xs'

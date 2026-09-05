@@ -1,0 +1,133 @@
+// Test: two-overloads-distinguished-by-alias-leave-one-candidate
+typealias Code = int(0 to u32.max)
+typealias Small = int(0 to 100)
+
+interface Labeled
+	function label(v Code) returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(v Code) returns Code
+		return v
+	end 'label'
+
+	export function label(v Small) returns Code
+		return 7
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.label(t.x)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Tag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x19, x0
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at two-overloads-distinguished-by-alias-leave-one-candidate.test:12: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Tag.label {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x1, x0
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at two-overloads-distinguished-by-alias-leave-one-candidate.test:16: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 42
+    arm64.bl Tag.create
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+  __il_body:
+    arm64.cmp x1, 0
+    arm64.b.lt __il_slow
+  __rc_chk#7:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x1, x0
+    arm64.b.le __rc_ok#6
+  __il_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl Tag.label
+    arm64.movRegReg x20, x0
+    arm64.b __il_cont
+  __rc_ok#6:
+    arm64.movRegReg x20, x1
+  __il_cont:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk#3:
+    arm64.cmp x20, 255
+    arm64.b.le __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at two-overloads-distinguished-by-alias-leave-one-candidate.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

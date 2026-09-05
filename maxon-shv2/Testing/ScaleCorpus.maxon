@@ -5521,11 +5521,9 @@ let BufferElementPushCount = 1
 //     ⚠ It was `dispatchStringMethod`'s own `addressableBytes` arm until W49 wave 7 retired that member;
 //     the arm's site died and this one took the mint, so the COUNT is unchanged and the NAME is not.
 //   • `__ManagedDirectory.filename` / `currentPath` (`Parser.emitOwnedManagedMemoryResult`) lowers to the
-//     `__md_*` runtime entries, which are x64-windows only — MEASURED as **E3104 `this construct is
-//     x64-windows only at this rung: it lowers to the runtime entry '__md_current_path', which has no
-//     arm64-macos implementation`**. `compileRung` spawns `build` with no `--target`, so the ladder always
-//     compiles for the HOST and a rung that generated one would FAIL TO COMPILE and take the whole run down
-//     as a BROKEN RUN — exactly the constraint that keeps witness tables and `Set` out of this corpus.
+//     `__md_*` runtime entries. ⚠ This one is a CORPUS GAP rather than a door the generator cannot reach:
+//     every lane that can HOST a compile provides `managedDirectory`, and `compileRung` spawns `build` with
+//     no `--target`, so a rung generating one would compile. Nothing measures these two producers today.
 //
 // The TWO `Array with <T>` instances this knob adds are FIXED, exactly as the array knobs' three are, and
 // only the site count doubles: `{BufferSurfaceArrayAlias}` — which IS `Array with Byte`, so the `.managed`
@@ -5989,9 +5987,9 @@ export function printCorpusManifest()
 	print("    either: a fused wrapper's inline `managed` read (which serves the corpus's own\n")
 	print("    `String.addressableBytes()`, and which no rung can declare a fused wrapper to reach), and\n")
 	print("    `__ManagedDirectory.filename`/\n")
-	print("    `currentPath` lower to the `__md_*` runtime entries, which are x64-windows only — E3104, so a\n")
-	print("    rung that generated one would FAIL TO COMPILE on any other host and take the whole run down as\n")
-	print("    a BROKEN RUN, exactly as a witness table would.\n")
+	print("    `currentPath` lower to the `__md_*` runtime entries, which every compile-hosting lane provides\n")
+	print("    — so unlike the fused wrapper above, that one is a CORPUS GAP a knob could close rather than a\n")
+	print("    door this generator cannot reach.\n")
 	print("\n")
 	print("  !! THE MEMORY COLUMNS CANNOT SEE A COST THAT ALLOCATES NOTHING. THE CPU COLUMN CAN.\n")
 	print("     Allocations and bytes are exact and blind in the same breath: a pass that re-walks tokens or\n")

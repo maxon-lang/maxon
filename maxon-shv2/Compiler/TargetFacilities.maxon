@@ -65,11 +65,12 @@ export enum HostFacility
 	// a monotonic count since boot and a calendar are different questions with different APIs, and the
 	// answer to one says nothing about the other.
 	//
-	// ⚠ **THE OP BEHIND IT LOWERS ON MORE LANES THAN THIS ROW CLAIMS, AND THE ROW IS STILL HONEST.** Every
-	// POSIX lane has a `mrt_host_tick_ms` chunk, but each installs it only under `usesIocp` — so the
-	// callee's `iatCall`/`callDirect` would relocate against a chunk that is not in the image for a program
-	// that reads the uptime and spawns nothing. A lane claims this row by widening that install gate, which
-	// is the "a `true` promises a lowering" rule this file's header states.
+	// ⚠ **THE ROW IS ABOUT AN INSTALL GATE, NOT ABOUT WHETHER A LANE CAN SPELL THE CALL.** Every POSIX lane
+	// has a `mrt_host_tick_ms` chunk, and a lane that installs it only under `usesIocp` must answer `false`
+	// here: the callee's `iatCall`/`callDirect` would then relocate against a chunk that is not in the image
+	// for a program that reads the uptime and spawns nothing. A lane claims this row by gating the chunk on
+	// the union of the op's producers, which is the "a `true` promises a lowering" rule this file's header
+	// states.
 	uptimeClock
 	// The timed park (`osSleepMs`) — `__gt_sleep`, and so `sleep(ms)` through `stdlib/Sleep.maxon`.
 	sleep
@@ -745,16 +746,19 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// ⭐⭐ **AND CONDITIONS 2 AND 3 ARE WHAT THIS ROW REALLY COST.** `NO_COLOR` and `TERM` make the
 			// detecting body emit `StdOp.osEnvRead`, which on a libc-less lane walks `__mrt_envp` — a `.data`
 			// word only the ENTRY STUB can fill. All three gates on that capture ride
-			// `PosixRuntime.posixReadsEnvironment` rather than the scheduler's bit, because a terminal-detecting
+			// `LinuxRuntime.linuxReadsEnvironment` rather than the scheduler's bit, because a terminal-detecting
 			// program need not have a scheduler; gated on `usesGt` alone the first such program relocated
 			// against a word nothing wrote.
 			terminalDetection gives true
-			// The two host calls behind `__shm_*` are Win32 section calls with no lowering on this lane.
-			sharedMemory gives false
-			// `mrt_host_tick_ms` exists on this lane and is installed only under `usesIocp`
-			// (see `HostFacility.uptimeClock`), so a program that reads the uptime and spawns nothing would
-			// relocate against a chunk the image does not carry.
-			uptimeClock gives false
+			// ⭐⭐ **THE NAMED SHARED SECTION, ON A LANE WITH NO `shm_open` TO CALL.** That is a libc FUNCTION on
+			// Linux rather than a syscall, and all it does is prepend `/dev/shm/` and `open` the result — so
+			// `Arm64LinuxRuntime`'s band builds the path itself and reaches the same `tmpfs` file with
+			// `openat`/`ftruncate`/`unlinkat`, while the mapping is the `mmap` every POSIX lane shares.
+			sharedMemory gives true
+			// `mrt_host_tick_ms` is installed on the union of its three producers — a subprocess deadline, a
+			// DebugStream entry's stamp, and `__uptime_ms` itself — so a program that reads the uptime and
+			// spawns nothing carries the chunk it relocates against.
+			uptimeClock gives true
 		end 'f'
 	end 'linuxArm64'
 
@@ -858,15 +862,17 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// OPTIONAL.** This lane had no part of `StdOp.osEnvRead`: the isel now routes it to
 			// `buildX64LinuxEnvReadChunk` on the syscall route, and `BackendDispatch.appendLinuxEnvpCapture`
 			// stashes the vector the kernel left on the stack. ⭐ The env-read gate is
-			// `PosixRuntime.posixReadsEnvironment` — a union whose OTHER producer, the scheduler's
-			// `MAXON_MAX_PROCS` read, cannot fire here yet — so the day `greenThreads` lands it needs no widening.
+			// `LinuxRuntime.linuxReadsEnvironment` — a union over every producer of `StdOp.osEnvRead` on this
+			// lane, the terminal test, the scheduler's `MAXON_MAX_PROCS` read and the named section's attach —
+			// so a new producer is added there once rather than at each lane's chunk list.
 			terminalDetection gives true
-			// The two host calls behind `__shm_*` are Win32 section calls with no lowering on this lane.
-			sharedMemory gives false
-			// `mrt_host_tick_ms` exists on this lane and is installed only under `usesIocp`
-			// (see `HostFacility.uptimeClock`), so a program that reads the uptime and spawns nothing would
-			// relocate against a chunk the image does not carry.
-			uptimeClock gives false
+			// ⭐⭐ **THE NAMED SHARED SECTION — the arm64-linux row's band with this lane's own syscall
+			// numbers**, `X64LinuxRuntime` building the `/dev/shm` path the libc `shm_open` this image cannot
+			// call would have built. That row states why a Linux lane spells a create rather than calling one.
+			sharedMemory gives true
+			// The arm64-linux row's reason: `mrt_host_tick_ms` is installed on the union of the op's three
+			// producers, so a program that reads the uptime and spawns nothing carries the chunk.
+			uptimeClock gives true
 		end 'f'
 	end 'linuxX64'
 

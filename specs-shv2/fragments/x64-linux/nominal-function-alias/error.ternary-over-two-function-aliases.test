@@ -1,0 +1,32 @@
+// Test: error.ternary-over-two-function-aliases
+typealias Integer = int(i64.min to i64.max)
+typealias Handler = function(n Integer) returns Integer
+typealias Callback = function(n Integer) returns Integer
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function addTwo(n Integer) returns Integer
+	return n + 2
+end 'addTwo'
+
+function pickHandler() returns Handler
+	return addOne
+end 'pickHandler'
+
+function pickCallback() returns Callback
+	return addTwo
+end 'pickCallback'
+
+function main() returns ExitCode
+	let h = pickHandler()
+	let cb = pickCallback()
+	let k = 3 as Integer
+	let chosen = h if k > 2 else cb
+	print("{chosen(1)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2028: <fragment>:26:17: ternary expression type mismatch: true branch is 'Handler' but false branch is 'Callback'

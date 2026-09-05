@@ -34,8 +34,9 @@
 let ElfDataSectionName = ".data"
 let ElfRodataSectionName = ".rodata"
 
-// ⚠ NAMED, NOT YET WRITTEN: `ElfWriter` refuses a non-empty `CodeResult.symdata` outright, so a read of
-// this section on a Linux lane reports a missing section rather than a wrong one.
+// The DebugStream producer's interned tag and name tables. `ElfWriter` lays it in the non-loadable tail
+// beside the symbol tables, so a program built without `--debugstream` has no such section and a read of
+// it reports a missing section rather than a wrong one.
 let ElfSymdataSectionName = ".symdata"
 
 // The ELF spelling of a `LinkedSectionKind` — this format's half of the one name table
@@ -77,9 +78,10 @@ let ShdrSizeOffset = 32
 // section is empty" are different facts, and a spec pinning an empty layout must tell them apart.
 //
 // `noSectionHeaders` is its own arm rather than a flavour of `sectionMissing`, because it is a
-// different diagnosis with a different fix: `ElfWriter.writeElfDebugSections` returns early when a
-// build produced no debug symbols, leaving a valid ELF with NO section header table at all. An image
-// in that state has not lost its `.data` — it has lost the only map this reader can read.
+// different diagnosis with a different fix: `ElfWriter.writeElfTrailingSections` returns early when a
+// build produced neither debug symbols nor interned names, leaving a valid ELF with NO section header
+// table at all. An image in that state has not lost its `.data` — it has lost the only map this reader
+// can read.
 export union ElfReadError implements Error
 	unreadable(path FilePath)
 	notAnElfFile(path FilePath)

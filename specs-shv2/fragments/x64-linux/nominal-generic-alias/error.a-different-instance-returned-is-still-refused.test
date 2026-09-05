@@ -1,0 +1,19 @@
+// Test: error.a-different-instance-returned-is-still-refused
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 63)
+typealias WideCol = Array with Wide
+typealias NarrowCol = Array with Narrow
+
+function makeNarrow() returns NarrowCol
+	var w = WideCol.create()
+	w.push(5)
+	return w
+end 'makeNarrow'
+
+function main() returns ExitCode
+	print("{makeNarrow().count()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:10:2: Cannot return 'WideCol' from function declared to return 'NarrowCol'

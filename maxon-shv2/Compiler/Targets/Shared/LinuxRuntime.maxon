@@ -45,6 +45,49 @@ export let LinuxOpenCreateTruncateFlags = 0x241
 // this op is `DeleteFileA`, which refuses a directory.)
 export let LinuxUnlinkFileFlags = 0
 
+// ⭐⭐ **`O_RDWR|O_CREAT|O_EXCL`, THE FLAG WORD THAT MAKES AN `openat` A SEGMENT CREATE.** `shm_open` is a
+// libc FUNCTION on Linux rather than a syscall — all it does is open a path under `/dev/shm` — so a
+// libc-less image opens that path itself with exactly the flags the function would have used.
+//
+// ⭐ **THE `O_EXCL` IS LOAD-BEARING.** The create side unlinks the name first, so the object cannot already
+// exist; if it somehow does, this refuses rather than adopting a segment whose contents another process is
+// still writing.
+//
+// ⚠ **THESE ARE THE ARCH-NEUTRAL THREE** — `O_RDWR` 0x2, `O_CREAT` 0x40, `O_EXCL` 0x80, none of them among
+// the four `asm/fcntl.h` overrides for AArch64 — and they are NOT Darwin's numbers, which spells the latter
+// two 0x200 and 0x800 (`Arm64DarwinRuntime.DarwinShmCreateFlags`). MEASURED on an aarch64 guest: a raw
+// `openat` with this word created the file 0600 and a second one answered `-EEXIST`.
+export let LinuxShmCreateFlags = 0xC2
+
+// ⭐ **WHERE A POSIX NAMED SEGMENT LIVES ON LINUX, AND WHY THIS FILE HAS TO KNOW.** `shm_open("/name")`
+// resolves to this `tmpfs` mount; with no libc to consult, the runtime prepends the prefix itself, so the
+// two ends of a ring agree on a path rather than on a call.
+export let LinuxDevShmPrefix = b"/dev/shm/"
+
+// ⭐ **THE FOUR NAMED-SECTION BODIES BOTH LINUX LANES BUILD, SO THE SYMBOLS ARE ONE FACT HERE RATHER THAN
+// TWO COPIES PER ARCH.** They keep the lane infix `PosixRuntime`'s header mandates: the MAP and the UNMAP
+// are a shared host-surface verb and wear `mrt_host_`, while naming a segment is a Linux-only body — every
+// other lane calls `shm_open` and this one opens the `/dev/shm` path that function would have built.
+//
+// The three the isel branches to are the create, the attach and the unpublish; the path builder is called
+// from those three and from nothing else, so it is not exported.
+export let LinuxShmPathName = b"mrt_linux_shm_path"
+export let LinuxShmCreateName = b"mrt_linux_shm_create"
+export let LinuxShmOpenName = b"mrt_linux_shm_open"
+export let LinuxShmUnlinkName = b"mrt_linux_shm_unlink"
+
+// ⭐⭐ **WHO WALKS THE CAPTURED `envp` VECTOR — the POSIX union, PLUS the WHOLE NAMED-SECTION BAND.**
+// `mrt_linux_shm_open` reads `MAXON_DEBUGSTREAM` with `mrt_host_env_read` where Darwin's twin calls `getenv`
+// and needs no vector, and that chunk is laid out on the union of the band's two ends — so BOTH of those
+// bits are readers of the chunk and of the capture, whether or not the attach is the reachable one. A `bl`
+// into a chunk nothing laid out is a link failure rather than a diagnostic, so the gate is the union.
+//
+// ⚠ **BOTH LINUX LANES ASK IT AND NEITHER OWNS IT**, exactly as `linuxOpensFiles` records for the open
+// chunk: the question is about `RuntimeUsage` and names no instruction set.
+export function linuxReadsEnvironment(usage RuntimeUsage) returns bool
+	return posixReadsEnvironment(usage) or usage.usesDebugStream or usage.usesSharedMemory
+end 'linuxReadsEnvironment'
+
 // `ENAMETOOLONG` — 36 on Linux and 63 on Darwin, so unlike the five in `PosixRuntime` it cannot be a POSIX
 // fact; it is the same 36 on both Linux arches because neither overrides `asm-generic/errno.h` (each arch's
 // `asm/errno.h` is a bare include of it). It is what a search whose DIRECTORY PART does not fit the scratch
@@ -149,7 +192,7 @@ export let LinuxTimespecSlots = 2 as StackSize
 export function linuxEnvpGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
-	if target.os != Os.linux or not posixReadsEnvironment(usage) 'notThisLane'
+	if target.os != Os.linux or not linuxReadsEnvironment(usage) 'notThisLane'
 		return out
 	end 'notThisLane'
 

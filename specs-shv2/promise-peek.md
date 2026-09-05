@@ -386,5 +386,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:7:10: this construct is x64-windows only at this rung: 'Runtime.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation
+error E3104: <fragment>:7:10: 'Runtime.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation
 ```
