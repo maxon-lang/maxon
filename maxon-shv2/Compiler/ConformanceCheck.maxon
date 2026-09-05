@@ -755,12 +755,15 @@ export function checkLiteralInitConformance(project Project)
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for siteIndex in 0 upto project.literalInitSites.count() 'eachSite'
 		let site = try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")
-		if not typeDeclaresInterface(declared, interfaces: project.interfaces, typeName: site.typeName, interfaceName: InitableFromStringLiteralName) 'doesNotConform'
+		if not typeDeclaresInterface(declared, interfaces: project.interfaces, typeName: site.typeName, interfaceName: site.interfaceName) 'doesNotConform'
 			// The POSITION is read off the borrow and copied into scalars, so the only thing crossing the
 			// mutating call is a fresh inline element read — see the loop header's note.
 			let nameLine = site.nameLine
 			let nameColumn = site.nameColumn
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: "Type '{String.from((try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")).typeName)}' does not conform to {String.from(InitableFromStringLiteralName)}", line: nameLine, column: nameColumn, filePath: (try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")).filePath)
+			// The conformance the site requires, taken off the borrow into an OWNED String for the reason the
+			// two positions above are: what crosses the mutating call must not be a read of `project`.
+			let interfaceName = String.from(site.interfaceName)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: "Type '{String.from((try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")).typeName)}' does not conform to {interfaceName}", line: nameLine, column: nameColumn, filePath: (try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")).filePath)
 		end 'doesNotConform'
 	end 'eachSite'
 end 'checkLiteralInitConformance'

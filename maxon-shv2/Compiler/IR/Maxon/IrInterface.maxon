@@ -358,6 +358,11 @@ export let ErrorInterfaceName = b"Error"
 // with the same bytes the stdlib declares, never a second literal.
 export let InitableFromStringLiteralName = b"InitableFromStringLiteral"
 
+// ⭐ **`<Type> from 'A'` — THE SAME SUGAR OVER A CHARACTER LITERAL** (`stdlib/Builtins.maxon:47` —
+// `static function init(value Character) returns Self`). Its own name beside its String twin because the two
+// are two conformances with two `init` parameter types, and a site records WHICH it needs.
+export let InitableFromCharLiteralName = b"InitableFromCharLiteral"
+
 // The protocol methods + their result/param type spellings, verbatim from
 // stdlib/Interfaces.maxon (the SAME file the reference compilers parse).
 export let HashMethodName = b"hash"
@@ -942,12 +947,16 @@ export typealias ConformanceDeclArray = Array with ConformanceDecl
 // `E3005 … :16:10`, the `Wrapper` of `let w = Wrapper from "hello"`).
 export type LiteralInitSite
 	export let typeName as ByteArray
+	// ⭐ **WHICH CONFORMANCE THIS SITE REQUIRES**, carried rather than assumed: `<Type> from "…"` needs
+	// `InitableFromStringLiteral` and `<Type> from 'A'` needs `InitableFromCharLiteral`, and the check runs
+	// over one array holding both. A checker that named one of them would silently hold every site to it.
+	export let interfaceName as ByteArray
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
 	export let filePath as FilePath
 
-	export static function create(typeName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns LiteralInitSite
-		return Self{typeName: typeName, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	export static function create(typeName ByteArray, interfaceName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns LiteralInitSite
+		return Self{typeName: typeName, interfaceName: interfaceName, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
 	end 'create'
 end 'LiteralInitSite'
 

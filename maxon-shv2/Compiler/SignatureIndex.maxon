@@ -310,6 +310,7 @@ let ConstShapeManagedValue = 45 as HashDigest
 // a reader that saw one must re-parse when it becomes the other.
 let ManagedShapeString = 46 as HashDigest
 let ManagedShapeByteArray = 47 as HashDigest
+let ManagedShapeCharacter = 112 as HashDigest
 
 // The FOURTH shape a top-level binding's answer hashes under (P1.7 slice 2b): it folded to an ARRAY
 // LITERAL. Its own discriminator for `ConstShapeManagedValue`'s reason — `let X = "ab"` becoming
@@ -1072,6 +1073,13 @@ end 'constArrayElementScalar'
 export enum ManagedConstKind
 	string
 	byteArray
+	// ⭐ **A CHARACTER, WHICH REACHES THIS ENUM THROUGH EXACTLY ONE POSITION: the ARGUMENT of a
+	// `<Type> from 'A'` construction.** A top-level `let c = 'X'` is refused permanently and by both
+	// references (`Parser.evalConstCharLiteral` — a Character is a RECORD, and a module-scope initializer is a
+	// folded constant by definition), so nothing ever settles a managed GLOBAL to this kind; what the
+	// construction needs is only that the bytes reach `__module_init` and materialize there as the literal
+	// every body writes.
+	character
 end 'ManagedConstKind'
 
 // ⭐ **ONE MANAGED TOP-LEVEL BINDING — its `.data` label, the bytes its initializer folded to, and the
@@ -1499,9 +1507,19 @@ end 'GlobalFactoryReturn'
 // WHICH record a managed LITERAL global's bytes build — the `ManagedConstKind` → `ManagedGlobalRecord`
 // map, in one place so the kind a constant folded to and the construction its slot gets cannot drift apart.
 function managedLiteralRecord(bytes ByteArray, kind ManagedConstKind) returns ManagedGlobalRecord
-	return match kind 'k'
-		string gives ManagedGlobalRecord.stringRecord(bytes)
-		byteArray gives ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count(), bytes: bytes)
+	match kind 'k'
+		string then return ManagedGlobalRecord.stringRecord(bytes)
+		byteArray then return ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count(), bytes: bytes)
+		// ⭐ **A CHARACTER IS THAT SAME RECORD AT A DIFFERENT TAG**, which is `Parser.emitCharacterLiteral`'s
+		// own sentence: a character literal emits the identical `stringLiteral` op over an immortal `.rdata`
+		// byte record, and only the value's tag differs. So it takes the identical construction, and the
+		// `valueType` `globalRecordOf` carries beside it is what makes `ModuleInit.clonedStringRecord` mint the
+		// clone at `character` rather than at `string`.
+		//
+		// It reaches here only as the ARGUMENT of a `<Type> from 'A'` construction. A top-level `let c = 'X'`
+		// is refused permanently by `Parser.evalConstCharLiteral` and by both references — a Character is a
+		// record, and a module-scope initializer is a folded constant by definition.
+		character then return ManagedGlobalRecord.stringRecord(bytes)
 	end 'k'
 end 'managedLiteralRecord'
 
@@ -14820,6 +14838,7 @@ export type ProgramSignatures
 		return match kind 'k'
 			string gives MaxonType.string
 			byteArray gives MaxonType.genericInstance(self.internArrayByteInstance(elementFilePath))
+			character gives MaxonType.character
 		end 'k'
 	end 'managedConstValueType'
 
@@ -16413,6 +16432,7 @@ export type ProgramSignatures
 		return match kind 'k'
 			string gives Hasher.combined(state, value: ManagedShapeString)
 			byteArray gives Hasher.combined(state, value: ManagedShapeByteArray)
+			character gives Hasher.combined(state, value: ManagedShapeCharacter)
 		end 'k'
 	end 'mixManagedKind'
 
