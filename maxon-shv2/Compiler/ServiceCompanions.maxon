@@ -461,12 +461,30 @@ end 'serviceRosterRefusalMessage'
 // ⭐ **THE LESSON IS WRITTEN ONCE AND BOTH FINDINGS END WITH IT**, `borrowLaunderDoorClause`'s arrangement
 // and for its reason: the two differ in WHY this frame is not the value's only owner, and not at all in what a
 // send requires or in what the author does about it. Two copies would be free to drift into two rules.
-let ServiceTransferLesson = "A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send"
+//
+// ⛔⛔ **IT NAMED `.clone()` FIRST AND THAT CURE DOES NOT WORK — MEASURED, AT EVERY SEND AND FOR EVERY
+// SHAPE.** `h.keep(s.clone())` and `let c = s.clone()` + `h.keep(c)` are BOTH refused, because a send
+// requires a value this frame provably solely owns and `ProgramSignatures.returnsFreshValue` answers `false`
+// for `String.clone`: `Parser.noteFreshReturnShape` publishes the fresh-record claim only for
+// `return <Name>{ … }` ending the line, and `stdlib/String.maxon:269` writes `return sliceBytes(…)` — a call
+// to a function that IS fresh by that criterion, one hop away. Closing the claim over such a hop is a
+// whole-program fixpoint (`closeByRefForwarding`'s shape) and is NOT built; until it is, the sentence must
+// not send an author to a spelling the next diagnostic refuses.
+//
+// ⚠ The cure that DOES work is the second one, so it is the only one named: an interpolation builds a
+// record at the send site that nothing else can name (`h.keep("{buf}")`, or bound first). `specs-shv2/
+// services.md`'s `a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation` is that program.
+let ServiceTransferLesson = "A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one"
 
-// The BORROWED half: this frame does not own the value at all, and its type has no cheap owning copy the send
-// could take instead (a byte record does, and is promoted rather than refused).
+// The BORROWED half: this frame does not own the value at all.
+// ⚠ **IT NAMES NO TYPE, AND IT USED TO.** The sentence ended *"and its type has no owning copy a send could
+// take instead"*, which was true of the only shape it then refused — a struct — because a borrowed BYTE
+// RECORD was promoted to a copy rather than refused. One send site answering one question two ways, decided
+// by whether the value's type happened to have a cheap clone, is what that clause recorded; the rule is
+// uniform now and the clause with it (`Parser.moveIntoGreenThread`, ⚖ ruling 2026-09-04). What is left is the
+// fact that decides: this frame does not own it.
 module function serviceBorrowedTransferMessage(blame String, source String) returns String
-	return "{blame} is BORROWED{serviceTransferSourceClause(source)} — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. {ServiceTransferLesson}"
+	return "{blame} is BORROWED{serviceTransferSourceClause(source)} — read out of a field, an element or a parameter — so this frame does not own it. {ServiceTransferLesson}"
 end 'serviceBorrowedTransferMessage'
 
 // The CO-OWNED half: this frame owns a reference, but not provably the only one. Both arrivals are named

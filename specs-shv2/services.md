@@ -1622,13 +1622,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
+error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one
 ```
 
 <!-- test: error.a-borrowed-parameter-may-not-be-sent -->
-Send-uniqueness does not survive a function boundary for a value with no owning copy: `p` arrived as a
-BORROWED struct parameter, the caller still holds it, and a struct has no static clone for the send site to
-take. (A borrowed `String` is not in this class — it has a cheap owning copy and is promoted.)
+Send-uniqueness does not survive a function boundary: `p` arrived as a BORROWED struct parameter and the
+caller still holds it. ⭐ **THE RULE IS UNIFORM OVER BORROWS AND USED NOT TO BE.** A borrowed `String` was
+PROMOTED to a copy here rather than refused, so one send site answered one question two ways — deciding by
+whether the value's type happened to have a cheap owning copy — and the copy was an allocation the author
+never wrote. `error.a-value-sent-through-a-parameter-is-refused` below is that shape, refused now.
+
+⚠ What is still promoted is a value with NO owner at all: a STRING LITERAL this parse minted, whose record
+is immortal `.rdata`. Nobody owns it, so nothing can be a second owner, and there is nothing to move — see
+`a-string-argument-moves-into-the-service`, whose third send is a bare literal.
 ```maxon
 type Payload
 	var n as Integer
@@ -1663,7 +1669,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it, and its type has no owning copy a send could take instead. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send
+error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one
 ```
 
 <!-- test: error.a-service-is-rejected-on-wasm -->
@@ -4397,16 +4403,20 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: error.a-value-sent-through-a-parameter-is-refused -->
-<!-- MEASURED 2026-09-04: shv2 COMPILES the program clean where the case pins `E3138: 'buf' arrived as a parameter
-     and cannot be proven unique at the send`. The refusal needs a TRANSITIVE consume analysis, which is what the
-     prose above already describes as missing. -->
-⚠ **THE SHAPE THIS CASE PINS IS A `String`, AND IT IS THE ONE THE SEND SITE CURRENTLY ACCEPTS.** A borrowed
-byte record is PROMOTED to a fresh owned copy at the send, which is sound — the service gets a record of its
-own — so the refusal below is what a TRANSITIVE consume analysis would let the compiler replace the copy
-with. The struct shape, which has no owning copy to take, IS refused today and is pinned live by
-`error.a-borrowed-parameter-may-not-be-sent`. So this case is about the COST of the missing fixpoint (one
-copy per forwarded String), not about a hole in the safety rule.
+<!-- test: error.a-value-sent-through-a-parameter-is-refused -->
+⭐⭐ **THE `String` HALF OF `error.a-borrowed-parameter-may-not-be-sent`, AND THE CASE THAT MADE THE RULE
+UNIFORM.** `buf` arrived as a borrowed parameter and the caller still holds it — the identical fact the
+struct case is refused for, at the identical position, in the identical sentence. It compiled here until
+2026-09-04, promoting `buf` to a fresh copy: sound, and an allocation the author never wrote, chosen by
+whether the value's TYPE had a cheap clone rather than by whether a second owner exists.
+
+⚠ **THE CURE THE DIAGNOSTIC TEACHES IS THE COPY IT USED TO MAKE.** `h.keep(buf.clone())` compiles and does
+exactly what the promotion did — at a site the reader can see, which is what an explicit transfer rule owes
+them.
+
+⚠ A bare LITERAL is not in this class and is still promoted: it has no owner to be a second of. That is
+`a-string-argument-moves-into-the-service`'s third send, and it is why the test here is PROVENANCE and not
+type.
 ```maxon
 type Store
 	var n as Integer
@@ -4417,8 +4427,7 @@ type Store
 
 	export function keep(s String)
 		self.n = self.n + 1
-		print("kept {s}
-")
+		print("kept {s}\n")
 	end 'keep'
 end 'Store'
 
@@ -4434,7 +4443,56 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:14:8: 'buf' arrived as a parameter and cannot be proven unique at the send
+error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Build the value at the send: an INTERPOLATION over it is a record nothing else can name, and a send admits one
+```
+
+<!-- test: a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux, x64-linux -->
+⭐⭐ **THE CURE THE TWO REFUSALS ABOVE NAME, AND THE CASE THAT SAYS IT IS REACHABLE.** A refusal that teaches
+a spelling the next diagnostic also refuses leaves an author with nothing to write, which is what a rule
+without this case would be. An interpolation ALLOCATES: the record it builds is this frame's, nothing else
+can name it, and the send moves it — so `buf` stays readable in the caller and the service owns a record of
+its own.
+
+⛔⛔ **`.clone()` IS NOT THAT SPELLING, AND IT NEVER WAS — MEASURED at every send and for every shape.**
+`h.keep(buf.clone())` and `let c = buf.clone()` + `h.keep(c)` are both E3138: a send needs a value this frame
+provably solely owns, and `returnsFreshValue` answers `false` for `String.clone`, whose body is
+`return sliceBytes(…)` — a call to a function that IS fresh by `noteFreshReturnShape`'s criterion, one hop
+away. Closing the claim over that hop is a whole-program fixpoint and is not built. The lesson sentence named
+`.clone()` first until 2026-09-04.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s} ({self.n})\n")
+	end 'keep'
+end 'Store'
+
+function forward(h Store.handle, buf String)
+	h.keep("{buf}")
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let s = "hello"
+	forward(h, buf: s)
+	print("caller still has {s}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+caller still has hello
+kept hello (1)
 ```
 
 <!-- test: error.use-after-await-of-a-reply -->

@@ -82100,18 +82100,37 @@ export type Parser
 	// LANGUAGE guarantees one green thread per box. Reusing that door here would not be slow; it would race two
 	// unsynchronised increments on one word and free a live record.
 	//
-	// ⇒ **A TRANSFER IS ADMITTED ONLY WHERE THIS FRAME PROVABLY HOLDS THE ONLY REFERENCE.** Three answers:
+	// ⇒ **A TRANSFER IS ADMITTED ONLY WHERE THIS FRAME PROVABLY HOLDS THE ONLY REFERENCE.** Two answers:
 	//
 	//   • a SCALAR owns no record and crosses as a machine word — nothing to transfer;
-	//   • a BORROWED BYTE RECORD is PROMOTED to a fresh sole copy (`promoteToOwnedString`), which is the same
-	//     answer `transferConsumedArg` gives it and for the same reason: a byte record has a cheap owning copy,
-	//     so the source stays readable and the service gets a record nobody else names;
 	//   • an OWNED value this frame solely owns is MOVED — the source binding poisoned (E3102 on a later read)
 	//     or the temporary drained. **No incref: the frame's own `+1` rides into the mailbox**, which is what
 	//     makes the service the record's one owner rather than its second.
 	//
 	// Everything else is refused as **`SemanticServiceArgumentNotUnique`**, naming the value and the `.clone()`
 	// cure.
+	//
+	// ⭐⭐ **AND A THIRD ANSWER FOR A VALUE WITH NO OWNER AT ALL: A STRING LITERAL THIS PARSE MINTED IS
+	// PROMOTED to a fresh sole copy.** Its record is immortal `.rdata` — nobody owns it, so nothing can be a
+	// second owner, and the copy is not hiding a shared reference but materializing the only owned record
+	// there will be. There is nothing to move: an immortal record cannot be given up.
+	//
+	// ⛔⛔ **THAT ARM USED TO ADMIT EVERY BORROWED BYTE RECORD, AND THE RULE IS UNIFORM OVER BORROWS NOW.**
+	// The promotion was sound; what it was not was the same rule the shape beside it got. A borrowed STRUCT
+	// parameter is refused, so one send site answered the identical question two ways — deciding by whether
+	// the value's TYPE happened to have a cheap owning copy: `h.keep(p)` an E3138 and `h.keep(buf)` a silent
+	// allocation the author never wrote. The cure a refusal teaches — `.clone()` — IS that allocation, spelled
+	// by the author at the site that pays for it. ⚖ user ruling, 2026-09-04.
+	//
+	// ⚠ **THE NARROWING TO "a literal" IS THE CORPUS'S OWN ANSWER, MEASURED.** With the arm deleted outright,
+	// the six `specs-shv2/services.md` cases that went red were SIX BARE LITERALS (`h.say("a")`,
+	// `sink.say("from the worker")`) and not one field, element or parameter read — so the population the
+	// promotion actually served and the population the refusal is for are disjoint, and the test that
+	// separates them is provenance rather than type.
+	//
+	// ⚠ `transferConsumedArg` KEEPS the wider promotion and must: `async` is not a send. Its coroutine never
+	// leaves the caller's green thread, so two references on one thread are two references and the copy buys
+	// nothing there — the whole reason these are two doors rather than one.
 	//
 	// ⚠⚠ **THE TYPE QUESTION IS ASKED HERE FOR EXACTLY ONE SHAPE, AND THAT SHAPE IS THE ONLY ONE THAT CAN
 	// REACH A SEND.** A function value, an interface value and an opaque type parameter are refused at the
@@ -82140,9 +82159,9 @@ export type Parser
 		end 'aMachineWord'
 
 		if not self.valueIsOwnedHeap(value) 'borrowed'
-			if not tagIsByteRecord(self.tagOf(value)) 'noOwningCopyExists'
+			if not self.valueIsAMintedStringLiteral(value) 'someoneElseMayOwnIt'
 				throw ParseError.serviceArgumentNotUnique(serviceBorrowedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
-			end 'noOwningCopyExists'
+			end 'someoneElseMayOwnIt'
 
 			// The promoted copy REPLACES the value the caller carries, exactly as `transferConsumedArg`'s arm
 			// does: what crosses is the fresh record, and this frame's own statement drop must not also reach it.
@@ -82294,6 +82313,14 @@ export type Parser
 	// name for a value no binding holds (a temporary, an element read, a field read). Split out because both
 	// refusals need it and neither may resolve it a second way; the sentence builders decide what to say when
 	// it is empty.
+	// ⭐ **DID THIS PARSE MINT `value` AS A STRING LITERAL?** — `knownLiteralBytes`'s criterion asked as a
+	// PREDICATE, so the send door pays one array read rather than a boxed union it would then discard. The
+	// answer is a fact about PROVENANCE and not about the record: a parameter, a field, a merge result and a
+	// runtime slice are all `false` here even when the record they happen to hold is the immortal one.
+	function valueIsAMintedStringLiteral(value ValueId) returns bool
+		return self.constPayloadDomain(value) == ConstPayloadDomain.stringLiteralOp
+	end 'valueIsAMintedStringLiteral'
+
 	function transferredValueName(value ValueId) returns String
 		let index = self.liveOwnerIndexOf(value)
 		if self.noLiveOwner(index) 'noBindingHoldsIt'
