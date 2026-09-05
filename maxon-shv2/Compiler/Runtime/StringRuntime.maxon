@@ -52,22 +52,13 @@ export let StringLengthOffset = ManagedRecordLengthOffset
 // Exported for `Parser.emitStringInterp`, which WRITES an owned heap String's record (the literal path
 // here only ever writes rdata). One set of offsets, read by the runtime and written by the interpolation
 // lowering, so a reader and a writer of the same record cannot drift.
-// ⭐ **THESE THREE ARE DERIVED FROM `BufferOwnership`, NOT DECLARED HERE**, because `__mm_cow_detach` is ONE
+// ⭐ **THESE TWO ARE DERIVED FROM `BufferOwnership`, NOT DECLARED HERE**, because `__mm_cow_detach` is ONE
 // emitted function that reads them out of this record AND out of the Array record. They were two
 // coincidentally-equal sets of literals until that function existed; a divergence would now be a wrong load
 // inside it rather than a second value flowing through a parameter, so the numbers live in one place and
 // these names alias them.
 export let StringCapacityOffset = ManagedRecordCapacityOffset
 export let StringElementSizeOffset = ManagedRecordElementSizeOffset
-let StringParentPtrOffset = ManagedRecordParentOffset
-
-// ⭐ **`element_destroy@40` — A STRING'S IS ALWAYS `TrivialElementDestroy`, AND THAT IS A FACT RATHER THAN
-// A FILLER.** A String's elements are `Byte`s; a byte owns nothing, so there is no per-element destructor
-// to run and the drop path releases the bytes without walking them. Aliased from the shared offset for the
-// reason the five above are: `__managed_decref` reads this slot out of a String record now (W157 —
-// `__str_bytes_view` hands one over), so a divergence would be a wrong load in a function that cannot tell
-// which record it was handed.
-let StringElementDestroyOffset = ManagedRecordElementDestroyOffset
 
 // ⭐⭐ **SLOT@48 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND IT
 // USED TO BE THE STRICTLY WEAKER `isAscii`.** The corpus field this record IS
@@ -96,9 +87,7 @@ export let StringSingleByteGraphemesOffset = ManagedRecordBytes as ByteOffset
 // OUTRIGHT UNTIL W157**, when the two records were the same six slots disagreeing about what `@40` held;
 // the alias is now an ADDITION, and that difference is the rung. It is still DERIVED rather than written
 // `56`, for the same reason: the number is "a buffer record, plus a flag".
-let StringFieldBytes = 8 as BytePos
-
-export let StringRecordBytes = ManagedRecordBytes + StringFieldBytes
+export let StringRecordBytes = ManagedRecordBytes + ManagedRecordSlotBytes
 
 // ⚠ **`StringElementSize = 1` STOOD HERE AND IS GONE (W49 wave 9).** It said *"a String's elements are
 // bytes"*, which since the envelope collapse is `ManagedMemoryRuntime.ByteStringElementSize` in other words — a
@@ -581,52 +570,24 @@ end 'stringBlobBytes'
 // Build the 56-byte record for a literal. `byteLength` EXCLUDES the NUL (it is the payload count);
 // `singleByteGraphemes` is `bytesAreSingleByteGraphemes`'s answer.
 //
-// ⭐ **`capacity@16` IS `ImmortalRecordCapacity`, NOT `RdataBufferCapacity`, AND THE DIFFERENCE IS THIS
-// FUNCTION** (W157). Both say "the buffer is an immortal `.rdata` blob"; only this one also says "and so is
-// the record you are holding" — which is exactly what a record ASSEMBLED AS BYTES AND REGISTERED AS AN
-// `.rdata` CONSTANT is, and what a byte-string literal's heap `__mm_alloc` box is not. Since W157 hands a
-// String's own record out as a buffer (`buildStrBytesView`), that difference is what stops `__mm_incref` and
-// `__managed_decref` performing a refcount read-modify-write on read-only memory.
-//
-// ⚠ **`buffer@0` HOLDS THE BLOB'S RDATA OFFSET, NOT 0, AND THIS IS LOAD-BEARING FOR DEDUP.** The PE
-// writer OVERWRITES `buffer@0` with the blob's absolute VA (`ImageBase + rdataRva + blobOffset`), so
-// the value stored here is irrelevant to what the program reads. But it is NOT irrelevant to
-// `registerRdataConstant`, which DEDUPES records by their bytes: two different strings of the same
-// length and ascii-ness have byte-identical records EXCEPT for `buffer@0`, so a placeholder of 0 would
-// collapse `"hello"` and `"world"` into ONE record pointing at ONE blob — a silent wrong answer where
-// every same-length string compares equal. Seeding `buffer@0` with the blob's own offset (distinct per
-// distinct blob, shared by identical strings that already dedup their blob) makes records dedup EXACTLY
-// when their strings are identical.
-//
-// ⭐ EACH FIELD IS APPENDED AT ITS NAMED OFFSET AND THE APPENDER ASSERTS IT LANDS THERE, so the offsets
-// the runtime functions load by (`StringBufferOffset`, `StringLengthOffset`) and the offsets this
-// writes are ONE set of constants that cannot drift: reorder a field or mis-size one and this panics
-// rather than shipping a record the runtime reads wrong.
+// ⭐ **A STRING RECORD IS `BufferOwnership.immortalRecordBytes` PLUS ONE SLOT.** The six it shares carry
+// their own rules there — `capacity@16 = ImmortalRecordCapacity` for "the record itself is image data too",
+// and `buffer@0` seeded with the blob's rdata OFFSET so that byte-keyed dedup pools records exactly when
+// their strings are identical. The flag rides `appendRecordSlot` for the same reason the six do: its offset
+// is asserted, so a reordered or mis-sized slot panics here rather than shipping a record the runtime reads
+// wrong.
 // ⚠ **NOT `export`ED SINCE W49 WAVE 9** — the same orphan sweep. `registerStringRecord` is its one caller
 // and the door every other file comes through; an `export` here advertised a second way to assemble the
 // record that would skip the blob registration the offset seed depends on.
 function buildStringRecordBytes(blobOffset ByteOffset, byteLength BytePos, singleByteGraphemes bool) returns ByteArray
-	var record = ByteArray.create()
-	appendRecordField(record, expectedOffset: StringBufferOffset, value: blobOffset as ParsedInt)
-	appendRecordField(record, expectedOffset: StringLengthOffset, value: byteLength as ParsedInt)
-	appendRecordField(record, expectedOffset: StringCapacityOffset, value: ImmortalRecordCapacity)
-	appendRecordField(record, expectedOffset: StringElementSizeOffset, value: ByteStringElementSize)
-	appendRecordField(record, expectedOffset: StringParentPtrOffset, value: NoOwedAllocation)
-	appendRecordField(record, expectedOffset: StringElementDestroyOffset, value: TrivialElementDestroy)
-	appendRecordField(record, expectedOffset: StringSingleByteGraphemesOffset, value: singleByteGraphemesFlagValue(singleByteGraphemes))
+	var record = immortalRecordBytes(blobOffset, length: byteLength as ParsedInt, elementSize: ByteStringElementSize)
+	appendRecordSlot(record, expectedOffset: StringSingleByteGraphemesOffset, value: singleByteGraphemesFlagValue(singleByteGraphemes))
 
 	if record.count() != StringRecordBytes 'sizeDrift'
 		panic("buildStringRecordBytes: assembled {record.count()} bytes, not {StringRecordBytes} — a field's width does not match its offset spacing")
 	end 'sizeDrift'
 	return record
 end 'buildStringRecordBytes'
-
-function appendRecordField(record ByteArray, expectedOffset ByteOffset, value ParsedInt)
-	if record.count() != expectedOffset 'offsetDrift'
-		panic("buildStringRecordBytes: a record field is being written at offset {record.count()} but its constant says {expectedOffset} — the record layout the runtime reads and this writes have drifted")
-	end 'offsetDrift'
-	record.append(scalarImage(value, byteCount: StringFieldBytes))
-end 'appendRecordField'
 
 function singleByteGraphemesFlagValue(singleByteGraphemes bool) returns ParsedInt
 	if singleByteGraphemes 'oneByteEach'

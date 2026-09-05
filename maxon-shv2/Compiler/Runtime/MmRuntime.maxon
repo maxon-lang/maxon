@@ -1643,10 +1643,12 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	module.functions.push(func)
 end 'buildMmAlloc'
 
-// ⭐ **THE ONE `__mm_alloc` CALL EMISSION, AND THE ONE PLACE ITS FLAG-DEPENDENT ARITY IS KNOWN.** Every
-// heap box the compiler builds — a String record, an array record, its element buffer, a list node, a
-// user struct — comes through here, so `__mm_alloc(size, destructor[, tag])` is spelled in exactly one
-// place. `Parser.emitBoxAlloc`'s header already argued the point for the three call sites it consolidated
+// ⭐ **THE `__mm_alloc` CALL EMISSION FOR EVERY BOX BUILT AS ALREADY-LOWERED `StdOp`s — a String record, an
+// array record, its element buffer, a list node, a user struct — so `__mm_alloc(size, destructor[, tag])`
+// has one spelling at this tier.** The Maxon→Std lowering has the other, `LowerMaxonToStd.appendMmAllocTag`,
+// which cannot come through here: it mints from its own dense per-function counter rather than a
+// `ValueMinter`, and the two headers name each other so the flag-dependent arity moves in both.
+// `Parser.emitBoxAlloc`'s header already argued the point for the three call sites it consolidated
 // ("an added or reordered alloc argument that reached three of those call sites and missed the fourth
 // would corrupt that box silently"); `--debugstream` is that added argument, and it reaches fifteen.
 //

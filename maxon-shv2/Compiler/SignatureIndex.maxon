@@ -2503,6 +2503,20 @@ union ExistentialOwnershipProtocol
 	// predicate bolted beside it. A promise that could be retained would be two owners of one thread, which
 	// is the double reclaim `await`'s linearity exists to make unrepresentable.
 	greenThread
+	// ⭐⭐ **AN `Array` RECORD — RELEASED LIKE AN AGGREGATE, CO-OWNED THROUGH A RUNTIME TEST.** It is the
+	// second representation in this language with an IMMORTAL member: a module-level managed constant
+	// materializes as a `.rdata` buffer record (`Parser.emitManagedConstant`), and `__mm_retain` on
+	// one is a refcount read-modify-write on a read-only page — the identical access violation the
+	// `byteRecord` arm above exists to avoid. It cannot simply BE `byteRecord`: that arm's callees read a
+	// String record's seventh slot and its release is `__str_decref`, where this record's is
+	// `__managed_decref`. And it cannot be decided at the CALL SITE, because a witness word and a descriptor
+	// word are read by a body that cannot name the type at all — which is why the fork is `__managed_retain`,
+	// off the record's own `capacity@16`, exactly as `__str_retain` forks one representation over.
+	//
+	// ⚠ APPENDED, never inserted — the drop-side arms above are matched as the ordinal range
+	// `byteRecord to greenThread`, and a case placed inside it would silently join a set that is about
+	// something else.
+	bufferRecord
 end 'ExistentialOwnershipProtocol'
 
 // ⭐⭐ **THE ONE SPELLING OF "HOW DO I TAKE A REFERENCE UNDER THIS PROTOCOL" (W41-opaque).** Two runtime words
@@ -2518,6 +2532,8 @@ function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns 
 	match protocol 'protocol'
 		byteRecord then return StrCloneName
 		aggregate then return MmRetainName
+		// The one arm whose answer is neither a copy nor a plain incref: see the case's own note.
+		bufferRecord then return ManagedRetainName
 		// A green thread is never co-owned — see the arm's own note. EMPTY here is the complete answer, not a
 		// sentinel, exactly as it is for `none`: both readers stamp nothing and the zero word is inert.
 		greenThread then return EmptySourceText
@@ -25566,7 +25582,7 @@ export type ProgramSignatures
 	export function instanceArgOwesDrop(id GenericInstanceId, position TypeParamPosition) returns bool
 		return match self.typeOwnershipProtocol(self.canonicalInstanceArg(id, position: position)) 'protocol'
 			none gives false
-			byteRecord to greenThread gives true
+			byteRecord to greenThread or bufferRecord gives true
 		end 'protocol'
 	end 'instanceArgOwesDrop'
 
@@ -26946,7 +26962,11 @@ export type ProgramSignatures
 	export function existentialDestroyCallee(typeName ByteArray) returns ByteArray
 		match self.existentialOwnershipProtocol(typeName) 'protocol'
 			byteRecord then return StrDecrefName
-			aggregate then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
+			// The NAME door never answers `bufferRecord` — a generic conformer takes a PER-INSTANCE table
+			// (`LowerMaxonToStd.witnessRetainCallee`), so an `Array with X` reaches `instanceDropCallee` and
+			// this door sees only non-generic names. The arms share a body rather than one panicking, because
+			// what an Array record's drop IS is exactly what an aggregate's is.
+			aggregate or bufferRecord then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
 			// A conformer whose value half is a green thread releases it the one way a green thread is
 			// released. Its `retainFunc@16` twin is 0 — see the protocol arm for why that pair is uneven here.
 			greenThread then return GtPromiseDropName
@@ -27008,8 +27028,9 @@ export type ProgramSignatures
 			none gives EmptySourceText
 			// `greenThread` joins the range rather than earning an arm: `managedFieldDropCallee` routes an
 			// instance through `genericInstanceBoxDropCallee`, whose FIRST arm is the promise, so the callee
-			// this hands back is already `__gt_promise_drop`.
-			byteRecord to greenThread gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
+			// this hands back is already `__gt_promise_drop`. `bufferRecord` joins it for the same reason from
+			// the other end: an Array record's drop is an aggregate's, and only its RETAIN is its own.
+			byteRecord to greenThread or bufferRecord gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
 		end 'protocol'
 	end 'instanceDropCallee'
 
@@ -27078,8 +27099,9 @@ export type ProgramSignatures
 	export function typeParamDropCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
 		return match self.typeParamOwnershipProtocol(id, position: position) 'protocol'
 			none gives EmptySourceText
-			// See `instanceDropCallee` — the promise routes itself through `genericInstanceBoxDropCallee`.
-			byteRecord to greenThread gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
+			// See `instanceDropCallee` — the promise routes itself through `genericInstanceBoxDropCallee`, and
+			// an Array record's drop is an aggregate's.
+			byteRecord to greenThread or bufferRecord gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
 		end 'protocol'
 	end 'typeParamDropCallee'
 
@@ -27137,6 +27159,20 @@ export type ProgramSignatures
 		if self.typeDenotesInterface(t) 'anExistentialHasNoStaticProtocol'
 			return ExistentialOwnershipProtocol.none
 		end 'anExistentialHasNoStaticProtocol'
+
+		// ⭐ **AN `Array` INSTANCE IS THE ONE MANAGED SHAPE WHOSE RECORD MAY BE IMAGE DATA**, so it takes the
+		// protocol whose retain asks the record rather than assuming a refcount — see the case's own note.
+		// Asked LAST, past every arm that answers about something other than a box, so it narrows the
+		// aggregate answer and changes no other.
+		//
+		// ⚠ **THROUGH `denotedInstance`, NOT OFF THE TAG.** An argument may SPELL the container as a generic
+		// ALIAS — `ByteArray` is a `named` leaf, not a `genericInstance` — and the tag test MEASURED as an
+		// access violation on exactly that spelling: the compiler's own `TypeNameInterner`'s `Map with
+		// (ByteArray, TypeNameId)` retained a `.rdata` key through `__retain_type_param` during a rehash.
+		let denoted = try self.denotedInstance(t) otherwise return ExistentialOwnershipProtocol.aggregate
+		if self.isArrayInstance(denoted) 'aBufferRecord'
+			return ExistentialOwnershipProtocol.bufferRecord
+		end 'aBufferRecord'
 
 		return ExistentialOwnershipProtocol.aggregate
 	end 'typeOwnershipProtocol'

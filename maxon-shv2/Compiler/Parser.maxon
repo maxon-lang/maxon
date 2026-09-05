@@ -2444,6 +2444,17 @@ let sharedEmptyMergeBlames = MergeBlameMap.create()
 // no name to a managed value read out of a writable slot never writes it.
 let sharedEmptyRebindableSlotReads = ValueMarkSet.create()
 
+// ⭐⭐ **WHICH RECORD A `b"…"`'S BYTES ARE MATERIALIZED INTO — the ONE fork between the two producers of a
+// byte-string value, and a STORAGE CLASS rather than a use.** An inline literal takes a fresh OWNED heap
+// record this statement drops, because a `var` bound to one REWRITES it in place (`push` republishes
+// `buffer@0`/`capacity@16`/`length@8`); a module-level managed constant's read is the address of the ONE
+// immortal `.rdata` record every read of that declaration shares, which is why it costs nothing per read.
+// The two emit the identical op, so the fork is said here and carried to the lowering on a side table.
+enum ByteStringRecordStorage
+	ownedTemporary
+	immortalImage
+end 'ByteStringRecordStorage'
+
 // The module-level shared EMPTY constructor-feed parameter set (W41-opaque), held as the initial value of
 // `constructorFeedParams` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyRebindableSlotReads`'s pattern, for its reason and with its invariant. A function with no
@@ -37944,6 +37955,19 @@ export type Parser
 	// what `emitOwnedRuntimeResult` stamps at the spawn and at the clone), so the guard costs one dense array
 	// read on the overwhelmingly common path and is exact on the one that matters.
 	function retainCalleeForValue(value ValueId, result RetainResult) returns ByteArray
+		// ⭐⭐ **AN ARRAY RECORD TAKES THE IMMORTAL-AWARE ENTRY, AND THIS DOOR DECIDES THE RECORD FORMAT
+		// RATHER THAN THE PROVENANCE.** A module-level managed constant's record is `.rdata`
+		// (`Parser.emitManagedConstant`), so a refcount read-modify-write on it faults — and whether
+		// THIS value is one cannot be known here, because it may be a merge phi. So the provenance test is
+		// deferred to run time, exactly as `__str_retain` defers it one representation over, and what is
+		// settled here is only which records that entry may read `capacity@16` out of: a six-slot buffer
+		// record. A struct box's `@16` is an arbitrary field — or past the end of a box too small to have one
+		// (`IrInterface.WitnessRetainFuncOffset` carries the measurement) — so everything else keeps the plain
+		// box incref.
+		if self.signatures.isArrayInstanceAt(self.tagOf(value), nameId: self.valueNameId(value)) 'bufferRecord'
+			return managedRecordRetainCallee(result)
+		end 'bufferRecord'
+
 		if self.tagOf(value) != ValueTypeTag.structRef 'notNominal'
 			return plainBoxRetainCallee(result)
 		end 'notNominal'
@@ -39161,8 +39185,9 @@ export type Parser
 	// `7`, writing through `<the integer> - 24 + 16` where the program answers 11; and a hardcoded incref
 	// under the gate on `widen("abc")`, writing into read-only `.rdata`.
 	//
-	// ⚠ Both entries return a value the caller must USE — but only the concrete arm is guaranteed to hand
-	// back what it was given, so a caller may never substitute the source for the result.
+	// ⚠ Both entries return a value the caller must USE, and NEITHER is guaranteed to hand back what it was
+	// given: the existential arm dispatches through the witness, and the concrete arm answers `__managed_retain`
+	// for a buffer record, which copies an immortal one. A caller may never substitute the source for the result.
 	function emitRetainCall(source ValueId, range SourceRange) returns ValueId
 		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
 			return self.emitRetainExistentialCall(source, range: range)
@@ -39218,14 +39243,14 @@ export type Parser
 	// record, so this frame marks nothing and drops nothing — the container's destructor releases exactly the
 	// reference taken here.
 	//
-	// ⚠⚠ **BUT THE RESULT IS STILL WHAT THE CALLER MUST STORE, AND DISCARDING IT WAS A MEASURED ACCESS
-	// VIOLATION.** The struct/union arm below hands back the same box (`__mm_incref` is void and an aggregate
-	// must stay one record), and the existential arm used to do the same on the reasoning that a fresh id
-	// "would buy nothing". It buys the whole correctness of a byte-record conformer: `__retain_existential`
-	// dispatches through the witness's `retainFunc@16`, which for a `String`/`Character` is a `__str_clone`
-	// handing back a DIFFERENT, independently-droppable record. Returning the source instead put an immortal
-	// `.rdata` literal into durable storage AND leaked the clone — MEASURED as `widen("abc")` printing `A` and
-	// dying with 0xC0000005.
+	// ⚠⚠ **THE RESULT IS WHAT THE CALLER MUST STORE, BECAUSE TWO OF THE THREE ARMS HAND BACK A DIFFERENT
+	// RECORD.** Only the struct/union arm can answer with the source: `__mm_incref` is void and an aggregate
+	// must stay one record. The other two co-own a representation with an IMMORTAL member, and an immortal
+	// record's only co-owner is a COPY — `__retain_existential` dispatches through the witness's
+	// `retainFunc@16`, which for a `String`/`Character` conformer is `__str_clone`, and `__managed_retain`
+	// forks on the buffer record's own `capacity@16`. Handing the SOURCE back instead puts an immortal
+	// `.rdata` record into durable storage, where the sink's first write faults on a read-only page and the
+	// clone nobody kept leaks — MEASURED as `widen("abc")` printing `A` and dying with 0xC0000005.
 	//
 	// ⚠ **AND IT IS NOT A MOVE.** The source is deliberately NOT poisoned: co-ownership is what makes
 	// `Holder.create(p)` twice legal in one body, where a move would make the second an E3102 and a single
@@ -39237,9 +39262,31 @@ export type Parser
 			return retained
 		end 'existential'
 
+		return self.coOwnConcreteRecordForSink(value, range: range)
+	end 'coOwnBorrowedForConsume'
+
+	// ⭐⭐ **THE REFERENCE A BORROWED CONCRETE RECORD OWES A DURABLE SINK, AS THE ValueId THE SINK MUST
+	// RECEIVE — ONE HOME, BECAUSE THE ANSWER IS NOT ALWAYS THE VALUE THAT WENT IN.** Both doors that hand a
+	// borrowed record to storage that outlives the statement (`coOwnBorrowedForConsume`, a consumed argument
+	// or a direct move-in; `coOwnConcreteAggregateFeed`, a type-parameter feed position) owe exactly this one
+	// act, and the answer they must pass on is the one this returns.
+	//
+	// ⚠⚠ **A BUFFER RECORD MAY BE IMAGE DATA, AND THE VOID INCREF IS UNSOUND FOR ONE.** A module-level
+	// managed constant materializes as an immortal `.rdata` record (`emitManagedConstant`), and
+	// `__managed_incref` on one does NOTHING by design — so the sink comes to hold the read-only record
+	// itself, and the first mutation reached through it writes a read-only page (a segfault on x64, a SILENT
+	// write on wasm, which has no read-only section). `__managed_retain` forks on the record's own
+	// `capacity@16`: a private clone for an immortal record, the same box with one more owner for every other.
+	// Which record a sink is handed is not a compile-time fact — it may be a merge phi — so the fork has to be
+	// the run-time one.
+	function coOwnConcreteRecordForSink(value ValueId, range SourceRange) returns ValueId
+		if self.signatures.isArrayInstanceAt(self.tagOf(value), nameId: self.valueNameId(value)) 'bufferRecord'
+			return self.emitRetainCall(value, range: range)
+		end 'bufferRecord'
+
 		self.emitIncref(value, range: range)
 		return value
-	end 'coOwnBorrowedForConsume'
+	end 'coOwnConcreteRecordForSink'
 
 	// ⭐⭐ **THE REFERENCE A REBIND FROM AN IMMUTABLE SOURCE OWES — the assignment door's half of the
 	// 2026-08-04 alias ruling** (`rebindSourceIsAnImmutableAlias` carries the rule; this is what it costs
@@ -53570,6 +53617,8 @@ export type Parser
 	// is pinned to the concrete `Array with Byte` gid so `.count()`/`.get()` dispatch through a real generic
 	// instance — a bare `named(Array)` would trip the generics machinery. Enrolled as an owned temp so a
 	// scope-exit / statement-end drop (`__managed_decref`) frees the record (the rdata buffer is left alone).
+	// A module-level CONSTANT's read reaches the same emitter with the other storage class — see
+	// `ByteStringRecordStorage`.
 	//
 	// A codepoint above 0xFF (`b"Ā"`, a `\uNNNN` naming one, an emoji) has no single-byte encoding and is
 	// REJECTED with E1004 — the self-hosted oracle's behaviour, deliberately UNLIKE the C# bootstrap, which
@@ -53577,22 +53626,35 @@ export type Parser
 	function parseByteStringLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.byteStringLiteral)
 		let bytes = try decodeByteStringLiteral(tok.value, tok: tok)
-		return try self.emitByteStringLiteralValue(bytes, range: SourceRange.ofToken(tok))
+		return try self.emitByteStringLiteralValue(bytes, storage: ByteStringRecordStorage.ownedTemporary, range: SourceRange.ofToken(tok))
 	end 'parseByteStringLiteral'
 
 	// Append a `constArrayLiteral` op carrying the DECODED bytes at a one-byte stride; return the owned `Array with Byte`
 	// ValueId it defines. `emitStringLiteral`'s twin, and split out for its reason: a second caller
 	// already holds decoded bytes — a use of a top-level managed constant (`emitManagedConstant`), whose
-	// bytes were decoded once by the declaration sweep. One emit site, so the value's TYPE (the concrete
-	// `Array with Byte` gid) and its OWNERSHIP (an owned temp the statement drops) cannot drift between
-	// the two spellings of the same literal.
-	function emitByteStringLiteralValue(bytes ByteArray, range SourceRange) returns ValueId throws ParseError
+	// bytes were decoded once by the declaration sweep. One emit site, so the value's TYPE — the concrete
+	// `Array with Byte` gid — cannot drift between the two spellings of the same literal. Their STORAGE is
+	// exactly what does differ, which is why it is a parameter and not a fact this function decides
+	// (`ByteStringRecordStorage`).
+	function emitByteStringLiteralValue(bytes ByteArray, storage ByteStringRecordStorage, range SourceRange) returns ValueId throws ParseError
 		try self.requireByteStringBlobFitsItsElement(bytes, line: range.line, column: range.column)
 
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid as TypeNameId)
+		// Filed BEFORE the emit, off the count that IS the index the append will land at —
+		// `recordAllocTagSite`'s contract, for its reason. The check above may throw, so it is asked first.
+		if storage == ByteStringRecordStorage.immortalImage 'imageData'
+			self.artifact.recordImmortalConstArraySite()
+		end 'imageData'
+
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: ByteStringElementSize, elementCount: bytes.count(), bytes: bytes), range: range)
-		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
+
+		// An immortal record is never created and never freed, so it owes no drop — the whole of what makes a
+		// constant's read cost nothing.
+		if storage == ByteStringRecordStorage.ownedTemporary 'ownedTemp'
+			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
+		end 'ownedTemp'
+
 		return result
 	end 'emitByteStringLiteralValue'
 
@@ -72451,27 +72513,33 @@ export type Parser
 	// the `literal`-op inline directly above, and the same storage model: the declaration reserves
 	// nothing, and the READ is where the value comes from.
 	//
-	// It emits the very ops the literal itself emits, so a managed constant's storage class is the one
-	// its literal already has and shv2 grows NO second immortality mechanism (the oracle's
-	// `MmImmortalRefcount` sentinel is deliberately not imported — see `ARCHITECTURE.md`):
+	// ⭐⭐ **A `let` IS IMAGE DATA — BOTH KINDS, AND THE READ IS ONE ADDRESS** (⚖ user ruling). Nothing is
+	// created at run time, there is no refcount and there is nothing mutable, so a worker holding one shares
+	// nothing. It emits the very ops the literal itself emits and shv2 grows NO second immortality mechanism
+	// (the oracle's `MmImmortalRefcount` sentinel is deliberately not imported — see `ARCHITECTURE.md`):
 	//
 	//   • a **String** literal is a wholly IMMORTAL `.rdata` record (`lowerStringLiteral`), and
 	//     `registerRdataConstant` dedupes it by bytes — so every read of `let name = "Ada"` in the whole
-	//     program shares ONE record, materialized once, never allocated and never freed. This is exactly
-	//     "materialized once, shared by every read, immortal", reached with no new mechanism at all.
-	//   • a **byte string** literal is an owned `Array with Byte` RECORD over an immortal `.rdata` BLOB
-	//     (`lowerConstArrayLiteral`). The payload is still materialized once and shared — the blob dedupes
-	//     by bytes — but the 48-byte record is heap and per-read, because an Array is a MUTABLE container
-	//     whose record its own methods rewrite (a `push` detaches the buffer by writing `buffer@0`,
-	//     `capacity@16` and `length@8`), and a `.rdata` record cannot be written. Making the RECORD
-	//     immortal too needs two things shv2 does not have — enforcement that a `let`-bound array is never
-	//     mutated, and a real COPY promotion for `var b = <borrowed array>` (which today increfs the box,
-	//     and an rdata box has no refcount word to incref). Both are named in OPEN.md; neither is invented
-	//     here, because a SECOND immortality mechanism is precisely what this design exists to avoid.
+	//     program shares ONE record, materialized once, never allocated and never freed.
+	//   • a **byte string** literal is the same shape over the Array record
+	//     (`ManagedMemoryRuntime.registerImmortalByteArrayRecord`): six slots in `.rdata` beside their blob,
+	//     `capacity@16 = ImmortalRecordCapacity`, deduped by bytes so every read of one declaration reaches
+	//     one object. The storage class is passed rather than assumed, because an INLINE `b"…"` and a STORED
+	//     global's initializer emit the identical op and must keep an owned heap record a `var` may rewrite.
+	//
+	// ⚠⚠ **THE BYTE-ARRAY ARM MARKS NOTHING ON THE VALUE, AND THE SELF-COMPILE IS WHAT SETTLED THAT.** A
+	// per-value mark cannot answer the question the acquire doors ask, because the value they are handed may
+	// be a MERGE PHI: `return A if c else B` over two constants leaves a phi with NO arm promoted
+	// (`resolveGivesOwnership` promotes only into an OWNED result), and a phi's provenance is not a
+	// compile-time fact at all — the reading `LiteralArgPromotion`'s header already records for the String
+	// half of the same question. MEASURED: with the mark, that exact shape `__mm_retain`'d a `.rdata` record
+	// and segfaulted, in the compiler's own `SignatureIndex.plainBoxRetainCallee`. The fork is made at RUN
+	// TIME instead, off the record's own `capacity@16` — see `retainCalleeForValue` and
+	// `ManagedMemoryRuntime.__managed_retain`.
 	function emitManagedConstant(bytes ByteArray, kind ManagedConstKind, range SourceRange) returns ValueId throws ParseError
 		return match kind 'k'
 			string gives self.emitStringLiteral(bytes, range: range)
-			byteArray gives try self.emitByteStringLiteralValue(bytes, range: range)
+			byteArray gives try self.emitByteStringLiteralValue(bytes, storage: ByteStringRecordStorage.immortalImage, range: range)
 		end 'k'
 	end 'emitManagedConstant'
 
@@ -80616,8 +80684,7 @@ export type Parser
 	// (`requireFedContainerElementDropIsNameable`).
 	function referenceOrMarkOpaqueFeed(argValue ValueId, anchor Token) returns ValueId
 		if self.tagOf(argValue) != ValueTypeTag.typeParameter 'concreteArgument'
-			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
-			return argValue
+			return self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
 		end 'concreteArgument'
 		if not self.signatures.typeParamFeedCanOwnAReference(self.valueTypeParamId(argValue)) 'noInstantiationOwesOne'
 			return argValue
@@ -80637,18 +80704,19 @@ export type Parser
 	// exactly the co-owned trivial class (`typeArgIsCoOwnedTrivial`: a struct box, a trivial generic instance)
 	// plus the scalars — and a SCALAR is not a pointer, owns no record and needs nothing, which is what
 	// `valueIsNonTextAggregate` answers `false` for. A byte record cannot arrive: a `String` type argument is
-	// `typeArgIsOwned` and is consumed, never borrowed.
+	// `typeArgIsOwned` and is consumed, never borrowed. An `Array` one CAN, and its reference is the returning
+	// retain — see `coOwnConcreteRecordForSink`, which is why this hands back a ValueId at all.
 	//
 	// The released end is the container's own drop, on the SAME `typeIsManaged` boundary this retain implies —
 	// a direct field through `genericInstanceFieldIsManaged`, an opaque column through the descriptor's
 	// `destroyFunc@40` (`managedOpaqueArrayElementOf`, which carries the measurement of what the two reading
 	// different boundaries cost).
-	function coOwnConcreteAggregateFeed(argValue ValueId, anchor Token)
+	function coOwnConcreteAggregateFeed(argValue ValueId, anchor Token) returns ValueId
 		if not self.valueIsNonTextAggregate(argValue) 'scalarOwnsNoRecord'
-			return
+			return argValue
 		end 'scalarOwnsNoRecord'
 
-		self.emitIncref(argValue, range: SourceRange.ofToken(anchor))
+		return self.coOwnConcreteRecordForSink(argValue, range: SourceRange.ofToken(anchor))
 	end 'coOwnConcreteAggregateFeed'
 
 	// Does the concrete instance's argument at parameter `position`'s type-parameter feed own managed heap

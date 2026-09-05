@@ -624,6 +624,97 @@ end 'main'
 2 65 66
 ```
 
+<!-- test: byte-string-literal.constant-into-a-container-detaches -->
+
+⭐ **THE NINE DETACH CASES ABOVE ALL WRITE AN INLINE `b"…"`, WHOSE RECORD IS AN ORDINARY HEAP BOX. A
+MODULE-LEVEL `let`'s RECORD IS `.rdata` ITSELF**, so a mutation reached through it writes a read-only page:
+`0xC0000005` on x64, and on wasm — which has no read-only section — a SILENT overwrite of the image plus a
+leak report. The detach cannot rescue it: a detach republishes `buffer@0` and `capacity@16` IN the record.
+
+So the constant may never come to rest in a mutable sink. Storing one into a container is a co-own
+(`Parser.coOwnConcreteRecordForSink`), and an immortal record's only co-owner is a private COPY —
+`__managed_retain` forks on `capacity@16` and clones. The element the container then hands back is that
+copy, writable like any other, and the constant is untouched.
+```maxon
+typealias ByteArrayArray = Array with ByteArray
+
+let Keyword = b"critsplit"
+
+function main() returns ExitCode
+		var a = ByteArrayArray.create()
+		a.push(Keyword)
+		var e = try a.get(0) otherwise b""
+		e.push(88)
+		let k = try Keyword.get(0) otherwise 0
+		print("{e.count()} {Keyword.count()} {k}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 9 99
+```
+
+<!-- test: byte-string-literal.constant-into-a-struct-field-detaches -->
+
+The other durable sink, and the same fork reached through the other door: a field of a record this frame
+builds. `Holder.create(Keyword)` co-owns its argument for the box that will hold it, so the field holds the
+copy and `h.b.push(…)` writes that.
+```maxon
+let Keyword = b"critsplit"
+
+type Holder
+		export var b as ByteArray
+
+		export static function create(b ByteArray) returns Self
+				return Self{b: b}
+		end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+		let h = Holder.create(Keyword)
+		h.b.push(88)
+		let k = try Keyword.get(0) otherwise 0
+		print("{h.b.count()} {Keyword.count()} {k}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 9 99
+```
+
+<!-- test: byte-string-literal.constant-into-a-corpus-container-detaches -->
+
+`List.append` is a CORPUS member, so the constant reaches storage through the type-parameter FEED sink
+rather than through a compiler-emitted container primitive. Both sinks owe the same reference and take it
+the same way, which is what this case pins: two doors, one fork.
+```maxon
+typealias ByteArrayList = List with ByteArray
+
+let Keyword = b"critsplit"
+
+function main() returns ExitCode
+		var l = ByteArrayList.create()
+		l.append(Keyword)
+		var e = try l.removeFirst() otherwise b""
+		e.push(88)
+		let k = try Keyword.get(0) otherwise 0
+		print("{e.count()} {Keyword.count()} {k}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 9 99
+```
+
 <!-- test: error.byte-string-literal.negative-resize-is-refused -->
 
 A NEGATIVE `resize` is the one mutator that could write outside its buffer entirely, and the one the detach

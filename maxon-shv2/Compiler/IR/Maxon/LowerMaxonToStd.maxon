@@ -1043,6 +1043,10 @@ type MaxonToStdLowering
 	// first tier that can NUMBER them: the interner is whole-program and this walk is the one pass that sees
 	// the whole merged module — see `Project.debugStreamNameSites`.
 	let debugStreamNameSites as DebugStreamNameSiteMap
+
+	// Which `constArrayLiteral` ops materialize an IMMORTAL `.rdata` record rather than an owned heap one
+	// (`project.immortalConstArraySites`). Read by `lowerConstArrayLiteral` and by nothing else.
+	let immortalConstArraySites as ImmortalConstArraySiteSet
 	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE (EC15)** — the container stamp
 	// of every runtime call whose first argument is a CONCRETE `Array with T`, keyed by the Std op index the
 	// call is about to occupy (`project.stdOpElementStrides`). Written by `recordStaticElementStride` and read
@@ -1163,7 +1167,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, stdOpElementStrides: project.stdOpElementStrides, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1636,6 +1640,21 @@ type MaxonToStdLowering
 	// Only the FOUR non-zero fields are stamped: `parent@32` and `element_destroy@40` come pre-zeroed from
 	// `__mm_alloc`'s zeroing contract (the same one `__managed_create` relies on to leave them unwritten).
 	function lowerConstArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, dstBlock IrBlock)
+		// ⭐⭐ **A MODULE-LEVEL MANAGED CONSTANT'S READ IS IMAGE DATA, AND IT IS `lowerStringLiteral` EXACTLY**
+		// — the RECORD lives in `.rdata` beside its blob (`capacity@16 = ImmortalRecordCapacity`), so the read is
+		// ONE address: nothing allocated, no refcount, nothing to drop. A `let` reserves no storage, so this is
+		// the whole cost of a constant however often it is read.
+		//
+		// ⚠ **ONLY THAT DECLARATION FORM, WHICH IS WHY THE OP CANNOT DECIDE IT.** An inline `b"…"` and a
+		// STORED global's initializer emit the identical op and must keep the owned heap record below — a
+		// `var` REWRITES it (`push` republishes `buffer@0`/`capacity@16`/`length@8`), and a `.rdata` record
+		// cannot be written. The parser marks the reads that may take this door; see
+		// `Project.immortalConstArraySites`.
+		if self.immortalConstArraySites.contains(self.currentMaxonOpIndex) 'imageData'
+			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: registerImmortalByteArrayRecord(self.globalData, elementSize: elementSize, elementCount: elementCount, bytes: bytes).toByteArray()))
+			return
+		end 'imageData'
+
 		let blobLabel = registerByteArrayLiteralBlob(self.globalData, bytes: bytes)
 
 		// result = __mm_alloc(ManagedRecordBytes, 0) — the owned heap 48-byte record (MM header + refcount before it).
@@ -1646,7 +1665,7 @@ type MaxonToStdLowering
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(recordSize)
 		allocArgs.push(recordDtor)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: allocArgs))
+		self.appendMmAllocTag(result, args: allocArgs, tag: mmTagIndex(MmTag.ArrayRecord), dstBlock: dstBlock)
 
 		// buffer@0 = &blob (immortal `.rdata`, materialized by a RIP-relative lea — never freed).
 		let blobAddr = self.mintStdValueId()
@@ -3184,18 +3203,24 @@ type MaxonToStdLowering
 		end 'slot'
 	end 'lowerCall'
 
-	// Emit `__mm_alloc(size, destructor[, tag])`. With `--debugstream` off this is the two-argument call it
-	// has always been, byte for byte; with it on the interned tag index is appended as a third argument.
-	// See the `allocTag` arm for why this tier is the one that can name it.
-	function appendMmAllocTag(result ValueId, args ValueIdArray, dstBlock IrBlock)
+	// ⭐ **THE ONE `__mm_alloc` CALL THIS TIER WRITES, AND THE ONE PLACE ITS FLAG-DEPENDENT ARITY IS KNOWN
+	// HERE** — `MmRuntime.emitMmAllocCall`'s Maxon-tier twin, which cannot be reused because that one mints
+	// through a `ValueMinter` and this walk mints from its own dense counter. With `--debugstream` off this
+	// is the two-argument call it has always been, byte for byte; with it on `tag` is appended as a third
+	// argument.
+	//
+	// The tag is the CALLER's because its two callers know it two different ways: a parser-emitted box is
+	// named from the side table or the result's own type (`allocTagIndexOf`), while a box this file builds
+	// itself names its roster case outright — which is the only way a `genericInstance` result gets a name at
+	// all, that tag being the one `allocTagIndexOf` deliberately declines to guess.
+	function appendMmAllocTag(result ValueId, args ValueIdArray, tag ParsedInt, dstBlock IrBlock)
 		if not self.debugStream 'untracedBuild'
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: args))
 			return
 		end 'untracedBuild'
 
-		let tagIndex = self.allocTagIndexOf(result)
 		let tagValue = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(tagValue, value: tagIndex, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(tagValue, value: tag, valueType: StdType.i64))
 		var tagged = ValueIdArray.create()
 		tagged.append(args)
 		tagged.push(tagValue)
@@ -3222,6 +3247,12 @@ type MaxonToStdLowering
 	//        through `typeNames` would print a DIFFERENT type's name. Printing none is better than printing
 	//        the wrong one.
 	function allocTagIndexOf(result ValueId) returns ParsedInt
+		// An untraced build emits no tag argument at all, so neither source is asked — the side-table probe and
+		// the type-name read below are per-`__mm_alloc` work with no reader.
+		if not self.debugStream 'untracedBuild'
+			return mmTagIndex(MmTag.Untagged)
+		end 'untracedBuild'
+
 		let recorded = try self.allocTagSites.get(self.currentMaxonOpIndex) otherwise 'noRecordedTag'
 			return self.allocTagFromResultType(result)
 		end 'noRecordedTag'
@@ -3344,7 +3375,7 @@ type MaxonToStdLowering
 
 		let nameId = try self.valueNameIds.get(result) otherwise return mmTagIndex(MmTag.Untagged)
 		let name = try self.typeNames.nameOf(nameId) otherwise return mmTagIndex(MmTag.Untagged)
-		return userTagIndex(self.globalData, name: String.from(name), debugStream: true)
+		return userTagIndex(self.globalData, name: String.from(name), debugStream: self.debugStream)
 	end 'allocTagFromResultType'
 
 	// ⭐⭐ **A DIRECT CALL WHOSE CALLEE RETURNS AN INTERFACE DEFINES TWO VALUES, SO IT IS A `tryCall`
@@ -3435,7 +3466,7 @@ type MaxonToStdLowering
 		// side table for a box that is not any declared type's, the result's own type for every box that
 		// has one. Neither is decided at this arm; see that function.
 		if callee.equals(MmAllocName) 'allocTag'
-			self.appendMmAllocTag(result, args: args, dstBlock: dstBlock)
+			self.appendMmAllocTag(result, args: args, tag: self.allocTagIndexOf(result), dstBlock: dstBlock)
 			return
 		end 'allocTag'
 		// ⭐⭐ **THE ONE RUNTIME CALLEE THAT BECOMES A CONSTANT RATHER THAN A CALL** — the

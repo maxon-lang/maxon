@@ -296,6 +296,38 @@ end 'main'
 error E3068: specs/fragments/reference-identity/primitive-error.test:5:7: 'is' requires reference types (structs), not primitive values
 ```
 
+<!-- test: byte-array-constant-identity -->
+A module-level `let` holding a byte string is image data, not a heap object: the whole program reads ONE
+`.rdata` record for it, and the record table pools by bytes. So `is` answers the same way it does for the
+interned string literals above — a constant is itself, and two constants with the same bytes are one
+object. An INLINE `b"…"` is a different storage class (a fresh heap record the statement drops), so it is
+its own object and shares with neither.
+```maxon
+let A = b"hi"
+let B = b"hi"
+let C = b"ho"
+
+function main() returns ExitCode
+	var result = 0
+	if A is A 'self'
+		result = result + 1
+	end 'self'
+	if A is B 'sameBytes'
+		result = result + 2
+	end 'sameBytes'
+	if A is not C 'otherBytes'
+		result = result + 4
+	end 'otherBytes'
+	if A is not b"hi" 'inlineIsItsOwn'
+		result = result + 8
+	end 'inlineIsItsOwn'
+	return result
+end 'main'
+```
+```exitcode
+15
+```
+
 <!-- test: static-array-of-literals -->
 An array of never-mutated string literals is a shared immortal record: its inline pointer table
 references the elements' own static records. Iterating and indexing it allocate nothing, the

@@ -139,6 +139,11 @@ export enum RdataPayloadKind
 	slabTable
 	// A Unicode character-database table (`UnicodeCategoryRuntime`).
 	unicodeTable
+	// The 48-byte Array record a module-level byte-array constant IS
+	// (`ManagedMemoryRuntime.registerImmortalByteArrayRecord`). Six machine words, and the bytes it names are a
+	// byte blob rather than text, so it renders as a bare label — the `byteArrayBlob` answer for the record
+	// over it.
+	byteArrayRecord
 end 'RdataPayloadKind'
 
 // The kind column, parallel to `names`/`values` — see `GlobalDataTable.payloadKinds`.
@@ -331,8 +336,9 @@ export type GlobalDataTable
 	// honest: it walks the payloads and panics if any recorded offset disagrees with the actual image
 	// position. See `registerRdataConstant` for why the copy is worth its guard.
 	var rdataSizeSoFar as ByteOffset
-	// The `(record, blob)` pairs the PE writer patches to bake each String literal's `buffer@0` — see
-	// StringBufferFixup. Empty for a program with no string literal, which is most of the corpus.
+	// The `(record, blob)` pairs the PE writer patches to bake an immortal record's `buffer@0` — see
+	// StringBufferFixup. Both producers of such a record register one: a String literal, and a module-level
+	// byte-array constant. Empty for a program with neither.
 	export var stringBufferFixups as StringBufferFixupArray
 	// ⭐ **WHICH BLOB EACH RECORD NAMES, keyed by the record's label** — the same `(record, blob)` pair
 	// `stringBufferFixups` above carries, indexed for LOOKUP. Written in the same call, by
@@ -591,17 +597,17 @@ export type GlobalDataTable
 		self.recordBlobLabels.upsert(recordLabel, value: blobLabel)
 	end 'recordStringBufferFixup'
 
-	// ⭐ **THE BLOB A STRING RECORD NAMES — the question "what does this `.rdata` slot MEAN?" for the
-	// one kind whose bytes are a POINTER rather than the thing pointed at.** Emitted code addresses a
-	// String literal through its RECORD (`leaRegRdata rcx, [rip + __str_rec_1]`), never through its blob,
-	// so a reader following the label alone reaches 56 bytes of struct and stops one hop short of the text.
+	// ⭐ **THE BLOB AN IMMORTAL RECORD NAMES — the question "what does this `.rdata` slot MEAN?" for the
+	// one kind whose bytes are a POINTER rather than the thing pointed at.** Emitted code addresses such a
+	// record BY the record (`leaRegRdata rcx, [rip + __str_rec_1]`), never by its blob, so a reader following
+	// the label alone reaches the struct and stops one hop short of the payload.
 	//
-	// A record with no pairing is an invariant break rather than a case: `registerStringLiteralRecord` is
-	// the only door a record comes through, and it registers the blob, the record and this fixup as ONE
-	// act — because a record registered without the fixup carries the blob rdata OFFSET where a pointer
-	// belongs, which is a defect that function already exists to prevent.
+	// A record with no pairing is an invariant break rather than a case. There are exactly two doors —
+	// `StringRuntime.registerStringLiteralRecord` and `ManagedMemoryRuntime.registerImmortalByteArrayRecord`
+	// — and each registers the blob, the record and this fixup as ONE act, because a record registered
+	// without the fixup carries the blob rdata OFFSET where a pointer belongs.
 	export function stringBlobLabelOfRecord(recordLabel String) returns String
-		return try self.recordBlobLabels.get(recordLabel) otherwise panic("GlobalDataTable.stringBlobLabelOfRecord: '{recordLabel}' is registered as a String record but names no blob — `registerStringLiteralRecord` registers the blob, the record and the fixup in one act, so a record without a pairing means a second door was cut")
+		return try self.recordBlobLabels.get(recordLabel) otherwise panic("GlobalDataTable.stringBlobLabelOfRecord: '{recordLabel}' is registered as an immortal record but names no blob — both registering doors write the blob, the record and the fixup in one act, so a record without a pairing means a third door was cut")
 	end 'stringBlobLabelOfRecord'
 
 	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `funcName`'s absolute `.text`

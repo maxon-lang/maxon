@@ -114,3 +114,73 @@ mm_free InterpolationScratch #1
 mm_decref StringRecord #2 rc=0
 mm_free StringRecord #2
 ```
+
+<!-- test: module-let-byte-string-read-allocates-no-record-per-read -->
+A module-scope `let` holding a byte string literal is ONE array for the whole program, so READING it must
+cost nothing. Three reads of the same global appear here and the golden is EMPTY: not one memory-manager
+event may attend them. The read is a single `.rdata` address, and an address is not an allocation.
+
+What makes that a claim worth pinning is a global with no storage. With `hasStorage == false` the binding
+is INLINED at each read, and every inlined read is a fresh `constArrayLiteral` — a 48-byte managed record
+allocated, four fields stamped into it, then decref'd and freed at the end of the statement. One heap
+record per dynamic read of a constant, which on a hot path is the dominant allocation in the program.
+These same three reads cost exactly this per read while the binding had no storage:
+
+    mm_alloc ArrayRecord #1 size=48
+    mm_decref ArrayRecord #1 rc=0
+    mm_free ArrayRecord #1
+    mm_alloc ArrayRecord #2 size=48
+    mm_decref ArrayRecord #2 rc=0
+    mm_free ArrayRecord #2
+    mm_alloc ArrayRecord #3 size=48
+    mm_decref ArrayRecord #3 rc=0
+    mm_free ArrayRecord #3
+
+**Any line at all below is that regression**, and three `size=48` records for three reads is the exact
+shape of it.
+
+<!-- MmTrace -->
+```maxon
+let Keyword = b"critsplit"
+
+function main() returns ExitCode
+	let a = try Keyword.get(0) otherwise 0
+	let b = try Keyword.get(1) otherwise 0
+	let c = try Keyword.get(2) otherwise 0
+	return 0 if a + b + c == 318 else 1
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+
+```
+
+<!-- test: module-var-byte-string-read-allocates-no-record-per-read -->
+The negative control for its `let` sibling above: a module-scope `var` byte string, read the same three
+times. A `var` global has storage — the array is materialized ONCE at startup and every reference loads
+that one record — so its whole trace is that single startup allocation, whatever the read count. It must
+STAY that way.
+
+**If this golden grows a line, the change reached the storage-backed global path**, which is not what a
+fix to the inlined `let` path is allowed to do.
+<!-- MmTrace -->
+```maxon
+var Buffer = b"critsplit"
+
+function main() returns ExitCode
+	let a = try Buffer.get(0) otherwise 0
+	let b = try Buffer.get(1) otherwise 0
+	let c = try Buffer.get(2) otherwise 0
+	return 0 if a + b + c == 318 else 1
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+mm_alloc ArrayRecord #1 size=48
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+```

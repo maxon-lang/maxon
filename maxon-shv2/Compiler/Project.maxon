@@ -921,6 +921,10 @@ export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
 // `Project.debugStreamNameSites`.
 export typealias DebugStreamNameSiteMap = Map with (OpIndex, ByteArray)
 
+// ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation. See
+// `Project.immortalConstArraySites`.
+export typealias ImmortalConstArraySiteSet = Set with OpIndex
+
 // ⭐⭐ **STD** op index ⇒ the compile-time `element_size@24` stamp of the container that call operates on.
 // ⚠ The three maps above are keyed by **MAXON** op indices and are folded by `mergeArtifact`; this one is
 // keyed by an index into the **Std** module's `ops` and is never merged. The name says `stdOp` for that
@@ -3629,11 +3633,11 @@ export let InlineManagedFieldName = b"managed"
 
 // ⭐⭐ **HOW MANY BYTES A COLLAPSED `managed` OCCUPIES — the SIX `__ManagedMemory` slots, DERIVED.** The
 // buffer record is `buffer`, `length`, `capacity`, `element_size`, `parent`, `element_destroy`: six machine
-// words, and every one of them is named at that offset by both fused records shv2 already builds
-// (`StringRuntime`'s `StringBufferOffset`…`StringElementDestroyOffset` and `BufferOwnership`'s
-// `ManagedRecordBufferOffset`…`ManagedRecordElementDestroyOffset`).
-// Writing `48` here instead would be a third statement of a number those twelve constants already fix, and
-// the one that no reader would check — so it is a product of the two facts it is made of.
+// words, named at those offsets by `BufferOwnership`'s `ManagedRecordBufferOffset`…
+// `ManagedRecordElementDestroyOffset`, which is the one set both fused records shv2 builds are assembled
+// from (`BufferOwnership.immortalRecordBytes`). Writing `48` here instead would be a second statement of a
+// number those constants already fix, and the one no reader would check — so it is a product of the two
+// facts it is made of.
 //
 // ⚠ **IT WAS FIVE UNTIL W157, AND THE SIXTH SLOT IS THE WHOLE OF THAT RUNG.** The collapsed `managed`
 // deliberately STOPPED at `parent@32` and let `type String`'s own `singleByteGraphemesFlag` take `@40`,
@@ -7616,6 +7620,17 @@ export type Project
 	// ⚠ **RECORDED UNCONDITIONALLY, never under `--debugstream`**, for the exact reason stated above it: a
 	// parser artifact is CACHED across builds and keyed on the file's content, not the build's flags.
 	export var debugStreamNameSites as DebugStreamNameSiteMap
+	// ⭐⭐ **WHICH `constArrayLiteral` OPS MATERIALIZE AN IMMORTAL `.rdata` RECORD INSTEAD OF ALLOCATING
+	// ONE.** A module-level managed constant reserves no storage, so every READ of one re-emits its literal
+	// (`Parser.emitManagedConstant`) — and the record those reads share is image data: no `__mm_alloc`, no
+	// refcount, nothing to drop. An INLINE `b"…"` and a STORED global's initializer emit the identical op and
+	// must keep their private heap record, which a `var` mutates in place, so the two cannot be told apart by
+	// the op and this says which is which.
+	//
+	// ⚠ **A SIDE TABLE FOR `allocTagSites`' REASON, and recorded UNCONDITIONALLY for its second one**: a
+	// parser artifact is CACHED across builds and keyed on the file's content, so a table written under a
+	// flag would serve one build's artifact to another. It costs one entry per read of a managed constant.
+	export var immortalConstArraySites as ImmortalConstArraySiteSet
 	// ⭐⭐ **THE COMPILE-TIME `element_size@24` STAMP OF A MANAGED-PRIMITIVE CALL'S CONTAINER (EC15)** —
 	// what lets `inlineManagedPrimitives` emit ONE of `emitStrideDispatch`'s arms instead of forking on a
 	// stride the compiler already knows. `Array with Integer` is 8 at compile time and the pass was emitting a
@@ -7756,6 +7771,7 @@ export type Project
 			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
+			immortalConstArraySites: ImmortalConstArraySiteSet.create(),
 			stdOpElementStrides: StdOpElementStrideMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,

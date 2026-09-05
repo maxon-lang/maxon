@@ -122,12 +122,13 @@ export let RdataBufferCapacity = -2 as NotOwnedBufferCapacity
 export let InlineBufferCapacity = -3 as NotOwnedBufferCapacity
 
 // ⭐⭐ **THE FOURTH PROVENANCE (W157): THE BUFFER IS AN IMMORTAL `.rdata` BLOB *AND SO IS THE RECORD* — so
-// nothing here may be increfed, decrefed or freed.** A String LITERAL is the only value born this way: its
-// record is emitted into `.rdata` beside its blob (`StringRuntime.registerStringRecord`) and the PE writer
-// maps that section READ-ONLY, so a refcount read-modify-write on it does not merely double-count, it
-// FAULTS. A byte-string or constant-array literal keeps `RdataBufferCapacity`: its blob is immortal but its
-// RECORD is an ordinary `__mm_alloc` box that `__managed_cow_detach` must be able to republish and
-// `__managed_decref` must free, which is exactly the distinction the two values now carry.
+// nothing here may be increfed, decrefed or freed.** Two values are born this way, and both have their
+// record emitted into `.rdata` beside their blob (`immortalRecordBytes`): a String LITERAL, and a READ of a
+// module-level byte-array constant. The PE writer maps that section READ-ONLY, so a refcount
+// read-modify-write on such a record does not merely double-count, it FAULTS. An INLINE `b"…"` and a stored
+// global's initializer keep `RdataBufferCapacity`: the blob is immortal but the RECORD is an ordinary
+// `__mm_alloc` box that `__managed_cow_detach` must be able to republish and `__managed_decref` must free,
+// which is exactly the distinction the two values carry.
 //
 // ⚠⚠ **IT EXISTS BECAUSE W157 MADE AN IMMORTAL RECORD REACHABLE BY THE REFCOUNT PATHS FOR THE FIRST TIME.**
 // Until then a literal's record was handed to no counting path at all — `__str_bytes_view` MINTED a heap
@@ -143,13 +144,13 @@ export let InlineBufferCapacity = -3 as NotOwnedBufferCapacity
 // through the residual it shares with the other two immortal-blob provenances. `__str_retain`'s
 // copy-immortal arm moved from `RdataBufferCapacity` to this value for the same reason the record test did:
 // it is the RECORD's writability that decides, not the blob's.
-export let ImmortalRecordCapacity = -4 as NotOwnedBufferCapacity
+let ImmortalRecordCapacity = -4 as NotOwnedBufferCapacity
 
 // `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
 // String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
 // allocated a buffer at all. It is an ORDINARY answer, not an error case, which is why every release
 // step is null-guarded.
-export let NoOwedAllocation = 0 as ParsedInt
+let NoOwedAllocation = 0 as ParsedInt
 
 // --- ⭐⭐ THE BUFFER RECORD, DECLARED ONCE AND EMBEDDED WHOLE BY THE STRING RECORD ---
 //
@@ -191,6 +192,55 @@ export let ManagedRecordElementDestroyOffset = 40 as ByteOffset
 // ⚠ A STRING record is this plus one slot; `StringRuntime.StringRecordBytes` DERIVES itself from this
 // number rather than restating it, so the two cannot drift.
 export let ManagedRecordBytes = 48 as BytePos
+
+// A buffer record's slot is one machine word. Named here rather than written `8` at each producer: the six
+// offsets above are eight apart because of it, and a String record's seventh slot is the same width.
+export let ManagedRecordSlotBytes = 8 as BytePos
+
+// ⭐⭐ **THE SIX SLOTS OF A RECORD THAT *IS* IMAGE DATA, ASSEMBLED AS BYTES — one home, two producers.**
+// A String literal and a module-level byte-array constant register the identical six words and differ only
+// in what follows: the String appends its `singleByteGraphemes` flag, the array appends nothing.
+//
+// ⭐ **`buffer@0` HOLDS THE BLOB'S RDATA OFFSET, NOT 0, AND THAT IS LOAD-BEARING FOR DEDUP.** The writer
+// OVERWRITES it with the blob's absolute VA, so the value stored here is irrelevant to what the program
+// reads — but not to `registerRdataConstant`, which dedupes BY BYTES: two payloads of equal length and
+// stride have byte-identical records except for this slot, so a placeholder of 0 would collapse them into
+// ONE record naming ONE blob. Seeding the blob's own offset makes records dedup exactly when their payloads
+// do.
+//
+// ⭐ **`element_destroy@40` IS `TrivialElementDestroy` AND THAT IS THE TRUTH, NOT A SHORTCUT** — for both
+// producers: a String's elements are `Byte`s, and a constant array's element is inline-stored by
+// construction (`SignatureIndex.arrayElementMayBeConstantBlob` admits no managed element), so neither has a
+// per-element destructor to name. It matters because every DERIVED record inherits the slot
+// (`ManagedMemoryRuntime.emitRecordView`, the packed copy, `__managed_clone`), so a 0 written where a real
+// destructor belonged would leak the elements of every copy.
+//
+// Each slot is appended at its named offset and the appender asserts it lands there, so the offsets the
+// runtime loads by and the offsets this writes are one set of constants that cannot drift.
+export function immortalRecordBytes(blobOffset ByteOffset, length ParsedInt, elementSize ParsedInt) returns ByteArray
+	var record = ByteArray.create()
+	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as ParsedInt)
+	appendRecordSlot(record, expectedOffset: ManagedRecordLengthOffset, value: length)
+	appendRecordSlot(record, expectedOffset: ManagedRecordCapacityOffset, value: ImmortalRecordCapacity)
+	appendRecordSlot(record, expectedOffset: ManagedRecordElementSizeOffset, value: elementSize)
+	appendRecordSlot(record, expectedOffset: ManagedRecordParentOffset, value: NoOwedAllocation)
+	appendRecordSlot(record, expectedOffset: ManagedRecordElementDestroyOffset, value: TrivialElementDestroy)
+
+	if record.count() != ManagedRecordBytes 'sizeDrift'
+		panic("immortalRecordBytes: assembled {record.count()} bytes, not {ManagedRecordBytes} — a slot's width does not match its offset spacing")
+	end 'sizeDrift'
+	return record
+end 'immortalRecordBytes'
+
+// Append one machine-word slot at `expectedOffset`, refusing to write it anywhere else. Exported because a
+// String record's seventh slot rides the same rule.
+export function appendRecordSlot(record ByteArray, expectedOffset ByteOffset, value ParsedInt)
+	if record.count() != expectedOffset 'offsetDrift'
+		panic("appendRecordSlot: a record slot is being written at offset {record.count()} but its constant says {expectedOffset} — the record layout the runtime reads and this writes have drifted")
+	end 'offsetDrift'
+
+	record.append(scalarImage(value, byteCount: ManagedRecordSlotBytes))
+end 'appendRecordSlot'
 
 // `capacity < 0` — ⭐ **THE ONE HOME OF THE NOT-MINE TEST**, asked by the places that must act on it and
 // reached by no other: `__managed_cow_detach` (such a buffer cannot be WRITTEN in place, so replace it),
@@ -343,6 +393,12 @@ end 'emitCapacityIsSentinel'
 //     precisely so the terminator slot is the record's own; the slab's zeroing contract supplies the zero.
 //   * `ImmortalRecordCapacity` — a String LITERAL, whose blob `StringRuntime.stringBlobBytes` NUL-terminates
 //     inside `.rdata`. Same immutability argument as the rdata blob, plus a guaranteed zero.
+//     ⚠ **THE GUARANTEE IS THE STRING PRODUCER'S ALONE.** A module-level byte-array constant's record carries
+//     this same sentinel and its blob is `registerByteArrayLiteralBlob`'s, which appends no NUL — so this arm
+//     would vouch a terminator that is not there. Nothing reaches it: `toCString` is stdlib-only
+//     (`Parser.requireStdlibOnlyBufferMethod`) and no `stdlib/` module calls it on an array. A `stdlib/`
+//     caller that did would need the blob NUL-terminated, not this admit-list widened — the record is
+//     read-only, so the `unvouched` route cannot serve it either.
 //
 // ⛔⛔ **THE TWO IT REFUSES, AND WHY NEITHER IS AN EDGE CASE.**
 //

@@ -65,9 +65,9 @@
 // ⚠ **THIS FILE USED TO ALIAS ALL SIX BEHIND `Arr*` SPELLINGS, AND THE ALIAS WAS THE FILE'S NAME SPEAKING.**
 // It existed so an `Array` runtime could spell a shared layout in its own vocabulary; renaming the file to the
 // buffer it is leaves `ManagedRecordBufferOffset = ManagedRecordBufferOffset`, which is a fact written twice
-// with nothing between the copies. `StringRuntime` keeps its `String*Offset` aliases, and that asymmetry is
-// deliberate: a String record is a DIFFERENT record from this one, so `StringParentPtrOffset` still says
-// something the shared name does not.
+// with nothing between the copies. `StringRuntime` keeps the `String*Offset` aliases its own emitters read
+// through, and that asymmetry is deliberate: a String record is a DIFFERENT record from this one, so a
+// String-side spelling of a shared offset still says something the shared name does not.
 //
 // ⚠ **`ManagedRecordElementDestroyOffset` STOOD HERE AND MOVED TO `BufferOwnership` AT W157.** Its header
 // said `@40` was *"the one slot that is genuinely THIS record's own — the String record's `@40` is
@@ -143,6 +143,29 @@ let ByteArrayBlobPrefix = "__barr_blob_"
 export function registerByteArrayLiteralBlob(globalData GlobalDataTable, bytes ByteArray) returns String
 	return globalData.registerRdataConstant(ByteArrayBlobPrefix, bytes: bytes, kind: RdataPayloadKind.byteArrayBlob)
 end 'registerByteArrayLiteralBlob'
+
+// The `.rdata` label prefix a module-level byte-array constant's RECORD registers under — distinct from
+// `__str_rec_` so a reader of the section can tell a 48-byte Array record from a 56-byte String one.
+let ByteArrayRecordPrefix = "__barr_rec_"
+
+// ⭐⭐ **THE WHOLE OF "MAKE THESE BYTES AN IMMORTAL `.rdata` ARRAY", AS ONE CALL** — the blob, the record
+// over it, and the fixup that points `buffer@0` at the blob's final address. `StringRuntime.
+// registerStringLiteralRecord`'s twin over the six slots the two records share, and the three steps are ONE
+// act for its reason: a record registered without the fixup carries the blob's rdata OFFSET where a pointer
+// belongs.
+//
+// ⭐ **THE RECORD DEDUPES BY BYTES, AND THAT IS WHAT MAKES EVERY READ OF ONE DECLARATION SHARE ONE OBJECT.**
+// A module-level `let` reserves no storage — each read re-materializes the literal (`Parser.
+// emitManagedConstant`) — so the reads reach one record only because their payload, length and stride are
+// identical and the table pools them. Two DISTINCT declarations whose three agree therefore share it too,
+// exactly as two identical String literals do.
+export function registerImmortalByteArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray) returns String
+	let blobLabel = registerByteArrayLiteralBlob(globalData, bytes: bytes)
+	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(blobLabel), length: elementCount, elementSize: elementSize as ParsedInt)
+	let recordLabel = globalData.registerRdataConstant(ByteArrayRecordPrefix, bytes: recordBytes, kind: RdataPayloadKind.byteArrayRecord)
+	globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
+	return recordLabel
+end 'registerImmortalByteArrayRecord'
 
 // ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** They used to be four
 // file-local `let`s picked against a file-local list, which is how this file's element-size-zero code and
@@ -371,6 +394,27 @@ export let ManagedAppendManagedName = b"__managed_append_managed"
 // `__managed_cow_detach`, called rather than restated.
 export let ManagedSoleName = b"__managed_sole"
 export let ManagedSoleManagedName = b"__managed_sole_managed"
+
+// ⭐⭐ **THE TWO CO-OWN ENTRIES A BUFFER RECORD TAKES INSTEAD OF THE PLAIN BOX'S, BECAUSE ONE SUCH RECORD
+// IS IMAGE DATA.** A module-level managed constant materializes as an immortal `.rdata` record
+// (`Parser.emitManagedConstant`), and `__mm_incref`'s refcount read-modify-write on one is a store
+// into a read-only page. Which record a co-own is handed is NOT a compile-time fact — it may be a merge phi
+// whose arms disagree — so the test is the record's own `capacity@16`, which is `__str_retain`'s answer to
+// the identical question over the String representation.
+//
+// ⚠ **TWO ENTRIES AND NOT ONE, AND THE SHAPE IS WHY.** `__managed_retain` owes its caller a value it may
+// WRITE and DROP, so on the immortal arm it CLONES — which is what keeps `var b = <a constant>` the writable
+// array it has always been. `__managed_incref` owes nothing back: its caller goes on holding the record it
+// already had, so the immortal arm does nothing at all, and that is balanced because `__managed_decref` skips
+// an immortal record too. Folding them would make the void form allocate a clone nobody holds.
+//
+// ⛔ **SO THE VOID FORM MAY NOT SERVE A SINK THE RECORD COMES TO REST IN.** Doing nothing is the right
+// answer only for a co-owner that will READ. A container slot, a struct field or a rebound `var` hands its
+// record on to a mutator, and a mutator's first write to an immortal record is a store into a read-only page
+// — a fault on x64, a silent overwrite on wasm. Every such sink takes `__managed_retain`; the one home of
+// that rule is `Parser.coOwnConcreteRecordForSink`.
+export let ManagedRetainName = b"__managed_retain"
+export let ManagedIncrefName = b"__managed_incref"
 
 // ⭐ **THE OPAQUE-`T` copy operations (P1.7 slice 3b-vi-b-β).** A `slice`/`append` on an `Array with <type
 // parameter>` field inside a GENERIC body serves both a MANAGED (`Container with String`) and a TRIVIAL
@@ -1102,6 +1146,8 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedRemove(module)
 	buildManagedSlice(module)
 	buildManagedClone(module)
+	buildManagedRetain(module)
+	buildManagedIncref(module)
 	buildManagedAppend(module)
 	buildManagedMap(module)
 	buildArrayHash(module, name: ManagedHashName)
@@ -3643,6 +3689,69 @@ function buildManagedClone(module StdModule)
 	module.functions.push(func)
 end 'buildManagedClone'
 
+// `__managed_retain(arr) -> arr'` — take a second owner of a buffer record, or a PRIVATE COPY of one that
+// cannot have a second owner. See `ManagedRetainName` for why the fork is here and not at the call site.
+// The clone is `__managed_clone`, so the copy an immortal record produces is the same COW view any other
+// `.clone()` produces: a fresh 48-byte record over the same immortal blob, detaching at its first write.
+function buildManagedRetain(module StdModule)
+	var func = IrFunction.createFromStd(ManagedRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var imageData = module.addBlock(func, label: b"imagedata")
+	var countable = module.addBlock(func, label: b"countable")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: arr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: imageData.id, elseBlockId: countable.id))
+
+	let cloned = ids.mint()
+	module.appendOp(imageData, op: StdOp.call(cloned, callee: ManagedCloneName, args: argsOf(arr)))
+	module.setTerminator(imageData, op: StdOp.ret(cloned))
+
+	module.appendOp(countable, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(arr)))
+	module.setTerminator(countable, op: StdOp.ret(arr))
+
+	module.functions.push(func)
+end 'buildManagedRetain'
+
+// `__managed_incref(arr)` — the void twin of the above, for the caller that keeps the ValueId it already
+// holds and will only READ through it (see `ManagedIncrefName` for the sink this may not serve). An immortal
+// record is left alone, which is balanced rather than skipped: `__managed_decref` returns on the same
+// `emitRecordIsImmortal` test, so the acquire and the release decline together — the pairing
+// `BufferOwnership.emitRecordIsImmortal` requires of every reader of that test.
+function buildManagedIncref(module StdModule)
+	var func = IrFunction.createFromStd(ManagedIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var countable = module.addBlock(func, label: b"countable")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: arr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: done.id, elseBlockId: countable.id))
+
+	module.appendOp(countable, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(arr)))
+	module.setTerminator(countable, op: StdOp.branch(done.id))
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedIncref'
+
+// Which of the two a co-own of a buffer record spends — `plainBoxRetainCallee`'s twin over the record format
+// that has an immortal member, read by `Parser.retainCalleeForValue`.
+export function managedRecordRetainCallee(result RetainResult) returns ByteArray
+	return match result 'shape'
+		discarded gives ManagedIncrefName
+		freshName gives ManagedRetainName
+	end 'shape'
+end 'managedRecordRetainCallee'
+
 // `__managed_append(dest, src)` — append `src`'s elements to `dest`; `dest` grows, `src` is READ-ONLY (borrowed and
 // preserved, `append-preserves-originals`). Reserve `dest.length + src.length` up front (one grow, never per-
 // element), then block-copy `src.length · element_size` bytes past `dest`'s live end. TRIVIAL elements only — a
@@ -4913,10 +5022,10 @@ function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids Va
 end 'emitMemoryThrow'
 
 // ⭐⭐ **`__managed_decref(record)` — ONE FEWER OWNER OF A BUFFER RECORD, AND ITS FIRST QUESTION IS WHETHER
-// THE RECORD IS COUNTABLE AT ALL (W157).** An `ImmortalRecordCapacity` record is a String LITERAL's: it and
-// its blob are both `.rdata`, which the PE writer maps READ-ONLY, so the refcount read-modify-write below
-// is an access violation rather than a miscount — and there is nothing to reclaim in any case, because
-// nothing was ever allocated. It leaves untouched.
+// THE RECORD IS COUNTABLE AT ALL (W157).** An `ImmortalRecordCapacity` record is a String literal's or a
+// module-level byte-array constant's: it and its blob are both `.rdata`, which the PE writer maps READ-ONLY,
+// so the refcount read-modify-write below is an access violation rather than a miscount — and there is
+// nothing to reclaim in any case, because nothing was ever allocated. It leaves untouched.
 //
 // ⚠ **THIS IS THE DUAL OF `StringRuntime.__str_bytes_view`'s IMMORTAL ARM AND THE TWO MUST MOVE
 // TOGETHER**: that one hands the record back UNCOUNTED, and this one is what makes an uncounted hand-back
@@ -5105,8 +5214,9 @@ end 'buildManagedCloneManaged'
 // proof and the buffer detach are ONE answer, and the element walk is the only thing the two differ by.
 //
 // ⚠ **THE IMMORTAL TEST COMES FIRST, EXACTLY AS `__managed_decref`'s DOES.** An `ImmortalRecordCapacity`
-// record is a String literal's: its header is image data with no count anyone maintains, and its buffer is
-// `.rdata` a detach would pointlessly copy out. Nothing can co-own it either, so it is already moveable.
+// record's header is image data with no count anyone maintains, and its buffer is `.rdata` a detach would
+// pointlessly copy out. Nothing can co-own it either — `__managed_retain` answers with a private clone — so
+// it is already moveable.
 //
 // ⚠ **A MANAGED-ELEMENT ARRAY'S OWN BUFFER IS NEVER SHARED TODAY** — `.clone()`/`.slice()` on one deep-copy
 // through the `_managed` entries rather than viewing — so the detach is a no-op there. It is called anyway
