@@ -21,30 +21,66 @@ ExitCode: 33
 module {
   func @pair(a: i64, b: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=64
-    arm64.mov x2, #1
-    arm64.add x3, x0, x2
-    arm64.mov x0, #2
+    arm64.prologue stack_size=96
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, lt
+    arm64.mov x2, #1000
+    arm64.cmp x0, x2
+    arm64.cset x4, gt
+    arm64.orr x0, x3, x4
+    arm64.cmp x0, #0
+    arm64.b.ne pair.__range_panic_0
+    arm64.b pair.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #1000
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne pair.__range_panic_1
+    arm64.b pair.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
     arm64.add x2, x1, x0
-    arm64.str x2, [x29, #-16]
-    arm64.str x3, [x29, #-24]
+    arm64.mov x3, #2
+    arm64.ldr x4, [x29, #-16]
+    arm64.add x5, x4, x3
+    arm64.str x2, [x29, #-32]
+    arm64.str x5, [x29, #-40]
     arm64.mov x0, #16
     arm64.mov x1, #0
     arm64.mov x2, #1
     arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x29, #-24]
-    arm64.str x2, [x1, #0]
-    arm64.ldr x3, [x29, #-8]
-    arm64.ldr x4, [x29, #-16]
-    arm64.str x4, [x3, #8]
-    arm64.ldr x5, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x7, [x29, #-32]
+    arm64.str x7, [x6, #0]
+    arm64.ldr x8, [x29, #-24]
+    arm64.ldr x9, [x29, #-40]
+    arm64.str x9, [x8, #8]
+    arm64.ldr x10, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
     arm64.bl mm_incref
-    arm64.ldr x6, [x29, #-8]
-    arm64.mov x0, x6
-    arm64.epilogue stack_size=64
+    arm64.ldr x11, [x29, #-24]
+    arm64.mov x0, x11
+    arm64.epilogue stack_size=96
     arm64.ret
   }
   func @apply(f: i64, __env_f: i64) -> u16 {
@@ -75,7 +111,7 @@ module {
     arm64.b.ne apply.__range_panic_0
     arm64.b apply.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.adrp_add_symdata x0, __panic_msg_11
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
@@ -107,7 +143,7 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_11
+    arm64.adrp_add_symdata x0, __panic_msg_12
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic

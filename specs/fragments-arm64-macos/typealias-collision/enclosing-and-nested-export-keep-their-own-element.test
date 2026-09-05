@@ -40,7 +40,7 @@ outer=200 inner=-50
 module {
   func @outer.Outer.stash() -> u8 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.bl Array_Cell_i64_0to255.create
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
@@ -51,20 +51,22 @@ module {
     arm64.mov x1, #0
     arm64.bl Array_Cell_i64_0to255.get
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
     arm64.str x0, [x29, #-24]
-    arm64.mov x3, #0
-    arm64.cmp x1, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
     arm64.b.ne outer.Outer.stash.otherwise_default_error_0
-    arm64.b outer.Outer.stash.otherwise_default_continue_0
+    arm64.b outer.Outer.stash.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b outer.Outer.stash.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
     arm64.b outer.Outer.stash.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -83,17 +85,17 @@ module {
   __range_ok_0:
     arm64.ldr x1, [x29, #-8]
     arm64.cmp x1, #0
-    arm64.b.eq outer.Outer.stash.__skip_guarded_28
+    arm64.b.eq outer.Outer.stash.__skip_guarded_27
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label outer.Outer.stash.__skip_guarded_28
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
+    arm64.label outer.Outer.stash.__skip_guarded_27
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @outer.inner.Inner.stash() -> i8 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.bl Array_Cell_i64_n100to100.create
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
@@ -104,20 +106,22 @@ module {
     arm64.mov x1, #0
     arm64.bl Array_Cell_i64_n100to100.get
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
     arm64.str x0, [x29, #-24]
-    arm64.mov x3, #0
-    arm64.cmp x1, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
     arm64.b.ne outer.inner.Inner.stash.otherwise_default_error_0
-    arm64.b outer.inner.Inner.stash.otherwise_default_continue_0
+    arm64.b outer.inner.Inner.stash.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b outer.inner.Inner.stash.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
     arm64.b outer.inner.Inner.stash.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #-100
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -136,12 +140,12 @@ module {
   __range_ok_0:
     arm64.ldr x1, [x29, #-8]
     arm64.cmp x1, #0
-    arm64.b.eq outer.inner.Inner.stash.__skip_guarded_28
+    arm64.b.eq outer.inner.Inner.stash.__skip_guarded_27
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label outer.inner.Inner.stash.__skip_guarded_28
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
+    arm64.label outer.inner.Inner.stash.__skip_guarded_27
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @main() -> u8 {

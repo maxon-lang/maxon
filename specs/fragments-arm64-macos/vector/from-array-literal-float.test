@@ -12,7 +12,7 @@ ExitCode: 4
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=160
+    arm64.prologue stack_size=144
     arm64.fldr d0, [__float_1.5]
     arm64.fldr d1, [__float_2.5]
     arm64.fstr d1, [x29, #-8]
@@ -59,12 +59,12 @@ module {
     arm64.mov x0, #40
     arm64.ldr x2, [x29, #-24]
     arm64.add x4, x2, x0
-    arm64.str x4, [x29, #-72]
-    arm64.ldr x0, [x29, #-72]
+    arm64.str x4, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
     arm64.mov x2, x3
     arm64.bl maxon_memcpy
     arm64.ldr x1, [x29, #-24]
-    arm64.ldr x2, [x29, #-72]
+    arm64.ldr x2, [x29, #-56]
     arm64.str x2, [x1, #0]
     arm64.mov x1, #2
     arm64.ldr x2, [x29, #-24]
@@ -73,47 +73,51 @@ module {
     arm64.ldr x2, [x29, #-24]
     arm64.str x1, [x2, #32]
     arm64.ldr x1, [x29, #-24]
-    arm64.str x0, [x29, #-80]
+    arm64.str x0, [x29, #-64]
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-24]
     arm64.mov x1, #0
     arm64.bl __Vector_2_f64.get
-    arm64.fldr d2, [__float_0]
-    arm64.fstr d2, [x29, #-32]
-    arm64.fstr d0, [x29, #-40]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
+    arm64.fstr d0, [x29, #-72]
     arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
+    arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.fldr d0, [x29, #-32]
-    arm64.fstr d0, [x29, #-40]
+    arm64.fldr d0, [__float_0]
+    arm64.fstr d0, [x29, #-32]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.fldr d0, [x29, #-72]
+    arm64.fstr d0, [x29, #-32]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.fldr d0, [x29, #-40]
-    arm64.fstr d0, [x29, #-48]
+    arm64.fldr d0, [x29, #-32]
+    arm64.fstr d0, [x29, #-40]
     arm64.ldr x0, [x29, #-24]
     arm64.mov x1, #1
     arm64.bl __Vector_2_f64.get
-    arm64.fldr d1, [__float_0]
-    arm64.fstr d1, [x29, #-56]
-    arm64.fstr d0, [x29, #-64]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
+    arm64.fstr d0, [x29, #-56]
     arm64.b.ne main.otherwise_default_error_1
-    arm64.b main.otherwise_default_continue_1
+    arm64.b main.otherwise_default_success_1
   otherwise_default_error_1:
+    arm64.fldr d0, [__float_0]
+    arm64.fstr d0, [x29, #-48]
+    arm64.b main.otherwise_default_continue_1
+  otherwise_default_success_1:
     arm64.fldr d0, [x29, #-56]
-    arm64.fstr d0, [x29, #-64]
+    arm64.fstr d0, [x29, #-48]
     arm64.b main.otherwise_default_continue_1
   otherwise_default_continue_1:
-    arm64.fldr d0, [x29, #-64]
-    arm64.fldr d1, [x29, #-48]
+    arm64.fldr d0, [x29, #-48]
+    arm64.fldr d1, [x29, #-40]
     arm64.fadd d2, d1, d0
     arm64.fcvtzs x0, d2
     arm64.mov x1, #0
@@ -133,14 +137,14 @@ module {
     arm64.bl mrt_panic
   __range_ok_0:
     arm64.ldr x1, [x29, #-24]
-    arm64.str x0, [x29, #-72]
+    arm64.str x0, [x29, #-56]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_91
+    arm64.b.eq main.__skip_guarded_89
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_91
-    arm64.ldr x0, [x29, #-72]
-    arm64.epilogue stack_size=160
+    arm64.label main.__skip_guarded_89
+    arm64.ldr x0, [x29, #-56]
+    arm64.epilogue stack_size=144
     arm64.ret
   }
 }

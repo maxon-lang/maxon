@@ -32,8 +32,41 @@ module {
     arm64.prologue stack_size=96
     arm64.str x0, [x29, #-8]
     arm64.str x1, [x29, #-16]
-    arm64.mov x1, #900
-    arm64.cmp x0, x1
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, lt
+    arm64.mov x2, #1000
+    arm64.cmp x0, x2
+    arm64.cset x4, gt
+    arm64.orr x0, x3, x4
+    arm64.cmp x0, #0
+    arm64.b.ne pairThrows.__range_panic_0
+    arm64.b pairThrows.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_20
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #1000
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne pairThrows.__range_panic_1
+    arm64.b pairThrows.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_20
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.mov x0, #900
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
     arm64.cset x2, gt
     arm64.cmp x2, #0
     arm64.b.ne pairThrows.guard_0
@@ -77,11 +110,29 @@ module {
   }
   func @run(a: i64) -> u16 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=96
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #1000
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne run.__range_panic_0
+    arm64.b run.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_21
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
     arm64.mov x1, #20
     arm64.bl pairThrows
-    arm64.str x1, [x29, #-8]
-    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, ne
@@ -89,26 +140,26 @@ module {
     arm64.b.ne run.propagate_error_0
     arm64.b run.try_continue_0
   propagate_error_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq run.__skip_guarded_10
     arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq run.__skip_guarded_21
+    arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label run.__skip_guarded_10
-    arm64.ldr x1, [x29, #-8]
+    arm64.label run.__skip_guarded_21
+    arm64.ldr x1, [x29, #-16]
     arm64.mov x0, #0
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=96
     arm64.ret
   try_continue_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-24]
     arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
     arm64.bl mm_incref
-    arm64.ldr x2, [x29, #-24]
+    arm64.ldr x2, [x29, #-32]
     arm64.ldr x3, [x2, #0]
-    arm64.ldr x4, [x29, #-24]
+    arm64.ldr x4, [x29, #-32]
     arm64.ldr x5, [x4, #8]
     arm64.add x6, x3, x5
     arm64.mov x7, #0
@@ -119,70 +170,74 @@ module {
     arm64.cset x10, gt
     arm64.orr x11, x8, x10
     arm64.cmp x11, #0
-    arm64.b.ne run.__range_panic_0
-    arm64.b run.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_16
+    arm64.b.ne run.__range_panic_1
+    arm64.b run.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_22
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x6, [x29, #-32]
-    arm64.cmp x0, #0
-    arm64.b.eq run.__skip_guarded_31
-    arm64.bl mm_decref
-    arm64.label run.__skip_guarded_31
-    arm64.ldr x1, [x29, #-24]
-    arm64.cmp x1, #0
-    arm64.b.eq run.__skip_guarded_33
+  __range_ok_1:
     arm64.ldr x0, [x29, #-24]
+    arm64.str x6, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq run.__skip_guarded_42
     arm64.bl mm_decref
-    arm64.label run.__skip_guarded_33
+    arm64.label run.__skip_guarded_42
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq run.__skip_guarded_44
     arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label run.__skip_guarded_44
+    arm64.ldr x0, [x29, #-40]
     arm64.mov x1, #0
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=96
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=112
+    arm64.prologue stack_size=80
     arm64.mov x0, #10
     arm64.bl run
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-32]
     arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
+    arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-8]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
     arm64.mov x0, #950
     arm64.bl run
-    arm64.mov x2, #42
-    arm64.str x2, [x29, #-32]
-    arm64.str x0, [x29, #-40]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-32]
     arm64.b.ne main.otherwise_default_error_1
-    arm64.b main.otherwise_default_continue_1
+    arm64.b main.otherwise_default_success_1
   otherwise_default_error_1:
+    arm64.mov x0, #42
+    arm64.str x0, [x29, #-24]
+    arm64.b main.otherwise_default_continue_1
+  otherwise_default_success_1:
     arm64.ldr x0, [x29, #-32]
-    arm64.str x0, [x29, #-40]
+    arm64.str x0, [x29, #-24]
     arm64.b main.otherwise_default_continue_1
   otherwise_default_continue_1:
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
     arm64.add x2, x1, x0
     arm64.mov x3, #0
     arm64.cmp x2, x3
@@ -195,13 +250,13 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_17
+    arm64.adrp_add_symdata x0, __panic_msg_23
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
     arm64.mov x0, x2
-    arm64.epilogue stack_size=112
+    arm64.epilogue stack_size=80
     arm64.ret
   }
 }

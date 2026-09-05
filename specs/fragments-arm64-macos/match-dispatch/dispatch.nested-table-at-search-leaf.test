@@ -35,21 +35,39 @@ module {
   entry:
     arm64.prologue stack_size=48
     arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #5
+    arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
-    arm64.cmp x2, #0
+    arm64.mov x1, #10000000
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #5
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
     arm64.b.ne classify.m_0.dispatch0
     arm64.b classify.m_0.dispatch1
   m_0.dispatch0:
     arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.sub x2, x1, x0
     arm64.jump_table x2, 4 cases, default=classify.m_0.case9
   m_0.dispatch1:
     arm64.mov x0, #7
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, lt
     arm64.cmp x2, #0
@@ -57,7 +75,7 @@ module {
     arm64.b classify.m_0.dispatch3
   m_0.dispatch2:
     arm64.mov x0, #5
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
@@ -65,7 +83,7 @@ module {
     arm64.b classify.m_0.case4
   m_0.dispatch4:
     arm64.mov x0, #6
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
@@ -75,7 +93,7 @@ module {
     arm64.b classify.m_0.case9
   m_0.dispatch3:
     arm64.mov x0, #7
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
@@ -83,7 +101,7 @@ module {
     arm64.b classify.m_0.case6
   m_0.dispatch6:
     arm64.mov x0, #8
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
@@ -91,7 +109,7 @@ module {
     arm64.b classify.m_0.case7
   m_0.dispatch7:
     arm64.mov x0, #1000000
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0

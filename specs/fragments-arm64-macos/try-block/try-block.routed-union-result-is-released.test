@@ -56,8 +56,25 @@ module {
   entry:
     arm64.prologue stack_size=80
     arm64.str x0, [x29, #-8]
-    arm64.mov x1, #500
+    arm64.mov x1, #0
     arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #1000
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne makeShape.__range_panic_0
+    arm64.b makeShape.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_33
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #500
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
     arm64.cset x2, gt
     arm64.cmp x2, #0
     arm64.b.ne makeShape.tooBig_0
@@ -66,7 +83,7 @@ module {
     arm64.mov x0, #500
     arm64.mov x0, #16
     arm64.mov x1, #0
-    arm64.mov x2, #8
+    arm64.mov x2, #10
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.mov x1, #0
@@ -85,7 +102,7 @@ module {
     arm64.ldr x0, [x29, #-8]
     arm64.mov x0, #16
     arm64.mov x1, #0
-    arm64.mov x2, #9
+    arm64.mov x2, #11
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-24]
     arm64.mov x1, #0
@@ -103,30 +120,49 @@ module {
   }
   func @classify(r: i64) -> u16 {
   entry:
-    arm64.prologue stack_size=176
+    arm64.prologue stack_size=192
+    arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
-    arm64.str x1, [x29, #-8]
-    arm64.bl makeShape
-    arm64.str x0, [x29, #-16]
-    arm64.str x1, [x29, #-24]
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #1000
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_34
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
     arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl makeShape
+    arm64.str x0, [x29, #-24]
+    arm64.str x1, [x29, #-32]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
     arm64.b.ne classify.try_block_continue_0
     arm64.b classify.try_block_throw_0
   try_block_continue_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-32]
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
     arm64.bl mm_incref
-    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x2, [x29, #-40]
     arm64.ldr x3, [x2, #0]
-    arm64.ldr x4, [x29, #-32]
-    arm64.str x4, [x29, #-40]
-    arm64.str x3, [x29, #-48]
-    arm64.ldr x5, [x29, #-48]
+    arm64.ldr x4, [x29, #-40]
+    arm64.str x4, [x29, #-48]
+    arm64.str x3, [x29, #-56]
+    arm64.ldr x5, [x29, #-56]
     arm64.mov x6, #0
     arm64.cmp x5, x6
     arm64.cset x7, ne
@@ -135,7 +171,7 @@ module {
     arm64.b classify.m_0.case0
   m_0.dispatch0:
     arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-48]
+    arm64.ldr x1, [x29, #-56]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
@@ -144,47 +180,47 @@ module {
   m_0.dispatch1:
     arm64.b classify.m_0.merge
   m_0.case0:
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-48]
     arm64.ldr x1, [x0, #8]
-    arm64.str x1, [x29, #-8]
+    arm64.str x1, [x29, #-16]
     arm64.b classify.m_0.merge
   m_0.case1:
     arm64.mov x0, #0
-    arm64.str x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
     arm64.b classify.m_0.merge
   m_0.merge:
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-40]
     arm64.cmp x0, #0
-    arm64.b.eq classify.__skip_guarded_33
+    arm64.b.eq classify.__skip_guarded_44
     arm64.bl mm_decref
-    arm64.label classify.__skip_guarded_33
-    arm64.ldr x1, [x29, #-16]
+    arm64.label classify.__skip_guarded_44
+    arm64.ldr x1, [x29, #-24]
     arm64.cmp x1, #0
-    arm64.b.eq classify.__skip_guarded_35
-    arm64.ldr x0, [x29, #-16]
+    arm64.b.eq classify.__skip_guarded_46
+    arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label classify.__skip_guarded_35
+    arm64.label classify.__skip_guarded_46
     arm64.b classify.try_block_after_0
   try_block_throw_0:
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
-    arm64.b.eq classify.__skip_guarded_38
+    arm64.b.eq classify.__skip_guarded_49
     arm64.bl mm_decref
-    arm64.label classify.__skip_guarded_38
+    arm64.label classify.__skip_guarded_49
     arm64.b classify.try_block_err_0
   try_block_err_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-56]
-    arm64.ldr x1, [x29, #-56]
-    arm64.ldr x2, [x1, #0]
+    arm64.ldr x0, [x29, #-32]
     arm64.str x0, [x29, #-64]
-    arm64.ldr x3, [x29, #-64]
-    arm64.str x2, [x29, #-80]
-    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x3, [x29, #-72]
+    arm64.str x2, [x29, #-88]
+    arm64.ldr x0, [x29, #-72]
     arm64.bl mm_incref
-    arm64.ldr x4, [x29, #-80]
-    arm64.str x4, [x29, #-72]
-    arm64.ldr x5, [x29, #-72]
+    arm64.ldr x4, [x29, #-88]
+    arm64.str x4, [x29, #-80]
+    arm64.ldr x5, [x29, #-80]
     arm64.mov x6, #0
     arm64.cmp x5, x6
     arm64.cset x7, ne
@@ -194,27 +230,27 @@ module {
   k_0.dispatch0:
     arm64.b classify.k_0.merge
   k_0.case0:
-    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-72]
     arm64.ldr x1, [x0, #8]
     arm64.mov x2, #499
     arm64.sub x3, x1, x2
-    arm64.str x3, [x29, #-8]
+    arm64.str x3, [x29, #-16]
     arm64.b classify.k_0.merge
   k_0.merge:
-    arm64.ldr x0, [x29, #-56]
-    arm64.cmp x0, #0
-    arm64.b.eq classify.__skip_guarded_60
-    arm64.bl mm_decref
-    arm64.label classify.__skip_guarded_60
-    arm64.ldr x1, [x29, #-64]
-    arm64.cmp x1, #0
-    arm64.b.eq classify.__skip_guarded_62
     arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq classify.__skip_guarded_71
     arm64.bl mm_decref
-    arm64.label classify.__skip_guarded_62
+    arm64.label classify.__skip_guarded_71
+    arm64.ldr x1, [x29, #-72]
+    arm64.cmp x1, #0
+    arm64.b.eq classify.__skip_guarded_73
+    arm64.ldr x0, [x29, #-72]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_73
     arm64.b classify.try_block_after_0
   try_block_after_0:
-    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -223,15 +259,15 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne classify.__range_panic_0
-    arm64.b classify.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_32
+    arm64.b.ne classify.__range_panic_1
+    arm64.b classify.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_35
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.epilogue stack_size=176
+  __range_ok_1:
+    arm64.epilogue stack_size=192
     arm64.ret
   }
   func @main() -> u8 {
@@ -260,7 +296,7 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_33
+    arm64.adrp_add_symdata x0, __panic_msg_36
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic

@@ -41,7 +41,7 @@ module {
     arm64.str x2, [x29, #-32]
     arm64.mov x1, x4
     arm64.mov x0, #48
-    arm64.mov x2, #11
+    arm64.mov x2, #10
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.mov x0, #-2
@@ -124,31 +124,33 @@ module {
   }
   func @compute() -> i64 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.mov x0, #5
     arm64.bl mayFail
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-24]
     arm64.b.ne compute.otherwise_default_error_0
-    arm64.b compute.otherwise_default_continue_0
+    arm64.b compute.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.b compute.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-8]
     arm64.b compute.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
     arm64.mov x0, #24
     arm64.bl mm_raw_alloc
     arm64.mov x1, #1
     arm64.str x1, [x0, #0]
     arm64.mov x2, #0
     arm64.str x2, [x0, #8]
-    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x3, [x29, #-8]
     arm64.str x3, [x0, #16]
     arm64.adrp_add_func x4, mayFail
     arm64.mov x2, x0
@@ -156,22 +158,24 @@ module {
     arm64.bl __gt_spawn
     arm64.bl __gt_try_await
     arm64.mov x5, #0
-    arm64.str x5, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.mov x6, #0
-    arm64.cmp x1, x6
-    arm64.cset x7, ne
-    arm64.cmp x7, #0
+    arm64.cmp x1, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.str x0, [x29, #-24]
     arm64.b.ne compute.otherwise_default_error_1
-    arm64.b compute.otherwise_default_continue_1
+    arm64.b compute.otherwise_default_success_1
   otherwise_default_error_1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b compute.otherwise_default_continue_1
+  otherwise_default_success_1:
     arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
+    arm64.str x0, [x29, #-16]
     arm64.b compute.otherwise_default_continue_1
   otherwise_default_continue_1:
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #0
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @main() -> u8 {
@@ -179,20 +183,22 @@ module {
     arm64.prologue stack_size=48
     arm64.bl compute
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-8]
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
     arm64.str x0, [x29, #-16]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
     arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
+    arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-8]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt

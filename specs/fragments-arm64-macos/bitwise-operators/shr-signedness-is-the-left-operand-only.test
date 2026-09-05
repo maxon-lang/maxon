@@ -51,15 +51,16 @@ module {
   }
   func @bitsCount(n: i64) -> u8 {
   entry:
-    arm64.prologue stack_size=16
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
     arm64.mov x1, #63
     arm64.cmp x0, x1
     arm64.cset x3, gt
-    arm64.orr x1, x2, x3
-    arm64.cmp x1, #0
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
     arm64.b.ne bitsCount.__range_panic_0
     arm64.b bitsCount.__range_ok_0
   __range_panic_0:
@@ -68,7 +69,24 @@ module {
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=16
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #63
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne bitsCount.__range_panic_1
+    arm64.b bitsCount.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @wideCount(n: i64) -> u64 {
@@ -77,7 +95,27 @@ module {
   }
   func @shiftRight(value: i64, distance: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=16
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #63
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne shiftRight.__range_panic_0
+    arm64.b shiftRight.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.mov x2, #0
     arm64.cmp x1, x2
     arm64.cset x3, lt
@@ -85,7 +123,7 @@ module {
     arm64.b.ne shiftRight.__shift_count_panic_0
     arm64.b shiftRight.__shift_count_ok_0
   __shift_count_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.adrp_add_symdata x0, __panic_msg_3
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
@@ -98,7 +136,7 @@ module {
     arm64.csel x4, x1, x2, ne
     arm64.asrv x1, x0, x4
     arm64.mov x0, x1
-    arm64.epilogue stack_size=16
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @main() -> u8 {
@@ -117,7 +155,7 @@ module {
     arm64.b.ne main.__shift_count_panic_0
     arm64.b main.__shift_count_ok_0
   __shift_count_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.adrp_add_symdata x0, __panic_msg_4
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
@@ -232,7 +270,7 @@ module {
     arm64.b.ne main.__shift_count_panic_1
     arm64.b main.__shift_count_ok_1
   __shift_count_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.adrp_add_symdata x0, __panic_msg_5
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
@@ -346,7 +384,7 @@ module {
     arm64.b.ne main.__shift_count_panic_2
     arm64.b main.__shift_count_ok_2
   __shift_count_panic_2:
-    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.adrp_add_symdata x0, __panic_msg_6
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic

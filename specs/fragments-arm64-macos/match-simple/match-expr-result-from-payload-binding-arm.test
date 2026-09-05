@@ -30,26 +30,28 @@ ExitCode: 65
 module {
   func @firstByte(b: i64) -> u8 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.bl ByteArray.get
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
     arm64.str x0, [x29, #-24]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
     arm64.b.ne firstByte.otherwise_default_error_0
-    arm64.b firstByte.otherwise_default_continue_0
+    arm64.b firstByte.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b firstByte.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
     arm64.b firstByte.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -61,12 +63,12 @@ module {
     arm64.b.ne firstByte.__range_panic_0
     arm64.b firstByte.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_15
+    arm64.adrp_add_symdata x0, __panic_msg_17
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @nameOf(op: i64) -> u8 {
@@ -133,7 +135,7 @@ module {
     arm64.label nameOf.__skip_guarded_33
     arm64.mov x3, #0
     arm64.str x3, [x29, #-24]
-    arm64.adrp_add_symdata x4, __panic_msg_16
+    arm64.adrp_add_symdata x4, __panic_msg_18
     arm64.mov x5, x4
     arm64.mov x0, x5
     arm64.bl mrt_panic
@@ -154,7 +156,7 @@ module {
     arm64.b.ne nameOf.__range_panic_0
     arm64.b nameOf.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_17
+    arm64.adrp_add_symdata x0, __panic_msg_19
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
@@ -212,7 +214,7 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_18
+    arm64.adrp_add_symdata x0, __panic_msg_20
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic

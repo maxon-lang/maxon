@@ -19,17 +19,36 @@ ExitCode: 7
 module {
   func @modLive(a: i64, b: i64, x: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.mov x3, #1
-    arm64.add x4, x2, x3
-    arm64.cmp x1, #0
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.str x2, [x29, #-24]
+    arm64.mov x0, #1
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne modLive.__range_panic_0
+    arm64.b modLive.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.add x2, x1, x0
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-16]
+    arm64.cmp x4, #0
     arm64.b.ne modLive.__div_ok_0
     arm64.bl mrt_div_by_zero
     arm64.label modLive.__div_ok_0
-    arm64.sdiv x2, x0, x1
-    arm64.msub x3, x2, x1, x0
-    arm64.add x0, x3, x4
-    arm64.epilogue stack_size=16
+    arm64.sdiv x5, x3, x4
+    arm64.msub x6, x5, x4, x3
+    arm64.add x7, x6, x2
+    arm64.mov x0, x7
+    arm64.epilogue stack_size=80
     arm64.ret
   }
   func @main() -> u8 {
@@ -50,7 +69,7 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_7
+    arm64.adrp_add_symdata x0, __panic_msg_9
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic

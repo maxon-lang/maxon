@@ -22,41 +22,51 @@ module {
   func @classify(n: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
-    maxon.assign %0 {var = __match_m_0} {kind = i64} {decl = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    %2 = maxon.binop %0, %1 {op = lt}
+    %3 = maxon.literal {value = 100 : i64}
+    %4 = maxon.binop %0, %3 {op = gt}
+    %5 = maxon.binop %2, %4 {op = or}
+    maxon.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at dispatch.shape-linear-under-threshold.test:5: Range check failed: value outside typealias 'Probe'"
+  __range_ok_0:
+    %6 = maxon.var_ref {var = n} {type = i64}
+    maxon.assign %6 {var = __match_m_0} {kind = i64} {decl = 1 : i1}
     maxon.switch __match_m_0 [7:m_0.case0, 8:m_0.case1, 9:m_0.case2] default=m_0.case3
   m_0.case0:
-    %4 = maxon.literal {value = 1 : i64}
+    %10 = maxon.literal {value = 1 : i64}
     maxon.scope_end [n, __match_m_0]
-    maxon.return %4
+    maxon.return %10
   m_0.case1:
-    %8 = maxon.literal {value = 2 : i64}
+    %14 = maxon.literal {value = 2 : i64}
     maxon.scope_end [n, __match_m_0]
-    maxon.return %8
+    maxon.return %14
   m_0.case2:
-    %12 = maxon.literal {value = 3 : i64}
+    %18 = maxon.literal {value = 3 : i64}
     maxon.scope_end [n, __match_m_0]
-    maxon.return %12
+    maxon.return %18
   m_0.case3:
-    %13 = maxon.literal {value = 0 : i64}
+    %19 = maxon.literal {value = 0 : i64}
     maxon.scope_end [n, __match_m_0]
-    maxon.return %13
+    maxon.return %19
   m_0.merge:
   }
   func @main() -> i64 {
   entry:
-    %14 = maxon.literal {value = 8 : i64}
-    %15 = maxon.call @classify %14
-    %16 = maxon.literal {value = 0 : i64}
-    %17 = maxon.binop %15, %16 {op = lt}
-    %18 = maxon.literal {value = 255 : i64}
-    %19 = maxon.binop %15, %18 {op = gt}
-    %20 = maxon.binop %17, %19 {op = or}
-    maxon.cond_br %20 [then: __range_panic_0, else: __range_ok_0]
+    %20 = maxon.literal {value = 8 : i64}
+    %21 = maxon.call @classify %20
+    %22 = maxon.literal {value = 0 : i64}
+    %23 = maxon.binop %21, %22 {op = lt}
+    %24 = maxon.literal {value = 255 : i64}
+    %25 = maxon.binop %21, %24 {op = gt}
+    %26 = maxon.binop %23, %25 {op = or}
+    maxon.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at dispatch.shape-linear-under-threshold.test:15: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end []
-    maxon.return %15
+    maxon.return %21
   }
 }
 === standard
@@ -64,51 +74,64 @@ module {
   func @classify(n: i64) -> u8 {
   entry:
     %0 = func.param n : StdI64
-    memref.store %0, __match_m_0
-    %1 = memref.load __match_m_0 : i64
-    %2 = arith.constant {value = 7 : i64}
-    %3 = arith.cmpi ne %1, %2
-    cf.cond_br %3 [then: m_0.dispatch0, else: m_0.case0]
+    memref.store %0, n
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.cmpi lt %0, %1
+    %3 = arith.constant {value = 100 : i64}
+    %4 = arith.cmpi gt %0, %3
+    %5 = arith.ori1 %2, %4
+    cf.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %6 = memref.lea_symdata __panic_msg_0
+    %7 = std.ptr_to_i64 %6
+    std.call_runtime @mrt_panic %7
+  __range_ok_0:
+    %8 = memref.load n : i64
+    memref.store %8, __match_m_0
+    %9 = memref.load __match_m_0 : i64
+    %10 = arith.constant {value = 7 : i64}
+    %11 = arith.cmpi ne %9, %10
+    cf.cond_br %11 [then: m_0.dispatch0, else: m_0.case0]
   m_0.dispatch0:
-    %4 = arith.constant {value = 8 : i64}
-    %5 = arith.cmpi ne %1, %4
-    cf.cond_br %5 [then: m_0.dispatch1, else: m_0.case1]
+    %12 = arith.constant {value = 8 : i64}
+    %13 = arith.cmpi ne %9, %12
+    cf.cond_br %13 [then: m_0.dispatch1, else: m_0.case1]
   m_0.dispatch1:
-    %6 = arith.constant {value = 9 : i64}
-    %7 = arith.cmpi ne %1, %6
-    cf.cond_br %7 [then: m_0.dispatch2, else: m_0.case2]
+    %14 = arith.constant {value = 9 : i64}
+    %15 = arith.cmpi ne %9, %14
+    cf.cond_br %15 [then: m_0.dispatch2, else: m_0.case2]
   m_0.dispatch2:
     cf.br m_0.case3
   m_0.case0:
-    %8 = arith.constant {value = 1 : i64}
-    func.return %8
+    %16 = arith.constant {value = 1 : i64}
+    func.return %16
   m_0.case1:
-    %9 = arith.constant {value = 2 : i64}
-    func.return %9
+    %17 = arith.constant {value = 2 : i64}
+    func.return %17
   m_0.case2:
-    %10 = arith.constant {value = 3 : i64}
-    func.return %10
+    %18 = arith.constant {value = 3 : i64}
+    func.return %18
   m_0.case3:
-    %11 = arith.constant {value = 0 : i64}
-    func.return %11
+    %19 = arith.constant {value = 0 : i64}
+    func.return %19
   m_0.merge:
   }
   func @main() -> u8 {
   entry:
-    %12 = arith.constant {value = 8 : i64}
-    %13 = func.call @classify %12
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 255 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+    %20 = arith.constant {value = 8 : i64}
+    %21 = func.call @classify %20
+    %22 = arith.constant {value = 0 : i64}
+    %23 = arith.cmpi lt %21, %22
+    %24 = arith.constant {value = 255 : i64}
+    %25 = arith.cmpi gt %21, %24
+    %26 = arith.ori1 %23, %25
+    cf.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %19 = memref.lea_symdata __panic_msg_0
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @mrt_panic %20
+    %27 = memref.lea_symdata __panic_msg_1
+    %28 = std.ptr_to_i64 %27
+    std.call_runtime @mrt_panic %28
   __range_ok_0:
-    func.return %13
+    func.return %21
   }
 }
 === arm64
@@ -117,16 +140,34 @@ module {
   entry:
     arm64.prologue stack_size=48
     arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #7
+    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.cset x2, lt
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #7
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
     arm64.b.ne classify.m_0.dispatch0
     arm64.b classify.m_0.case0
   m_0.dispatch0:
     arm64.mov x0, #8
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
@@ -134,7 +175,7 @@ module {
     arm64.b classify.m_0.case1
   m_0.dispatch1:
     arm64.mov x0, #9
-    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
@@ -176,7 +217,7 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.adrp_add_symdata x0, __panic_msg_1
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic

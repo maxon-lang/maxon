@@ -21,7 +21,25 @@ module {
     arm64.prologue stack_size=80
     arm64.str x0, [x29, #-8]
     arm64.str x1, [x29, #-16]
-    arm64.cmp x2, #0
+    arm64.str x2, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne pick.__range_panic_0
+    arm64.b pick.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
     arm64.b.ne pick.isTrue_0
     arm64.b pick.isTrue_0.after
   isTrue_0:
@@ -34,20 +52,20 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne pick.__range_panic_0
-    arm64.b pick.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.b.ne pick.__range_panic_1
+    arm64.b pick.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_9
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     arm64.epilogue stack_size=80
     arm64.ret
   isTrue_0.after:
     arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-32]
     arm64.ldr x2, [x1, #8]
     arm64.mov x3, #0
     arm64.cmp x2, x3
@@ -57,14 +75,14 @@ module {
     arm64.cset x6, gt
     arm64.orr x7, x4, x6
     arm64.cmp x7, #0
-    arm64.b.ne pick.__range_panic_1
-    arm64.b pick.__range_ok_1
-  __range_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.b.ne pick.__range_panic_2
+    arm64.b pick.__range_ok_2
+  __range_panic_2:
+    arm64.adrp_add_symdata x0, __panic_msg_10
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_1:
+  __range_ok_2:
     arm64.mov x0, #0
     arm64.cmp x2, x0
     arm64.cset x1, lt
@@ -73,14 +91,14 @@ module {
     arm64.cset x3, gt
     arm64.orr x0, x1, x3
     arm64.cmp x0, #0
-    arm64.b.ne pick.__range_panic_2
-    arm64.b pick.__range_ok_2
-  __range_panic_2:
-    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.b.ne pick.__range_panic_3
+    arm64.b pick.__range_ok_3
+  __range_panic_3:
+    arm64.adrp_add_symdata x0, __panic_msg_10
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_2:
+  __range_ok_3:
     arm64.mov x0, x2
     arm64.epilogue stack_size=80
     arm64.ret
@@ -88,7 +106,7 @@ module {
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=48
-    arm64.adrp_add_global x0, __static_lit_0
+    arm64.adrp_add_global x0, __static_lit_1
     arm64.mov x1, x0
     arm64.mov x2, #32
     arm64.add x3, x1, x2
@@ -112,7 +130,7 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.adrp_add_symdata x0, __panic_msg_11
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
@@ -126,33 +144,6 @@ module {
     arm64.label main.__skip_guarded_21
     arm64.ldr x0, [x29, #-16]
     arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__module_init() {
-  entry:
-    arm64.adrp_add_global x0, __static_lit_0
-    arm64.mov x1, x0
-    arm64.mov x2, #80
-    arm64.str x2, [x1, #0]
-    arm64.mov x3, #1
-    arm64.str x3, [x1, #8]
-    arm64.mov x4, #0
-    arm64.str x4, [x1, #16]
-    arm64.mov x5, #4611686018427387904
-    arm64.str x5, [x1, #24]
-    arm64.adrp_add_rdata x6, __str_0
-    arm64.mov x7, x6
-    arm64.str x7, [x1, #32]
-    arm64.mov x8, #5
-    arm64.str x8, [x1, #40]
-    arm64.mov x9, #-2
-    arm64.str x9, [x1, #48]
-    arm64.mov x10, #1
-    arm64.str x10, [x1, #56]
-    arm64.mov x11, #0
-    arm64.str x11, [x1, #64]
-    arm64.mov x12, #1
-    arm64.str x12, [x1, #72]
     arm64.ret
   }
 }

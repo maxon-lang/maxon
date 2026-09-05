@@ -43,7 +43,7 @@ module {
     arm64.str x2, [x29, #-64]
     arm64.mov x1, x4
     arm64.mov x0, #48
-    arm64.mov x2, #11
+    arm64.mov x2, #10
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-24]
     arm64.mov x1, #-2
@@ -165,7 +165,7 @@ module {
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=192
+    arm64.prologue stack_size=160
     arm64.mov x0, #50
     arm64.mov x1, #2
     arm64.mov x0, #32
@@ -185,7 +185,7 @@ module {
     arm64.bl __gt_spawn
     arm64.mov x7, #10
     arm64.mov x8, #0
-    arm64.str x0, [x29, #-88]
+    arm64.str x0, [x29, #-64]
     arm64.mov x0, #32
     arm64.bl mm_raw_alloc
     arm64.mov x9, #2
@@ -220,63 +220,69 @@ module {
     arm64.mov x2, x16
     arm64.bl __gt_spawn
     arm64.str x0, [x29, #-16]
-    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x0, [x29, #-64]
     arm64.bl __gt_try_await
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-72]
     arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
+    arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-72]
+    arm64.str x0, [x29, #-24]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-32]
-    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-32]
     arm64.ldr x1, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
     arm64.bl __gt_try_await
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-48]
-    arm64.str x0, [x29, #-56]
-    arm64.mov x3, #0
-    arm64.cmp x1, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-64]
     arm64.b.ne main.otherwise_default_error_1
-    arm64.b main.otherwise_default_continue_1
+    arm64.b main.otherwise_default_success_1
   otherwise_default_error_1:
-    arm64.ldr x0, [x29, #-48]
-    arm64.str x0, [x29, #-56]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-40]
+    arm64.b main.otherwise_default_continue_1
+  otherwise_default_success_1:
+    arm64.ldr x0, [x29, #-64]
+    arm64.str x0, [x29, #-40]
     arm64.b main.otherwise_default_continue_1
   otherwise_default_continue_1:
-    arm64.ldr x0, [x29, #-56]
-    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x0, [x29, #-48]
     arm64.ldr x1, [x29, #-16]
     arm64.ldr x0, [x29, #-16]
     arm64.bl __gt_try_await
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-72]
-    arm64.str x0, [x29, #-80]
-    arm64.mov x3, #0
-    arm64.cmp x1, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-64]
     arm64.b.ne main.otherwise_default_error_2
-    arm64.b main.otherwise_default_continue_2
+    arm64.b main.otherwise_default_success_2
   otherwise_default_error_2:
-    arm64.ldr x0, [x29, #-72]
-    arm64.str x0, [x29, #-80]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-56]
+    arm64.b main.otherwise_default_continue_2
+  otherwise_default_success_2:
+    arm64.ldr x0, [x29, #-64]
+    arm64.str x0, [x29, #-56]
     arm64.b main.otherwise_default_continue_2
   otherwise_default_continue_2:
-    arm64.ldr x0, [x29, #-80]
-    arm64.ldr x1, [x29, #-40]
-    arm64.ldr x2, [x29, #-64]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-48]
     arm64.add x3, x1, x2
     arm64.add x4, x3, x0
     arm64.mov x5, #0
@@ -296,7 +302,7 @@ module {
     arm64.bl mrt_panic
   __range_ok_0:
     arm64.mov x0, x4
-    arm64.epilogue stack_size=192
+    arm64.epilogue stack_size=160
     arm64.ret
   }
 }

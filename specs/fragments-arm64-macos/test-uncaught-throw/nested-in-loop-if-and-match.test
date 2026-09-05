@@ -46,8 +46,27 @@ Stderr: ```
 module {
   func @advance(n: i64) {
   entry:
-    arm64.mov x1, #1
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
     arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #9
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne advance.__range_panic_0
+    arm64.b advance.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
     arm64.cset x2, gt
     arm64.cmp x2, #0
     arm64.b.ne advance.over_0
@@ -58,9 +77,11 @@ module {
     arm64.add x2, x0, x1
     arm64.mov x1, x2
     arm64.mov x0, #0
+    arm64.epilogue stack_size=48
     arm64.ret
   over_0.after:
     arm64.mov x1, #0
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @__test_walks_the_steps() {
@@ -342,7 +363,7 @@ module {
     arm64.label __test_walks_the_steps.__skip_guarded_194
     arm64.mov x3, #0
     arm64.str x3, [x29, #-32]
-    arm64.adrp_add_symdata x4, __panic_msg_0
+    arm64.adrp_add_symdata x4, __panic_msg_1
     arm64.mov x5, x4
     arm64.mov x0, x5
     arm64.bl mrt_panic

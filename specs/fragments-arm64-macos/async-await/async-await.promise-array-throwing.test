@@ -43,7 +43,7 @@ module {
     arm64.str x2, [x29, #-32]
     arm64.mov x1, x4
     arm64.mov x0, #48
-    arm64.mov x2, #7
+    arm64.mov x2, #6
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.mov x0, #-2
@@ -123,7 +123,7 @@ module {
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=240
+    arm64.prologue stack_size=224
     arm64.bl IntPromiseArray.create
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #10
@@ -140,14 +140,14 @@ module {
     arm64.mov x0, x2
     arm64.mov x2, x16
     arm64.bl __gt_spawn
-    arm64.str x0, [x29, #-104]
+    arm64.str x0, [x29, #-96]
     arm64.mov x0, #8
     arm64.mov x1, #0
-    arm64.mov x2, #17
+    arm64.mov x2, #16
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.ldr x1, [x29, #-16]
-    arm64.ldr x2, [x29, #-104]
+    arm64.ldr x2, [x29, #-96]
     arm64.str x2, [x1, #0]
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-8]
@@ -167,14 +167,14 @@ module {
     arm64.mov x2, x0
     arm64.mov x0, x6
     arm64.bl __gt_spawn
-    arm64.str x0, [x29, #-112]
+    arm64.str x0, [x29, #-104]
     arm64.mov x0, #8
     arm64.mov x1, #0
-    arm64.mov x2, #17
+    arm64.mov x2, #16
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-24]
     arm64.ldr x7, [x29, #-24]
-    arm64.ldr x8, [x29, #-112]
+    arm64.ldr x8, [x29, #-104]
     arm64.str x8, [x7, #0]
     arm64.bl mm_incref
     arm64.ldr x9, [x29, #-8]
@@ -196,14 +196,14 @@ module {
     arm64.mov x0, x1
     arm64.mov x1, x12
     arm64.bl __gt_spawn
-    arm64.str x0, [x29, #-120]
+    arm64.str x0, [x29, #-112]
     arm64.mov x0, #8
     arm64.mov x1, #0
-    arm64.mov x2, #17
+    arm64.mov x2, #16
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-32]
     arm64.ldr x1, [x29, #-32]
-    arm64.ldr x2, [x29, #-120]
+    arm64.ldr x2, [x29, #-112]
     arm64.str x2, [x1, #0]
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-8]
@@ -240,15 +240,15 @@ module {
     arm64.mov x10, #0
     arm64.str x10, [x29, #-64]
     arm64.cmp x9, #0
-    arm64.str x7, [x29, #-104]
+    arm64.str x7, [x29, #-96]
     arm64.b.ne main.__slot_empty_0
     arm64.b main.__slot_nonnull_0
   __slot_empty_0:
     arm64.b main.__slot_merge_0
   __slot_nonnull_0:
-    arm64.ldr x0, [x29, #-104]
+    arm64.ldr x0, [x29, #-96]
     arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-104]
+    arm64.ldr x0, [x29, #-96]
     arm64.str x0, [x29, #-64]
     arm64.b main.__slot_merge_0
   __slot_merge_0:
@@ -263,57 +263,59 @@ module {
     arm64.mov x0, x3
     arm64.bl __gt_try_await
     arm64.mov x4, #0
-    arm64.str x4, [x29, #-88]
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
     arm64.str x0, [x29, #-96]
-    arm64.mov x5, #0
-    arm64.cmp x1, x5
-    arm64.cset x6, ne
-    arm64.cmp x6, #0
     arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
+    arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-88]
-    arm64.str x0, [x29, #-96]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-88]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-96]
+    arm64.str x0, [x29, #-88]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-96]
+    arm64.ldr x0, [x29, #-88]
     arm64.ldr x1, [x29, #-40]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-40]
     arm64.ldr x3, [x29, #-80]
     arm64.cmp x3, #0
-    arm64.b.eq main.__skip_guarded_115
+    arm64.b.eq main.__skip_guarded_114
     arm64.ldr x0, [x29, #-80]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_115
+    arm64.label main.__skip_guarded_114
     arm64.ldr x4, [x29, #-72]
     arm64.cmp x4, #0
-    arm64.b.eq main.__skip_guarded_117
+    arm64.b.eq main.__skip_guarded_116
     arm64.ldr x0, [x29, #-72]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_117
+    arm64.label main.__skip_guarded_116
     arm64.ldr x5, [x29, #-16]
     arm64.cmp x5, #0
-    arm64.b.eq main.__skip_guarded_119
+    arm64.b.eq main.__skip_guarded_118
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_119
+    arm64.label main.__skip_guarded_118
     arm64.mov x6, #0
     arm64.str x6, [x29, #-16]
     arm64.ldr x7, [x29, #-24]
     arm64.cmp x7, #0
-    arm64.b.eq main.__skip_guarded_123
+    arm64.b.eq main.__skip_guarded_122
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_123
+    arm64.label main.__skip_guarded_122
     arm64.mov x8, #0
     arm64.str x8, [x29, #-24]
     arm64.ldr x9, [x29, #-32]
     arm64.cmp x9, #0
-    arm64.b.eq main.__skip_guarded_127
+    arm64.b.eq main.__skip_guarded_126
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_127
+    arm64.label main.__skip_guarded_126
     arm64.mov x10, #0
     arm64.str x10, [x29, #-32]
     arm64.b main.each_0.incr
@@ -336,36 +338,36 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.adrp_add_symdata x0, __panic_msg_27
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
     arm64.ldr x1, [x29, #-8]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_147
+    arm64.b.eq main.__skip_guarded_146
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_147
+    arm64.label main.__skip_guarded_146
     arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_149
+    arm64.b.eq main.__skip_guarded_148
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_149
+    arm64.label main.__skip_guarded_148
     arm64.ldr x1, [x29, #-24]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_151
+    arm64.b.eq main.__skip_guarded_150
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_151
+    arm64.label main.__skip_guarded_150
     arm64.ldr x2, [x29, #-32]
     arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_153
+    arm64.b.eq main.__skip_guarded_152
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_153
+    arm64.label main.__skip_guarded_152
     arm64.ldr x0, [x29, #-40]
-    arm64.epilogue stack_size=240
+    arm64.epilogue stack_size=224
     arm64.ret
   }
   func @__destruct_IntPromise(ptr: i64) {

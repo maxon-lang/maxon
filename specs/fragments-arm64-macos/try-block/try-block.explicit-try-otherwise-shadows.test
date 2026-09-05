@@ -78,31 +78,33 @@ module {
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=144
+    arm64.prologue stack_size=128
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
     arm64.mov x0, #1
     arm64.bl callA
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-56]
     arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
+    arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x0, [x29, #-16]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
     arm64.mov x0, #0
     arm64.bl callB
-    arm64.str x0, [x29, #-40]
-    arm64.str x1, [x29, #-48]
+    arm64.str x0, [x29, #-32]
+    arm64.str x1, [x29, #-40]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, eq
@@ -110,8 +112,8 @@ module {
     arm64.b.ne main.try_block_continue_0
     arm64.b main.try_block_throw_0
   try_block_continue_0:
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-24]
     arm64.mov x2, x1
     arm64.mov x3, x0
     arm64.add x4, x2, x3
@@ -121,11 +123,11 @@ module {
   try_block_throw_0:
     arm64.b main.try_block_err_0
   try_block_err_0:
-    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-40]
     arm64.mov x1, #1
     arm64.sub x2, x0, x1
-    arm64.str x2, [x29, #-56]
-    arm64.ldr x3, [x29, #-56]
+    arm64.str x2, [x29, #-48]
+    arm64.ldr x3, [x29, #-48]
     arm64.mov x4, #0
     arm64.cmp x3, x4
     arm64.cset x5, ne
@@ -153,12 +155,12 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_18
+    arm64.adrp_add_symdata x0, __panic_msg_19
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=144
+    arm64.epilogue stack_size=128
     arm64.ret
   }
 }

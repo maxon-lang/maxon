@@ -95,20 +95,22 @@ module {
     arm64.ldr x0, [x29, #-16]
     arm64.bl CategoryLevelMap.get
     arm64.mov x3, #0
-    arm64.str x3, [x29, #-24]
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
     arm64.str x0, [x29, #-32]
-    arm64.mov x4, #0
-    arm64.cmp x1, x4
-    arm64.cset x5, ne
-    arm64.cmp x5, #0
     arm64.b.ne getCategoryLevel.otherwise_default_error_0
-    arm64.b getCategoryLevel.otherwise_default_continue_0
+    arm64.b getCategoryLevel.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.b getCategoryLevel.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-24]
     arm64.b getCategoryLevel.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
     arm64.epilogue stack_size=80
     arm64.ret
   }

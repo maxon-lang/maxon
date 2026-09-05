@@ -19,27 +19,29 @@ ExitCode: 24
 module {
   func @first(v: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.bl Vec3.get
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
     arm64.str x0, [x29, #-24]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
     arm64.b.ne first.otherwise_default_error_0
-    arm64.b first.otherwise_default_continue_0
+    arm64.b first.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b first.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
     arm64.b first.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @main() -> u8 {

@@ -38,99 +38,117 @@ ExitCode: 18
 module {
   func @keyFor(n: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=208
+    arm64.prologue stack_size=224
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #1000000
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne keyFor.__range_panic_0
+    arm64.b keyFor.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
     arm64.adrp_add_rdata x1, __interp_lit_0
     arm64.mov x2, x1
-    arm64.mov x1, #1
-    arm64.str x0, [x29, #-80]
+    arm64.mov x3, #1
     arm64.str x2, [x29, #-88]
     arm64.mov x0, #21
     arm64.bl mm_raw_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-80]
-    arm64.ldr x1, [x29, #-8]
-    arm64.bl maxon_u64_to_string
-    arm64.ldr x1, [x29, #-8]
-    arm64.mov x2, #1
-    arm64.add x3, x2, x0
-    arm64.mov x4, #49
-    arm64.add x5, x3, x4
-    arm64.adrp_add_func x4, __destruct_String
-    arm64.mov x6, x4
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl maxon_i64_to_string
+    arm64.ldr x4, [x29, #-16]
+    arm64.mov x5, #1
+    arm64.add x6, x5, x0
+    arm64.mov x7, #49
+    arm64.add x8, x6, x7
+    arm64.adrp_add_func x9, __destruct_String
+    arm64.mov x10, x9
     arm64.str x0, [x29, #-96]
-    arm64.str x3, [x29, #-104]
-    arm64.mov x0, x5
-    arm64.mov x1, x6
+    arm64.str x6, [x29, #-104]
+    arm64.mov x0, x8
+    arm64.mov x1, x10
     arm64.mov x2, #1
     arm64.bl mm_alloc
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #48
-    arm64.ldr x1, [x29, #-16]
-    arm64.add x2, x1, x0
-    arm64.mov x3, #0
-    arm64.str x3, [x29, #-24]
-    arm64.str x2, [x29, #-32]
-    arm64.ldr x4, [x29, #-104]
-    arm64.str x4, [x29, #-40]
-    arm64.ldr x5, [x29, #-88]
-    arm64.str x5, [x29, #-48]
-    arm64.mov x6, #1
-    arm64.str x6, [x29, #-56]
-    arm64.ldr x7, [x29, #-8]
-    arm64.str x7, [x29, #-64]
-    arm64.ldr x8, [x29, #-96]
-    arm64.str x8, [x29, #-72]
-    arm64.ldr x9, [x29, #-32]
-    arm64.ldr x10, [x29, #-24]
-    arm64.add x11, x9, x10
-    arm64.ldr x12, [x29, #-48]
-    arm64.ldr x14, [x29, #-56]
-    arm64.mov x0, x11
-    arm64.mov x1, x12
-    arm64.mov x2, x14
-    arm64.memcpy
-    arm64.ldr x15, [x29, #-24]
-    arm64.ldr x0, [x29, #-56]
-    arm64.add x1, x15, x0
-    arm64.str x1, [x29, #-24]
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x11, #48
+    arm64.ldr x12, [x29, #-24]
+    arm64.add x14, x12, x11
+    arm64.mov x15, #0
+    arm64.str x15, [x29, #-32]
+    arm64.str x14, [x29, #-40]
+    arm64.ldr x0, [x29, #-104]
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-88]
+    arm64.str x0, [x29, #-56]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x0, [x29, #-96]
+    arm64.str x0, [x29, #-80]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-32]
     arm64.add x2, x0, x1
-    arm64.ldr x0, [x29, #-64]
-    arm64.ldr x1, [x29, #-72]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-64]
     arm64.str x2, [x29, #-112]
     arm64.ldr x0, [x29, #-112]
-    arm64.ldr x1, [x29, #-64]
-    arm64.ldr x2, [x29, #-72]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x2, [x29, #-64]
     arm64.memcpy
     arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x1, [x29, #-64]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-80]
+    arm64.str x2, [x29, #-120]
+    arm64.ldr x0, [x29, #-120]
+    arm64.ldr x1, [x29, #-72]
+    arm64.ldr x2, [x29, #-80]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
     arm64.add x2, x0, x1
     arm64.mov x0, #0
     arm64.strb x0, [x2, #0]
-    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-16]
     arm64.bl mm_raw_free
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
     arm64.mov x2, #1
     arm64.mov x3, #-3
-    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x4, [x29, #-24]
     arm64.str x0, [x4, #0]
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
     arm64.str x1, [x0, #8]
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
     arm64.str x1, [x0, #16]
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
     arm64.str x2, [x0, #24]
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
     arm64.str x3, [x0, #32]
     arm64.mov x0, #0
-    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
     arm64.str x0, [x1, #40]
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
     arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-16]
-    arm64.epilogue stack_size=208
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=224
     arm64.ret
   }
   func @memoized(cache: i64, n: i64) -> u32 {
@@ -141,6 +159,22 @@ module {
     arm64.ldr x2, [x0, #0]
     arm64.str x2, [x29, #-16]
     arm64.str x1, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #1000000
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne memoized.__range_panic_0
+    arm64.b memoized.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
     arm64.ldr x0, [x29, #-24]
     arm64.bl keyFor
     arm64.str x0, [x29, #-32]
@@ -167,20 +201,20 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne memoized.__range_panic_0
-    arm64.b memoized.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.b.ne memoized.__range_panic_1
+    arm64.b memoized.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_2
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     arm64.ldr x1, [x29, #-32]
     arm64.cmp x1, #0
-    arm64.b.eq memoized.__skip_guarded_28
+    arm64.b.eq memoized.__skip_guarded_38
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label memoized.__skip_guarded_28
+    arm64.label memoized.__skip_guarded_38
     arm64.ldr x0, [x29, #-40]
     arm64.epilogue stack_size=128
     arm64.ret
@@ -203,20 +237,20 @@ module {
     arm64.cset x9, gt
     arm64.orr x10, x7, x9
     arm64.cmp x10, #0
-    arm64.b.ne memoized.__range_panic_1
-    arm64.b memoized.__range_ok_1
-  __range_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.b.ne memoized.__range_panic_2
+    arm64.b memoized.__range_ok_2
+  __range_panic_2:
+    arm64.adrp_add_symdata x0, __panic_msg_3
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_1:
+  __range_ok_2:
     arm64.ldr x0, [x29, #-32]
     arm64.str x1, [x29, #-56]
     arm64.cmp x0, #0
-    arm64.b.eq memoized.__skip_guarded_46
+    arm64.b.eq memoized.__skip_guarded_56
     arm64.bl mm_decref
-    arm64.label memoized.__skip_guarded_46
+    arm64.label memoized.__skip_guarded_56
     arm64.ldr x0, [x29, #-48]
     arm64.epilogue stack_size=128
     arm64.ret
@@ -294,7 +328,7 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.adrp_add_symdata x0, __panic_msg_4
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic

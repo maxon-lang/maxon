@@ -28,8 +28,27 @@ ExitCode: 42
 module {
   func @getString(i: i64) -> u8 {
   entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne getString.__range_panic_0
+    arm64.b getString.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_13
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
     arm64.cset x2, eq
     arm64.cmp x2, #0
     arm64.b.ne getString.zero_0
@@ -40,10 +59,12 @@ module {
     arm64.add x2, x0, x1
     arm64.mov x1, x2
     arm64.mov x0, #0
+    arm64.epilogue stack_size=48
     arm64.ret
   zero_0.after:
     arm64.mov x0, #42
     arm64.mov x1, #0
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @consume(x: i64) -> u8 {
@@ -52,6 +73,23 @@ module {
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne consume.__range_panic_0
+    arm64.b consume.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_14
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
     arm64.cset x2, eq
     arm64.cmp x2, #0
     arm64.b.ne consume.empty_0
@@ -74,54 +112,58 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne consume.__range_panic_0
-    arm64.b consume.__range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.b.ne consume.__range_panic_1
+    arm64.b consume.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_15
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     arm64.mov x1, #0
     arm64.epilogue stack_size=48
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.mov x0, #1
     arm64.bl getString
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-8]
-    arm64.str x0, [x29, #-16]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-24]
     arm64.b.ne main.otherwise_default_error_0
-    arm64.b main.otherwise_default_continue_0
+    arm64.b main.otherwise_default_success_0
   otherwise_default_error_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-8]
     arm64.b main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
     arm64.bl consume
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-24]
-    arm64.str x0, [x29, #-32]
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, ne
-    arm64.cmp x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-24]
     arm64.b.ne main.otherwise_default_error_1
-    arm64.b main.otherwise_default_continue_1
+    arm64.b main.otherwise_default_success_1
   otherwise_default_error_1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b main.otherwise_default_continue_1
+  otherwise_default_success_1:
     arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
+    arm64.str x0, [x29, #-16]
     arm64.b main.otherwise_default_continue_1
   otherwise_default_continue_1:
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -133,12 +175,12 @@ module {
     arm64.b.ne main.__range_panic_0
     arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.adrp_add_symdata x0, __panic_msg_16
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=64
     arm64.ret
   }
 }
