@@ -378,6 +378,15 @@ let ConstShapeBoxedUnionValue = 108 as HashDigest
 // refuse the fourth occurrence: these are ~60 free-standing `let`s, and a duplicate compiles. The cure is to
 // make the space a declaration order rather than a literal — reported for its own rung, not taken here.
 
+// Which of the two storage models a record binding took, mixed so a binding that crosses between them cannot
+// hash alike on the terms the two do not share. `ProgramSignatures.mixRecordStorage` carries the rule.
+//
+// ⚠ **116 AND 117 BECAUSE THEY ARE PAST THE MAXIMUM**, which is `ConstShapeBoxedUnionValue`'s rule for its
+// reason: the space is written down rather than derived, so a number a reader can verify without trusting a
+// census is the only safe claim.
+let RecordStorageShapeSlot = 116 as HashDigest
+let RecordStorageShapeImage = 117 as HashDigest
+
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
@@ -1690,17 +1699,21 @@ export type TopLevelDecl
 	export var nameColumn as ColumnNumber
 	// The evaluator's answer, mutated in place as the DFS reaches and leaves this decl.
 	export var outcome as TopLevelConstant
-	// ⭐ THE `.data` LABEL — this var's IR IDENTITY, and EMPTY for a `let`, which has no storage.
+	// ⭐ THE `.data` LABEL — this binding's IR IDENTITY, and EMPTY for every binding with no slot.
+	//
+	// ⚠ **WHICH BINDINGS THOSE ARE IS `hasStorage`, NEVER `mutable`.** A `let` takes either storage model
+	// (see that field), so an imaged record `let` and a scalar `let` are unlabelled while a record `let` the
+	// compiler cannot image is labelled like any `var`.
 	//
 	// DERIVED FROM THE KEY, not a second spelling of it: `assignDataLabels` walks the arena in
-	// declaration order and hands each mutable decl its bare name, disambiguated ONLY where an
+	// declaration order and hands each STORED decl its bare name, disambiguated ONLY where an
 	// earlier decl already took that label. So the common program gets `__data_counter` and the
 	// pathological one gets `__data_counter` + `__data_counter$1` — and NEITHER carries a file path,
 	// which is what keeps a golden fragment free of the temp directory the spec runner compiled in.
 	//
-	// Empty is not a sentinel here: it is the literal truth that an immutable declaration has no
-	// slot, and every reader gates on `mutable` before looking (`dataLabelOf` panics rather than
-	// handing back an empty label).
+	// Empty is not a sentinel here: it is the literal truth that a slotless declaration has no slot, and
+	// every reader gates on `hasStorage` before looking (`dataLabelOf` panics rather than handing back an
+	// empty label).
 	export var dataLabel as ByteArray
 	// ⭐⭐ **WAS THIS BINDING DECLARED BY THE STDLIB CORPUS?** Stdlib is loaded into EVERY compile whether the
 	// program names it or not, so a corpus declaration is not the program's: `contributesStorage` keeps a
@@ -16986,35 +16999,29 @@ export type ProgramSignatures
 			// what every OTHER file compiles to while their own bytes never move. The KIND rides too: the
 			// same bytes as a `String` and as a `b"…"` produce different records and different types.
 			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(Hasher.combined(keyed, value: ConstShapeManagedValue), kind: kind), bytes: bytes)
-			// ⭐ **AN ARRAY BINDING MIXES ITS ELEMENT KIND AND ITS LABEL, AND NOT ITS ELEMENTS** (P1.7 slice
-			// 2b) — `mixDeclAnswer`'s `var` branch, for the identical reason and now for a `let` too. An array
-			// binding is STORED whichever keyword declared it, so every reader emits `globalAddr <label>` +
-			// `loadIndirect` and that is byte-identical whether the literal said `[1, 2]` or `[9, 9, 9]`: the
-			// elements reach only `__module_init`, which is rebuilt from this arena whenever this query
-			// misses. What a reader DOES depend on is the element KIND — it fixes the `Array with T` instance
-			// the load is typed with, and `[1]` becoming `["a"]` retypes every use — and the LABEL, which is
-			// the slot the emitted `globalAddr` names. Mixing the elements too would be SOUND and WRONG: the
-			// "sound, and useless" key that re-parses the program on every keystroke in any initializer.
-			arrayValue(elements, element) then return mixBytes(self.mixArrayElementKind(Hasher.combined(keyed, value: ConstShapeArrayValue), element: element, enumName: constArrayLiteralEnumName(elements)), bytes: decl.dataLabel)
-			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE, ITS BRAND AND ITS LABEL** — the array-literal arm's
-			// facts, with the instance stated outright instead of inferred from an element kind. There are no
-			// elements to leave out. The BRAND rides beside the instance because two aliases spell one
-			// instance and `globalLookup` hands the brand back: a reader's coercion verdict moves when it
-			// changes, so a key that dropped it would serve an answer naming the wrong alias.
-			containerValue(giid, brand, _) then return mixBytes(mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: brand), bytes: decl.dataLabel)
-			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS ROOT CALLEE AND ITS LABEL, AND NOT ITS ARGUMENTS** — the
-			// array-literal arm's rule, applied to the one initializer that calls. Every reader emits
-			// `globalAddr <label>` + `loadIndirect`, byte-identical whichever arguments the call passes, so
-			// the arguments reach only `__module_init`, which is rebuilt from this arena whenever this query
-			// misses. That covers a NESTED call too: it is an argument, and no reader's bytes move when
-			// `Outer.create(Inner.create(0))` becomes `Outer.create(Inner.create(1))`. What a reader DOES
-			// depend on is the ROOT CALLEE — it fixes the slot's type, and swapping `Database.create` for
-			// `Database.empty` can retype every use — and the LABEL, which is the slot the emitted
-			// `globalAddr` names.
-			// ⭐ A STRUCT-LITERAL global (W116) mixes the STRUCT NAME in the callee's place, and its fields in
-			// the arguments' — i.e. not at all — because the two facts a reader depends on are the same two:
-			// the name fixes the slot's type, and `Pair{a: 1}` becoming `Pair{a: 2}` moves no reader's bytes.
-			factoryValue(calls, root, _) then return mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeFactoryValue), bytes: self.constFactoryCallHashName(factoryCallAt(calls, id: root))), bytes: decl.dataLabel)
+			// ⭐ **AN ARRAY BINDING MIXES ITS ELEMENT KIND, THEN ITS STORAGE MODEL'S TERM** (P1.7 slice 2b).
+			// The KIND rides either way — it fixes the `Array with T` instance the read is typed with, and
+			// `[1]` becoming `["a"]` retypes every use. `mixConstArrayRecord` decides the rest.
+			arrayValue(elements, element) then return self.mixConstArrayRecord(self.mixArrayElementKind(Hasher.combined(keyed, value: ConstShapeArrayValue), element: element, enumName: constArrayLiteralEnumName(elements)), decl: decl, element: element, elements: elements)
+			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE, ITS BRAND AND ITS STORAGE MODEL — AND HAS NO CONTENT
+			// TO MIX AT ALL.** The instance is stated outright instead of inferred from an element kind, and
+			// the BRAND rides beside it because two aliases spell one instance and `globalLookup` hands the
+			// brand back: a reader's coercion verdict moves when it changes, so a key that dropped it would
+			// serve an answer naming the wrong alias.
+			//
+			// ⛔ **AN IMAGED CONTAINER IS EMPTY BY CONSTRUCTION, so it is the one record shape with no content
+			// term to owe.** `emptyContainerIsImageData` admits a container only when it holds NO elements,
+			// and an empty one's bytes are a function of the INSTANCE alone — an `Array` record's header, or
+			// the box `Map.create()`'s `Self{}` lays down from the base's own declared field defaults, which
+			// are hashed where they are declared (`mixFieldDefault`). A container WITH members is stored. ⇒ a
+			// content term here would key a value no edit can move, so this arm goes to the fork and stops.
+			containerValue(giid, brand, _) then return self.mixRecordStorage(mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: brand), decl: decl)
+			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS ROOT CALLEE, THEN ITS STORAGE MODEL'S TERM.** The ROOT
+			// CALLEE rides either way — it fixes the slot's type, and swapping `Database.create` for
+			// `Database.empty` can retype every use. A STRUCT-LITERAL global (W116) mixes the STRUCT NAME in
+			// the callee's place. `mixConstStructRecord` decides the rest, which for a stored global excludes
+			// the ARGUMENTS — a nested `Outer.create(Inner.create(0))` included, that being an argument too.
+			factoryValue(calls, root, _) then return self.mixConstStructRecord(mixBytes(Hasher.combined(keyed, value: ConstShapeFactoryValue), bytes: self.constFactoryCallHashName(factoryCallAt(calls, id: root))), decl: decl, calls: calls, root: root)
 			// ⭐ **A BOXED UNION'S PAYLOAD-FREE CASE MIXES ITS UNION, ITS CASE AND ITS LABEL.** The union NAME
 			// fixes the slot's type and so every reader's `match`, and the LABEL is the slot a `var`'s emitted
 			// `globalAddr` names.
@@ -17034,9 +17041,127 @@ export type ProgramSignatures
 		end 'o'
 	end 'mixConstant'
 
+	// ⭐⭐⭐ **WHICH STORAGE MODEL A RECORD BINDING TOOK, AND THE ONE FACT THAT RIDES WITH IT — THE RULE ALL
+	// THREE RECORD ARMS FORK ON, STATED HERE AND NOWHERE ELSE.**
+	//
+	// A STORED record's read is `globalAddr <label>` + `loadIndirect`, so its LABEL is its whole IR identity
+	// and its content reaches only `__module_init`, which is rebuilt from this arena whenever this query
+	// misses. Mixing that content would be SOUND and WRONG — the "sound, and useless" key
+	// `verify-warm-rebuild`'s property (b) rejects, where a keystroke in any initializer re-parses the whole
+	// program.
+	//
+	// An IMAGED record has no slot to name at all — `assignDataLabels` labels only decls with storage, so its
+	// `dataLabel` is EMPTY — and its bytes are copied into every reader instead. Leaving THOSE out is the
+	// opposite failure and a WRONG ANSWER rather than a slow one: every reader's `.rdata` moves while the key
+	// stands still, and each reader keeps a memo built over the old bytes.
+	//
+	// ⚠ **`mutable` CANNOT STAND IN FOR THE BIT.** A `var` is never imaged, but a `let` takes EITHER model —
+	// an array of scalars is `.rdata`, one of managed elements has a slot (`TopLevelDecl.hasStorage`).
+	//
+	// Both directions are gated, and by DIFFERENT probes, because one probe cannot see both: see
+	// `VerifyWarmRebuild`'s property (e).
+	function mixRecordStorage(state HashDigest, decl TopLevelDecl) returns HashDigest
+		if decl.hasStorage 'aSlotTheReaderLoadsFrom'
+			return mixBytes(Hasher.combined(state, value: RecordStorageShapeSlot), bytes: decl.dataLabel)
+		end 'aSlotTheReaderLoadsFrom'
+
+		return Hasher.combined(state, value: RecordStorageShapeImage)
+	end 'mixRecordStorage'
+
+	// ⭐ **WHAT AN IMAGED ARRAY'S READERS BAKE: the element COUNT and the elements themselves.** Every read
+	// emits the blob inline (`Parser.emitImagedConstArrayLiteral` carries `bytes:` and `elementCount:`), so
+	// `[1, 2]` becoming `[9, 9, 9]` changes what every OTHER file compiles to while their own bytes and every
+	// name in the program stay put. `mixRecordStorage` is why the stored half stops at its label.
+	function mixConstArrayRecord(state HashDigest, decl TopLevelDecl, element ConstArrayElementKind, elements ConstArrayElementArray) returns HashDigest
+		var mixed = self.mixRecordStorage(state, decl: decl)
+		// The SAME branch the fork above just took: a stored array is done at its label.
+		if decl.hasStorage 'theSlotBranchOfMixRecordStorage'
+			return mixed
+		end 'theSlotBranchOfMixRecordStorage'
+
+		mixed = Hasher.combined(mixed, value: elements.count() as HashDigest)
+
+		// ⭐ **THE FORK `arrayLiteralImageOf` MAKES, OFF THE SAME ELEMENT KIND, READ THROUGH THE SAME TWO
+		// DOORS** — a String element makes a table of ADDRESSES whose content is the elements' TEXTS, every
+		// other admitted element a blob of VALUES. Sharing the builder's own accessors is what keeps the key
+		// and the bytes from disagreeing about what an element contributes, and it is where a Character
+		// element is refused: one comes only from a SET literal, whose container is imaged only when empty.
+		if element == ConstArrayElementKind.string 'aTableOfAddresses'
+			for text in elements 'eachText'
+				mixed = mixBytes(mixed, bytes: constArrayElementText(text))
+			end 'eachText'
+
+			return mixed
+		end 'aTableOfAddresses'
+
+		for value in elements 'eachValue'
+			mixed = Hasher.combined(mixed, value: constArrayElementScalar(value) as HashDigest)
+		end 'eachValue'
+
+		return mixed
+	end 'mixConstArrayRecord'
+
+	// ⭐ **WHAT AN IMAGED BOX'S READERS BAKE: its SLOTS** — `mixConstArrayRecord`'s question at the shape
+	// whose record is a struct. `let P = Pair.create(1)` lays its slots down in `.rdata` and every read emits
+	// those bytes inline (`Parser.emitImageBoxRead`), so `create(2)` changes what every reader compiles to
+	// while no name in the program moves.
+	//
+	// The two refusals are invariant breaks rather than reachable cases: `constStructIsImageData` admits only
+	// a `construct` root, and it is the one thing that decides imaging.
+	//
+	// ⛔⛔ **THE GUARD BELOW IS LOAD-BEARING FOR THE WALK'S REFUSALS, NOT ONLY FOR INCREMENTALITY — a
+	// `construct` ROOT DOES NOT IMPLY ALL-SCALAR FIELDS.** `Parser.constFactoryConstruction` mints one only
+	// once `everyConstFieldIsAFoldedScalar` holds, but `evalConstStructConstructionInto` — the W116
+	// `Pair{a: 1}` literal path — mints one with no such test, so a STORED struct global may carry a managed
+	// field. MEASURED: with this guard removed, the compiler's own source panics in `mixConstFoldedScalar` on
+	// one. Reaching the field walk only through the imaged branch is what makes "an imaged box holds a NUMBER
+	// only" true down there.
+	function mixConstStructRecord(state HashDigest, decl TopLevelDecl, calls ConstFactoryCallArray, root InitializerCallId) returns HashDigest
+		let mixed = self.mixRecordStorage(state, decl: decl)
+		// The SAME branch the fork above just took: a stored global is done at its label, and its arguments —
+		// a nested call among them — reach only `__module_init`.
+		if decl.hasStorage 'theSlotBranchOfMixRecordStorage'
+			return mixed
+		end 'theSlotBranchOfMixRecordStorage'
+
+		match factoryCallAt(calls, id: root) 'node'
+			construct(_, fields) then return self.mixConstStructFields(mixed, fields: fields)
+			call then panic("ProgramSignatures.mixConstStructRecord: '{String.from(decl.name)}' is imaged but its arena root is a `call` — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
+			mapLiteral to arrayLiteral then panic("ProgramSignatures.mixConstStructRecord: '{String.from(decl.name)}' is imaged but its arena root is a container literal — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
+		end 'node'
+	end 'mixConstStructRecord'
+
+	// The box's slots in LAYOUT order, which is the order `ConstFactoryCall.construct` stores them in — so a
+	// field's POSITION is its destination and no label is needed to say which slot moved. Each rides through
+	// `mixConstantValue`, the very door a scalar `let`'s own value takes, so a number in a field and a number
+	// in a constant cannot come to hash two ways.
+	//
+	// A slot the fold did not settle to a scalar is an invariant break: `everyConstFieldIsAFoldedScalar` is
+	// what admitted this box, and it refuses a nested call and every managed value.
+	function mixConstStructFields(state HashDigest, fields ConstFactoryArgumentValueArray) returns HashDigest
+		var mixed = Hasher.combined(state, value: fields.count() as HashDigest)
+		for field in fields 'eachSlot'
+			match field 'slot'
+				folded(value) then mixed = self.mixConstFoldedScalar(mixed, value: value)
+				call then panic("ProgramSignatures.mixConstStructFields: an imaged box holds a slot produced by a nested CALL — `everyConstFieldIsAFoldedScalar` admits only a folded scalar, and it is what decides imaging")
+			end 'slot'
+		end 'eachSlot'
+
+		return mixed
+	end 'mixConstStructFields'
+
+	// The tail of the walk above, split out because a `match` arm may not open one.
+	function mixConstFoldedScalar(state HashDigest, value ConstFoldedValue) returns HashDigest
+		match value 'kind'
+			scalar(constant) then return self.mixConstantValue(state, payload: constant.payload, tag: constant.tag, typeName: constant.typeName)
+			managed to boxedUnionCase then panic("ProgramSignatures.mixConstFoldedScalar: an imaged box holds a managed literal, a record or a boxed case — `constFoldedIsAScalar` admits a NUMBER only, and it is what decides imaging")
+		end 'kind'
+	end 'mixConstFoldedScalar'
+
 	// ⭐ **THE NAME A ROOT NODE CONTRIBUTES TO A DECLARING FILE'S CONTENT HASH** — one derivation, so the
-	// spellings of "what fixes this slot's type" cannot be mixed two ways; see `mixConstant`'s `factoryValue`
-	// arm for why the arguments and the fields are deliberately left out.
+	// spellings of "what fixes this slot's type" cannot be mixed two ways. It is the whole of what a STORED
+	// global's arm carries beyond its label; an IMAGED box's slots ride separately, through
+	// `mixConstStructRecord`.
 	//
 	// ⚠ **A CONTAINER LITERAL CONTRIBUTES ITS INSTANCE AND NOT ITS BASE NAME, WHICH IS THE HALF A READER
 	// ACTUALLY DEPENDS ON.** Its slot's type is `Array with Op` or `Map with (K, V)` — the base alone is the
@@ -17089,11 +17214,10 @@ export type ProgramSignatures
 			// ⛔⛔ **THE ENUM'S NAME IS MIXED, AND LEAVING IT OUT IS A STALE-CACHE BUG RATHER THAN A COARSE
 			// KEY.** This arm's two neighbours can hash a shape alone because their kind IS their element type;
 			// `enumCase` is a FAMILY, and `Array with Reg` and `Array with CharClass` are different types with
-			// different instances. The elements themselves are deliberately NOT hashed (see the caller: an
-			// array global's readers depend on its LABEL and its element TYPE, never on its values), so the
-			// name is the only thing standing between two enum arrays — without it, editing `[Reg.rcx]` to
-			// `[CharClass.other]` keeps the kind and keeps the label, and every reader is answered from the
-			// other's parse.
+			// different instances. The name is what stands between two enum arrays a STORED binding's terms
+			// cannot otherwise tell apart — its elements reach only `__module_init` and never this key
+			// (`mixConstArrayRecord`), so without the name, editing `[Reg.rcx]` to `[CharClass.other]` keeps
+			// the kind and keeps the label, and every reader is answered from the other's parse.
 			enumCase gives mixBytes(Hasher.combined(state, value: ArrayElementShapeEnumCase), bytes: enumName)
 		end 'e'
 	end 'mixArrayElementKind'
@@ -17123,10 +17247,15 @@ export type ProgramSignatures
 	// whenever any global's initial value moved, which is precisely the "sound, and useless"
 	// failure `verify-warm-rebuild`'s property (b) exists to reject — the composite-source-hash key
 	// wearing a different hat. `globalValueEditIsLocal` is the probe that keeps this honest.
+	// ⚠ **THE FORK IS `hasStorage`, WHICH IS THE ONE THE RECORD ARMS ASK** (`mixRecordStorage`). For a folded
+	// SCALAR the two spellings coincide — nothing but `settleRecordValue` moves the bit off `mutable`, and no
+	// scalar goes through it — so this reads as `not decl.mutable` today and is written the other way
+	// deliberately: "does a reader bake this?" answered two ways in one function is how the two would come to
+	// disagree the day a third storage model exists.
 	function mixDeclAnswer(state HashDigest, decl TopLevelDecl, payload ParsedInt, tag ValueTypeTag, typeName ByteArray) returns HashDigest
-		if not decl.mutable 'constantInlinesItsValue'
+		if not decl.hasStorage 'inlinedBakesItsValue'
 			return self.mixConstantValue(state, payload: payload, tag: tag, typeName: typeName)
-		end 'constantInlinesItsValue'
+		end 'inlinedBakesItsValue'
 
 		return mixBytes(self.mixValueTag(Hasher.combined(state, value: ConstShapeValue), tag: tag, typeName: typeName), bytes: decl.dataLabel)
 	end 'mixDeclAnswer'

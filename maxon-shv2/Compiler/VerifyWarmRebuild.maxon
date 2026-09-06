@@ -317,9 +317,70 @@ let ConstantValueEditAfter = "let warmRebuildProbeConstant = 8"
 let GlobalValueEditBefore = "var warmRebuildProbeGlobal = 7"
 let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
 
+// ⭐ **THE IMAGED-RECORD PROBE: the same declaration twice, differing only in the BYTES A READER BAKES.**
+//
+// The constant probe above holds a scalar, whose value reaches its readers through `mixConstant`'s value
+// arm. A constant ARRAY does not: it is IMAGE DATA, so `assignDataLabels` gives it no `dataLabel` — that
+// walk labels only decls with storage — and a key built from shape-level facts plus that empty label carries
+// nothing of the elements at all. Meanwhile every reader bakes the ELEMENT BYTES into its own ops
+// (`Parser.emitImagedConstArrayLiteral` carries `bytes:`). So the number a reader compiles to moves while
+// the key does not.
+//
+// Measured, not argued (2026-09-06): against a key carrying only the element kind and the label, this probe
+// reported **1** re-parse (the edited file's own bytes) where the property demands `fileCount`, measured at
+// **54**, while every other probe here passed. None of them can see it: every other probe in this file moves
+// a NAME, a SCALAR or a KEYWORD, and a key that mixes those moves on all of them. Only an edit that holds
+// the name and the element kind FIXED and moves the elements can tell a key that carries an imaged record's
+// CONTENT from one that carries only its SHAPE.
+let ArrayValueEditBefore = "let warmRebuildProbeArray = [1, 2]"
+let ArrayValueEditAfter = "let warmRebuildProbeArray = [9, 9, 9]"
+
+// ⭐ **AND THE SAME EDIT ON A `var` ARRAY, ASSERTING THE OPPOSITE — the `let`/`var` pair one shape up.**
+//
+// A `var` is never imaged (`settleRecordValue` overrules the keyword), so its record is a `.data` slot and
+// every reader emits `globalAddr <label>` + `loadIndirect` whichever elements the literal held: they reach
+// only `__module_init`, rebuilt from the arena whenever the signature query misses. Mixing them would be
+// SOUND and would re-parse the whole program on every keystroke inside any array initializer.
+//
+// ⚠ **THE SCALAR `var` PROBE ABOVE CANNOT STAND IN FOR THIS ONE.** A scalar `var` and an array `var` hash
+// through DIFFERENT arms (`mixDeclAnswer` and `mixConstArrayRecord`), so a key that mixed an array's
+// elements unconditionally would pass every other probe in this file, the scalar `var` one included, and
+// silently throw property (b) away for arrays.
+let ArrayGlobalValueEditBefore = "var warmRebuildProbeArrayGlobal = [1, 2]"
+let ArrayGlobalValueEditAfter = "var warmRebuildProbeArrayGlobal = [9, 9, 9]"
+
+// ⭐⭐ **THE DECLARATION BOTH BOX PROBES ARE BUILT OVER — BOUND ONCE, so "the type is held byte-identical
+// across the pair" is STRUCTURAL rather than asserted.** A second copy could drift by one byte — a renamed
+// field, an added `export` — and each probe would silently become a DECLARATION edit, which the probes above
+// already gate; it would then report `fileCount` forever for the wrong reason and never fail again.
+//
+// The slot's range is the probe's own domain, one decimal digit, and the two pairs below fix it at 1 and 2.
+let WarmRebuildProbeBoxDecl = "typealias WarmRebuildProbeSlot = int(0 to 9)\ntype WarmRebuildProbePair\n\texport let a as WarmRebuildProbeSlot\n\tstatic function create(a WarmRebuildProbeSlot) returns WarmRebuildProbePair\n\t\treturn Self\{a: a\}\n\tend 'create'\nend 'WarmRebuildProbePair'"
+
+// ⭐ **THE IMAGED-BOX PROBE: the array probe's question at the shape whose record is a STRUCT.**
+//
+// A constant folded from a scalar-argument factory is image data too (`constStructIsImageData`), and it
+// arrives through a different arm: `factoryValue`, whose key carries the ROOT CALLEE and the same empty
+// label. Every read of it emits the box inline (`Parser.emitImageBoxRead` carries `bytes:`), so `create(1)`
+// becoming `create(2)` moves every reader's `.rdata` while the callee, the name and the label all stand
+// still — and the array probe above says nothing about it, the two arms sharing no term.
+let StructFieldEditBefore = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(1)"
+let StructFieldEditAfter = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(2)"
+
+// ⭐ **AND THE SAME EDIT ON A `var` BOX, ASSERTING THE OPPOSITE — the array pair's twin, one arm over, and
+// the one probe that can see the `factoryValue` arm's over-mix guard.**
+//
+// ⛔ **NEITHER `var` PROBE ABOVE COVERS THIS ARM.** `Parser.constFactoryConstruction` folds `T.create(n)`
+// into a `construct` node without ever consulting mutability, and `settleRecordValue` then gives the `var`
+// storage — so a stored box reaches `mixConstStructRecord` with the SAME root an imaged one has, and only
+// its `hasStorage` branch keeps the slots out of the key. Delete that branch and every other probe here
+// stays green while a keystroke inside any struct global's initializer re-parses the whole program.
+let StructGlobalFieldEditBefore = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(1)"
+let StructGlobalFieldEditAfter = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(2)"
+
 // ⭐ **THE `static`-FLAG PROBE: the same interface requirement twice, differing ONLY in the KEYWORD.**
 //
-// The four probes above move a NAME or a NUMBER. An interface requirement's RECEIVER KIND is neither,
+// Every probe above moves a NAME or a VALUE. An interface requirement's RECEIVER KIND is neither,
 // and it became a fact a PARSE reads at A2w: a witness dispatch on a constrained type parameter now
 // REFUSES a `static` requirement (E3116) and the comparison operators refuse one as `Equatable`
 // (E3005). So `function origin()` becoming `static function origin()` in one file changes whether
@@ -330,7 +391,7 @@ let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
 // `ReceiverShapeAbsent`/`ReceiverShapePresent` mix absent — which is how A2w shipped — this probe reported
 // **1** re-parse (the edited file's own bytes) where the property demands `fileCount`, measured at **8**,
 // while the spec suite reported 3091/0 and every other probe here still passed. None of them can see it:
-// the four edits above all move a NAME or a VALUE, and a key that mixes those moves on all four. Only an
+// every edit above moves a NAME or a VALUE, and a key that mixes those moves on all of them. Only an
 // edit that holds the name, the formals and the result FIXED and moves the receiver kind can tell a
 // key that carries the flag from one that does not.
 let ReceiverKindEditBefore = "interface WarmRebuildProbeInterface\n\tfunction warmRebuildProbeRequirement() returns bool\nend 'WarmRebuildProbeInterface'"
@@ -378,15 +439,23 @@ let MinFilesForInvalidation = 2 as QueryCount
 //   (d) EDIT AN INTERFACE REQUIREMENT'S `static` FLAG ⇒ EVERY file's parse must be invalidated. Not a
 //       special case of (a) or (c): no name moves and no value moves — a KEYWORD does, and since A2w a
 //       parse in another file accepts or REFUSES on it. See `ReceiverKindEditBefore`.
+//   (e) EDIT AN **IMAGED** RECORD CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated, AND the
+//       same edit on a STORED one may invalidate only the edited file. (c)'s pair at the shapes whose
+//       value is a record rather than a number: an imaged `let` is `.rdata` and every read bakes its
+//       bytes, while a `var`'s record is a slot every read loads from. The two pull opposite ways for one
+//       spelling, so a key that mixed content unconditionally satisfies half of this and throws (b) away.
+//       ⚠ **AND EACH RECORD ARM NEEDS ITS OWN PAIR**: an ARRAY and a BOX hash through different functions,
+//       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore` +
+//       `ArrayGlobalValueEditBefore`, and `StructFieldEditBefore` + `StructGlobalFieldEditBefore`.
 //
-// All four are asserted here, on ONE fresh project, by editing a real file in the query database
+// All five are asserted here, on ONE fresh project, by editing a real file in the query database
 // and re-querying.
 //
 // ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
-// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c) and (d) expect
-// `fileCount` re-parses and (b) expects 1, and those are the same number — so a key that tracks only
-// the file's own bytes, which is EXACTLY the bug this property exists to catch, sails through all
-// four.
+// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c), (d) and (e)'s
+// imaged half expect `fileCount` re-parses while (b) and (e)'s stored half expect 1, and those are the
+// same number — so a key that tracks only the file's own bytes, which is EXACTLY the bug this property
+// exists to catch, sails through every one of them.
 // This file used to say so in a comment and print PASS anyway, which is the worst of both: a gate
 // that knows it is vacuous and reports green. **A gate you cannot see fail is not a gate.**
 // It now FAILS, and says what to point it at.
@@ -445,6 +514,39 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditAfter}\n")
 	let globalValueEditMisses = try parseMissesOnRequery(project)
 
+	// Seat the ARRAY probe at its BEFORE value — a declaration edit, discarded for the same reason its
+	// scalar twin's is.
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same name, same element kind — only the BYTES a reader bakes moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditAfter}\n")
+	let arrayValueEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the `var` ARRAY probe, then measure the same edit on a binding whose readers bake nothing.
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayGlobalValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayGlobalValueEditAfter}\n")
+	let arrayGlobalValueEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the imaged-BOX probe, then measure it: same type declaration, same factory — only the SLOT a
+	// reader bakes moved. The declaration is interpolated rather than carried in each pair, so the two
+	// spellings cannot drift into a declaration edit (`WarmRebuildProbeBoxDecl`).
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditAfter}\n")
+	let structFieldEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the `var` BOX probe, then measure it — the only probe that can see `mixConstStructRecord`'s
+	// stored-side guard, the imaged one above being green with or without it.
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructGlobalFieldEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructGlobalFieldEditAfter}\n")
+	let structGlobalFieldEditMisses = try parseMissesOnRequery(project)
+
 	// Seat the receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
 	// reason the two above are.
 	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditBefore}\n")
@@ -477,14 +579,19 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let declarationEditInvalidatesEveryFile = assertCounterMove("a DECLARATION edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: declarationEditMisses, expectedDelta: fileCount)
 	let constantValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: constantValueEditMisses, expectedDelta: fileCount)
 
+	let arrayValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: arrayValueEditMisses, expectedDelta: fileCount)
+	let structFieldEditInvalidatesEveryFile = assertCounterMove("an IMAGED struct constant's field edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: structFieldEditMisses, expectedDelta: fileCount)
+
 	let globalValueEditIsLocal = assertCounterMove("a top-level VAR's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: globalValueEditMisses, expectedDelta: OneQuery)
+	let arrayGlobalValueEditIsLocal = assertCounterMove("a top-level VAR ARRAY's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: arrayGlobalValueEditMisses, expectedDelta: OneQuery)
+	let structGlobalFieldEditIsLocal = assertCounterMove("a STORED struct global's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: structGlobalFieldEditMisses, expectedDelta: OneQuery)
 
 	let receiverKindEditInvalidatesEveryFile = assertCounterMove("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: receiverKindEditMisses, expectedDelta: fileCount)
 	let methodReceiverKindEditInvalidatesEveryFile = assertCounterMove("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: methodReceiverKindEditMisses, expectedDelta: fileCount)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and globalValueEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}; var-value edit re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 
