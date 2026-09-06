@@ -1301,6 +1301,153 @@ end 'main'
 error E4014: specs/fragments/ownership/cycle-mutual-recursion.test:2:6: type 'A' contains a reference cycle (via A → b: B → a: A); recursive type references are not allowed
 ```
 
+<!-- test: cycle-through-an-interface -->
+⭐⭐ **AN INTERFACE-TYPED FIELD IS A HOLE IN THE CYCLE CHECK, AND THE RULE ABOVE PROMISES IT IS NOT.**
+Line 31 of this file says a type *"may not reference itself directly or indirectly through struct
+fields"*, and `docs/MEMORY_MANAGEMENT.md` says reference cycles *"are impossible — they are compile-time
+errors"*, which is what buys the language its freedom from weak references and a tracing collector. This
+is `cycle-mutual-recursion` with ONE hop through an interface: `Holder` is the only `Backref` there is,
+so `Cell` reaches `Cell`. ⚠ The refusal is over the DECLARATION, exactly as the four cases above are —
+no program here constructs the cycle, and none needs to.
+```maxon
+typealias Small = int(0 to 255)
+
+interface Backref
+	function tag() returns Small
+end 'Backref'
+
+type Cell
+	export var back as Backref
+end 'Cell'
+
+type Holder implements Backref
+	export var cell as Cell
+
+	export function tag() returns Small
+		return 1
+	end 'tag'
+end 'Holder'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:8:6: type 'Cell' contains a reference cycle (via Cell → back: Backref → Holder → cell: Cell); recursive type references are not allowed
+```
+
+<!-- test: cycle-through-a-generic-instance-conformer -->
+⭐⭐ **THE CONFORMER IS THE INSTANCE, NOT THE BASE, AND CREDITING THE BASE LOSES THE CYCLE.** A generic
+base's fields are opaque type parameters, so its node holds nothing and is a SINK; the argument that closes
+the loop lives in the instance. `valueWidensToInterface` reduces `Box with Holder` to `Box` when it asks
+whether the value may be stored, so the cycle graph must reduce the same way when it asks what that value
+HOLDS — two different nodes otherwise, and the reach through the instance goes unseen. MEASURED as a clean
+compile and **exit 101** while the same program with a concrete payload was refused.
+⚠ The path names `HolderBox`, the author's own `typealias`, rather than the mangled instance symbol.
+```maxon
+typealias Small = int(0 to 255)
+typealias HolderBox = Box with Holder
+
+interface Tagged
+	function tag() returns Small
+end 'Tagged'
+
+type Box uses T implements Tagged
+	var payload as T
+
+	export static function create(p T) returns Self
+		return Self{payload: p}
+	end 'create'
+
+	export function tag() returns Small
+		return 3
+	end 'tag'
+end 'Box'
+
+type Holder
+	var t as Tagged
+
+	export static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function retarget(next Tagged)
+		self.t = next
+	end 'retarget'
+
+	export function go() returns Small
+		return self.t.tag()
+	end 'go'
+end 'Holder'
+
+type Leaf implements Tagged
+	let n as Small
+
+	export static function create(n Small) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function tag() returns Small
+		return self.n
+	end 'tag'
+end 'Leaf'
+
+function main() returns ExitCode
+	var h = Holder.create(Leaf.create(1))
+	let b = HolderBox.create(h)
+	h.retarget(b)
+	return h.go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:21:6: type 'Holder' contains a reference cycle (via Holder → t: Tagged → HolderBox → Holder); recursive type references are not allowed
+```
+
+<!-- test: an-interface-field-is-legal-when-no-conformer-reaches-back -->
+⚠ **THE CONTROL FOR THE CASE ABOVE, AND THE ONE THAT SAYS THE REFUSAL DID NOT GROW TEETH IT SHOULD NOT
+HAVE.** An interface-typed field is ordinary; what makes one a cycle is a CONFORMER that reaches back to
+the holder. `Plain` reaches nothing, so this must keep compiling and keep answering. A cycle check that
+refuses an interface field on sight would pass its own case and take this one with it.
+```maxon
+typealias Small = int(0 to 255)
+
+interface Backref
+	function tag() returns Small
+end 'Backref'
+
+type Plain implements Backref
+	let mark as Small
+
+	export static function create(m Small) returns Self
+		return Self{mark: m}
+	end 'create'
+
+	export function tag() returns Small
+		return self.mark
+	end 'tag'
+end 'Plain'
+
+type Cell
+	var back as Backref
+
+	export static function create(b Backref) returns Self
+		return Self{back: b}
+	end 'create'
+
+	export function tag() returns Small
+		return self.back.tag()
+	end 'tag'
+end 'Cell'
+
+function main() returns ExitCode
+	let c = Cell.create(Plain.create(7))
+	return c.tag() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: local-shadowing-a-consumed-parameter -->
 ⛔⛔ **A LOCAL THAT REBINDS A PARAMETER'S NAME TAKES THE NAME WITH IT, AND THE CONSUME ANALYSIS STOPS
 THERE.** The store below moves the LOCAL into the field; the parameter is never moved anywhere, so the

@@ -1315,13 +1315,20 @@ end 'declaredConformanceIndex'
 // ⭐⭐ **MAY A VALUE OF `valueType` STAND WHERE AN `interfaceRef` IS DECLARED? — THE WIDENING DOOR
 // (P1.7a-existentials slice 1).**
 //
-// ⚠ **ONE CALLER, BECAUSE AT THIS SLICE THERE IS ONE WIDENING POSITION:** the call ARGUMENT
-// (`SemanticCheck.checkOneArgType`). A parameter is the only declared place with room for the fat pointer's
-// second word — it travels as an adjacent hidden argument — so a `return`, a struct FIELD, a union payload
-// and a container element are REFUSED outright at their declarations
-// (`Parser.requireStorableDeclaredType`) rather than widened. v1 checks the argument too and lets its other
-// three positions soft-fail to a NULL witness, which is a wild jump at the first dispatch; shv2 has no
-// other position to soft-fail, and the day one opens it asks HERE rather than growing a second test.
+// ⚠ **ONE CALLER, AND IT SERVES BOTH WIDENING POSITIONS: `SemanticCheck.existentialWideningVerdict`.** A
+// call ARGUMENT and a `return` into an interface-typed return both reach this through that one verdict —
+// see its header for why they may never answer differently. The second word of the fat pointer is the
+// address of `__witness_<conformer>.<Iface>`, and a DECLARED type at the position is what names the
+// interface half of that symbol; the two differ only in where the word travels (an adjacent hidden argument,
+// the secondary return register).
+//
+// A struct FIELD declared at an interface type is ORDINARY and stored — the record carries both words — and
+// it is not a third widening position, because the value reaching one is already an existential: a concrete
+// store into an interface-typed field is E2015, which says so and sends the author to a parameter. The
+// declared places that cannot carry the second word at all are refused at the DECLARATION instead
+// (`Parser.requireStorableDeclaredType`); `Parser.DeclaredStoragePosition` is the roster of them and the one
+// place that stays complete, so nothing is listed here. v1 lets its non-argument positions soft-fail to a
+// NULL witness, which is a wild jump at the first dispatch; shv2 refuses instead.
 //
 // Two ways a value may stand there, and the second is the one that costs nothing:
 //

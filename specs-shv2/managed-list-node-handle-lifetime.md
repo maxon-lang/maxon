@@ -1015,11 +1015,13 @@ a heap string long enough not to be inline
 0
 ```
 
-<!-- disabled-test: an-element-holding-a-handle-into-its-own-chain-leaks -->
-<!-- MEASURED 2026-09-04: exit 101 where the case pins 1 — the LEAK GATE fires. The case is about an element
-     holding a handle into its own chain, and shv2 leaks it rather than reporting the cycle. -->
-A chain whose element can reach a handle into that same chain is a retain cycle, and refcounting cannot
-collect one. The type-graph cycle check (E4014) refuses the direct spelling and does not see this one.
+<!-- test: error.an-element-holding-a-handle-into-its-own-chain-is-a-cycle -->
+A chain whose element can reach a handle back into that same chain is a retain cycle, and refcounting
+cannot collect one — which is why `ownership.md` makes a cycle a COMPILE error rather than a runtime
+concern. The cycle here closes through an interface (`Cell` holds a `Backref`; `Holder` is one and holds
+the node), so it is `ownership/cycle-through-an-interface` with a `__ManagedListNode` on the return leg
+rather than a plain field. ⚠ The container is incidental: the same cycle over two plain structs is
+refused by the same rule.
 ```maxon
 typealias Small = int(0 to 255)
 typealias CellChain = __ManagedList with Cell
@@ -1077,8 +1079,8 @@ function main() returns ExitCode
 	return cell.tag()
 end 'main'
 ```
-```exitcode
-1
+```maxoncstderr
+error E4014: <fragment>:22:6: type 'Holder' contains a reference cycle (via Holder → back: CellNode → Cell → back: Backref → Holder); recursive type references are not allowed
 ```
 
 <!-- test: reading-a-node-a-remove-emptied-aborts -->

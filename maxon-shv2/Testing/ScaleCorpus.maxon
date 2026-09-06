@@ -3640,6 +3640,14 @@ let InterfacePrefix = "ScaleProto"
 let ConformerPrefix = "ScaleUnit"
 let InterfaceFileDriverPrefix = "scaleIfaceFile"
 
+// ⭐⭐ **THE HOLDER IS WHAT MAKES AN INTERFACE A NODE IN `TypeCycleCheck`'s GRAPH.** That check reads a
+// declared FIELD's type, so interfaces and conformers with no field declared AT an interface exercise none
+// of its interface half — every rung reads zero however many conformances it declares. One holder per pair
+// puts the interface count on that walk's multiplicand, which is what a walk driven from the wrong side
+// bends on.
+let InterfaceHolderSuffix = "Hold"
+let InterfaceHolderFieldName = "back"
+
 let DispatchInterfacePrefix = "ScaleDispProto"
 let DispatchConformerPrefix = "ScaleDisp"
 let IfaceDispatchDriver = "scaleIfaceDispatch"
@@ -5340,6 +5348,14 @@ function interfaceConformancePair(interfaceName String, typeName String, salt Kn
 	out.append("\t\treturn Self\{base: base\}\n")
 	out.append("\tend 'create'\n")
 	out.append("end '{typeName}'\n")
+	// ⚠ DECLARED AND NEVER CONSTRUCTED, WHICH IS THE COST IT IS HERE TO CARRY: `TypeCycleCheck` reads
+	// DECLARATIONS, and a holder that were constructed would need its field fed an already-widened conformer
+	// — a concrete store into an interface-typed field is E2015 — so the corpus would be measuring
+	// construction instead. It closes no cycle: nothing conforms to `{interfaceName}` but `{typeName}`, whose
+	// only field is an int.
+	out.append("\ntype {typeName}{InterfaceHolderSuffix}\n")
+	out.append("\tlet {InterfaceHolderFieldName} as {interfaceName}\n")
+	out.append("end '{typeName}{InterfaceHolderSuffix}'\n")
 	return out.build()
 end 'interfaceConformancePair'
 

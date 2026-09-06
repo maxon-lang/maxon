@@ -1285,36 +1285,22 @@ end 'requireSameSlotNumbering'
 //
 // It walks the same `extendsInterfaces` edges `appendInterfaceWitnessSlots` does and terminates on the same
 // `visited` test, so a cyclic `extends` chain answers rather than hangs — one walk shape, two readers.
+//
+// ⭐ **IT IS THE CLOSURE, PROBED — THERE IS ONE WALK OF THE `extends` RELATION IN THIS FILE AND THIS IS NOT A
+// SECOND ONE.** A search that pruned on `wanted` would be a second statement of the same edges, free to gain
+// a rule the enumeration never got: on the conformance side that is a false refusal, on `TypeCycleCheck`'s a
+// missing edge and therefore a LEAK, and neither is a compile error. What it gives up is the early exit, on
+// a walk that allocates the same one set either way and is asked once per declared conformance of a
+// discharged `where` clause.
 export function conformanceSatisfiesInterface(interfaces IrInterfaceMap, declaredName ByteArray, wanted ByteArray) returns bool
-	var visited = InterfaceNameSet.create()
-	return conformanceReachesInterface(interfaces, declaredName: declaredName, wanted: wanted, visited: visited)
+	var closure = InterfaceNameSet.create()
+	collectInterfaceAndItsParents(interfaces, name: declaredName, into: closure)
+	return closure.contains(wanted)
 end 'conformanceSatisfiesInterface'
 
-// The recursion `conformanceSatisfiesInterface` seeds — separate only because the `visited` set is the walk's
-// own bookkeeping and no caller should have to supply it (`interfaceWitnessSlots`' arrangement).
-function conformanceReachesInterface(interfaces IrInterfaceMap, declaredName ByteArray, wanted ByteArray, visited InterfaceNameSet) returns bool
-	if declaredName.equals(wanted) 'isTheOne'
-		return true
-	end 'isTheOne'
-	if visited.contains(declaredName) 'alreadySeen'
-		return false
-	end 'alreadySeen'
-	visited.insert(declaredName)
-
-	// ⚠ The parent walk runs INSIDE the `found` arm rather than after it. Bound and discarded, the lookup had
-	// to be made a SECOND time to recover the declaration — two `lookupInterface` calls per `extends` node,
-	// each of which may synthesize a protocol interface, for one question.
-	match lookupInterface(interfaces, name: declaredName) 'decl'
-		found(iface) then return interfaceReachesInterface(interfaces, iface: iface, wanted: wanted, visited: visited)
-		// A conformance naming an interface no file declares is E3015's to report, not this walk's; it
-		// simply reaches nothing further.
-		notFound then return false
-	end 'decl'
-end 'conformanceReachesInterface'
-
 // ⭐⭐ **DOES A WHOLE DECLARED CONFORMANCE SET REACH `wanted`? — THE ONE LIST-LEVEL HOME, above the one
-// pairwise home below it.** `conformanceSatisfiesInterface` answers for a SINGLE declared name; this answers
-// for everything one `implements` clause declared, which is the question every caller actually has. Both
+// pairwise home.** `conformanceSatisfiesInterface` answers for a SINGLE declared name; this answers for
+// everything one `implements` clause declared, which is the question every caller actually has. Both
 // sites that ask it — `ConformanceCheck.typeDeclaresInterface` (the E3016/E3017 conformance answer) and
 // `ProgramSignatures.conformersOf` (which types an `extension <Interface>` publishes onto) — reach it here.
 //
@@ -1326,16 +1312,15 @@ end 'conformanceReachesInterface'
 // but allocated a fresh `visited` set per declared name. Two spellings of one orchestration, disagreeing
 // about cost, with the next edit to the rule landing in whichever one the editor opened.
 //
-// ⭐ **ONE `visited` SET FOR THE WHOLE CLAUSE, WHICH IS WHY THE LOOP IS HERE AND NOT AT EITHER CALLER.**
-// `wanted` is fixed across the set, so an ancestor that failed to reach it under one declared name cannot
-// reach it under another — sharing the set is the walk's own pruning applied to the whole question, and it
-// makes the cost one allocation per (type, interface) asked rather than one per name. A DIAMOND
-// (`implements Left, Right` where both `extends Root`) is therefore walked once, by that set and not by a
+// ⭐ **ONE CLOSURE FOR THE WHOLE CLAUSE, WHICH IS WHY THE LOOP IS HERE AND NOT AT EITHER CALLER.** A DIAMOND
+// (`implements Left, Right` where both `extends Root`) is walked once, by the closure's own set and not by a
 // second rule, exactly as `appendInterfaceWitnessSlots` handles its own; a cyclic `extends` chain terminates
-// on the same test.
+// on the same test. The cost is one allocation per (type, interface) ASKED — fine at a caller that asks it
+// once per site, and quadratic at one that asks it per pair, which is what
+// `collectDeclaredInterfaceClosure` exists for.
 //
 // ⚠ **THE DIRECT HIT IS A SET PROBE AND IS ASKED FIRST.** Every conformance in the corpus but the `extends`
-// cases answers there, in O(1) and before the walk allocates anything. That is why the parameter is an
+// cases answers there, in O(1) and before the closure allocates anything. That is why the parameter is an
 // `InterfaceNameSet` rather than the raw `StructLayout.conformsTo` array: the fast path is only fast in the
 // set, and `ProgramSignatures.sweptConformanceIndex` is that array already in this shape.
 export function declaredInterfacesReach(interfaces IrInterfaceMap, declaredNames InterfaceNameSet, wanted ByteArray) returns bool
@@ -1343,27 +1328,51 @@ export function declaredInterfacesReach(interfaces IrInterfaceMap, declaredNames
 		return true
 	end 'declaresItDirectly'
 
-	var visited = InterfaceNameSet.create()
-	for declaredName in declaredNames 'eachDeclared'
-		if conformanceReachesInterface(interfaces, declaredName: declaredName, wanted: wanted, visited: visited) 'reachesItByExtends'
-			return true
-		end 'reachesItByExtends'
-	end 'eachDeclared'
-
-	return false
+	var closure = InterfaceNameSet.create()
+	collectDeclaredInterfaceClosure(interfaces, declaredNames: declaredNames, into: closure)
+	return closure.contains(wanted)
 end 'declaredInterfacesReach'
 
-// Does any of `iface`'s parents reach `wanted`? The `found` arm's body, split out only because a `match`
-// arm is one expression and this is a loop.
-function interfaceReachesInterface(interfaces IrInterfaceMap, iface IrInterface, wanted ByteArray, visited InterfaceNameSet) returns bool
-	for parentName in iface.extendsInterfaces 'eachParent'
-		if conformanceReachesInterface(interfaces, declaredName: parentName, wanted: wanted, visited: visited) 'reached'
-			return true
-		end 'reached'
-	end 'eachParent'
+// ⭐⭐ **EVERY INTERFACE ONE DECLARED CONFORMANCE SET REACHES — THE ONE WALK OF THE `extends` RELATION, which
+// the two predicates above are this PROBED.** They answer a (type, interface) pair and cost one allocation
+// each; a caller that must place one type against EVERY interface at once cannot use them, because asking
+// per candidate is one set per PAIR — quadratic, and `TypeCycleCheck.addConformerEdgesOf` is such a caller.
+// It asks here, and because the predicates are this walk rather than a second one, what they refuse and what
+// it credits cannot drift.
+//
+// `into` IS the walk's visited set as well as its result, so a diamond is walked once and a cyclic `extends`
+// chain terminates. ⚠ **A CALLER THAT SEEDS `into` WITH ANYTHING ELSE FIRST SUPPRESSES THAT NAME'S PARENTS**
+// — see `TypeCycleCheck.addConformerEdgesOf`, which runs this before its own union for that reason.
+export function collectDeclaredInterfaceClosure(interfaces IrInterfaceMap, declaredNames InterfaceNameSet, into InterfaceNameSet)
+	for declaredName in declaredNames 'eachDeclared'
+		collectInterfaceAndItsParents(interfaces, name: declaredName, into: into)
+	end 'eachDeclared'
+end 'collectDeclaredInterfaceClosure'
 
-	return false
-end 'interfaceReachesInterface'
+// The recursion above seeds. Also the whole walk for a SINGLE declared name (`conformanceSatisfiesInterface`),
+// which is why it is a function rather than the loop body.
+function collectInterfaceAndItsParents(interfaces IrInterfaceMap, name ByteArray, into InterfaceNameSet)
+	if into.contains(name) 'alreadyWalked'
+		return
+	end 'alreadyWalked'
+	into.insert(name)
+
+	// The parent walk runs INSIDE the `found` arm rather than after it: bound and discarded, the declaration
+	// would have to be looked up a SECOND time to recover it — two `lookupInterface` calls per `extends` node,
+	// each of which may synthesize a protocol interface, for one question.
+	match lookupInterface(interfaces, name: name) 'decl'
+		found(iface) then collectParentInterfaces(interfaces, iface: iface, into: into)
+		// A conformance naming an interface no file declares reaches nothing further; E3015 reports it.
+		notFound then return
+	end 'decl'
+end 'collectInterfaceAndItsParents'
+
+// Each parent of one interface, split out because a `match` arm is one expression and this is a loop.
+function collectParentInterfaces(interfaces IrInterfaceMap, iface IrInterface, into InterfaceNameSet)
+	for parentName in iface.extendsInterfaces 'eachParent'
+		collectInterfaceAndItsParents(interfaces, name: parentName, into: into)
+	end 'eachParent'
+end 'collectParentInterfaces'
 
 // ⭐ **IS THIS RESOLVED DISPATCH TARGET THE PROTOCOL `want` DECLARES? (P1.7a slice 2b-ii; a PREDICATE since
 // R10c.)** A constraint declaring a method of the protocol's NAME is not the protocol — its RESULT, its

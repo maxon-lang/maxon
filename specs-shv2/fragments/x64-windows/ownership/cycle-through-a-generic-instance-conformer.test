@@ -1,0 +1,57 @@
+// Test: cycle-through-a-generic-instance-conformer
+typealias Small = int(0 to 255)
+typealias HolderBox = Box with Holder
+
+interface Tagged
+	function tag() returns Small
+end 'Tagged'
+
+type Box uses T implements Tagged
+	var payload as T
+
+	export static function create(p T) returns Self
+		return Self{payload: p}
+	end 'create'
+
+	export function tag() returns Small
+		return 3
+	end 'tag'
+end 'Box'
+
+type Holder
+	var t as Tagged
+
+	export static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function retarget(next Tagged)
+		self.t = next
+	end 'retarget'
+
+	export function go() returns Small
+		return self.t.tag()
+	end 'go'
+end 'Holder'
+
+type Leaf implements Tagged
+	let n as Small
+
+	export static function create(n Small) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function tag() returns Small
+		return self.n
+	end 'tag'
+end 'Leaf'
+
+function main() returns ExitCode
+	var h = Holder.create(Leaf.create(1))
+	let b = HolderBox.create(h)
+	h.retarget(b)
+	return h.go() as ExitCode
+end 'main'
+---
+CompilerError:
+error E4014: <fragment>:21:6: type 'Holder' contains a reference cycle (via Holder → t: Tagged → HolderBox → Holder); recursive type references are not allowed

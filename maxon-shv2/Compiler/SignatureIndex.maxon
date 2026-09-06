@@ -5404,7 +5404,7 @@ export let SetBuiltinBaseName = b"Set"
 // with no second predicate to keep in step. What each door then ANSWERS with differs — the mangled instance
 // name where there is no source spelling, the typealias's own name where there is — and folding those two
 // into one `String` return is what put a mangled `Array_Opaque` into a diagnostic that pins `OpaqueArr`.
-union GenericInstanceConformer
+export union GenericInstanceConformer
 	// A conforming `Array with E`: every one of them reduces to the ONE `Array` conformer, whose impls walk
 	// raw bytes and are element-independent.
 	arrayBuiltin
@@ -24567,7 +24567,16 @@ export type ProgramSignatures
 	//
 	// A BUILTIN base (`Array`, `Set`, `List`, a `Map` while it is still synthesized) has no `StructLayout` to
 	// declare anything, so it keeps the mangled name it always had and the arms above stay authoritative.
-	// ⚠⚠ **IT ANSWERS THE REDUCTION, NOT THE NAME, AND THE DIFFERENCE IS A DIAGNOSTIC THAT REGRESSED WHEN IT
+	// ⭐ **EXPORTED FOR `TypeCycleCheck.addInstanceConformerEdges`, WHICH MUST WALK THE VERY NODE A VALUE OF
+	// AN INSTANCE WIDENS FROM.** That check credits an interface's conformers as graph edges, and a generic
+	// base is a SINK there — its field types are opaque type parameters — while the argument that can close a
+	// cycle lives in the instance. Asking the reduction rather than re-deriving it is what keeps "may this
+	// value stand at that interface" and "what may that interface's field hold" one answer.
+	//
+	// ⚠ **THE CASE MATTERS TO THAT READER TOO, NOT ONLY THE NAME**: an `unreduced` instance conforms to
+	// nothing, so it contributes no edge — the same fallback the diagnostic half needs, for a different reason.
+	//
+	// ⚠ **IT ANSWERS THE REDUCTION, NOT THE NAME, AND THE DIFFERENCE IS A DIAGNOSTIC THAT REGRESSED WHEN IT
 	// DID ANSWER THE NAME.** The two doors share the RULE and emphatically do not share the FALLBACK: an
 	// unreduced instance is its MANGLED name at `conformerNameOfType` (which holds no source spelling) and its
 	// ALIAS's own name at `conformerNameOfDeclaredName` (which does, and whose name reaches an author).
@@ -24575,7 +24584,7 @@ export type ProgramSignatures
 	// nested case began reporting *"but 'Array_Opaque' does not implement 'Hashable'"* where the corpus pins
 	// *"but 'OpaqueArr' does not implement 'Hashable'"* — the compiler's mangling shown to someone who wrote
 	// a typealias. So the miss is a CASE the caller must handle, not a default this may pick.
-	function instanceConformerReduction(id GenericInstanceId) returns GenericInstanceConformer
+	export function instanceConformerReduction(id GenericInstanceId) returns GenericInstanceConformer
 		// ⛔⛔ **AN ARRAY IS DECIDED BY ITS `where` CLAUSE AND MAY NEVER FALL THROUGH TO `declaredBase` (A4q).**
 		// The paragraph above rests on `Array` having no `StructLayout` — *"a BUILTIN base has no StructLayout
 		// to declare anything, so it keeps the mangled name it always had"* — and listing `stdlib/Array.maxon`

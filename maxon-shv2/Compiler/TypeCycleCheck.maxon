@@ -13,12 +13,15 @@
 // MEASURED (cubic). So this file contributes the GRAPH and the WORDS, and nothing else. A second cycle
 // finder here would be the one-fact-twice bug at the algorithm level.
 //
-// ⭐ **THE NODE SPACE IS AGGREGATES *PLUS* GENERIC INSTANCES, AND THE CONTAINER NODES ARE WHAT MAKE THE
-// PATH READ THE WAY THE SPEC PINS IT.** `Folder → children: FolderArray → Folder` names the ALIAS the author
+// ⭐ **THE NODE SPACE IS AGGREGATES *PLUS* GENERIC INSTANCES *PLUS* THE INTERFACES A REFERENCE NAMES, AND
+// THE CONTAINER NODES ARE WHAT MAKE THE PATH READ THE WAY THE SPEC PINS IT.** `Folder → children:
+// FolderArray → Folder` names the ALIAS the author
 // wrote, not `Array with Folder` and not the element type alone, so `FolderArray` has to be a node the path
 // passes THROUGH. That is also what makes the rule transitive through nesting for free: an instance's
 // arguments are edges like any other, so `Array with (Map with (String, Folder))` reaches `Folder` by the
-// same walk with no case of its own.
+// same walk with no case of its own. An INTERFACE is a node for the same reason one level further out: a
+// field declared at one holds a CONFORMER, so the interface is the hop the path passes through and its
+// out-edges are the conformer set.
 //
 // ⭐ **ONLY A USER-WRITTEN DECLARATION IS EVER BLAMED, AND THE GRAPH IS BUILT OVER EVERYTHING ANYWAY.**
 // The two halves are separate on purpose. Building over everything is what lets a genuine user → stdlib →
@@ -33,8 +36,9 @@
 // `project.typeNames`, a generic instance's argument in the index's own private table
 // (`ProgramSignatures.instanceArgCycleTarget`, which is why that door is a method there and not a call here).
 export union TypeCycleTarget
-	// A primitive, a ranged alias, an opaque type parameter, an interface, a function value — nothing this
-	// graph has a node for, and nothing that can hold a type inside itself.
+	// A primitive, a ranged alias, an opaque type parameter, a function value — nothing this graph has a node
+	// for. ⚠ **AN INTERFACE IS NOT ONE OF THEM: it holds a type inside itself through its conformers**, and it
+	// is `existential` below.
 	nothing
 	// A declared `type` / `enum` / `union`, BY NAME. The name is resolved against the declaration registries
 	// by the caller rather than here, so a name no declaration holds simply contributes no edge — which is
@@ -43,6 +47,10 @@ export union TypeCycleTarget
 	// A generic INSTANCE — `Array with Folder`, whether the author wrote it inline or reached it through a
 	// `typealias`.
 	container(id GenericInstanceId)
+	// An INTERFACE, BY NAME — the type of `var back as Backref`. WHAT such a field holds is decided
+	// whole-program by the conformance registry and never by the reference itself, which is why this arm
+	// carries only the name and the conformers are read where the graph is built.
+	existential(interfaceName ByteArray)
 end 'TypeCycleTarget'
 
 // The node a `MaxonType` interned in `typeNames` points at. `named` and `structRef` are ONE arm because the
@@ -60,11 +68,19 @@ export function typeCycleTargetOf(t MaxonType, typeNames TypeNameInterner) retur
 		return TypeCycleTarget.container(genericInstanceIdOf(t))
 	end 'namesAContainer'
 
+	// An existential rides the NAME column exactly as `named`/`structRef` do (`interfaceNameOfType`), so the
+	// interface arrives by name and is resolved against a registry the same way every other edge source is.
+	if tag == ValueTypeTag.interfaceRef 'namesAnInterface'
+		return TypeCycleTarget.existential(interfaceNameOfType(t, typeNames: typeNames))
+	end 'namesAnInterface'
+
 	return TypeCycleTarget.nothing
 end 'typeCycleTargetOf'
 
-// Aggregate name ⇒ its dense node key.
-typealias AggregateNodeMap = Map with (ByteArray, CsrIndex)
+// A declared name ⇒ its dense node key. ONE alias for both name-keyed halves of the space: what an aggregate
+// name and an interface name are looked up FOR is the same question, and the two maps differ only in which
+// half of the numbering they answer in.
+typealias TypeCycleNodeMap = Map with (ByteArray, CsrIndex)
 
 // ⭐ **"NO NODE" AS A VALUE, NOT AS A SENTINEL INSIDE THE KEY SPACE.** `CsrIndex` is 0-based and 0 is a real
 // node, so the absence has to sit ABOVE every key any program can mint — which `u64.max` does, and which no
@@ -85,7 +101,7 @@ let TypeCyclePathArrow = " → "
 type TypeCycleGraph
 	// Aggregate name ⇒ its node. The container node for instance `gid` is `aggregateCount() + gid`, so the
 	// two spaces are disjoint by construction and neither needs a kind bit.
-	var nodeOfAggregate as AggregateNodeMap
+	var nodeOfAggregate as TypeCycleNodeMap
 	// Node ⇒ its name, for the aggregate half. The container half's display name is derived at render time
 	// (`ProgramSignatures.instanceDisplayName`), because it is the author's `typealias` spelling and there is
 	// no reason to materialize one per instance for a program that compiles.
@@ -93,6 +109,14 @@ type TypeCycleGraph
 	// How many generic instances the program interned — the container half's width, held here so the
 	// adjacency and the node numbering cannot come to disagree about how wide the space is.
 	var instanceCount as GenericInstanceId
+	// Interface name ⇒ its node, plus the reverse column — for the interfaces some declared reference NAMES.
+	// ⭐ **MINTED ON MENTION, AND NUMBERED ABOVE BOTH OTHER HALVES SO THE SPACE MAY GROW WHILE THE EDGES ARE
+	// BEING BUILT**: an aggregate's node is fixed by the pass before any edge exists, and a container's is a
+	// formula over two counts, so appending here can move neither. An interface no reference names gets no
+	// node and no conformer walk, and could lie on no cycle anyway — a node nothing points AT has in-degree
+	// zero.
+	var nodeOfInterface as TypeCycleNodeMap
+	var interfaceNames as ByteArrayArray
 	// The edges, as the parallel (owner, held) columns `buildCsr` consumes.
 	var edgeOwners as CsrColumn
 	var edgeHeld as CsrColumn
@@ -106,12 +130,36 @@ type TypeCycleGraph
 	var edgeMemberNames as ByteArrayArray
 
 	static function create(instanceCount GenericInstanceId) returns TypeCycleGraph
-		return Self{nodeOfAggregate: AggregateNodeMap.create(), aggregateNames: ByteArrayArray.create(), instanceCount: instanceCount, edgeOwners: CsrColumn.create(), edgeHeld: CsrColumn.create(), edgeCaseNames: ByteArrayArray.create(), edgeMemberNames: ByteArrayArray.create()}
+		return Self{nodeOfAggregate: TypeCycleNodeMap.create(), aggregateNames: ByteArrayArray.create(), instanceCount: instanceCount, nodeOfInterface: TypeCycleNodeMap.create(), interfaceNames: ByteArrayArray.create(), edgeOwners: CsrColumn.create(), edgeHeld: CsrColumn.create(), edgeCaseNames: ByteArrayArray.create(), edgeMemberNames: ByteArrayArray.create()}
 	end 'create'
 
 	function aggregateCount() returns CsrIndex
 		return self.aggregateNames.count()
 	end 'aggregateCount'
+
+	// Where the INTERFACE half of the numbering starts — the two halves below it, stated once so the mint, the
+	// render and the node count cannot come to disagree about where it is.
+	function interfaceNodeBase() returns CsrIndex
+		return self.aggregateCount() + (self.instanceCount as CsrIndex)
+	end 'interfaceNodeBase'
+
+	// How many interfaces some declared reference has named.
+	function referencedInterfaceCount() returns CsrIndex
+		return self.interfaceNames.count()
+	end 'referencedInterfaceCount'
+
+	// The node of an interface a reference names, minted on first mention — see `nodeOfInterface` for why
+	// minting mid-build is safe here and would not be in either other half.
+	function interfaceNode(name ByteArray) returns CsrIndex
+		if let already = try self.nodeOfInterface.get(name) 'alreadyMinted'
+			return already
+		end 'alreadyMinted'
+
+		let node = self.interfaceNodeBase() + self.interfaceNames.count()
+		self.nodeOfInterface.upsert(name, value: node)
+		self.interfaceNames.push(name)
+		return node
+	end 'interfaceNode'
 
 	// Claim the node for a declared aggregate. Every declaration claims one before any edge is added, because
 	// an edge may point at a type declared in a file folded later — the completeness argument
@@ -130,18 +178,21 @@ type TypeCycleGraph
 	// The node `target` denotes, or `NoTypeCycleNode` when it denotes nothing this graph holds — an
 	// undeclared name, or a reference to a type that cannot contain one.
 	//
-	// ⚠ **THE TWO ARMS THAT ANSWER A NODE ANSWER FROM DIFFERENT AUTHORITIES, WHICH IS WHY ONE FALLS BACK AND
-	// THE OTHER PANICS.** An aggregate arrives BY NAME, and a name no declaration filed is an ordinary
-	// property of the program (a `named` that turned out to be a ranged alias) — so "no node" is a real
-	// answer. A container arrives as an INTERNED ID from the very registry whose count fixed this graph's
+	// ⚠ **THE THREE ARMS THAT ANSWER A NODE ANSWER FROM DIFFERENT AUTHORITIES, WHICH IS WHY ONE FALLS BACK,
+	// ONE PANICS AND THE THIRD MINTS.** An aggregate arrives BY NAME, and a name no declaration filed is an
+	// ordinary property of the program (a `named` that turned out to be a ranged alias) — so "no node" is a
+	// real answer. A container arrives as an INTERNED ID from the very registry whose count fixed this graph's
 	// width at `create`, so an id outside that count is not a program property but a graph built over the
 	// wrong registry — and its node would index past `adjacency()`'s `nodeCount`, reading out of bounds
-	// inside `nodesOnACycle` instead of reporting anything.
+	// inside `nodesOnACycle` instead of reporting anything. An EXISTENTIAL names an interface the parser
+	// already resolved — a reference reaches an `interfaceRef` tag no other way — so there is neither a
+	// fallback to take nor an id to check, and the name simply claims its node.
 	function nodeOfTarget(target TypeCycleTarget) returns CsrIndex
 		match target 'kind'
 			nothing then return NoTypeCycleNode
 			aggregate(name) then return try self.nodeOfAggregate.get(name) otherwise NoTypeCycleNode
 			container(id) then return self.containerNode(id)
+			existential(interfaceName) then return self.interfaceNode(interfaceName)
 		end 'kind'
 	end 'nodeOfTarget'
 
@@ -162,16 +213,40 @@ type TypeCycleGraph
 			return
 		end 'referencesNothingThisGraphHolds'
 
+		self.pushEdge(owner, held: held, caseName: caseName, memberName: memberName)
+	end 'addEdge'
+
+	// ⭐ **ONE OF AN INTERFACE NODE'S OUT-EDGES: A NODE THE CONFORMANCE REGISTRY FILES UNDER IT.** The hop
+	// declares no member, so it is labelled like a container element and the path reads
+	// `back: Backref → Holder`. An interface no reference named has no node and needs no edge — which is what
+	// makes the walk affordable from the CONFORMER side, where a type's whole conformance closure is known at
+	// once and each name is one probe.
+	//
+	// ⚠ **A CONFORMER IS NOT THE SAME SET AS "WHAT MAY STAND AT THIS INTERFACE", AND THE EDGE IS THE WIDER
+	// ONE.** An `enum` may declare `implements` and is filed, but no value of one widens (E3005 at the store),
+	// and a generic BASE is filed while only its INSTANCES widen. The graph carries the relation whole
+	// because a missed edge is a leak and a spare one to a node that holds nothing costs a sink.
+	function recordConformerEdge(interfaceName ByteArray, conformer CsrIndex)
+		let owner = try self.nodeOfInterface.get(interfaceName) otherwise NoTypeCycleNode
+		if owner == NoTypeCycleNode 'namedByNoReference'
+			return
+		end 'namedByNoReference'
+
+		self.pushEdge(owner, held: conformer, caseName: EmptySourceText, memberName: EmptySourceText)
+	end 'recordConformerEdge'
+
+	// The one writer of the four parallel edge columns.
+	function pushEdge(owner CsrIndex, held CsrIndex, caseName ByteArray, memberName ByteArray)
 		self.edgeOwners.push(owner)
 		self.edgeHeld.push(held)
 		self.edgeCaseNames.push(caseName)
 		self.edgeMemberNames.push(memberName)
-	end 'addEdge'
+	end 'pushEdge'
 
 	// The adjacency both walks read. Built on demand rather than cached: `nodesOnACycle` asks for it once per
 	// compile, and `shortestCycleThrough` only on a program that is already being rejected.
 	function adjacency() returns CsrGraph
-		return buildCsr(self.edgeOwners, to: self.edgeHeld, nodeCount: self.aggregateCount() + (self.instanceCount as CsrIndex))
+		return buildCsr(self.edgeOwners, to: self.edgeHeld, nodeCount: self.interfaceNodeBase() + self.referencedInterfaceCount())
 	end 'adjacency'
 
 	// ⭐⭐ **THE PATH, AND IT IS ONE FORMULA FOR ALL FOUR SHAPES `/specs/ownership.md` pins.** The cycle
@@ -182,9 +257,18 @@ type TypeCycleGraph
 	//   `Link → link.next: Link`                     — one node, one closing edge (a union case's value)
 	//   `Folder → children: FolderArray → Folder`    — two nodes; the container node contributes the second
 	//   `A → b: B → a: A`                            — two nodes, two member edges
+	//   `Cell → back: Backref → Holder → cell: Cell` — three nodes; the interface node contributes the third
 	//
 	// fall out of the SAME loop. Nothing here asks which shape it is rendering, which is what stops three of
 	// the four canonical cases from silently testing the fourth's spelling.
+	//
+	// ⚠ **THE PATH IS ONE WITNESS AND WHICH ONE IT SHOWS IS ADJACENCY ORDER — for every node kind here, not
+	// only interfaces.** A struct with two fields that each close a cycle shows whichever edge was recorded
+	// first, and an interface with two conformers on cycles shows whichever conformer was. That is
+	// deliberately NOT `blameForTypeCycles`' earliest-declared rule, which settles the one thing a second
+	// choice would DOUBLE-DIAGNOSE: the declaration the message is anchored on. A witness is not contested —
+	// every one of them is a real cycle through the blamed type — so ordering it by source position would
+	// buy a per-node declaration lookup on the error path and change nothing an author acts on.
 	function renderCyclePath(signatures ProgramSignatures, cycle CsrColumn) returns String
 		let start = try cycle.get(0) otherwise panic("TypeCycleGraph.renderCyclePath: the blamed node lies on a cycle, so `shortestCycleThrough` returned a non-empty path for it")
 		var path = String.from(self.displayNameOfNode(signatures, node: start))
@@ -245,8 +329,18 @@ type TypeCycleGraph
 			return self.aggregateNameOfNode(node)
 		end 'aDeclaredAggregate'
 
+		if node >= self.interfaceNodeBase() 'anInterface'
+			return self.referencedInterfaceNameAt(node - self.interfaceNodeBase())
+		end 'anInterface'
+
 		return signatures.instanceDisplayName(((node - self.aggregateCount()) as GenericInstanceId))
 	end 'displayNameOfNode'
+
+	// The name of the interface minted at `index` — the one reader of that column, asked by the conformer walk
+	// (which questions the conformance registry about a NAME, never about a node) and by the path render.
+	function referencedInterfaceNameAt(index CsrIndex) returns ByteArray
+		return try self.interfaceNames.get(index) otherwise panic("TypeCycleGraph.referencedInterfaceNameAt: interfaceNames.get OOB at {index} below count {self.referencedInterfaceCount()}")
+	end 'referencedInterfaceNameAt'
 
 	// The declared name of a node ALREADY KNOWN to be an aggregate — the half `blameForTypeCycles` needs,
 	// where the loop bound is `aggregateCount()` and the container half of `displayNameOfNode` is therefore
@@ -362,6 +456,8 @@ end 'typeDeclEarlier'
 
 // ⭐ **THE ONE WALK OVER "WHAT DOES THIS TYPE HOLD".** Three declaration shapes contribute edges, and they
 // are the three the spec names: a struct FIELD, a union case's ASSOCIATED VALUE, and a container's ELEMENT.
+// A fourth source is not a declaration at all and so is a pass of its own below — the CONFORMERS of every
+// interface those three named.
 function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) returns TypeCycleGraph
 	var graph = TypeCycleGraph.create(signatures.genericInstanceCount())
 	for (name, _) in project.structTypes 'eachStructName'
@@ -404,5 +500,94 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 		end 'eachArgument'
 	end 'eachInstance'
 
+	// LAST, because it is driven by which interfaces the three walks above NAMED: an interface no reference
+	// names is not minted and is not walked.
+	addConformerEdges(project, signatures: signatures, graph: graph)
+
 	return graph
 end 'buildTypeReferenceGraph'
+
+// ⭐⭐ **AN INTERFACE-TYPED FIELD HOLDS A CONFORMER, SO THE CONFORMERS ARE THE INTERFACE'S EDGES — the hop
+// `/specs/ownership.md`'s *"directly or indirectly through struct fields"* needs and the graph had no node
+// for.** `Cell → back: Backref → Holder → cell: Cell` is one cycle, and refusing it is what the language's
+// freedom from weak references and a tracing collector rests on.
+//
+// ⚠ **WIDE ENOUGH TO CATCH THE CYCLE AND NO WIDER: the edge set is the CONFORMER SET, never the field
+// itself.** An interface-typed field is ordinary, and refusing one on sight would pass every case here while
+// refusing a large amount of legal code — `an-interface-field-is-legal-when-no-conformer-reaches-back` is the
+// control that says so. What makes a field a cycle is a conformer that reaches BACK to its holder, which is a
+// whole-program fact this walk asks the registry rather than deciding itself.
+//
+// ⭐⭐ **IT IS DRIVEN FROM THE CONFORMER SIDE, AND THAT IS THE WHOLE COST STORY.** Asked the other way —
+// per named interface, "which aggregates conform?" — the walk is Θ(interfaces × aggregates) with a
+// `visited` set allocated at every MISS, because `declaredInterfacesReach`'s O(1) probe fires only on a hit.
+// MEASURED on a corpus of K interfaces, K conformers and K interface-typed fields: ×2.77 → ×3.54 in
+// allocations per doubling of K, against a ×1.29 → ×1.62 control. Driven from this side each aggregate
+// expands its conformance closure ONCE and probes each reached name against the minted nodes, which is
+// O((aggregates + instances) × conformances × extends-depth) — linear in the declaration text, with no term
+// in the number of interfaces at all.
+function addConformerEdges(project Project, signatures ProgramSignatures, graph TypeCycleGraph)
+	if graph.referencedInterfaceCount() == 0 'noReferenceNamedAnInterface'
+		return
+	end 'noReferenceNamedAnInterface'
+
+	for (name, _) in project.structTypes 'eachStruct'
+		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
+	end 'eachStruct'
+	for (name, _) in project.enumTypes 'eachEnum'
+		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
+	end 'eachEnum'
+	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+		addInstanceConformerEdges(project, signatures: signatures, graph: graph, id: id)
+	end 'eachInstance'
+end 'addConformerEdges'
+
+// One aggregate's conformer edges: every interface it reaches that some reference NAMED.
+//
+// ⚠ **THE TWO HALVES ARE `ConformanceCheck.typeConformsTo`'s TWO HALVES, ENUMERATED INSTEAD OF TESTED** — the
+// intrinsic grant unioned with the declared registry, which is the relation `valueWidensToInterface` asks of
+// every store into an interface-typed place. Each half is read from the home that owns it —
+// `intrinsicConformanceProtocolNames` is derived from the predicate itself, and the closure from the very
+// walk `declaredInterfacesReach` probes — so neither is a second spelling of a rule stated elsewhere.
+//
+// ⚠ **THE CLOSURE RUNS BEFORE THE INTRINSICS, AND THE ORDER IS LOAD-BEARING**: `reached` doubles as the
+// closure's visited set, so a name already in it when the walk starts is treated as walked and its parents
+// are never reached. Seeded the other way, an interface that is both intrinsically granted and declared
+// loses its `extends` chain.
+//
+// `name` is the CONFORMER name, which for a generic instance is its base's — see `addInstanceConformerEdges`,
+// which supplies the instance's node against that name.
+function addConformerEdgesOf(project Project, signatures ProgramSignatures, graph TypeCycleGraph, name ByteArray, conformer CsrIndex)
+	var reached = InterfaceNameSet.create()
+	if let declaredNames = try declaredConformanceIndex(project).get(name) 'declaresAConformance'
+		collectDeclaredInterfaceClosure(project.interfaces, declaredNames: declaredNames, into: reached)
+	end 'declaresAConformance'
+
+	for protocolName in intrinsicConformanceProtocolNames(name, discovered: signatures.discoveredConformerOf(name)) 'eachIntrinsicProtocol'
+		reached.insert(protocolName)
+	end 'eachIntrinsicProtocol'
+
+	for interfaceName in reached 'eachReachedInterface'
+		graph.recordConformerEdge(interfaceName, conformer: conformer)
+	end 'eachReachedInterface'
+end 'addConformerEdgesOf'
+
+// ⭐⭐ **AN INSTANCE OF A CONFORMING GENERIC IS THE NODE THAT ACTUALLY WIDENS, AND ITS BASE IS A SINK.** A
+// generic base's field types are opaque type parameters — `TypeCycleTarget.nothing` — so every argument that
+// can close a cycle lives in the CONTAINER node instead (`instanceArgCycleTarget`). Crediting the base alone
+// leaves `Holder → t: Tagged → HolderBox → Holder` unrefused, which compiles clean and LEAKS (exit 101): the
+// value `Cell.create` is handed is a `Box with Holder`, and `conformerNameOfType` reduces THAT to `Box`.
+//
+// ⚠ **THE REDUCTION IS ASKED, NOT REPRODUCED** (`ProgramSignatures.instanceConformerReduction`): a
+// non-conforming `Array with Opaque` stays `unreduced` and conforms to nothing, and re-deriving that rule
+// here would be the copy that grants an edge the widening door refuses — or withholds one it allows.
+function addInstanceConformerEdges(project Project, signatures ProgramSignatures, graph TypeCycleGraph, id GenericInstanceId)
+	let conformer = graph.containerNode(id)
+	match signatures.instanceConformerReduction(id) 'reduction'
+		arrayBuiltin then addConformerEdgesOf(project, signatures: signatures, graph: graph, name: signatures.arrayRecordDeclaredName(), conformer: conformer)
+		declaredBase(baseName) then addConformerEdgesOf(project, signatures: signatures, graph: graph, name: baseName, conformer: conformer)
+		// A mangled instance name is claimed by no `implements` and no intrinsic row — the property that makes
+		// a non-conforming array fail E3017 — so nothing may widen from it and it owes no edge.
+		unreduced then break 'reduction'
+	end 'reduction'
+end 'addInstanceConformerEdges'
