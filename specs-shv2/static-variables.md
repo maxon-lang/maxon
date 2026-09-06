@@ -2591,14 +2591,27 @@ TAGGED `named(E)` while the op it emits carries `integer`. Emitting the literal 
 instead is a compiler panic — *"a `named` type must be resolved to a primitive before lowering"* — because
 the op's valueType is a STORAGE question and `named` is not an answer to it.
 
-⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE IS A CONSTANT TOO — IT IS MATERIALIZED, NOT FOLDED.** `isBoxed`
-means SOME case carries a payload, and then EVERY case — payload-free ones included — is a heap box rather
-than a bare tag; shv2's own `SemanticCheck.maxon:729` says so about its own binding (*"a payload-free union
-case is still a heap object in Maxon"*). But that settles HOW such a constant is built, never WHETHER it is
-one. The box is allocated before `main` by `__module_init` — `boxSizeBytes()` bytes, tag stored at offset 0,
-payload slots ZEROED, increfed into the `.data` slot — and released by `__maxon_global_cleanup`. That is the
-same path an empty container and a `create()`-style factory already took, which is why the fold tier was the
-wrong tier to ask the question in.
+⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE IS A CONSTANT TOO — AND THE KEYWORD DECIDES WHERE ITS BOX LIVES.**
+`isBoxed` means SOME case carries a payload, and then EVERY case — payload-free ones included — is a box
+rather than a bare tag; shv2's own `SemanticCheck.maxon:729` says so about its own binding (*"a payload-free
+union case is still a heap object in Maxon"*). But that settles what the value IS, never where it comes
+from, and the two keywords answer that differently:
+
+  * a **`var`** is BUILT: `__module_init` allocates `boxSizeBytes()` bytes before `main`, stores the tag at
+    offset 0, ZEROES the payload slots, and writes the box into the `.data` slot; `__maxon_global_cleanup`
+    releases it. That is the path an empty container and a `create()`-style factory already took.
+  * a **`let` is IMAGE DATA** (⚖ *a `let` is image data*): the record holds a tag and nothing else, so the
+    compiler lays those bytes down in `.rdata` behind an immortal allocation header
+    (`ProgramSignatures.boxedUnionCaseImageBytes`). No `.data` slot, no `__module_init` construction, no
+    cleanup drop, and every incref and decref reaching it is sent home by `MmRuntime.emitBoxIsImmortal`.
+
+⭐ **THE ADMISSION READS THE CASE, NOT THE UNION** (`boxedUnionCaseIsImageData`). A union whose OTHER case
+carries an `Array` is still imageable at the cases that carry nothing, because a `let` bound to one can never
+become the other. A case that DOES declare a payload is a construction and keeps the built path.
+
+⛔ **SO EVERY `let` CASE IN THIS SECTION MEASURES THE IMAGE, AND ITS `var` TWIN MEASURES THE BUILD.** Read
+each pair as one claim: the twin is not a duplicate, it is the only case on this page that still reaches
+`ModuleInit.builtUnionCaseBox` at all.
 
 ⛔⛔ **THIS PARAGRAPH USED TO CLAIM THE OPPOSITE, AND IT WAS MEASURED FALSE.** It read *"A BOXED UNION'S CASE
 IS EXCLUDED, AND THAT IS THE RULE RATHER THAN A LIMIT OF THIS SLICE … A heap object is not something a
@@ -2678,9 +2691,10 @@ raw=404 ord=1
 
 <!-- test: a-boxed-unions-payload-free-case-is-a-constant -->
 ⭐⭐ **THE INVERTED CONTROL — the program this spec pinned as an ERROR until the claim was measured against
-the oracle.** `Boxed` has a payload-carrying case, so `plain` is a heap box; it is a constant all the same,
-built by `__module_init` rather than folded. Byte-identical to the old `error.` case but for the binding's
-name, which no longer describes what happens to it.
+the oracle.** `Boxed` has a payload-carrying case, so `plain` is a box rather than a bare tag; it is a
+constant all the same, and as a `let` its box is laid down in `.rdata` rather than folded to a number.
+Byte-identical to the old `error.` case but for the binding's name, which no longer describes what happens
+to it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2704,13 +2718,15 @@ end 'main'
 
 <!-- test: a-boxed-union-constant-stores-its-tag-and-zeroes-the-payload -->
 ⚠ **WHICH NUMBER GOES IN THE BOX, AND WHAT SITS BESIDE IT.** `beta` is tag 1 with a payload-free case on
-either side of it, so a build that stored the wrong case's tag answers something other than 20 — and one
-that folded the constant to a bare tag instead of allocating would hand `match` the number 1 to dereference.
-The payload slot must be ZEROED rather than left holding whatever `__mm_alloc` returned: `withPayload`'s arm
-is never taken here, but the slot is part of the record the cleanup releases.
+either side of it, so an image that stamped the wrong case's tag answers something other than 20 — and one
+that folded the constant to a bare tag instead of laying a box down would hand `match` the number 1 to
+dereference. The tag is read off the layout at one door (`unionCaseLayoutOf`), which is the same door
+`__module_init` builds a `var`'s box through, so the two spellings of this case cannot disagree about which
+number goes in.
 
-Reading the same global three times must give ONE answer — the slot holds a record, not a value each read
-rematerializes.
+Reading the same `let` three times must give ONE answer. It is not a slot load: each read is a `lea` at the
+one `.rdata` object the image table pooled, so "one answer" here means the reads reach ONE record — the
+property byte-dedup buys and a per-read rematerialization would lose.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2744,11 +2760,21 @@ direct=20 copy=20 again=20
 ```
 
 <!-- test: a-boxed-union-constant-shared-across-many-reads-frees-cleanly -->
-⭐ **THE SHAPE THE COMPILER'S OWN SOURCE USES, AND THE EXIT CODE IS THE GATE.** One shared payload-free
-sentinel read and stored many times is exactly `Parser.sharedUnreadParamType` and `Project.NoPayloadStorage`
-— a single box for the whole program instead of one allocation per site. Every push CO-OWNS that one box, so
-`__module_init`'s incref, each push's own, and `__maxon_global_cleanup`'s decref have to balance: an
-unbalanced pair is a leak (exit 101) or a double free, neither of which a stdout comparison can see.
+⭐ **THE SHAPE THE COMPILER'S OWN SOURCE USES, AND WHAT AN IMAGED SENTINEL COSTS TO SHARE: NOTHING.** One
+payload-free sentinel read and stored many times is exactly `Parser.sharedUnreadParamType` and
+`Project.NoPayloadStorage` — a single record for the whole program instead of one allocation per site.
+
+⚠ **THE EXIT CODE HERE IS NOT A REFCOUNT GATE, AND SAYING IT WAS IS WHAT MADE THIS CASE STOP MEASURING ITS
+OWN SUBJECT.** A `let` of this shape is image data: there is no `.data` slot, no `__module_init` box and no
+cleanup drop, and the `__mm_incref` each `push` emits into the array is routed straight home by
+`emitBoxIsImmortal` — so no incref/decref pair EXISTS here to be unbalanced, and a sabotage of one could not
+turn this program red. What it does hold is that the co-ownership road is TAKEN and is harmless on an
+immortal box: four pushes into a durable `Array`, a read back out of it, and the array's own destructor
+running over four slots that all name one read-only record.
+
+⭐⭐ **THE BALANCE IS THE `var` TWIN'S, DIRECTLY BELOW, AND IT IS THE ONLY CASE ON THIS PAGE THAT CAN SEE
+ONE.** Read the two together: this case says an imaged sentinel is free to share, the twin says a built one
+is released exactly once.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias BoxedArray = Array with Boxed
@@ -2788,24 +2814,77 @@ end 'main'
 count=4 sum=28 first=7
 ```
 
+<!-- test: a-boxed-union-var-shared-across-many-reads-frees-cleanly -->
+⭐⭐ **THE `var` TWIN, AND THE EXIT CODE IS THE GATE.** The identical program with one keyword changed. A
+`var` is never imaged — `settleRecordValue` writes `hasStorage = decl.mutable or not recordShapeHasAnImage(…)`
+— so this binding keeps the whole built path the `let` above no longer has: `__module_init` allocates the
+box, stores the tag, zeroes the payload slots and writes the pointer into a `.data` slot, and
+`__maxon_global_cleanup` drops it after `main`.
+
+⛔ **AND THE REFCOUNTS ARE REAL HERE, WHICH IS THE WHOLE REASON THIS CASE EXISTS.** The slot owns one
+reference; every `push` CO-OWNS the same box through a `__mm_incref` that actually steps a counter; the
+array's destructor releases four; the cleanup releases the slot's. Those have to balance, and an unbalanced
+pair is a leak (exit 101) or a double free — neither of which the stdout comparison can see. MEASURED with
+one extra `__mm_incref` in `ModuleInit.builtUnionCaseBox`: **this case exits 101 and the `let` case above
+does not move**, which is exactly the asymmetry the pair is here to state.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BoxedArray = Array with Boxed
+
+union Boxed
+	plain
+	withPayload(n Integer)
+end 'Boxed'
+
+var sentinel = Boxed.plain
+
+function tagOf(b Boxed) returns Integer
+	return match b 'k'
+		plain gives 7
+		withPayload(n) gives n
+	end 'k'
+end 'tagOf'
+
+function main() returns ExitCode
+	var xs = BoxedArray.create()
+	var i = 0 as Integer
+	var sum = 0 as Integer
+	while i < 4 'each'
+		xs.push(sentinel)
+		sum = sum + tagOf(sentinel)
+		i = i + 1
+	end 'each'
+	let first = try xs.get(0) otherwise Boxed.plain
+	print("count={xs.count()} sum={sum} first={tagOf(first)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+count=4 sum=28 first=7
+```
+
 <!-- test: a-boxed-union-constants-payload-slots-are-zeroed -->
-⚠⚠ **THE ONE CASE HERE THAT CAN SEE THE ZERO-FILL — and finding it took ruling out the obvious candidate.**
+⚠⚠ **THE PATTERN THAT CAN SEE A PAYLOAD SLOT — and finding it took ruling out the obvious candidate.**
 An `or` pattern may bind a payload the matched case does not declare (`none or some(n)`), and reading `n` on
 the `none` path reads the box's payload SLOT directly. `Parser.emitEnumBox` says a diagnostic rests on
 exactly this: E3129 admits the pattern *because* the fill pins a deterministic 0 there, and
 `zeroInhabitsPayloadType` decides whether that 0 is a value of the binding's type. So this program's answer
-IS the slot's contents, and the box `__module_init` builds owes the same 0 the box a function body builds does.
+IS the slot's contents.
 
-⚠ **THE DESTRUCTOR CANNOT SEE IT, WHICH IS WHY THE FIRST VERSION OF THIS CASE PROVED NOTHING.** It used a
-MANAGED payload (`held(s String)`) on the theory that a slot left un-zeroed would be `__str_decref`'d as a
-bogus pointer at cleanup. MEASURED, that is false: `synthesizeUnionDestructor` is TAG-DISPATCHED — it loads
-the tag and drops managed fields only for the case that matches, and a payload-free case's tag matches no
-managed case and branches straight to the free. That case passed with the slots deliberately filled with `1`.
+⛔⛔ **WHOSE ZERO IT IS DEPENDS ON THE KEYWORD, AND THIS CASE HOLDS ONLY THE IMAGE'S.** A `let` never reaches
+`__module_init`: its slot's 0 is `structBoxImageBytes`'s `growFilled(sizeBytes, value: 0)`, laid down at
+compile time. The 0 that `ModuleInit.builtUnionCaseBox` STORES is held by the `var` twin below, and by
+nothing else in this suite — MEASURED, with that store's literal changed from `0` to `1`: the twin answers
+1 and **this case stays green**. Three producers now owe the same byte (`emitEnumBox` in a body,
+`builtUnionCaseBox` at module scope, `structBoxImageBytes` in `.rdata`), because ONE `__destruct_<U>` drops
+every box they make.
 
-⚠ **AND `__mm_alloc` ALREADY RETURNS ZEROED MEMORY, so "delete the fill" is not the sabotage that tests it** —
-the slab would hand back zeros anyway and every case here would stay green. The fill is what keeps the
-guarantee once an allocator recycles (`emitEnumBox`'s own note carries that caveat). MEASURED with the slots
-filled with `1` instead: this case answers `1`, and it is the only one in this group that moves.
+⚠ **AND THE `.rdata` ZERO IS NOT `__mm_alloc`'s EITHER.** An image record is never allocated, so nothing
+would hand these bytes a zero if `growFilled` stopped writing one — which is what makes this half of the pair
+worth keeping beside the twin rather than folding the two into one case.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2815,6 +2894,45 @@ union Counter
 end 'Counter'
 
 let sentinel = Counter.none
+
+function valueOf(c Counter) returns Integer
+	return match c 'k'
+		none or some(n) gives n
+	end 'k'
+end 'valueOf'
+
+function main() returns ExitCode
+	return valueOf(sentinel) as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-boxed-union-vars-payload-slots-are-zeroed -->
+⭐⭐ **THE `var` TWIN, AND THE ONLY CASE IN THIS SUITE THAT READS A `__module_init`-BUILT BOX'S PAYLOAD SLOT
+BACK.** Same program, same `or` pattern, one keyword changed — and that keyword is what routes the box to
+`ModuleInit.builtUnionCaseBox`'s zero-fill loop instead of to `.rdata`.
+
+⚠ **AND `__mm_alloc` ALREADY RETURNS ZEROED MEMORY, so "delete the fill" is not the sabotage that tests it** —
+the slab would hand back zeros anyway and this case would stay green. The fill is what keeps the guarantee
+once an allocator recycles (`emitEnumBox`'s own note carries that caveat), so the sabotage that moves it is
+storing something ELSE: MEASURED with the literal changed from `0` to `1`, this case answers 1.
+
+⚠ **THE DESTRUCTOR CANNOT SEE IT, WHICH IS WHY THE FIRST VERSION OF THIS PAIR PROVED NOTHING.** It used a
+MANAGED payload (`held(s String)`) on the theory that a slot left un-zeroed would be `__str_decref`'d as a
+bogus pointer at cleanup. MEASURED, that is false: `synthesizeUnionDestructor` is TAG-DISPATCHED — it loads
+the tag and drops managed fields only for the case that matches, and a payload-free case's tag matches no
+managed case and branches straight to the free. That case passed with the slots deliberately filled with `1`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Counter
+	none
+	some(n Integer)
+end 'Counter'
+
+var sentinel = Counter.none
 
 function valueOf(c Counter) returns Integer
 	return match c 'k'

@@ -10217,10 +10217,11 @@ union ManagedReceiverBinding
 	// that folds this case into a no-field arm answers `undefinedVariable` for the BASE — a name it has
 	// just resolved — rather than a member diagnostic (`Parser.resolveFieldChain`).
 	imageRecord(image TopLevelImageRecord)
-	// ⭐ An IMAGE-DATA `let` holding a constructed STRUCT — its box is `.rdata` too, so it is immutable for
-	// the arm above's reason, and it differs in carrying its bytes and its type NAME rather than a record
-	// description: a user struct has no stride, count or element destructor to describe.
-	imageStruct(bytes ByteArray, typeName ByteArray)
+	// ⭐ An IMAGE-DATA `let` holding a BOX — a constructed struct, or a boxed union's payload-free case. Its
+	// box is `.rdata` too, so it is immutable for the arm above's reason, and it differs in carrying its
+	// bytes, its type NAME and the tag its value stands at rather than a record description: a box has no
+	// stride, count or element destructor to describe.
+	imageBox(bytes ByteArray, typeName ByteArray, tag ValueTypeTag)
 end 'ManagedReceiverBinding'
 
 // ⭐ **DID A TOP-LEVEL MANAGED RECEIVER ANSWER THIS CALL?** — `dispatchOnManagedTopLevelReceiver`'s two
@@ -34388,7 +34389,7 @@ export type Parser
 			// a scalar one is the same mistake and gets the same diagnostic.
 			found to foundManaged then throw assignToImmutableError(nameTok)
 			foundImageRecord then throw assignToImmutableError(nameTok)
-			foundImageStruct then throw assignToImmutableError(nameTok)
+			foundImageBox then throw assignToImmutableError(nameTok)
 			notFound then throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'constant'
 	end 'rejectNonGlobalAssignment'
@@ -57949,7 +57950,7 @@ export type Parser
 		let isConstant = match self.signatures.constantValueOf(name, readerFilePath: self.filePath) 'constant'
 			found to foundManaged gives true
 			foundImageRecord gives true
-			foundImageStruct gives true
+			foundImageBox gives true
 			notFound gives false
 		end 'constant'
 
@@ -60450,7 +60451,7 @@ export type Parser
 			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed))
 			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok), reader: self.moduleSlotReaderOf(tok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed))
 			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), varType: image.valueType, mutable: false, resultUsed: resultUsed))
-			imageStruct(bytes, typeName) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(tok)), varType: self.imageStructType(typeName), mutable: false, resultUsed: resultUsed))
+			imageBox(bytes, typeName, tag) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)), varType: self.imageBoxType(typeName, tag: tag), mutable: false, resultUsed: resultUsed))
 			none then return ManagedTopLevelDispatch.notAManagedReceiver
 		end 'binding'
 	end 'dispatchOnManagedTopLevelReceiver'
@@ -61356,7 +61357,7 @@ export type Parser
 			found then break 'constant'
 			foundManaged(bytes, kind) then return ManagedReceiverBinding.constant(bytes, kind: kind)
 			foundImageRecord(image) then return ManagedReceiverBinding.imageRecord(image)
-			foundImageStruct(bytes, typeName) then return ManagedReceiverBinding.imageStruct(bytes, typeName: typeName)
+			foundImageBox(bytes, typeName, tag) then return ManagedReceiverBinding.imageBox(bytes, typeName: typeName, tag: tag)
 			notFound then break 'constant'
 		end 'constant'
 
@@ -72266,7 +72267,7 @@ export type Parser
 				// choice, spelled at the QUALIFIED name because that is what this chain is rooted at.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
-				imageStruct(bytes, typeName) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(nameTok)), valueType: self.imageStructType(typeName), mutable: false)
+				imageBox(bytes, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), valueType: image.valueType, mutable: false)
 				none then break 'binding'
 			end 'binding'
@@ -72292,7 +72293,7 @@ export type Parser
 				// chain's own diagnostic rather than a claim that the base does not exist.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
-				imageStruct(bytes, typeName) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(baseTok)), valueType: self.imageStructType(typeName), mutable: false)
+				imageBox(bytes, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), valueType: image.valueType, mutable: false)
 				none then break 'binding'
 			end 'binding'
@@ -74923,7 +74924,7 @@ export type Parser
 			found(payload, tag, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
-			foundImageStruct(bytes, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(tok)))
+			foundImageBox(bytes, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)))
 			notFound then break 'constant'
 		end 'constant'
 
@@ -75028,27 +75029,36 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: image.elementSize, elementCount: image.elementCount, bytes: image.bytes), range: range)
 	end 'emitImagedConstArrayLiteral'
 
-	// ⭐⭐ **A USE OF AN IMAGE-DATA STRUCT `let` IS ONE `.rdata` ADDRESS TOO** — `emitImageRecordRead`'s twin
-	// over the shape whose mark cannot live in the record. It needs no side table: the op it emits exists
+	// ⭐ The type an imaged BOX's value is minted at, in THIS file's interner — the one place the crossing
+	// from the index's `typeName` bytes to a `MaxonType` happens, so the value's tag and the layout the
+	// chain resolves against cannot come from two interners.
+	//
+	// ⛔ **THE TAG IS THE INDEX'S ANSWER AND IS NOT RE-DERIVED FROM THE NAME.** A `structRef` box and a boxed
+	// union's `named` box are told apart by the OUTCOME that was imaged, and a name alone cannot say which:
+	// a struct and a union both spell a bare declared name here.
+	function imageBoxType(typeName ByteArray, tag ValueTypeTag) returns MaxonType
+		let id = self.artifact.typeNames.intern(typeName)
+		return match tag 'shape'
+			structRef gives MaxonType.structRef(id)
+			named gives MaxonType.named(id)
+			default panic("imageBoxType: '{String.from(typeName)}' is an imaged box standing at '{typeTagName(tag)}' — only a constructed struct (`structRef`) and a boxed union case (`named`) are laid down as boxes, and every other tag names a value this door cannot mint")
+		end 'shape'
+	end 'imageBoxType'
+
+	// ⭐⭐ **A USE OF AN IMAGE-DATA BOX `let` IS ONE `.rdata` ADDRESS TOO** — `emitImageRecordRead`'s twin
+	// over the shapes whose mark cannot live in the record. It needs no side table: the op it emits exists
 	// only for image data, where `constArrayLiteral` serves an owned heap literal as well and has to be told
 	// which of the two this site is.
 	//
 	// ⚠ **NO OWNED TEMP AND NO DROP**, for the twin's reason: an immortal record is never created, so a
 	// statement-end drop on one would be a write to a read-only page. The W117 immutable-global mark is still
 	// taken — imaging changes where the record lives, not what `let` means.
-	// The type an imaged struct's value is minted at, in THIS file's interner — the one place the crossing
-	// from the index's `typeName` bytes to a `MaxonType` happens, so the value's tag and the layout the
-	// chain resolves against cannot come from two interners.
-	function imageStructType(typeName ByteArray) returns MaxonType
-		return MaxonType.structRef(self.artifact.typeNames.intern(typeName))
-	end 'imageStructType'
-
-	function emitImageStructRead(bytes ByteArray, typeName ByteArray, range SourceRange) returns ValueId
-		let result = self.mintValue(ValueTypeTag.structRef, nameId: typeNameIdOf(self.imageStructType(typeName)))
+	function emitImageBoxRead(bytes ByteArray, typeName ByteArray, tag ValueTypeTag, range SourceRange) returns ValueId
+		let result = self.mintValue(tag, nameId: typeNameIdOf(self.imageBoxType(typeName, tag: tag)))
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, bytes: bytes, columns: sharedEmptyImmortalBoxColumns), range: range)
 		self.markImmutableGlobalRead(result)
 		return result
-	end 'emitImageStructRead'
+	end 'emitImageBoxRead'
 
 	// ⭐ **A USE OF A TOP-LEVEL CONSTANT INLINES ITS VALUE, AND THAT IS THE WHOLE STORAGE MODEL.**
 	//
@@ -79036,7 +79046,7 @@ export type Parser
 	//
 	// ⚠ **IT CARRIES THE TWO SPELLINGS AND DERIVES NOTHING FROM THEM.** The tag's number, the box's size and
 	// the slots to zero are read off the layout where the registry lives
-	// (`ProgramSignatures.boxedUnionRecordOf`), so one declaration is read ONCE and a fold cannot hand the
+	// (`ProgramSignatures.boxedUnionCaseBoxOf`), so one declaration is read ONCE and a fold cannot hand the
 	// synthesis a stale box shape. Bytes rather than interned ids, for `ConstValue.typeName`'s reason: this
 	// evaluator is a throwaway parser built per declaration.
 	function evalConstBoxedUnionCase() returns ConstFoldedValue
@@ -86262,7 +86272,7 @@ export type Parser
 		return match self.managedReceiverBindingOf(baseTok) 'managed'
 			constant to global gives true
 			none gives false
-			imageRecord to imageStruct gives true
+			imageRecord to imageBox gives true
 		end 'managed'
 	end 'methodCallsAt'
 

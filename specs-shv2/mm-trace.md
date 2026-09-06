@@ -362,3 +362,105 @@ end 'main'
 ```
 ```mm-trace
 ```
+
+<!-- test: a-payload-free-union-case-let-costs-no-allocation -->
+⭐ **A UNION CASE THAT CARRIES NOTHING IS A CONSTANT, AND A CONSTANT IS IMAGE DATA.** `Column.unwritten`
+holds a tag and no payload, so every value of it is the same value — there is nothing to construct and
+nothing a holder could write. It must cost no allocation, and the golden is EMPTY.
+
+⚠ **THIS IS THE LARGEST REMAINING CLASS, AND IT IS THE ONE THE OTHER RETIREMENTS CREATE.** A field whose
+"nothing yet" state used to be a shared empty container now names a payload-free case instead, which is
+why the compiler's own source holds 27 of these. Each is cheaper than the container it replaced — one
+16-byte box against a `Map`'s five records — but one box is not none, and the rule is that a `let` is
+never created at runtime:
+
+    mm_alloc Column #1 size=16
+    mm_decref Column #1 rc=0
+    mm_free Column #1
+
+⚠ **THE PROPERTY BELONGS TO THE CASE, NOT TO THE UNION.** `Column` is not a payload-free type — its
+`entries` case carries an array. What is constant is the VALUE `Column.unwritten`, whose record holds a
+tag and nothing else, and a `let` bound to it can never become an `entries`. So the admission rule reads
+the case a module-level `let` names, never the union it belongs to, and a `let` bound to a case that
+does carry a payload is refused exactly as it is today.
+
+**There are no fields to fold**, so this needs none of the const-evaluation the container images needed
+— the record's bytes are the tag. The gap is the refusal itself.
+<!-- MmTrace -->
+```maxon
+typealias Count = int(0 to 100)
+typealias CountArray = Array with Count
+
+union Column
+	unwritten
+	entries(items CountArray)
+end 'Column'
+
+let NoColumn = Column.unwritten
+
+function main() returns ExitCode
+	match NoColumn 'probe'
+		unwritten then return 0
+		entries(c) then return c.count() as ExitCode
+	end 'probe'
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+```
+
+<!-- test: a-payload-carrying-union-case-let-still-allocates -->
+⭐ **THE ROUTING GATE: A PAYLOAD-CARRYING CASE NEVER REACHES THE IMAGING PREDICATE AT ALL, AND THIS IS WHAT
+HOLDS IT THERE.** Both bindings below name cases of ONE union, and they are claimed by different TIERS.
+`Slot.empty` is claimed by `atConstBoxedUnionCase` (arity 0), settles as `boxedUnionValue`, and is image
+data. `Slot.filled(7)` is claimed by `atConstUnionCaseConstruction`, settles as `factoryValue` with a
+`unionCase` root, and its verdict comes from `constStructIsImageData` — whose `mapLiteral to arrayLiteral`
+arm covers that root and answers false. So the box below is built by `__module_init` and released after
+`main`, and the trace names exactly one box.
+
+⛔ **THIS CASE DOES NOT GATE `boxedUnionCaseIsImageData`, AND SAYING IT DID WOULD BE FALSE.** No edit to that
+predicate can lay `filled(7)`'s payload down as a zero — the value never arrives there. What a widened
+`constStructIsImageData` COULD do is admit the `unionCase` root, and then this trace goes empty while the
+program still answers 7 from an image that was never asked to hold a 7. That is the failure this case is
+placed against.
+
+⚠ **THE REFUSE DIRECTION IS ALREADY PINNED ONE CASE UP**, where `Column` declares `entries(items
+CountArray)`: a rule that read the UNION rather than the case would refuse `Column.unwritten` and turn that
+golden red. Between the two, both directions are held — and neither is held by this case alone.
+<!-- MmTrace -->
+```maxon
+typealias Tally = int(0 to 100)
+
+union Slot
+	empty
+	filled(n Tally)
+end 'Slot'
+
+let NoSlot = Slot.empty
+let SevenSlot = Slot.filled(7)
+
+function tallyOf(s Slot) returns Tally
+	return match s 'kind'
+		empty gives 0
+		filled(n) gives n
+	end 'kind'
+end 'tallyOf'
+
+function main() returns ExitCode
+	if tallyOf(NoSlot) != 0 'anEmptyCaseCarriesNothing'
+		return 1
+	end 'anEmptyCaseCarriesNothing'
+
+	return tallyOf(SevenSlot) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```mm-trace
+mm_alloc Slot #1 size=16
+mm_decref Slot #1 rc=0
+mm_free Slot #1
+```

@@ -1,0 +1,148 @@
+// Test: a-payload-carrying-union-case-let-still-allocates
+typealias Tally = int(0 to 100)
+
+union Slot
+	empty
+	filled(n Tally)
+end 'Slot'
+
+let NoSlot = Slot.empty
+let SevenSlot = Slot.filled(7)
+
+function tallyOf(s Slot) returns Tally
+	return match s 'kind'
+		empty gives 0
+		filled(n) gives n
+	end 'kind'
+end 'tallyOf'
+
+function main() returns ExitCode
+	if tallyOf(NoSlot) != 0 'anEmptyCaseCarriesNothing'
+		return 1
+	end 'anEmptyCaseCarriesNothing'
+
+	return tallyOf(SevenSlot) as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __data_SevenSlot@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __ds_base@40 = i64 0
+  __ds_buf_size@48 = i64 0
+  __ds_buf_mask@56 = i64 0
+  __ds_start_ts@64 = i64 0
+  __ds_lock@72 = i64 0
+  __mm_alloc_id@80 = i64 0
+}
+
+func @tallyOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-payload-carrying-union-case-let-still-allocates.test:13: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __struct_rec_0]
+  __il_body#4:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#8
+  matcharm#5:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#9
+  matchnext#8:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#7
+  matcharm#6:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+  matchcont#9:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#12
+  __rc_chk#11:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc lessEqual, __rc_ok#10
+  __il_slow#12:
+    x64.callDirect tallyOf
+    x64.jmp __il_cont#3
+  __rc_ok#10:
+    x64.movRegReg r8, rax
+  __il_cont#3:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  anEmptyCaseCarriesNothing:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegGlobal rax, __data_SevenSlot
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#18
+  matcharm#15:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#19
+  matchnext#18:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#17
+  matcharm#16:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+  matchcont#19:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#22
+  __rc_chk#21:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc lessEqual, __rc_ok#20
+  __il_slow#22:
+    x64.callDirect tallyOf
+    x64.jmp __il_cont#13
+  __rc_ok#20:
+    x64.movRegReg r8, rax
+  __il_cont#13:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead#17:
+  matchdead#7:
+}

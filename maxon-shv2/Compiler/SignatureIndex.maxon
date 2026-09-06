@@ -1289,7 +1289,7 @@ module union ManagedGlobalRecord
 	// `__destruct_<U>` that drops both would be right about only one of them.
 	//
 	// The offsets and the size are the LAYOUT's, resolved where the layout registry lives
-	// (`boxedUnionRecordOf`) — `builtStructBox`'s discipline, and the reason nothing here reads a registry.
+	// (`boxedUnionCaseBoxOf`) — `builtStructBox`'s discipline, and the reason nothing here reads a registry.
 	boxedUnionCaseRecord(tag ParsedInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset)
 	// ⚠ **A `characterSetRecord` ARM STOOD HERE AND WENT AT W129.** It was the ONE compiler-owned record a
 	// global could hold — a member set plus the mask `__cs_make` sealed it into a box with — and it was here
@@ -2169,17 +2169,21 @@ export union TopLevelConstantLookup
 	// rule): the two `found to foundManaged` range arms that ask only whether a constant EXISTS then keep
 	// EXCLUDING this case, so each has to be visited and decided rather than silently widened.
 	foundImageRecord(image TopLevelImageRecord)
-	// ⭐⭐ **AN IMAGE-DATA `let` HOLDING A CONSTRUCTED STRUCT** — a box of scalars whose every field was
-	// decided at compile time, so the whole record is `bytes` and a read is one `.rdata` address. It is a
-	// SEPARATE arm from `foundImageRecord` because the two describe different things: that one carries a
-	// `__ManagedMemory`-shaped record's stride, count and element destructor, none of which a user struct
-	// has — its box is its fields and nothing else.
+	// ⭐⭐ **AN IMAGE-DATA `let` HOLDING A BOX OF SCALARS** — a constructed struct whose every field was
+	// decided at compile time, or a boxed union's payload-free case, whose bytes are its tag. Either way the
+	// whole record is `bytes` and a read is one `.rdata` address. It is a SEPARATE arm from
+	// `foundImageRecord` because the two describe different things: that one carries a
+	// `__ManagedMemory`-shaped record's stride, count and element destructor, none of which a box has.
+	//
+	// ⭐ **`tag` IS THE ONE THING THE TWO SHAPES DISAGREE ON** — a struct's value stands at `structRef` and a
+	// union's at `named`, which is what routes its `match` and its drop — so it rides beside the bytes rather
+	// than earning a second arm that would differ in nothing else.
 	//
 	// ⚠ APPENDED PAST `foundImageRecord`, which is where a new arm goes.
 	// ⚠ **THE TYPE CROSSES AS A NAME, NOT AS AN INTERNED ID** — `found`'s rule, and it is the difference
-	// between a value the reading file can mint and a panic: every `structRef` id is minted from the FILE's
-	// own interner, and an id minted here names something else there.
-	foundImageStruct(bytes ByteArray, typeName ByteArray)
+	// between a value the reading file can mint and a panic: every `structRef` and `named` id is minted from
+	// the FILE's own interner, and an id minted here names something else there.
+	foundImageBox(bytes ByteArray, typeName ByteArray, tag ValueTypeTag)
 end 'TopLevelConstantLookup'
 
 // ⭐⭐ **EVERYTHING A USE SITE NEEDS TO MATERIALIZE AN IMAGE-DATA `let`** — the record's SHAPE, its payload
@@ -3258,9 +3262,10 @@ end 'payloadValueTypeOf'
 // not cosmetic: `typeTagName(function)` is the bare word `function`, so a function type nested inside another
 // printed as `fn(function) returns int` on BOTH sides of a mismatch — a diagnostic saying a type does not
 // match itself. Its id names the alias exactly as a `named` type's does.
-// The bytes a RESOLVED struct construction lays down: a zero box of the declared size with each slot's
-// scalar written at its own offset and width. The rest stays zero, which is what `__mm_alloc` gives a heap
-// box — so an imaged record and a built one are byte-for-byte the same record.
+// The bytes a RESOLVED box construction lays down: a zero box of the declared size with each slot's scalar
+// written at its own offset and width. The rest stays zero, which is what `__mm_alloc` gives a heap box — so
+// an imaged record and a built one are byte-for-byte the same record. Both imaged shapes come through it: a
+// constructed STRUCT's fields, and a payload-free union case's lone TAG slot.
 function structBoxImageOf(built GlobalInitCall) returns ByteArray
 	match built 'built'
 		construct(sizeBytes, fields) then return structBoxImageBytes(sizeBytes, fields: fields)
@@ -3275,7 +3280,7 @@ function structBoxImageBytes(sizeBytes ByteOffset, fields GlobalStructFieldArray
 	for field in fields 'eachSlot'
 		match field.value 'produced'
 			scalar(payload) then writeImageSlot(image, offset: field.offset, value: payload, byteCount: stdTypeStorageBytes(maxonTypeToStdType(field.storageType)))
-			record to call then panic("structBoxImageBytes: a slot is produced by running code, in a record `constStructIsImageData` admitted as bytes — that predicate is the one thing that decides imaging and it takes only folded scalars")
+			record to call then panic("structBoxImageBytes: a slot is produced by running code, in a record admitted as bytes — imaging is decided by `constStructIsImageData` for a constructed struct and by `boxedUnionCaseIsImageData` for a union case, and neither admits a slot a fold did not settle to a scalar")
 		end 'produced'
 	end 'eachSlot'
 
@@ -3287,7 +3292,7 @@ end 'structBoxImageBytes'
 function writeImageSlot(image ByteArray, offset ByteOffset, value ParsedInt, byteCount BytePos)
 	var at = offset
 	for b in scalarImage(value, byteCount: byteCount) 'eachByte'
-		try image.set(at as ElementIndex, value: b) otherwise panic("writeImageSlot: a {byteCount}-byte slot at offset {offset} runs past a {image.count()}-byte box — the size and the offsets both come from the one `StructLayout`")
+		try image.set(at as ElementIndex, value: b) otherwise panic("writeImageSlot: a {byteCount}-byte slot at offset {offset} runs past a {image.count()}-byte box — a caller reads the size and the offsets off ONE declaration's layout (a `StructLayout` for a struct, an `EnumLayout` for a union case), so a slot past the end means two were mixed")
 		at = at + 1
 	end 'eachByte'
 end 'writeImageSlot'
@@ -14777,18 +14782,33 @@ export type ProgramSignatures
 	// reader of the imaging verdict asks `hasStorage`, which is derived from this; a second enumeration of
 	// the shapes would be a roster free to go stale the day one joins, and stale here is a global that still
 	// allocates while the rule that permits it says none do.
-	//
-	// ⛔ A BOXED CASE is a `__mm_alloc`'d box with payload slots, and the shape of the payload is the case's
-	// rather than the union's — so there is no one offset an image could stamp a mark at.
 	function recordShapeHasAnImage(outcome TopLevelConstant) returns bool
 		return match outcome 'shape'
 			pending to managedValue gives false
 			arrayValue(elements, element) gives self.constArrayLiteralIsImageData(elements, element: element)
 			containerValue(giid, _, elements) gives self.emptyContainerIsImageData(giid, elements: elements)
 			factoryValue(calls, root, _) gives self.constStructIsImageData(calls, root: root)
-			boxedUnionValue gives false
+			boxedUnionValue(typeName, caseName) gives self.boxedUnionCaseIsImageData(typeName, caseName: caseName)
 		end 'shape'
 	end 'recordShapeHasAnImage'
+
+	// ⭐⭐ **CAN A BOXED UNION CASE'S BOX BE LAID DOWN AS BYTES? — the fourth shape, and the one with no
+	// fields to fold: the record's bytes ARE the tag.**
+	//
+	// ⛔⛔ **THE QUESTION IS THE CASE'S, NEVER THE UNION'S.** A union carrying an `Array` in some other case
+	// is imageable at the cases that carry nothing, because a `let` bound to `U.empty` can never become that
+	// other case — its box is a tag beside slots that stay zero, and there is no payload whose address a
+	// data→data relocation would have to write (`constArrayLiteralIsImageData`'s bound, one shape over).
+	// Reading the UNION instead would refuse every constant sentinel in this compiler's own source.
+	//
+	// ⚠ **THE ARITY IS ASKED HERE RATHER THAN INHERITED**, though `Parser.atConstBoxedUnionCase` claims the
+	// form only at arity 0 and nothing else mints this outcome: a payload-carrying case admitted here would
+	// image a box whose slots the author filled as ZEROS, silently, so the predicate that decides imaging
+	// states its own bound.
+	function boxedUnionCaseIsImageData(typeName ByteArray, caseName ByteArray) returns bool
+		let layout = self.unionCaseLayoutOf(typeName, caseName: caseName)
+		return layout.payloadArityAt(layout.indexOfCase(caseName)) == 0
+	end 'boxedUnionCaseIsImageData'
 
 	// ⭐⭐ **CAN A CONSTRUCTED STRUCT'S BOX BE LAID DOWN AS BYTES? — the third shape of the ⚖ *a `let` is image
 	// data* ruling, and the first whose mark cannot live in the record.**
@@ -15363,7 +15383,8 @@ export type ProgramSignatures
 			// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE reads as a container factory does — a POINTER slot holding
 			// the box `__module_init` built — and its type needs no inference either: the initializer named the
 			// union outright. It is tagged `named(<union>)`, the tag `Parser.emitEnumBox` mints a body's box
-			// at, so a `match` on the global recognizes it through the one `enumMatchFor` door.
+			// at, so a `match` on the global recognizes it through the one `enumMatchFor` door. An IMAGED
+			// `let` never reaches here, for the array arm's reason: it has no slot to name.
 			//
 			// ⚠ **INTERNED INTO THE READER'S TABLE (`into`), WHICH IS WHY THE OUTCOME CARRIES BYTES.** This is
 			// the adoption trap the note below records, avoided at the source rather than repaired after: a
@@ -15916,8 +15937,9 @@ export type ProgramSignatures
 				factoryValue(calls, root, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(self.globalInitCalls(calls, declName: decl.name, elementFilePath: decl.declFilePath), root: root), valueType: returnType))
 				// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE is a managed global for the same reason the three above
 				// are — its record is built before `main` and released after — and routes through the same
-				// `globalRecordOf`. It repeats their one call rather than joining their range because it is
-				// appended past the factory arm that stands between them.
+				// `globalRecordOf`, an IMAGED `let` having been filtered out above by `contributesStorage`.
+				// It repeats their one call rather than joining their range because it is appended past the
+				// factory arm that stands between them.
 				boxedUnionValue then entries.push(self.recordGlobalOf(decl))
 				pending to evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
@@ -16105,9 +16127,10 @@ export type ProgramSignatures
 	// zeroed managed slot is never decref'd as a bogus pointer, and `E3129` rests on that 0 being a value.
 	//
 	// Every layout fact is read HERE, where the registry is — `globalStructConstruct`'s discipline, and the
-	// same one `boxedUnionRecordOf` follows for the payload-free spelling.
+	// same one `boxedUnionCaseBoxOf` follows for the payload-free spelling. Both reach the declaration through
+	// `unionCaseLayoutOf`, so the two builds cannot disagree about which cases exist or how wide the box is.
 	function globalUnionCaseConstruct(typeName ByteArray, caseName ByteArray, payloads ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCall
-		let layout = self.constUnionLayoutOf(typeName, declName: declName)
+		let layout = self.unionCaseLayoutOf(typeName, caseName: caseName)
 		let caseIndex = layout.indexOfCase(caseName)
 		let declared = layout.payloadsAt(caseIndex)
 		if payloads.count() != declared.count() 'notSlotParallel'
@@ -16115,7 +16138,7 @@ export type ProgramSignatures
 		end 'notSlotParallel'
 
 		var fields = GlobalStructFieldArray.create()
-		fields.push(GlobalStructField.create(UnionTagOffset, storageType: MaxonType.integer, value: GlobalInitArgumentValue.scalar(layout.tagOfIndex(caseIndex)), valueType: MaxonType.integer))
+		fields.push(unionTagSlot(layout, caseIndex: caseIndex))
 		for i in 0 upto declared.count() 'eachPayload'
 			let field = try declared.get(i) otherwise panic("ProgramSignatures.globalUnionCaseConstruct: payloadsAt returned fewer fields than its own count at {i}")
 			let produced = self.globalInitValue(try payloads.get(i) otherwise panic("ProgramSignatures.globalUnionCaseConstruct: payloads.get OOB at {i} below the count this arity check just held it to"), calls: calls, declName: declName, elementFilePath: elementFilePath)
@@ -16130,16 +16153,6 @@ export type ProgramSignatures
 
 		return GlobalInitCall.construct(layout.boxSizeBytes(), fields: fields)
 	end 'globalUnionCaseConstruct'
-
-	// The layout a `unionCase` node names. A miss is the declaration sweep and the arena disagreeing about what
-	// a `union` is — `constStructLayoutOf`'s drift guard, stated for an enum — because the fold tier admits the
-	// form only after `Parser.constEnumCaseOfLayout` answered for this very name.
-	function constUnionLayoutOf(typeName ByteArray, declName ByteArray) returns EnumLayout
-		match self.enumInAnyFile(typeName) 'declared'
-			declared(layout) then return layout
-			undeclared then panic("ProgramSignatures.constUnionLayoutOf: '{String.from(declName)}' is initialized by a case of `{String.from(typeName)}`, and no file declares that enum or union — the evaluator admits the form only after `signatures.enumOf` has answered `declared` for that very name")
-		end 'declared'
-	end 'constUnionLayoutOf'
 
 	// ⭐ **AN ARRAY LITERAL'S RECORD, RESOLVED — `globalMapLiteral` one column narrower.** The description comes
 	// from `containerCreateCall`, the SAME router an `<Alias>.create()` global's container goes through, so a
@@ -16518,38 +16531,71 @@ export type ProgramSignatures
 			// stamps and the slot's type cannot come from two answers to one question.
 			arrayLiteral(elements, _) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: genericInstanceIdOf(valueType)), valueType: valueType)
 			containerCreate(giid, _, elements) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: giid), valueType: valueType)
-			boxedUnionCase(typeName, caseName) then return GlobalRecordAndType.create(self.boxedUnionRecordOf(typeName, caseName: caseName), valueType: valueType)
+			boxedUnionCase(typeName, caseName) then return GlobalRecordAndType.create(boxedUnionCaseBoxOf(self.unionCaseLayoutOf(typeName, caseName: caseName), caseName: caseName), valueType: valueType)
 		end 'folded'
 	end 'globalRecordOf'
 
-	// ⭐ **THE BOX SHAPE FOR ONE PAYLOAD-FREE CASE, READ OFF THE LAYOUT — the only place it is read.** The
-	// evaluator carried the two spellings and deliberately derived none of this, so the size the record is born
-	// with, the tag stored in it and the slots zeroed in it all come from ONE reading of the declaration. That
-	// is `globalStructConstruct`'s discipline and it is what keeps `__module_init`'s box byte-identical to the
-	// one `Parser.emitEnumBox` emits for the same case inside a function body.
+	// ⭐⭐ **THE DECLARATION BEHIND A FOLDED UNION CASE — THE ONE LOOKUP, AND THE ONE PLACE THAT SAYS WHAT
+	// MAKES A CASE USABLE.** All four readers come through it: the imaging verdict, the image's bytes, the
+	// payload-free box `__module_init` builds and the payload-CARRYING one. That is what makes "one reading of
+	// one declaration" true rather than aspirational — a guard on only one of those paths leaves the others
+	// free to lay down bytes for a shape their sibling refuses.
 	//
-	// Both refusals are invariant breaks rather than reachable cases: the evaluator admits this form only
-	// after establishing that the name is a declared BOXED union and that it HAS this case
-	// (`Parser.constBoxedUnionCase`).
-	function boxedUnionRecordOf(typeName ByteArray, caseName ByteArray) returns ManagedGlobalRecord
-		match self.enumInAnyFile(typeName) 'declared'
-			declared(layout) then return boxedUnionCaseBoxOf(layout, typeName: typeName, caseName: caseName)
-			undeclared then panic("ProgramSignatures.boxedUnionRecordOf: '{String.from(typeName)}' names no declared enum or union, and yet a constant initializer folded '{String.from(caseName)}' as one of its cases — the evaluator admits the form only after `signatures.enumOf` has answered `declared` for that very name")
+	// All three refusals are invariant breaks rather than reachable cases, and each is stated HERE because
+	// every caller needs all three:
+	//
+	//   * DECLARED — the evaluator admits the form only after `signatures.enumOf` answered for that name.
+	//   * BOXED — `Parser.atConstQualifiedEnumCase` claims either spelling only for a layout that `isBoxed`;
+	//     an UNBOXED case's tag IS its value and folds to a number one tier down, so a box built for one would
+	//     give every reader a pointer load over a number.
+	//   * HAS THE CASE — `EnumLayout.indexOfCase` answers `caseCount()` for a name it does not hold, and that
+	//     sentinel indexes nothing: left to the callers it surfaces as an internal `casePayloads.get` OOB a
+	//     few frames down instead of naming the case that is missing.
+	function unionCaseLayoutOf(typeName ByteArray, caseName ByteArray) returns EnumLayout
+		let layout = match self.enumInAnyFile(typeName) 'declared'
+			declared(found) gives found
+			undeclared panic("ProgramSignatures.unionCaseLayoutOf: '{String.from(typeName)}' names no declared enum or union, and yet a constant initializer folded '{String.from(caseName)}' as one of its cases")
 		end 'declared'
-	end 'boxedUnionRecordOf'
 
-	// The walk of the question above, split out because a `match` arm may not open one — `existentialFieldOfArena`'s
-	// arrangement, for its reason.
-	//
-	// The refusal is an invariant break rather than a reachable case: `Parser.atConstBoxedUnionCase` claims the
-	// form only for a layout that `isBoxed`, and an UNBOXED case's tag IS its value and folds to a number one
-	// tier down. Reaching here with one would allocate a box for a value that is not a box, and every read of
-	// the global would then load a tag where a pointer was promised.
-	function boxedUnionCaseBoxOf(layout EnumLayout, typeName ByteArray, caseName ByteArray) returns ManagedGlobalRecord
 		if not layout.isBoxed() 'aBareTag'
-			panic("ProgramSignatures.boxedUnionCaseBoxOf: '{String.from(typeName)}' declares no payload-carrying case, so its case '{String.from(caseName)}' is a bare TAG rather than a box — the scalar fold owns that shape, and building a record for it would give every reader a pointer load over a number")
+			panic("ProgramSignatures.unionCaseLayoutOf: '{String.from(typeName)}' declares no payload-carrying case, so its case '{String.from(caseName)}' is a bare TAG rather than a box — the scalar fold owns that shape")
 		end 'aBareTag'
 
+		if not layout.hasCase(caseName) 'noSuchCase'
+			panic("ProgramSignatures.unionCaseLayoutOf: `{String.from(typeName)}` declares no case '{String.from(caseName)}', and yet a constant initializer folded one — `Parser.constEnumCaseOfLayout` asks `hasCase` before either spelling is claimed")
+		end 'noSuchCase'
+
+		return layout
+	end 'unionCaseLayoutOf'
+
+	// ⭐ **THE TAG SLOT, SPELLED ONCE.** The imaged box and the built box put the same number at the same
+	// offset at the same width; two spellings of that is how one of them comes to move without the other.
+	function unionTagSlot(layout EnumLayout, caseIndex CaseIndex) returns GlobalStructField
+		return GlobalStructField.create(UnionTagOffset, storageType: MaxonType.integer, value: GlobalInitArgumentValue.scalar(layout.tagOfIndex(caseIndex)), valueType: MaxonType.integer)
+	end 'unionTagSlot'
+
+	// ⭐⭐ **THE BOX A PAYLOAD-FREE CASE IS, AS BYTES — the tag at `UnionTagOffset` and zeros to the end.**
+	// It goes through `structBoxImageBytes`, the very builder a constructed struct's image uses, so an
+	// imaged box and a `.rdata` struct box are laid down by one routine at one width; the size, the offset
+	// and the tag are the LAYOUT's, which is what keeps this byte-identical to the box `Parser.emitEnumBox`
+	// stores into for the same case.
+	//
+	// The slots past the tag stay zero because `emitEnumBox` pins the same deterministic 0 there, and that
+	// zero is load-bearing: a NULL managed slot is what the destructor cascade's null-guard skips.
+	function boxedUnionCaseImageBytes(typeName ByteArray, caseName ByteArray) returns ByteArray
+		let layout = self.unionCaseLayoutOf(typeName, caseName: caseName)
+		var fields = GlobalStructFieldArray.create()
+		fields.push(unionTagSlot(layout, caseIndex: layout.indexOfCase(caseName)))
+
+		return structBoxImageBytes(layout.boxSizeBytes(), fields: fields)
+	end 'boxedUnionCaseImageBytes'
+
+	// ⭐ **THE BOX SHAPE `__module_init` BUILDS FOR ONE PAYLOAD-FREE CASE, READ OFF THE LAYOUT.** The evaluator
+	// carried the two spellings and deliberately derived none of this, so the size the record is born with, the
+	// tag stored in it and the slots zeroed in it all come from ONE reading of the declaration — which is what
+	// keeps a `var`'s box byte-identical both to the one `Parser.emitEnumBox` emits inside a function body and
+	// to the bytes `boxedUnionCaseImageBytes` lays down for an imaged `let`.
+	function boxedUnionCaseBoxOf(layout EnumLayout, caseName ByteArray) returns ManagedGlobalRecord
 		var payloadSlotOffsets = ByteOffsetArray.create()
 		for slot in 0 upto layout.maxPayloadArity() 'eachSlot'
 			payloadSlotOffsets.push(layout.payloadSlotOffset(slot))
@@ -16665,14 +16711,17 @@ export type ProgramSignatures
 			// verdict is `settleRecordValue`'s rather than re-derived. A stored record never arrives: its
 			// caller's NEXT probe (`globalDeclFor`) is the one that answers for it.
 			//
-			// ⚠ **THE FOUR RECORD ARMS ARE ONE ARM, so which shapes may be imaged is written where it is
-			// DECIDED and nowhere else.** A shape that cannot be (a factory's returned record, a boxed case)
-			// reaches this door only as an invariant break, which `imageRecordOf` and `foldedValueOf` name;
-			// splitting them off here to answer `notFound` would be a fifth copy of that roster, silently
+			// ⚠ **NO ARM RE-DECIDES WHETHER ITS SHAPE MAY BE IMAGED, so that roster stays written where it is
+			// DECIDED and nowhere else.** Each arm here says only HOW its shape materializes; an arm answering
+			// `notFound` on a shape-by-shape test would be a second copy of `recordShapeHasAnImage`, silently
 			// stale the day a shape joins.
 			arrayValue to containerValue then return TopLevelConstantLookup.foundImageRecord(self.imageRecordOf(decl))
 			factoryValue(calls, root, _) then return self.imageStructLookup(calls, root: root, decl: decl)
-			boxedUnionValue then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is a boxed union case with no storage — `recordShapeHasAnImage` never images one, so a use site cannot reach this door")
+			// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE is the fourth imaged shape and the narrowest: its box is a
+			// tag beside zeroed slots, so it answers the struct arm's `foundImageBox` with the bytes the
+			// layout already fixes and no fold at all. It stands at `named`, the tag `Parser.emitEnumBox`
+			// mints a body's box at, which is what lets a `match` on the read recognize it.
+			boxedUnionValue(typeName, caseName) then return TopLevelConstantLookup.foundImageBox(self.boxedUnionCaseImageBytes(typeName, caseName: caseName), typeName: typeName, tag: ValueTypeTag.named)
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -16691,7 +16740,7 @@ export type ProgramSignatures
 			arrayLiteral(elements, element) then return self.arrayLiteralImageOf(elements, element: element, giid: genericInstanceIdOf(valueType), valueType: valueType)
 			containerCreate(giid, brand, _) then return self.emptyContainerImageOf(giid, valueType: valueType, brand: brand)
 			scalar to managed then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a scalar or a managed literal, neither of which is a record — `resolvedValueOf` answers both above and never reaches here")
-			boxedUnionCase then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a boxed union case, which `settleFoldedValue` never settles as imaged — a box has no `capacity@16` to carry the immortality mark")
+			boxedUnionCase then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a boxed union case, which is a BOX and not a `__ManagedMemory` record — it has no stride, count or element destructor for a `TopLevelImageRecord` to carry, so `resolvedValueOf` answers it with `foundImageBox` and never reaches here")
 		end 'folded'
 	end 'imageRecordOf'
 
@@ -16701,7 +16750,7 @@ export type ProgramSignatures
 	// differ in WHERE the box lives and in nothing else.
 	function imageStructLookup(calls ConstFactoryCallArray, root InitializerCallId, decl TopLevelDecl) returns TopLevelConstantLookup
 		match factoryCallAt(calls, id: root) 'node'
-			construct(typeName, fields) then return TopLevelConstantLookup.foundImageStruct(structBoxImageOf(self.globalStructConstruct(typeName, fields: fields, calls: calls, declName: decl.name, elementFilePath: decl.declFilePath)), typeName: typeName)
+			construct(typeName, fields) then return TopLevelConstantLookup.foundImageBox(structBoxImageOf(self.globalStructConstruct(typeName, fields: fields, calls: calls, declName: decl.name, elementFilePath: decl.declFilePath)), typeName: typeName, tag: ValueTypeTag.structRef)
 			call then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root is a `call` — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
 			mapLiteral to arrayLiteral then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root is a container literal — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
 		end 'node'
@@ -16966,12 +17015,15 @@ export type ProgramSignatures
 			// the arguments' — i.e. not at all — because the two facts a reader depends on are the same two:
 			// the name fixes the slot's type, and `Pair{a: 1}` becoming `Pair{a: 2}` moves no reader's bytes.
 			factoryValue(calls, root, _) then return mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeFactoryValue), bytes: self.constFactoryCallHashName(factoryCallAt(calls, id: root))), bytes: decl.dataLabel)
-			// ⭐ **A BOXED UNION'S PAYLOAD-FREE CASE MIXES ITS UNION AND ITS LABEL, AND NOT ITS CASE** — the
-			// array-literal arm's rule again. The union NAME fixes the slot's type and so every reader's
-			// `match`; the LABEL is the slot the emitted `globalAddr` names. The CASE reaches only
-			// `__module_init`, which is rebuilt from this arena whenever this query misses, so mixing it would
-			// re-parse every reader of a global whose emitted bytes did not move.
-			boxedUnionValue(typeName, _) then return mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeBoxedUnionValue), bytes: typeName), bytes: decl.dataLabel)
+			// ⭐ **A BOXED UNION'S PAYLOAD-FREE CASE MIXES ITS UNION, ITS CASE AND ITS LABEL.** The union NAME
+			// fixes the slot's type and so every reader's `match`, and the LABEL is the slot a `var`'s emitted
+			// `globalAddr` names.
+			//
+			// ⭐⭐ **THE CASE RIDES BECAUSE AN IMAGED `let` BAKES ITS TAG INTO EVERY READER** — the box is
+			// `.rdata` and the read is one address into it, so `U.a` becoming `U.b` moves a reader's bytes
+			// while the reader's own source never changes. It is the one fact separating this arm from the
+			// container arms, whose payload reaches only `__module_init`.
+			boxedUnionValue(typeName, caseName) then return mixBytes(mixBytes(mixBytes(Hasher.combined(keyed, value: ConstShapeBoxedUnionValue), bytes: typeName), bytes: caseName), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
