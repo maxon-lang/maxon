@@ -1,4 +1,4 @@
-// Test: clone-of-an-instance-over-the-enclosing-type-parameter
+// Test: element-payload-through-a-shared-body-field-read
 typealias Integer = int(i64.min to i64.max)
 
 type Box uses T
@@ -14,7 +14,7 @@ type Bag uses Element
 	typealias EBox = Box with Element
 	typealias EBoxArray = Array with EBox
 
-	var items as EBoxArray
+	export var items as EBoxArray
 
 	export static function create() returns Self
 		return Self{items: EBoxArray.create()}
@@ -35,15 +35,9 @@ function main() returns ExitCode
 	var b = IntBag.create()
 	b.add(91, tag: 4)
 
-	let c = b.copy()
-
-	if c.count() != 1 'badCount'
-		return 91
-	end 'badCount'
-
-	let e = try c.get(0) otherwise return 92
-
-	return e.tag
+	let c = b.items
+	let e = try c.get(0) otherwise return 90
+	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
 end 'main'
 ---
 ExitCode: 4
@@ -115,19 +109,6 @@ func @Bag.add {
     x64.ret
 }
 
-func @Bag.copy {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.leaRegRdata rdx, [rip + __layout_Array_Bag.EBox]
-    x64.callDirect Array.clone
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -143,27 +124,9 @@ func @main {
     x64.leaRegRdata r9, [rip + __layout_Bag_Integer]
     x64.movRegReg rcx, rbx
     x64.callDirect Bag.add
-    x64.leaRegRdata rdx, [rip + __layout_Bag_Integer]
-    x64.movRegReg rcx, rbx
-    x64.callDirect Bag.copy
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __managed_retain
     x64.movRegReg r12, r8
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, ifcont
-  badCount:
-    x64.movRegImm32 r13, 91
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Bag_Integer
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 0
@@ -193,7 +156,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.movRegImm32 r13, 92
+    x64.movRegImm32 r13, 90
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
@@ -206,24 +169,19 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r13, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at clone-of-an-instance-over-the-enclosing-type-parameter.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_body:
+    x64.cmpRegImm32 rax, 91
+    x64.setccReg equal, rax
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r13, 4
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r13, 70
+  matchcont:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx

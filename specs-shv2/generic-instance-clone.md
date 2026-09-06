@@ -367,87 +367,74 @@ end 'main'
 
 <!-- test: error.member-call-on-an-unsubstituted-element-payload-is-diagnosed -->
 ### A member call on a value still held at a type parameter is REFUSED, and the refusal names the parameter
-⭐ The half `clone-of-an-instance-over-the-enclosing-type-parameter` STEERS AROUND (W181): that case reads
-`e.tag` — a concretely-declared `Integer` field — precisely because reading `e.v` took the compiler down, and
-a check that declines to ask its own question pins nothing. `Bag.copy() returns EBoxArray` hands the caller
-the DECLARATION view (`Array with (Box with Element)`), so `e.v` is still `Bag`'s own opaque `Element` in
-`main` — and `main` encloses no declaration at all.
+⭐ **THE REFUSAL THAT SURVIVES SUBSTITUTION BEING CORRECT.** The call is INSIDE the shared body, where no
+instantiation is in scope: `Bag` is compiled once against the declaration view, and `main`'s
+`Bag with Integer` fixes nothing inside `holdsNinetyOne`. So the program is refused even though every `with`
+in it binds `Element` to `Integer` — which is what makes this about the DISPATCH and not about the crossing.
 
-⛔⛔ **THE REFUSAL WAS RIGHT AND THE COMPILER COULD NOT SAY IT.** The phrase builder asked
-`enclosingTypeParamName` which of the CALLER's parameters the token names, and at file scope
-`self.enclosingType` is empty: `panic at Parser.maxon: enclosingTypeParamName: type-parameter token …
-names no parameter of '', which declares 0`. A diagnostic the program had already earned, replaced by a
-stack trace — and the emptiness IS the tell, because a parameter's name is a property of the TOKEN (a W14
-digest of `(declaring type, parameter name)`) and never of whoever is looking at it. It is now read off
-`typeParamOwnerOf`, so the sentence below can be built from any scope.
-
-⚠ **THIS CASE PINS THE DIAGNOSTIC, NOT THE ANSWER.** The SUBSTITUTION is still missing — a correct compiler
-substitutes the receiver's `Integer` into that returned type and this program RUNS — and the case that pins
-that is `element-payload-through-a-shared-body-return-over-the-enclosing-parameter`, disabled directly below.
-When it lands, THIS case is the one that must be re-examined: the E2015 becomes wrong, not merely stale.
+⚠ It previously carried the same program as the case below, and that program runs now. The refusal was
+right for the wrong reason there: the value had crossed a shared body's return and lost its substitution.
+⚠ The diagnostic here was once a compiler PANIC — the phrase builder asked which of the CALLER's parameters
+the token named, and at file scope there is no caller: a parameter's name is a property of the TOKEN, not of
+whatever encloses the use.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-type Box uses T
-	export var v as T
-	export var tag as Integer
-
-	export static function create(x T, tag Integer) returns Self
-		return Self{v: x, tag: tag}
-	end 'create'
-end 'Box'
-
 type Bag uses Element
-	typealias EBox = Box with Element
-	typealias EBoxArray = Array with EBox
+	typealias EArr = Array with Element
 
-	var items as EBoxArray
+	var items as EArr
 
 	export static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EArr.create()}
 	end 'create'
 
-	export function add(x Element, tag Integer)
-		self.items.push(EBox.create(x, tag: tag))
+	export function add(x Element)
+		self.items.push(x)
 	end 'add'
 
-	export function copy() returns EBoxArray
-		return self.items.clone()
-	end 'copy'
+	export function holdsNinetyOne() returns bool
+		let e = try self.items.get(0) otherwise return false
+		return e.equals(91)
+	end 'holdsNinetyOne'
 end 'Bag'
 
 typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
 	var b = IntBag.create()
-	b.add(91, tag: 4)
-
-	let c = b.copy()
-	let e = try c.get(0) otherwise return 90
-	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
+	b.add(91)
+	return 4 as ExitCode if b.holdsNinetyOne() else 70 as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:40:30: Unsupported: no requirement named 'equals' is provided by the constraints on type parameter 'Element' — a method call on a value whose type is an interface, or on a constrained type parameter, dispatches through a witness table, so the method has to be one that interface declares
+error E2015: <fragment>:19:12: Unsupported: no requirement named 'equals' is provided by the constraints on type parameter 'Element' — a method call on a value whose type is an interface, or on a constrained type parameter, dispatches through a witness table, so the method has to be one that interface declares
 ```
 
-<!-- disabled-test: element-payload-through-a-shared-body-return-over-the-enclosing-parameter -->
-<!-- MEASURED 2026-09-04: `E2015 — no requirement named 'equals' is provided by the constraints on type parameter
-     'Element'`. A method call on a constrained type parameter dispatches through the witness table, so it has to
-     be a requirement the constraint declares; the case reaches `equals` through a shared body's return over the
-     ENCLOSING parameter, which the constraint set does not carry. -->
-The same program as the case above, as it must eventually RUN. `IntBag` binds `Element` to `Integer`, so
-`copy()`'s `Array with (Box with Element)` is an `Array with (Box with Integer)` at this receiver and `e.v`
-is an `Integer` — `.equals(91)` is then the ordinary builtin conformance the control case pins, and the
-program returns 4.
+<!-- test: element-payload-through-a-shared-body-return-over-the-enclosing-parameter -->
+The same program as the case above, RUNNING. `IntBag` binds `Element` to `Integer`, so `copy()`'s
+`Array with (Box with Element)` is an `Array with (Box with Integer)` at this receiver, `e.v` is an
+`Integer`, and `.equals(91)` is the ordinary builtin conformance the control below pins. Returns 4.
 
-⛔ **MEASURED at W181, and the reason it is shelved rather than fixed there**: the repair is NOT in the
-re-qualifying arm it looks like it should be in. `promoteBareGenericResultToCalleeScope` re-scopes a bare
-generic BASE and answers nothing for an alias; the arm below it re-qualifies an INNER (ranged) alias and a
-GENERIC alias lives in a different registry. Probing the actual value showed the result of `b.copy()`
-arriving tagged **`struct` and named `Box`** — the ELEMENT's base, two resolution steps off the array it
-declared — so the type is already wrong before any substitution door sees it, and the fix is in how a shared
-body's declared return crosses to a concrete caller. That is the same seam `W178` names.
+⭐⭐ **AN ARGUMENT SPELLED AS A NAME WAS CARRIED THROUGH SUBSTITUTION UNTOUCHED.**
+`typealias EBoxArray = Array with EBox` and `Array with (Box with Element)` written inline denote the same
+thing; the inline one compiled and ran throughout, and only the alias-named one was refused. The inline
+spelling records a real nested instance, so substitution recurses into it and reaches `Element`; the named
+one records an unresolved leaf, which substitution passes straight over. The cure asks the edge that
+already answers *"which instance does this argument denote"* — a reader that road had never had.
+
+⚠ **What converges is the SUBSTITUTED RESULT, not the interning.** The two spellings are still two
+interned instances; this case pins that they now behave alike, not that they are one entry. Making them one
+means rewriting recorded alias instances after the fold, which has to run after the alias CONTEST settles or
+a contested argument gets a last-wins answer baked in — that is a separate piece of work and this case does
+not claim it.
+
+⚠ **THIS IS NOT `W178`, and the note that said so was reading a shared word.** `W178` is an exit-139
+SEGFAULT on the drop/descriptor road; this is a type-substitution miss with no memory component. The earlier
+probe that reported the result "tagged `struct` and named `Box`" measured the ELEMENT two hops on, not the
+call's result — and `struct` is what `typeTagName` prints for a `genericInstance` as well as a `structRef`,
+so the call result was a correct instance all along. The FIELD road below is what settles that the fault is
+in the substitution rather than in the return.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -492,6 +479,98 @@ end 'main'
 ```
 ```exitcode
 4
+```
+
+<!-- test: element-payload-through-a-shared-body-field-read -->
+⭐ **THE SAME MISS REACHED WITHOUT A RETURN AT ALL**, which is what attributes it to the shared
+substitution rather than to the method-return crossing. Reading `b.items` directly — the field whose
+declared type is the same nested alias — was refused with the identical sentence, at the identical column.
+A repair that lived in the return road would leave this one broken.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	export static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias EBoxArray = Array with EBox
+
+	export var items as EBoxArray
+
+	export static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	export function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	export function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+end 'Bag'
+
+typealias IntBag = Bag with Integer
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	b.add(91, tag: 4)
+
+	let c = b.items
+	let e = try c.get(0) otherwise return 90
+	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.a-cyclic-alias-reaching-the-clone-gate-is-refused-not-overflowed -->
+⭐⭐ **THE DEEP-CLONE GATE WALKS THE TYPE GRAPH, SO IT OWES THAT WALK A CYCLE BREAK.** `Cyc` is
+`Array with Cyc`, an infinite type, and E2012 refuses it — but only if the compile survives long enough to
+say so. The gate's generic-alias arm descended without marking the name, and a container's ELEMENT is the
+same alias again, so it re-entered at the same name until the stack was gone: **STATUS_STACK_OVERFLOW, exit
+0xC00000FD, and ZERO BYTES OF OUTPUT.** A crash with no diagnostic reads to a build script like a missing
+binary.
+
+⚠ **`Cyc` is DECLARED AND NEVER USED**, and the reach is not the declaration — declaring the alias,
+constructing the instance, and even reading the field are all clean. It takes the `.clone()` inside a shared
+body to enter the gate, which is why this case sits with the clone family and not with the alias ones.
+The break already existed on the struct arm; this pins that both arms reach it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Cyc = Array with Cyc
+
+type Holder uses T
+	typealias TArr = Array with T
+	var items as TArr
+
+	export static function create() returns Self
+		return Self{items: TArr.create()}
+	end 'create'
+
+	export function all() returns TArr
+		return self.items.clone()
+	end 'all'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	var h = IntHolder.create()
+	let c = h.all()
+	return c.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2012: <fragment>:3:28: Circular typealias dependency: Cyc
 ```
 
 <!-- test: element-payload-through-a-concretely-instantiated-box -->

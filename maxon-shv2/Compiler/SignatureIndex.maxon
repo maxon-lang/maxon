@@ -8295,6 +8295,17 @@ export typealias GenericAliasEntryArray = Array with GenericAliasEntry
 // which counts ELEMENTS of something: a round is not one.
 typealias GenericAliasRoundCount = int(0 to u32.max)
 
+// How many ALIAS EDGES a substitution has already followed through a type argument
+// (`ProgramSignatures.substituteArgThrough`). Bounded by `genericAliases.count()`, which is the map the walk
+// hops through, and NOT by the DECLARATION count: that map is a strict superset — `__ManagedMemory` is
+// minted into it with no declaration behind it, and the contest mints an entry per distinct instance of a
+// contested name — so a bound of `genericAliasDecls.count()` would leave a long enough LEGAL chain
+// unresolved at its declaration view. Every hop consumes one key, so a chain with more hops than there are
+// keys has revisited one; hitting the bound reports nothing and is not itself a diagnosis. Its own type
+// because a hop is not a round — `GenericAliasRoundCount`'s fixpoint re-walks every declaration, this
+// walks one chain.
+typealias AliasHopCount = int(0 to u32.max)
+
 export union AliasCycleResult
 	at(index FieldIndex)
 	none
@@ -20251,6 +20262,26 @@ export type ProgramSignatures
 		end 'index'
 	end 'genericAliasSpellingIsSuperseded'
 
+	// ⭐⭐ **THE INSTANCE A GENERIC-ALIAS NAME DENOTES TO A READER THAT NAMES NO FILE — THE THREE-QUESTION
+	// SEQUENCE, ONCE.** Is the name an alias at all, has the CONTEST superseded this spelling, and only then
+	// the refusing door. Every reader-free classifier wants exactly that composition, and written out at each
+	// of them it is the ORDER that drifts: asking `genericAliasInstanceInAnyFile` before the superseded probe
+	// turns a whole-program walk over the append-only registry into a panic (the probe's own header records
+	// two such walks), and skipping the probe altogether makes a contested name a wrong TYPE rather than a
+	// compile error.
+	//
+	// `throws` is `Map.get`'s own channel and carries BOTH negative answers, which is what every caller but
+	// one wants. `typeSupportsDeepClone` is the exception and keeps its own outer `isGenericAliasInAnyFile`,
+	// because it owes a THIRD answer: a name that is no alias falls through to the aggregate walk, while a
+	// superseded one is admitted (A3k).
+	export function liveGenericAliasInstance(name ByteArray) returns GenericInstanceId throws MapError
+		if not self.isGenericAliasInAnyFile(name) or self.genericAliasSpellingIsSuperseded(name) 'namesNoLiveInstance'
+			throw MapError.keyNotFound
+		end 'namesNoLiveInstance'
+
+		return self.genericAliasInstanceInAnyFile(name)
+	end 'liveGenericAliasInstance'
+
 	// ⭐⭐ **THE SAME QUESTION ASKED OF A TYPE RATHER THAN A NAME (A3k review)** — for the one classifier door
 	// that has no `name` in hand because it is a COMPOSITION of two others, `typeArgIsCoOwnedTrivial`. It is
 	// the SAME fact and not a second one: it bottoms out in `genericAliasSpellingIsSuperseded` above, which is
@@ -21561,11 +21592,7 @@ export type ProgramSignatures
 		let name = self.nameOfId(typeNameIdOf(columnType))
 		// A superseded spelling votes nothing, for `typeArgIsManagedElement`'s reason: this is a REFUSAL, and
 		// a contested alias name no reader can reach is not an instantiation of anything.
-		if not self.isGenericAliasInAnyFile(name) or self.genericAliasSpellingIsSuperseded(name) 'notAnAliasForAnInstance'
-			return false
-		end 'notAnAliasForAnInstance'
-
-		return self.instanceRestsAnUnnameableSlot(self.genericAliasInstanceInAnyFile(name))
+		return self.instanceRestsAnUnnameableSlot(try self.liveGenericAliasInstance(name) otherwise return false)
 	end 'columnElementOwnsAnUnnameableSlot'
 
 	// ⭐⭐ **THE SAME QUESTION ASKED OF AN INSTANCE IN HAND, AND THE ONE PLACE THE WALK'S CYCLE SET IS SEEDED
@@ -25010,8 +25037,8 @@ export type ProgramSignatures
 	// arm existed: *"'UpCursor_Integer' does not implement 'Cursor'"* on a program whose
 	// `type UpCursor uses Element implements Cursor with Element` declares exactly that.
 	export function instanceOfDeclaredName(name ByteArray) returns GenericInstanceId throws MapError
-		if self.isGenericAliasInAnyFile(name) and not self.genericAliasSpellingIsSuperseded(name) 'genericInstanceAlias'
-			return self.genericAliasInstanceInAnyFile(name)
+		if let alias = try self.liveGenericAliasInstance(name) 'genericInstanceAlias'
+			return alias
 		end 'genericInstanceAlias'
 
 		return try self.renderedInstanceOfUnclaimedName(name)
@@ -26058,8 +26085,12 @@ export type ProgramSignatures
 	//
 	// ⭐ **IT IS INTERNER-FREE, AND THAT IS WHY EVERY CALLER MAY HAND IT ITS OWN FILE'S TYPES.** Both arms key
 	// on a WHOLE-PROGRAM payload — a `typeParameter` carries W14's `(declaring type, parameter name)` digest and
-	// a `genericInstance` carries a registry id — while every arm that would need a name table (`named`,
-	// `structRef`) is one this substitution passes through untouched.
+	// a `genericInstance` carries a registry id — while the type HANDED IN, whatever its tag, is only ever
+	// read for those two. A `named` or a `structRef` at the top level is passed straight back. Inside an
+	// interned instance's ARGUMENT list exactly two spellings resolve further: a `named` that denotes a LIVE
+	// generic alias (`substituteArgThrough`) and a TUPLE `structRef` (`substituteThroughInstanceInterned`,
+	// which hands every other `structRef` back unchanged). Both read THIS index's tables, which is where an
+	// interned instance's arguments live in the first place — never a caller's.
 	export function substituteThroughInstance(t MaxonType, id GenericInstanceId) returns MaxonType
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.typeParameter 'opaqueFormal'
@@ -26075,11 +26106,12 @@ export type ProgramSignatures
 			return t
 		end 'carriesNoDeclarationView'
 
-		return self.substituteInstanceArgsThrough(genericInstanceIdOf(t), through: id)
+		return self.substituteInstanceArgsThrough(genericInstanceIdOf(t), through: id, aliasHops: 0)
 	end 'substituteThroughInstance'
 
-	// The `genericInstance` arm of the substitution above: each argument substituted in turn, then the result
-	// RE-INTERNED so `Array with T` under `T -> Num` becomes the one `Array with Num` every other door reaches.
+	// The `genericInstance` arm of the substitution above: each argument resolved and substituted in turn
+	// (`substituteArgThrough`), then the result RE-INTERNED so `Array with T` under `T -> Num` becomes the one
+	// `Array with Num` every other door reaches.
 	//
 	// It returns the ORIGINAL instance when no argument moved, and that early return is what keeps the common
 	// case allocation-free in the two senses that matter: a concrete field type (`Array with Item`) neither
@@ -26129,12 +26161,12 @@ export type ProgramSignatures
 		return self.genericInstances.instanceFixedSize(through)
 	end 'substitutedFixedSize'
 
-	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId) returns MaxonType
+	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId, aliasHops AliasHopCount) returns MaxonType
 		let args = self.genericInstances.instanceArgs(nested)
 		var substituted = MaxonTypeArray.create()
 		var moved = false
 		for arg in args 'eachArg'
-			let next = self.substituteThroughInstanceInterned(arg, id: through, interner: self.typeNames)
+			let next = self.substituteArgThrough(arg, through: through, aliasHops: aliasHops)
 			if not maxonTypesDenoteSame(next, b: arg) 'argMoved'
 				moved = true
 			end 'argMoved'
@@ -26166,6 +26198,47 @@ export type ProgramSignatures
 
 		return MaxonType.genericInstance(substitutedId)
 	end 'substituteInstanceArgsThrough'
+
+	// ⭐⭐ **ONE TYPE ARGUMENT, SUBSTITUTED — AND RESOLVED FIRST WHEN IT IS AN ALIAS NAME.** A generic alias
+	// written as a bare NAME reaches its enclosing instance as a `named` LEAF: `resolveArgNode` records a type
+	// argument during the declaration SWEEP, where `parseTypeReference`'s alias arms are shut off by
+	// `allFilesFolded` so that no recorded type can depend on the order the files were walked in. So
+	// `typealias EBoxArray = Array with EBox` interns as `Array with named("Bag.EBox")` where the inline
+	// `Array with (Box with Element)` interns a real nested instance — and `substituteThroughInstance` passes
+	// a `named` through untouched. Without the resolution below, the `Element` inside such an argument is
+	// unreachable and every reader of the alias-spelled slot gets the DECLARATION view.
+	//
+	// ⭐ **THE RESOLUTION IS `liveGenericAliasInstance`, WHICH IS ALSO THE CLONE GATE'S**, so the two
+	// reader-free roads cannot come to mean two different declarations of one contested name. It FAILS
+	// CLOSED: a genuinely contested spelling panics rather than resolving last-wins, which is what this door
+	// needs, its answer being a TYPE a program is checked against — two files' `typealias Bag` may be an
+	// `Array with String` and an `Array with Num`.
+	//
+	// ⚠ **THE ORIGINAL SPELLING IS HANDED BACK WHENEVER THE INSTANCE FIXES NOTHING IN THE ARGUMENT**, so an
+	// alias naming no type parameter keeps the id it was interned with. That is what holds the repair inside
+	// the case it repairs: nothing that already compiled mints a different instance, a different canonical
+	// name or a different `__destruct_` symbol.
+	//
+	// ⛔ **THE HOP BOUND IS WHAT MAKES A SELF-REFERENTIAL ALIAS TERMINATE.** The PARSE substitutes and the
+	// alias cycle check runs after it — `canonicalNameWithin` carries a path guard for the same reason — so
+	// `typealias Cyc = Array with Cyc` reached through a concrete receiver follows its own edge until the host
+	// stack is gone. Every hop consumes one key of `genericAliases`, so a chain with more hops than that map
+	// has keys has revisited one; leaving the argument unresolved there terminates, is a property of the
+	// program rather than of the asking site, and gets the compile as far as whatever refuses it. Syntactic
+	// nesting closes no loop and does not count against the bound.
+	function substituteArgThrough(arg MaxonType, through GenericInstanceId, aliasHops AliasHopCount) returns MaxonType
+		if maxonTypeTag(arg) != ValueTypeTag.named 'spellsNoAlias'
+			return self.substituteThroughInstanceInterned(arg, id: through, interner: self.typeNames)
+		end 'spellsNoAlias'
+
+		if aliasHops >= self.genericAliases.count() as AliasHopCount 'moreHopsThanTheAliasTableHasKeys'
+			return arg
+		end 'moreHopsThanTheAliasTableHasKeys'
+
+		let denoted = try self.liveGenericAliasInstance(self.nameOfId(typeNameIdOf(arg))) otherwise return arg
+		let substitutedArg = self.substituteInstanceArgsThrough(denoted, through: through, aliasHops: aliasHops + 1)
+		return arg if genericInstanceIdOf(substitutedArg) == denoted else substitutedArg
+	end 'substituteArgThrough'
 
 	// ⭐⭐ **A TUPLE'S INSTANCE VIEW — the third declaration-view shape, and the ONE that cannot ride
 	// `substituteThroughInstance`.** `type MyMap uses Key, Value` and `type MyMapIterator uses Key, Value`
@@ -26719,7 +26792,7 @@ export type ProgramSignatures
 			functionAlias then return false
 			// A SUPERSEDED spelling consumes nothing — no call site can name it. See
 			// `genericAliasSpellingIsSuperseded`, which records the two walks that reach this arm with one.
-			genericAlias then return not self.genericAliasSpellingIsSuperseded(name) and self.genericInstanceHasManagedField(self.genericAliasInstanceInAnyFile(name))
+			genericAlias then return self.genericInstanceHasManagedField(try self.liveGenericAliasInstance(name) otherwise return false)
 			// A tuple IS a struct box, and `denotedSlotAggregateName` above has already resolved the alias to
 			// the tuple's own canonical name — so this arm is reached only if that resolution is ever
 			// narrowed, and it must then answer exactly as the struct arm does. A3e's measured wrong answer
@@ -28390,7 +28463,7 @@ export type ProgramSignatures
 			return false
 		end 'notNamed'
 		let name = self.nameOfId(typeNameIdOf(t))
-		return self.isGenericAliasInAnyFile(name) and not self.genericAliasSpellingIsSuperseded(name) and self.isArrayInstance(self.genericAliasInstanceInAnyFile(name))
+		return self.isArrayInstance(try self.liveGenericAliasInstance(name) otherwise return false)
 	end 'denotesArrayInstance'
 
 	// The `Array` instance the type above denotes. Precondition: `denotesArrayInstance(t)`, so exactly the
@@ -29133,9 +29206,9 @@ export type ProgramSignatures
 	// `direct` leaf; a struct/union is clonable iff every managed field/payload is; a trivial-element Array is a
 	// `direct` leaf; a managed-element Array or chain is clonable iff its element is; a non-Array generic
 	// instance (`Box with String`) is clonable iff every one of its SUBSTITUTED fields is (W162). `visited`
-	// (struct/union NAMES) breaks a recursive type (`type Node { var next as Node }`): a name already in flight
-	// is assumed clonable, so the walk terminates, and the synthesized cloner recurses at RUN time through the
-	// same field, which is correct.
+	// holds every name already in flight — aggregate, generic-alias and mangled-instance alike — and breaks a
+	// recursive type (`type Node { var next as Node }`, `typealias Cyc = Array with Cyc`). See
+	// `cloneWalkMayDescendInto`, the one door all three arms mark through.
 	//
 	// ⭐⭐ **THERE IS NO `asElement` PARAMETER, AND ITS REMOVAL IS G18'S WHOLE THESIS.** It used to be `true`
 	// wherever `type` is reached as an ARRAY ELEMENT — invoked through `callIndirect(fn, elem)`, so reachable
@@ -29172,11 +29245,12 @@ export type ProgramSignatures
 			// `typealias Bag = Array with <different element>` with `typealias NestedContainer = Container with
 			// Bag` took `requireOpaqueArrayCopyable` straight into `genericAliasInstance`'s refusal on a program
 			// whose single-file spelling compiles. See `genericAliasSpellingIsSuperseded`.
-			if self.genericAliasSpellingIsSuperseded(name) 'theContestReplacedThisOne'
+			let live = try self.liveGenericAliasInstance(name) otherwise return true
+			if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
 				return true
-			end 'theContestReplacedThisOne'
+			end 'alreadyInFlight'
 
-			return self.instanceGraphSupportsDeepClone(self.genericAliasInstanceInAnyFile(name), visited: visited)
+			return self.instanceGraphSupportsDeepClone(live, visited: visited)
 		end 'genericAlias'
 		// ⛔ **A COMPILER-OWNED AGGREGATE IS NOT DEEP-CLONEABLE, AND THE GATE HAS TO SAY SO — its layout is
 		// REGISTERED, so `containsStruct` below says yes and the walk would happily report its scalar-only
@@ -29193,6 +29267,35 @@ export type ProgramSignatures
 		// owners a descriptor whose `__mf_destruct` closes it once.
 		return self.aggregateNameSupportsDeepClone(name, visited: visited)
 	end 'typeSupportsDeepClone'
+
+	// ⭐⭐ **THE CLONE WALK'S CYCLE BREAK — THE ONE HOME FOR ALL THREE OF ITS ARMS**: the aggregate NAME
+	// (`aggregateNameSupportsDeepClone`), the generic-alias NAME (`typeSupportsDeepClone`) and the MANGLED
+	// INSTANCE name (`declaredInstanceSupportsDeepClone`). One `visited` set serves the three because their
+	// namespaces are disjoint by construction — a mangled name carries the reserved `__` prefix no
+	// declaration may take.
+	//
+	// ⛔⛔ **EVERY ARM MUST MARK, OR THE WALK CANNOT TERMINATE.** The alias arm descends through
+	// `instanceGraphSupportsDeepClone` into the container's ELEMENT, which for `typealias Cyc = Array with
+	// Cyc` is `Cyc` again, so an unmarked name re-enters `typeSupportsDeepClone` at the same name forever — a
+	// host stack overflow with no diagnostic at all. An alias merely DECLARED is enough to reach it: the gate
+	// is asked over the interned instances, not over the uses.
+	//
+	// ⚠ **A NAME IN FLIGHT IS ASSUMED CLONABLE, AND FOR A CYCLIC ALIAS THAT ANSWER IS NEVER ACTED ON.** For
+	// a recursive STRUCT (`type Node { var next as Node }`) it is simply true, and the synthesized cloner
+	// recurses at run time through the same field. A cyclic ALIAS describes an infinite type, so `true` would
+	// be wrong to act on — what makes it safe is the PIPELINE ORDER and not the diagnostic:
+	// `checkGenericAliasCycles` runs at the declaration-check phase ahead of the backend, nothing between
+	// this walk and there synthesizes a cloner, and the check reports NOTHING when the project already
+	// carries an error (`ParseStaging.checkGenericAliasCycles`) — so this break must hold for a cyclic
+	// program that never sees E2012 at all.
+	function cloneWalkMayDescendInto(name ByteArray, visited ClonerSet) returns bool
+		if visited.contains(name) 'alreadyOnThisWalk'
+			return false
+		end 'alreadyOnThisWalk'
+
+		visited.insert(name)
+		return true
+	end 'cloneWalkMayDescendInto'
 
 	// ⭐ **THE SAME QUESTION ASKED OF A RESOLVED AGGREGATE *NAME*** — the compiler-owned refusal, the cycle
 	// break, and the struct/union field walk, which is everything `typeSupportsDeepClone` does once it has a
@@ -29213,10 +29316,10 @@ export type ProgramSignatures
 			serviceHandle then return true
 			userDeclared then break 'compilerOwned'
 		end 'compilerOwned'
-		if visited.contains(name) 'cycle'
+		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
 			return true
-		end 'cycle'
-		visited.insert(name)
+		end 'alreadyInFlight'
+
 		if self.containsStructInAnyFile(name) 'struct'
 			return self.structFieldsSupportDeepClone(name, visited: visited)
 		end 'struct'
@@ -29279,19 +29382,20 @@ export type ProgramSignatures
 	// the buffer had an arm, every `Array with (List with Integer)` was refused for want of a field list its
 	// element does not have.
 	//
-	// The cycle break is the MANGLED INSTANCE NAME in the same `visited` set the struct/union walk uses, which
-	// is sound because the two namespaces are disjoint BY CONSTRUCTION: `mangleGenericInstance` mints a
-	// contested name behind the reserved `__` prefix no declaration may take (see its header).
+	// The cycle break is `cloneWalkMayDescendInto`'s, keyed by the MANGLED INSTANCE NAME in the same `visited`
+	// set the two NAME arms use — sound because the namespaces are disjoint BY CONSTRUCTION:
+	// `mangleGenericInstance` mints a contested name behind the reserved `__` prefix no declaration may take
+	// (see its header). The key is built BEFORE the probe and so is paid on every instance node of every clone
+	// walk, which is the one cost the shared break does not remove: a mangled name is derived from the
+	// instance and there is no cheaper key that is still disjoint from the declared names sharing the set.
 	function declaredInstanceSupportsDeepClone(id GenericInstanceId, visited ClonerSet) returns bool
 		if not self.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
 			return false
 		end 'noSynthesizedCloner'
 
-		let mangled = self.mangleGenericInstance(id)
-		if visited.contains(mangled) 'cycle'
+		if not self.cloneWalkMayDescendInto(self.mangleGenericInstance(id), visited: visited) 'alreadyInFlight'
 			return true
-		end 'cycle'
-		visited.insert(mangled)
+		end 'alreadyInFlight'
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if not self.genericInstanceFieldIsManaged(id, index: i) 'scalar'
