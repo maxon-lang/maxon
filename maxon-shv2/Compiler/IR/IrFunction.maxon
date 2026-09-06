@@ -112,11 +112,15 @@ export typealias ThrowsClauseArray = Array with ThrowsClause
 // `IrFunction.valueExistentialInstances`.
 export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanceId)
 
-// The COW anchor the column starts at, and the answer every reader gets for a function that declared no
-// parameterized existential — which is very nearly every function. `Parser.recordValueExistentialInstance`
-// copy-on-writes on first use by `is`-identity against THIS binding, so a program that never writes a `with`
-// clause on an interface type allocates one map for the whole compile. Never mutated.
-export let sharedEmptyExistentialInstanceMap = ValueExistentialInstanceMap.create()
+// ⛔⛔ **THE PARSER'S COLUMN IS A `ValueExistentialInstanceColumn` AND IT STOPS AT THIS BOUNDARY — an
+// `IrFunction` holds the MAP.** Two reasons, either sufficient. `createFromStd` builds one function per
+// register-allocator pool message on whichever OS thread the scheduler picked, so a placeholder shared
+// between two of them is a refcount lost update on a process-lifetime record — exit 101 on some runs and
+// not others (`Testing/IrFunctionSelfTest`). And a payload-free union case IS such a shared box. The gate
+// that catches exactly that cannot be pointed at a union either: `is` requires a struct reference (E3068),
+// so carrying the state across would delete the check that guards the hazard carrying it introduces.
+//
+// ⇒ `Parser.publishExistentialInstances` unwraps the state and hands over the map, or hands over nothing.
 
 // ⭐ **THE VALUES OF ONE FUNCTION THAT MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD (W117)** — see
 // `IrFunction.immutableGlobalAliasValues`. A SET rather than a list for the reason the parser's own mark is
@@ -775,7 +779,7 @@ export type IrFunction
 			valueClosureEnv: valueClosureEnv,
 			valueIsCapturingClosure: valueIsCapturingClosure,
 			valueWitnessIds: valueWitnessIds,
-			valueExistentialInstances: sharedEmptyExistentialInstanceMap,
+			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,

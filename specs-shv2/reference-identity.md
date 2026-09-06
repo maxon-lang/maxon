@@ -396,3 +396,78 @@ end 'main'
 ```exitcode
 3
 ```
+
+<!-- test: a-durable-store-of-a-let-map-copies-it -->
+⭐ **THE COPY RULE IS ABOUT IMAGE DATA, NOT ABOUT ARRAYS**, and a `Map` is the shape that proves it. The
+case above pins the rule with an `Array`, whose co-own already forks on `capacity@16`. A `Map` reaches the
+same sink by a different road — it is `genericInstance`-tagged, so it matches neither the buffer arm nor
+the `structRef` arm and falls through to a plain incref. The sink then holds the module-level `let` itself,
+and a write through it lands on the image: **a panic in `Map.ensureCapacity` on x64, and on wasm32-wasi —
+which has no read-only section — a SILENT rewrite of the constant.**
+
+⚠ **Both compilers once answered `11` here**, meaning the `upsert` reached `Shared` and the module-level
+`let` came back holding an entry. That is the wrong answer the copy exists to prevent, and it is only
+memory-safe while the constant is an ordinary heap record: the moment a `let` Map becomes image data the
+same aliasing is a write to a read-only page. `held` must see its own entry and `Shared` must still be
+empty — `1` and `0`, so `10`.
+```maxon
+typealias Key = int(0 to 1000)
+typealias KeyMap = Map with (Key, Key)
+typealias MapBox = Array with KeyMap
+
+let Shared = KeyMap.create()
+
+function main() returns ExitCode
+	var box = MapBox.create()
+	box.push(Shared)
+	var held = try box.get(0) otherwise KeyMap.create()
+	held.upsert(7, value: 7)
+	return ((held.count() as ExitCode) * 10) + (Shared.count() as ExitCode)
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: a-field-of-an-imaged-container-let-is-readable -->
+⭐ **AN IMAGED RECORD IS STILL A RECORD, AND ITS FIELDS ARE STILL FIELDS.** Imaging changes where a
+module-level `let` LIVES, never what may be read from it. The receiver road for a managed constant was
+written when the only imageable records were a `String`, a `b"…"` blob and an empty `Array` — none of
+which has a field a caller can name — so a field chain off one resolved to `undefinedVariable`. A
+declared container box has fields, and the reader must reach them.
+
+⚠ **THE TWO LINES BELOW TAKE DIFFERENT ROADS AND ONLY ONE OF THEM WAS BUILT.** `Shared.size()` is a
+method call and resolves through the receiver dispatch; `Shared.items` is a field chain. A diagnostic
+that fires on the second while the first compiles reports the base as undefined on the line AFTER the
+line that used it successfully, which sends the reader hunting for a typo in a name that is plainly
+declared. `Shared.version` pins the scalar field beside the container one, because a struct is admitted
+to the image on the strength of its scalar fields folding and it is exactly that admission which puts
+the record on this road.
+```maxon
+typealias Ver = int(0 to 100)
+
+type Bag uses T
+	typealias Items = Array with T
+	export var items as Items = Items.create()
+	export var version as Ver = 7
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+	export function size() returns ExitCode
+		return self.items.count() as ExitCode
+	end 'size'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+let Shared = StrBag.create()
+
+function main() returns ExitCode
+	let viaMethod = Shared.size()
+	let viaField = Shared.items.count() as ExitCode
+	return ((Shared.version as ExitCode) * 10) + viaMethod + viaField
+end 'main'
+```
+```exitcode
+70
+```

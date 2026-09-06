@@ -1123,6 +1123,26 @@ export enum CalleeMint
 	rangeOperator
 end 'CalleeMint'
 
+// ⭐⭐ **ONE SLOT OF AN IMAGED RECORD BOX THAT ADDRESSES ANOTHER IMAGE OBJECT** — a `Map`'s or a `Set`'s
+// empty column, whose record lives in `.rdata` beside the box that names it. The lowering registers the
+// column, seeds the slot with its `.rdata` offset (so two boxes are byte-equal exactly when they name the
+// same columns) and records the absolute data-to-data relocation that turns the seed into an address.
+export type ImmortalBoxColumn
+	export let offset as ByteOffset
+	// The column record's `element_size@24`, which for a column over one of the base's own type parameters
+	// is the fixed opaque slot the SHARED body builds it at and not the argument's own width.
+	export let elementSize as ElementStride
+	// The column element's drop callee, EMPTY when the element owns nothing —
+	// `ImmortalRecordKind.emptyContainer`'s encoding, for its reason.
+	export let elementDestroy as ByteArray
+
+	export static function create(offset ByteOffset, elementSize ElementStride, elementDestroy ByteArray) returns ImmortalBoxColumn
+		return Self{offset: offset, elementSize: elementSize, elementDestroy: elementDestroy}
+	end 'create'
+end 'ImmortalBoxColumn'
+
+export typealias ImmortalBoxColumnArray = Array with ImmortalBoxColumn
+
 export union MaxonOp
 	// --- band: callFree ---
 	// A free-function call `callee(args…)` whose result is a freshly-minted ValueId.
@@ -1654,7 +1674,14 @@ export union MaxonOp
 	// two a site is; this shape has no heap spelling. It also must not be credited with the ARRAY runtime a
 	// `constArrayLiteral` site turns on (`RuntimeUsage.recordConstArrayLiteralUsage`): a struct box is not a
 	// `__ManagedMemory` and reaches none of it.
-	immortalStructRecord(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	//
+	// ⭐⭐ **`columns` IS WHAT LETS THE BOX ADDRESS OTHER IMAGE OBJECTS**, which is the whole of the
+	// difference between a struct of scalars and a `Map`/`Set` whose slots hold its empty columns. Each
+	// entry names a slot the lowering fills with the address of an empty `Array` record it registers beside
+	// this box; a box of scalars carries none and its `bytes` are the finished record. It is one op rather
+	// than two because the payload and the registration are identical either way — a column list of zero
+	// entries IS the scalar shape.
+	immortalStructRecord(result ValueId, bytes ByteArray, columns ImmortalBoxColumnArray) = MaxonOpMeta{category: OpCategory.plain}
 	// --- A module-level `let` holding an array of string LITERALS ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `immortalStructRecord`, per the band-append invariant.

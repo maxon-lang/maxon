@@ -2138,39 +2138,40 @@ end 'enumInterpRendering'
 // (`Parser.memberAccessedTypeNames`). They are two facts and are deliberately not merged — see there.
 export typealias UsedTypeNameSet = Set with ByteArray
 
-// The set every walk that records nothing shares — which is every walk but `parseModule`'s, since
-// `collectsTypeNameUses` gates both recorders, and a file that names no type and reaches into none at all.
-// Copy-on-write, exactly as `sharedEmptyInnerAliases` is (`Parser.recordTypeNameUse`).
+// ⭐⭐ **"THIS WALK RECORDED NO TYPE NAME" AS A SPELLED STATE.** Its twin one screen down carries the whole
+// argument; what is particular here is that the roster ESCAPES — `FileParseArtifact` holds this very column
+// and `UnusedExportCheck` walks it — so the state travels with it rather than being unwrapped at the border.
 //
-// ⚠ **ONE singleton for BOTH fields**, and that is the rule `sharedEmptyDeferredNameDiagnostics` states: the
-// copy-on-write test is an IDENTITY test, so a second empty of the same type would make "which empty was
-// this field seeded with?" a fact to remember rather than one to derive.
-export let sharedEmptyUsedTypeNames = UsedTypeNameSet.create()
+// ⚠ ONE union for BOTH fields (`usedTypeNames` and `memberAccessedTypeNames`), which two empty containers
+// could not be: a test against one of those asks WHICH empty a field was seeded with, and a named state
+// asks nothing.
+export union UsedTypeNameRoster
+	unwritten
+	entries(names UsedTypeNameSet)
+end 'UsedTypeNameRoster'
 
-// ⭐ THE ONE EMPTY `DeferredNameDiagnosticArray` every list of that type starts as — the parser's
-// candidate list and both of the artifact's. A SINGLE singleton, because the copy-on-write test is an
-// IDENTITY test (`is`): two empties of one type would not be interchangeable, so which one a field was
-// seeded with would become a fact to remember rather than one to derive.
-export let sharedEmptyDeferredNameDiagnostics = DeferredNameDiagnosticArray.create()
+export let noUsedTypeNames = UsedTypeNameRoster.unwritten
 
-// Append to a copy-on-write deferred list and hand back the list to store. The ONE writer for all three
-// fields that share the singleton above, so the identity test is spelled once instead of at each.
-// ⚠ Each arm builds and returns its OWN list rather than rebinding one `var` across the `if`. That is
-// not style: shv2 mints no merge phi for a MANAGED `var` reassigned inside a labelled `if` in a free
-// function, and the rebinding form is `E9001 … does not dominate` at this very call
-// (`stdlib.Array.push` reading a value defined only on the taken arm). A loud internal error, not a
-// wrong answer — and a pre-existing gap in a construct this rung does not otherwise touch, so it is
-// REPORTED rather than worked around anywhere else.
-export function appendDeferredNameDiagnostic(list DeferredNameDiagnosticArray, entry DeferredNameDiagnostic) returns DeferredNameDiagnosticArray
-	if list is sharedEmptyDeferredNameDiagnostics 'stillShared'
-		var fresh = DeferredNameDiagnosticArray.create()
-		fresh.push(entry)
-		return fresh
-	end 'stillShared'
+// ⭐ **"THIS FUNCTION HOLDS NO PARAMETERIZED-INTERFACE VALUE" AS A SPELLED STATE.** File-private: the column
+// stops at `IrFunction`, which keeps the map — see that field for the pool-worker aliasing and the `is`
+// gate that bind it there.
+union ValueExistentialInstanceColumn
+	unwritten
+	entries(byValue ValueExistentialInstanceMap)
+end 'ValueExistentialInstanceColumn'
 
-	list.push(entry)
-	return list
-end 'appendDeferredNameDiagnostic'
+let noValueExistentialInstances = ValueExistentialInstanceColumn.unwritten
+
+// ⭐⭐ **"THIS WALK DEFERRED NO DIAGNOSTIC" AS A SPELLED STATE** — the parser's candidate list and both of
+// the artifact's. A shared empty `Array` cannot carry it, for `TupleLayoutTable`'s reason: an empty
+// `Array` `let` is image data too, so a field seeded from one holds a private clone and a test against the
+// shared record answers false whatever the field was seeded with.
+export union DeferredNameDiagnosticRoster
+	unwritten
+	entries(recorded DeferredNameDiagnosticArray)
+end 'DeferredNameDiagnosticRoster'
+
+export let noDeferredNameDiagnostics = DeferredNameDiagnosticRoster.unwritten
 
 // A generic method's QUALIFIED name -> "does it directly need this hidden slot?" — the SEED column
 // `scanDescriptorNeedsInto` fills and `solveDescriptorNeeds` closes over. Keyed qualified since W23c: the
@@ -2272,8 +2273,8 @@ end 'maskWithSignal'
 
 let sharedEmptyDescriptorScanSites = DescriptorScanSiteArray.create()
 
-// The INITIAL `Parser.enclosingWhereConstraints` (P1.7a slice 2a), held here (like
-// `sharedEmptyInnerAliases`) so a type with no `where` clause — every type on the generics-free corpus —
+// The INITIAL `Parser.enclosingWhereConstraints` (P1.7a slice 2a), held here so a type with no `where`
+// clause — every type on the generics-free corpus —
 // allocates nothing. `readWhereClause` REPLACES the field with a fresh list only when the clause is present,
 // and it is never mutated in place, so this shared instance is safe across the per-file parse fan-out.
 let sharedEmptyWhereConstraints = WhereConstraintArray.create()
@@ -2284,39 +2285,10 @@ let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 // present), so it is safe across the per-file parse fan-out.
 let sharedEmptyInterfaceConformances = InterfaceConformanceArray.create()
 
-// The INITIAL `Parser.siblingReceivers`, held here so a parser
-// allocates none of its own until a bare call inside a type body actually needs the map. The lazy builder
-// REPLACES the field with a fresh map — it never mutates in place — so this placeholder stays empty and is
-// safe to share across the per-file parse fan-out. A method-free file never touches the field at all.
-let sharedEmptySiblingReceivers = SiblingReceiverMap.create()
-
 // An interface NAME -> its transitive witness slot list (`IrInterface.interfaceWitnessSlots`), memoized per
 // Parser. The key is the constraint's interface name, which is the same key the interface registry is
 // keyed by, so a lookup here and a lookup there answer about one interface.
 typealias WitnessSlotsByInterfaceMap = Map with (ByteArray, CollectedInterfaceMethodArray)
-
-// ⚠⚠ **THE SLOT LIST IS BUILT ONCE PER INTERFACE PER FILE, NOT ONCE PER DISPATCH SITE, AND THE DIFFERENCE
-// IS A MEASURED QUADRATIC.** `findWitnessDispatchCandidates` runs at EVERY method call on a constrained type
-// parameter and needs the slot NUMBERING to compile `[witnessAddr + 24 + 8*i]`; asking
-// `interfaceWitnessSlots` there rebuilt the whole transitive list at each one, and a `CollectedInterfaceMethod`
-// is a heap record, so the walk allocates one per requirement. That is O(dispatch sites x requirements) —
-// MEASURED on `tests/ladders/genwitness.sh 1 <M> dispatch` as `1.02*M^2 + 19*M` extra allocations in
-// `phase:parse` (+200 at M=8 rising to +19,072 at M=128, a ratio approaching x4 per doubling), against a
-// scan that allocated NOTHING before R10c widened it. Memoized, the list is built once per interface the
-// file dispatches through and the per-site cost is a map lookup.
-//
-// ⚠ **PER `Parser` AND NOT ON `ProgramSignatures`, WHICH IS WHERE IT LOOKS LIKE IT BELONGS.** That object is
-// READ-ONLY during parse by design and is SHARED by the per-file parse fan-out; a mutable memo on it would
-// be a data race the moment two files parse at once. A `Parser` is private to one file's parse, which is
-// what makes this shape safe — the same shape and the same reason as `sharedEmptySurfaceRoster`'s rosters.
-//
-// ⚠ The memoized array is HANDED OUT and never mutated by its reader (`findWitnessDispatchCandidates` only
-// reads slots out of it), which is what lets one list serve every site.
-//
-// The INITIAL value is this shared empty map, so a file that dispatches through no constraint at all — the
-// whole corpus bar the generic bodies — allocates nothing. The lazy builder REPLACES the field with a fresh
-// map before its first insert, so this placeholder stays empty and is safe across the parse fan-out.
-let sharedEmptyWitnessSlots = WitnessSlotsByInterfaceMap.create()
 
 // The requirement list `Parser.requirementSlotsOf` hands back for an `implements` naming an interface that
 // resolves to nothing. Read-only (its one reader scans it for a method name), so ONE allocation serves the
@@ -2411,14 +2383,6 @@ let sharedOverloadUnscoreable = SweptOverloadFit.unscoreable
 // no "only on the safe path" spelling of this, which is why all seven went fresh together rather than the
 // three that happened to be reported.
 
-// The module-level shared EMPTY inner-alias placeholder (P1.6-C), held as the INITIAL value of the
-// `enclosingInnerAliases` working field AND as the COW anchor the reset points at. ONE allocation for the
-// whole compile, so a program that never declares a nested typealias pays NOTHING per parser: a parser
-// INCREFS this rather than allocating its own. It is never mutated: `readNestedRangedAlias` copy-on-writes a
-// fresh collection the first time it must write, keyed on the `is`-identity of this very instance, so the
-// shared one stays empty and safe to share across the per-file parse fan-out.
-let sharedEmptyInnerAliases = InnerAliasNameSet.create()
-
 // The same COW anchor for the GENERIC-INSTANCE typealiases declared in an `interface` body (W61) — see
 // `Parser.interfaceAliasScratch`. An interface that declares none, which is every interface in the corpus
 // outside `stdlib/Builtins.maxon` and `specs-shv2/associated-types.md`, INCREFS this rather than allocating.
@@ -2435,58 +2399,195 @@ var sharedEmptyInterfaceAliases = GenericAliasEntryArray.create()
 // and every declaration that is not an interface extension.
 let sharedEmptyExtensionAssociatedTypes = ByteArrayArray.create()
 
-// The same COW anchor for the declared-alias map (`ValueDeclaredAliasMap`), with the same invariant: a
-// function that declares no float-alias value and writes no `as` cast INCREFS this one rather than
-// allocating, and `recordValueDeclaredAlias` copies on its first write keyed on this instance's identity.
-let sharedEmptyDeclaredAliasMap = ValueDeclaredAliasMap.create()
+// ⭐⭐⭐ **"THIS FILE HAS WRITTEN NOTHING" IS A SPELLED STATE, NOT A SHARED EMPTY CONTAINER.**
+// `Parser.create` runs once per FILE and once per top-level CONSTANT, so every per-file memo below is built
+// thousands of times a compile and written in almost none of them.
+//
+// ⛔⛔ **A SHARED EMPTY CONTAINER CANNOT CARRY THAT STATE, BECAUSE READING IT IS A REPRESENTATION
+// DEPENDENCE.** Such a state is read by asking whether a field holds one PARTICULAR record — and a
+// module-level `let` container is IMAGE DATA, which a durable sink is free to duplicate: the construction
+// literal that seeds a field from one hands it a private DEEP COPY (`Parser.emitOwnContainerBoxCopy`), so
+// the field does not hold the record the test names. A NAMED empty state has no record to duplicate and
+// none to compare, so no reader below depends on which box a field happens to hold.
+//
+// ⚠ **IT IS NOT FREE.** A payload-free case is a 16-byte box, and these columns are RESET PER FUNCTION, so
+// one is installed per function per column written. That is what the removed dependence costs;
+// `docs/optimization-log.md` carries the numbers.
 
-// The same COW anchor for the character-literal op map (`CharLiteralOpMap`), with the same invariant: a
-// function that writes no character literal INCREFS this one rather than allocating, and
-// `recordCharLiteralOp` copies on its first write keyed on this instance's identity.
-let sharedEmptyCharLiteralOps = CharLiteralOpMap.create()
+// The tuple layouts this file has adopted (P1.10) — its own copy of each, so `mergeArtifact` commits it to
+// `project.structTypes` and the destructor installer finds a layout in both places.
+union TupleLayoutTable
+	unwritten
+	entries(filed StructLayoutMap)
+end 'TupleLayoutTable'
 
-// The same COW anchor for the byte-view op map (`StringBytesViewOpMap`), with the same invariant: a function
-// that never calls `addressableBytes()` INCREFS this one rather than allocating. That is every function of
-// every USER program — the method is stdlib-only — and all but a handful of the corpus's own.
-let sharedEmptyStringBytesViewOps = StringBytesViewOpMap.create()
+let noTupleLayouts = TupleLayoutTable.unwritten
 
-// The same COW anchor for the folded-index call-site map (`FoldedIndexCallSiteMap`), with the same
-// invariant: a function that never asks `startIndex()`/`endIndex()` OF A LITERAL INCREFS this one rather
-// than allocating, which is every function of almost every program.
-let sharedEmptyFoldedIndexCallSites = FoldedIndexCallSiteMap.create()
+// ⚠⚠ **ONE INTERFACE'S TRANSITIVE WITNESS SLOT LIST, BUILT ONCE PER FILE RATHER THAN ONCE PER DISPATCH
+// SITE, AND THE DIFFERENCE IS A MEASURED QUADRATIC.** `findWitnessDispatchCandidates` runs at every method
+// call on a constrained type parameter and needs the slot NUMBERING; asking `interfaceWitnessSlots` there
+// rebuilt the whole transitive list at each one, and a `CollectedInterfaceMethod` is a heap record, so the
+// walk allocates one per requirement. MEASURED on `tests/ladders/genwitness.sh 1 <M> dispatch` as
+// `1.02*M^2 + 19*M` extra allocations in `phase:parse` (+200 at M=8 rising to +19,072 at M=128).
+//
+// ⚠ **PER `Parser` AND NOT ON `ProgramSignatures`, WHICH IS WHERE IT LOOKS LIKE IT BELONGS.** That object is
+// READ-ONLY during parse by design and is SHARED by the per-file parse fan-out; a mutable memo on it would
+// be a data race the moment two files parse at once.
+//
+// ⚠ The memoized array is HANDED OUT and never mutated by its reader, which is what lets one list serve
+// every site.
+union WitnessSlotTable
+	unwritten
+	entries(byInterface WitnessSlotsByInterfaceMap)
+end 'WitnessSlotTable'
 
-// The same COW anchor for the grapheme-width memo (`SingleByteGraphemeLiteralMap`). Unlike its siblings
-// this one is per-FILE rather than per-function — see the typealias — so it is copied off the anchor at
-// most once per parse and never reset.
-let sharedEmptySingleByteGraphemeLiterals = SingleByteGraphemeLiteralMap.create()
+let noWitnessSlots = WitnessSlotTable.unwritten
 
-// The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
-// AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInnerAliases`' pattern, for its reason
-// and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
-// own, which is every file of the scale corpus and most of the compiler: the rung is then allocation-neutral
-// on a tuple-free program, and the doubling ladder can say so.
-let sharedEmptyTupleLayouts = StructLayoutMap.create()
+// Whether the corpus serves a container member through a body a caller may have to supply a layout
+// descriptor for, memoized per member NAME so the declaration scan pays it once per distinct name.
+union CorpusMemberVerdictTable
+	unwritten
+	entries(verdicts DescriptorNeedMap)
+end 'CorpusMemberVerdictTable'
 
-// The module-level shared EMPTY immutable-global-read set (P1.7 slice 2b), held as the initial value of
-// `immutableGlobalReads` AND as the COW anchor its reset points at — `sharedEmptyInnerAliases`' pattern,
-// for its reason and with its invariant. A program that declares no immutable top-level global with STORAGE
-// (which is every program with no array `let`) never writes it, so it stays empty, is safe to share across
-// the per-file parse fan-out, and costs a fixed handful of allocations for the whole compile rather than one
-// structure per function. `Set.contains` on a zero-capacity set returns before it hashes anything, so the
-// programs that never mark also never pay to ask.
-let sharedEmptyImmutableGlobalReads = ValueMarkSet.create()
+let noCorpusMemberVerdicts = CorpusMemberVerdictTable.unwritten
 
-// The module-level shared EMPTY merge-blame table, held as the initial value of `mergeImmutableBlame` AND as
-// the COW anchor its per-function reset points at — `sharedEmptyImmutableGlobalReads`' pattern, for its
-// reason and with its invariant. A program with no `let` binding reaching a call argument THROUGH a merge
-// leaves it empty, which is nearly every program, and `Map.count()` on it answers 0 before anything hashes.
-let sharedEmptyMergeBlames = MergeBlameMap.create()
+// The function names this file declares — what `overloadMembersOf` asks to know whether the incumbent of a
+// contested name is this file's or another's.
+union DeclaredFuncNameRoster
+	unwritten
+	entries(claimed DeclaredFuncNameSet)
+end 'DeclaredFuncNameRoster'
 
-// The module-level shared EMPTY rebindable-slot-read set (W41), held as the initial value of
-// `rebindableSlotReads` AND as the COW anchor its per-function reset points at —
-// `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. A function that binds
-// no name to a managed value read out of a writable slot never writes it.
-let sharedEmptyRebindableSlotReads = ValueMarkSet.create()
+let noDeclaredFuncNames = DeclaredFuncNameRoster.unwritten
+
+// The overload members recorded per base name, materialized on the first contest.
+union OverloadMemberTable
+	unwritten
+	entries(byBase OverloadMemberMap)
+end 'OverloadMemberTable'
+
+let noOverloadMembers = OverloadMemberTable.unwritten
+
+// The bare members of the enclosing declaration's nested typealiases, so the rest of its body's bare
+// references resolve. Both nested-alias shapes enter it the same way.
+union InnerAliasRoster
+	unwritten
+	entries(declared InnerAliasNameSet)
+end 'InnerAliasRoster'
+
+let noInnerAliases = InnerAliasRoster.unwritten
+
+// The ranged typealias each value's declared type NAMES - the source half of E3010's "is this cast
+// unneeded?" and of every range guard's death test.
+union ValueDeclaredAliasTable
+	unwritten
+	entries(recorded ValueDeclaredAliasMap)
+end 'ValueDeclaredAliasTable'
+
+let noValueDeclaredAliases = ValueDeclaredAliasTable.unwritten
+
+// The op index of each character literal's `stringLiteral`, filed as it is emitted so the retype to a
+// codepoint is an O(1) read rather than `ValueOriginTable`'s linear scan.
+union CharLiteralOpTable
+	unwritten
+	entries(filed CharLiteralOpMap)
+end 'CharLiteralOpTable'
+
+let noCharLiteralOps = CharLiteralOpTable.unwritten
+
+// The op index of each `String.addressableBytes` view, filed for the same reason one door over.
+union StringBytesViewOpTable
+	unwritten
+	entries(filed StringBytesViewOpMap)
+end 'StringBytesViewOpTable'
+
+let noStringBytesViewOps = StringBytesViewOpTable.unwritten
+
+// Where each folded `startIndex()`/`endIndex()` call was emitted, so the fold that made it garbage removes
+// it by position rather than by hunting for it.
+union FoldedIndexCallSiteTable
+	unwritten
+	entries(filed FoldedIndexCallSiteMap)
+end 'FoldedIndexCallSiteTable'
+
+let noFoldedIndexCallSites = FoldedIndexCallSiteTable.unwritten
+
+// Whether a string literal's clusters are all single-byte, memoized per literal op because the scan is
+// O(L) and K windows of one literal would otherwise scan it K times.
+union SingleByteGraphemeTable
+	unwritten
+	entries(scanned SingleByteGraphemeLiteralMap)
+end 'SingleByteGraphemeTable'
+
+let noSingleByteGraphemeLiterals = SingleByteGraphemeTable.unwritten
+
+// One interned stand-in per top-level name a borrow subject can be, so `g.get(0)` on one line and
+// `g.clear()` on the next are the SAME subject.
+union TopLevelBorrowSubjectTable
+	unwritten
+	entries(interned VarInfoMap)
+end 'TopLevelBorrowSubjectTable'
+
+let noTopLevelBorrowSubjects = TopLevelBorrowSubjectTable.unwritten
+
+// Which immutable binding a merge phi's arm named, so a later refusal can blame it by name.
+union MergeBlameColumn
+	unwritten
+	entries(blamed MergeBlameMap)
+end 'MergeBlameColumn'
+
+let noMergeBlames = MergeBlameColumn.unwritten
+
+// The declared buffer surface of each TUPLE SLOT a value holds (A2m) - the keyed mark, over the one shape
+// a `Set with ValueId` cannot express.
+union ValueSlotSurfaceColumn
+	unwritten
+	entries(bySlot ValueSlotSurfaceMap)
+end 'ValueSlotSurfaceColumn'
+
+let noBufferSurfaceSlots = ValueSlotSurfaceColumn.unwritten
+
+// The members of the DECLARATION being parsed, bare name -> takesReceiver, built lazily and keyed by the
+// declaration it was built from.
+union SiblingReceiverTable
+	unwritten
+	entries(members SiblingReceiverMap)
+end 'SiblingReceiverTable'
+
+let noSiblingReceivers = SiblingReceiverTable.unwritten
+
+// The local names this body must keep in cells, decided from TOKENS before it is parsed.
+union CellLocalNameRoster
+	unwritten
+	entries(names CellLocalNameSet)
+end 'CellLocalNameRoster'
+
+let noCellLocalNames = CellLocalNameRoster.unwritten
+
+// Where the innermost mutable binding of each name sits in `mutableVars`.
+union MutableVarNameIndex
+	unwritten
+	entries(byName MutableVarPositionByName)
+end 'MutableVarNameIndex'
+
+let noMutableVarInnermost = MutableVarNameIndex.unwritten
+
+// Drop `value`'s mark through the set's own `var` alias — a `match` arm binds its payload IMMUTABLY, so a
+// mutation may not be written in the arm (E3019).
+function removeMark(marked ValueMarkSet, value ValueId)
+	var target = marked
+	_ = target.remove(value)
+end 'removeMark'
+
+// Drop `value`'s mark. A column nothing has written holds no mark to drop, so the answer needs no
+// installation and the caller needs no column back.
+function unmarkValue(column ValueMarkColumn, value ValueId)
+	match column 'state'
+		unwritten then break 'state'
+		entries(marked) then removeMark(marked, value: value)
+	end 'state'
+end 'unmarkValue'
 
 // ⭐⭐ **WHICH RECORD A `b"…"`'S BYTES ARE MATERIALIZED INTO — the ONE fork between the two producers of a
 // byte-string value, and a STORAGE CLASS rather than a use.** An inline literal takes a fresh OWNED heap
@@ -2499,59 +2600,9 @@ enum ByteStringRecordStorage
 	immortalImage
 end 'ByteStringRecordStorage'
 
-// The module-level shared EMPTY constructor-feed parameter set (W41-opaque), held as the initial value of
-// `constructorFeedParams` AND as the COW anchor its per-function reset points at —
-// `sharedEmptyRebindableSlotReads`'s pattern, for its reason and with its invariant. A function with no
-// opaque `Self{field: p}` feed parameter never writes it, which is every function in a program with no
-// generic constructor in it.
-let sharedEmptyConstructorFeedParams = ValueMarkSet.create()
-
-// The module-level shared EMPTY opaque-slot-owner set (W41-opaque), held as the initial value of
-// `recordsOwningOpaqueSlots` AND as the COW anchor its per-function reset points at —
-// `sharedEmptyConstructorFeedParams`'s pattern, for its reason and with its invariant. Only a shared generic
-// body that BUILDS a record out of a borrowed opaque `T` ever writes it.
-let sharedEmptyRecordsOwningOpaqueSlots = ValueMarkSet.create()
-
-// The module-level shared EMPTY anchor for `recordsHoldingReferencedOpaqueSlots` (BATCH41 review), on the
-// pattern above and for its reason: only a shared generic body that FORWARDS a borrowed opaque `T` into
-// another generic's constructor AND takes a descriptor-mediated reference for it ever writes it.
-let sharedEmptyReferencedOpaqueRecords = ValueMarkSet.create()
-
-// The module-level shared EMPTY buffer-surface mark set (R4.4), held as the initial value of
-// `bufferSurfaceValues` AND as the COW anchor its per-function reset points at —
-// `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. Every program that
-// never names `__ManagedMemory` leaves it empty, which is the whole corpus bar a handful of files.
-let sharedEmptyBufferSurfaceValues = ValueMarkSet.create()
-
-// The module-level shared EMPTY TUPLE-SLOT surface table (A2m), held as the initial value of
-// `bufferSurfaceSlots` AND as the COW anchor its per-function reset points at —
-// `sharedEmptyBufferSurfaceValues`'s pattern, for its reason and with its invariant.
-let sharedEmptyBufferSurfaceSlots = ValueSlotSurfaceMap.create()
-
-// The module-level shared EMPTY ARRAY-ELEMENT surface mark set (A2m) — `sharedEmptyBufferSurfaceValues`'s
-// pattern, for its reason and with its invariant.
-let sharedEmptyBufferSurfaceElements = ValueMarkSet.create()
-
-// The module-level shared EMPTY unsigned-extreme literal mark set — `sharedEmptyBufferSurfaceValues`'s
-// pattern, for its reason and with its invariant. Empty in every program that never writes `u64.max` in
-// expression position, which is very nearly all of them.
-let sharedEmptyUnsignedMaxLiterals = ValueMarkSet.create()
-
-// The module-level shared EMPTY written-negative literal mark set — `sharedEmptyBufferSurfaceValues`'s
-// pattern, for its reason and with its invariant. It is `sharedEmptyUnsignedMaxLiterals`' companion and
-// is empty in every function that writes no negative literal at all.
-let sharedEmptyWrittenNegativeLiterals = ValueMarkSet.create()
-
-// The module-level shared EMPTY SIZED-CONTAINER buffer mark set (W192) — `sharedEmptyBufferSurfaceValues`'s
-// pattern, for its reason and with its invariant. Its own anchor and not one of the three above, because
-// the `is` identity test that decides whether a column has been minted yet reads as a claim about WHICH
-// column it is. Empty for every program that never names a sized container's buffer, which is all of them
-// bar `stdlib/Vector.maxon` and an `extension Vector`.
-let sharedEmptySizedContainerBufferValues = ValueMarkSet.create()
-
 // The module-level shared EMPTY iteration-lock stack (P1.8 slice A), held as the initial value of
 // `iterationLockedBindings` AND as the COW anchor its per-function reset points at —
-// `sharedEmptyInnerAliases`' pattern, for its reason and with its invariant. It is not a micro-
+// `sharedEmptyWhereConstraints`' pattern, for its reason and with its invariant. It is not a micro-
 // optimization: a `Parser` is built PER TOP-LEVEL CONSTANT by `SignatureIndex.walkConstInitializer`, so
 // an unconditional `create()` in the constructor is one allocation per constant in the program.
 // MEASURED, A/B against the parent built in the same worktree: it billed `phase:signatures`
@@ -2565,21 +2616,6 @@ let sharedEmptySizedContainerBufferValues = ValueMarkSet.create()
 // correct but it is an allocation exactly where this anchor exists to avoid one, and it leaves the
 // copy-on-write test below unable to fire at all.
 var sharedEmptyIterationLocks = VarInfoArray.create()
-
-// The module-level shared EMPTY table of E3070 module-storage subject stand-ins, held as the initial value
-// of `Parser.topLevelBorrowSubjects` AND as the COW anchor `topLevelBorrowSubjectOf` keys on —
-// `sharedEmptyIterationLocks`'s pattern, for its reason and with its invariant. It is never mutated (the
-// minting path REPLACES the field with a fresh map before its first upsert), so it stays empty and is safe
-// across the per-file parse fan-out; and a `Parser` is built per top-level constant, so an unconditional
-// `create()` in the constructor would be one map per constant in the program.
-let sharedEmptyTopLevelBorrowSubjects = VarInfoMap.create()
-
-// The counted-loop interval column of a function with no `for i in <const> upto|to <const>` loop in it —
-// `sharedEmptyInnerAliases`' pattern and its invariant, with the same two roles: the field's initial
-// value AND the copy-on-write anchor `recordProvenIntRange` replaces before its first write. A `Parser` is
-// built per function-bearing declaration, so an unconditional `create()` in the constructor would be one map
-// per function in the program (`ValueDeclaredAliasMap`'s measured reason).
-let sharedEmptyProvenIntRanges = ProvenIntRangeMap.create()
 
 // The `paramSites` column of a function no parameter of which is a ranged alias — which is most of them.
 //
@@ -2805,6 +2841,7 @@ function fieldDefaultHelpersIn(layout StructLayout) returns ByteArrayArray
 		match layout.fieldDefault(i) 'declared'
 			none to literal then break 'declared'
 			helper(name) then helpers.push(name)
+			bareCreateHelper(name) then helpers.push(name)
 		end 'declared'
 	end 'eachField'
 	return helpers
@@ -4482,26 +4519,6 @@ end 'requireUnclaimedInterfaceRequirementName'
 // the first spelling of that suffix (see `Parser.unclaimedRegistrationName`).
 let FirstOverloadNameOrdinal = 2
 
-// The module-level shared EMPTY declared-name set and overload-member table (D7), held as the INITIAL values
-// of `Parser.declaredFuncNames` / `Parser.overloadMembers` AND as the COW anchors their first writes key on —
-// `sharedEmptyIterationLocks`'s pattern, for its reason and with its invariant. Both matter for that reason
-// rather than as a micro-optimization: a `Parser` is built per file by the tolerant declaration sweep and PER
-// TOP-LEVEL CONSTANT by `SignatureIndex.walkConstInitializer`, and neither declares a function, so an
-// unconditional `create()` here would bill two allocations to every file and every constant in the program.
-// The member table additionally stays empty for every REAL parse that overloads nothing, which is nearly all
-// of them.
-let sharedEmptyDeclaredFuncNames = DeclaredFuncNameSet.create()
-let sharedEmptyOverloadMembers = OverloadMemberMap.create()
-
-// The same two anchors for the cross-type descriptor edge (ARRG), and here for the identical reason stated
-// one paragraph up. `Parser.corpusServedContainerMembers` is the per-file memo of "does the corpus serve
-// a container's `<m>` off its roster?"; `sharedEmptyCorpusContainerCallees` is what a scanned region's edge list IS
-// until it records its first edge. **Both stay empty for almost every region there is** — the memo is
-// touched only by a file that scans a GENERIC type's body at all, and the edge list only by a body that
-// calls a member the roster has already given up. Allocated unconditionally, the pair billed one heap object
-// per `Parser` and one per scanned method to every program in the suite: MEASURED on the ladder at **+3,329
-// allocations at rung 0 rising to +17,682 at rung 5** before this anchor pair went in.
-let sharedEmptyCorpusMemberVerdicts = DescriptorNeedMap.create()
 let sharedEmptyCorpusContainerCallees = ByteArrayArray.create()
 
 // The same anchor for W161's cross-type edge, empty for every region that calls nothing on a nested
@@ -4645,11 +4662,6 @@ module let CellContentOffset = 0 as ByteOffset
 // `Parser.collectCellLocalNames`. Keyed by name and not by binding, because it is decided from TOKENS
 // before a single binding exists.
 typealias CellLocalNameSet = Set with ByteArray
-
-// ⭐ THE ONE EMPTY set every body that needs no cell answers with — so a program with no pass-by-reference
-// and no closure allocates nothing per function. NEVER mutated: `collectCellLocalNames` builds a fresh set
-// the moment it has something to put in one.
-let sharedEmptyCellLocalNames = CellLocalNameSet.create()
 
 // ⭐ **THE TOKEN INDEX AT WHICH A CALL ARGUMENT HAS ASKED FOR A BINDING'S CELL RATHER THAN ITS CONTENTS**
 // — see `Parser.cellArgumentTokenIndex`. Zero is the "nothing pending" answer and is not a sentinel dressed
@@ -7262,6 +7274,15 @@ end 'quadArgs'
 // drift the block above exists to prevent, one file over.
 export let CreateMethod = b"create"
 
+// The five tokens of `<Type> . create ( )`, as offsets from the region's start
+// (`Parser.defaultRegionIsABareCreate`). Named rather than written as literals at the probe: the last of
+// them is the region-LENGTH test, where a bare 5 reads as an unrelated number.
+let BareCreateDotOffset = 1 as TokenIndex
+let BareCreateNameOffset = 2 as TokenIndex
+let BareCreateOpenParenOffset = 3 as TokenIndex
+let BareCreateCloseParenOffset = 4 as TokenIndex
+let BareCreateTokenCount = 5 as TokenIndex
+
 // The two `stdlib/Range.maxon` types an out-of-header `to` / `upto` constructs — inclusive and half-open.
 let RangeTypeName = b"Range"
 let OpenRangeTypeName = b"OpenRange"
@@ -8285,7 +8306,7 @@ end 'stringIndexSurfaceMemberNames'
 // beside the shared empties below does not compile. That is also the safer shape here — a module-level
 // array is shared across the per-file parse fan-out, where a per-Parser one is private by construction.
 //
-// ⚠ **LAZILY, off a shared empty anchor** — `sharedEmptyDeclaredFuncNames`' discipline, and load-bearing
+// ⚠ **LAZILY, off a shared empty anchor** — `sharedEmptySurfaceRoster`'s discipline, and load-bearing
 // for its reason: `Parser.create` runs once per FILE **and once per top-level constant**
 // (`walkConstInitializer`), so building these eagerly would bill two arrays to every constant in the
 // program for a structure most Parsers never read. The identity test is what keeps that at one pointer.
@@ -8788,7 +8809,7 @@ export function uniformArgRanges(args ValueIdArray, range SourceRange) returns S
 end 'uniformArgRanges'
 
 // ⭐ **THE `argImmutableNames` COLUMN OF A CALL WHOSE ARGUMENTS NAME NO IMMUTABLE BINDING** — one array
-// for the whole compile, the `sharedEmptyInnerAliases` pattern with its invariant: it is never
+// for the whole compile, the `sharedEmptyWhereConstraints` pattern with its invariant: it is never
 // mutated (`pushCallArg` builds a FRESH column, and `emitCall` only ever SUBSTITUTES this one in place of
 // an all-empty one), so it is safe to share across the per-file parse fan-out.
 //
@@ -10185,9 +10206,16 @@ union ManagedReceiverBinding
 	// say so.
 	global(label ByteArray, valueType MaxonType, mutable bool)
 	none
-	// ⭐ An IMAGE-DATA `let` — a constant array literal or an empty `Array with T`. It materializes its
-	// record at the receiver exactly as the `constant` arm does, and is immutable for that arm's reason:
-	// `.rdata` is not writable, so `Live.push(1)` is E3019 and the synthetic `VarInfo` is what says so.
+	// ⭐ An IMAGE-DATA `let` whose value is a RECORD the image describes — a constant array literal, an
+	// empty `Array with T`, or a declared container's box (`Map`, `Set`, and every generic written the way
+	// they are). It materializes its record at the receiver exactly as the `constant` arm does, and is
+	// immutable for that arm's reason: `.rdata` is not writable, so `Live.push(1)` is E3019 and the
+	// synthetic `VarInfo` is what says so.
+	//
+	// ⛔ **IT MAY HAVE FIELDS, AND EVERY READER OWES THEM A CHAIN.** A container box is a struct over its
+	// columns, so `Shared.items` is an ordinary field read; only the two buffer shapes have none. A reader
+	// that folds this case into a no-field arm answers `undefinedVariable` for the BASE — a name it has
+	// just resolved — rather than a member diagnostic (`Parser.resolveFieldChain`).
 	imageRecord(image TopLevelImageRecord)
 	// ⭐ An IMAGE-DATA `let` holding a constructed STRUCT — its box is `.rdata` too, so it is immutable for
 	// the arm above's reason, and it differs in carrying its bytes and its type NAME rather than a record
@@ -10283,15 +10311,13 @@ typealias MutableVarPositionByName = Map with ByteArray, MutableVarPosition
 // the pair unconditionally measured **+13,410 allocations and +590,040 bytes in `phase:signatures`
 // at scale rung 5**, a phase this change has no business touching at all; off the shared empties it
 // is +0 in every column there.
-// ⛔⛔ **A `var`, AND THE KEYWORD GUARDS THE MAP BESIDE IT RATHER THAN THIS ARRAY.** `pushMutableVar`'s one
-// copy-on-write test is an `is` against THIS anchor and it replaces BOTH columns. A `let` holding an empty
-// container is IMAGE DATA (⚖ user ruling), and an immortal record cannot be co-owned — every field seeded
-// from it holds a private CLONE (`Parser.coOwnConcreteRecordForSink`), so the test never fires; this array
-// would still be private, and `mutableVarInnermost` — a `Map`, which imaging does not reach — would stay
-// the one process-wide record every Parser writes into.
+// ⛔⛔ **A `var`, AND THE KEYWORD IS WHAT KEEPS THIS ANCHOR'S IDENTITY MEANINGFUL.** `pushMutableVar` tests
+// `is` against it to decide whether this function has pushed a `var` yet, and that test can only answer for
+// a record a field really holds. A `let` holding an empty container is IMAGE DATA (⚖ user ruling), which a
+// durable sink duplicates — every field seeded from one holds a private CLONE
+// (`Parser.coOwnConcreteRecordForSink`) — so the test would never fire. The name index beside it carries a
+// spelled state instead and is installed by its own door (`MutableVarNameIndex`).
 var sharedEmptyMutableVarShadowed = MutableVarPositionArray.create()
-let sharedEmptyMutableVarInnermost = MutableVarPositionByName.create()
-
 // Insert `position` into an ASCENDING, duplicate-free list, and say whether it was new. Binary
 // search rather than an append-then-sort, because the list is the construct's carried set: a
 // handful of entries on real code (never more than two across the whole scale corpus), so the
@@ -10357,7 +10383,7 @@ function ascendingTokenIndexHolds(column TokenIndexColumn, index TokenIndex) ret
 end 'ascendingTokenIndexHolds'
 
 // The INITIAL `Parser.blockExtentEnds`, AND the anchor whose `is`-identity says the index has not been built
-// yet — `sharedEmptyInnerAliases`' pattern, for its reason and with its invariant.
+// yet — `sharedEmptyWhereConstraints`' pattern, for its reason and with its invariant.
 // `buildBlockExtentIndex` REPLACES the field with a fresh column rather than mutating this one, so it stays
 // empty and is safe to share across the per-file parse fan-out. Reading it before the build is harmless:
 // `matchingEndOf` is the only reader and an empty column makes it panic rather than answer.
@@ -10380,7 +10406,7 @@ let sharedEmptyBlockKeywordNames = TokenIndexColumn.create()
 typealias InnerAliasNameSet = Set with ByteArray
 
 // The per-value existential-instance column this parser fills is `IrFunction.valueExistentialInstances`, and
-// both the `ValueExistentialInstanceMap` typealias and its `sharedEmptyExistentialInstanceMap` COW anchor are
+// both the `ValueExistentialInstanceMap` typealias and its `ValueExistentialInstanceColumn` state are
 // declared there — the parser WRITES the fact and three later tiers read it, so the IR tier owns the shape.
 
 // ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE TO THE RANGED TYPEALIAS ITS DECLARED TYPE NAMES — for the two
@@ -10510,51 +10536,6 @@ typealias MergeBlameMap = Map with (ValueId, ByteArray)
 // `(ByteArray, Int)` canonicalize to ONE interned tuple with ONE `StructLayout`, so a surface written there
 // would be read by both spellings. See `SignatureIndex.tupleStructLayout`'s ⚠⚠ block.
 typealias ValueSlotSurfaceMap = Map with (ValueId, DeclaredSurface)
-
-// ⭐⭐ **THE COPY-ON-WRITE OFF THE SHARED EMPTY ANCHOR — THE ONE HOME OF THE HALF OF A MARK THAT IS
-// DANGEROUS TO WRITE TWICE (review, R4.4).** Hand back the set the caller may INSERT into: its own, when it
-// already has one, and a fresh empty set when it is still holding `anchor`.
-//
-// ⚠ **THE ANCHOR IS MODULE-LEVEL AND SHARED ACROSS THE PER-FILE PARSE FAN-OUT**, so inserting into it is
-// not a lost mark but a LEAKED one: every other function in every other file would then see a mark naming
-// an unrelated value in its own SSA space, and a program would be refused for something it never wrote. A
-// wrong answer, and not a compile error — which is exactly why the test may not be a three-line idiom each
-// mark set copies. R4.4 arrived with a second hand-written copy of it (`markBufferSurface`), which is what
-// this closes; the pattern's purpose was already stated twice in prose before it was stated once in code.
-//
-// ⚠ Every mark set stays SPARSE, and that is what this buys beyond safety: a program that never mints the
-// mark never allocates a set for it, and `Set.contains` on the shared zero-capacity anchor returns before
-// it hashes anything. The reset-per-function and closure-body SWAP sites hand the anchor straight back.
-function privateValueMarkSet(current ValueMarkSet, anchor ValueMarkSet) returns ValueMarkSet
-	if current is anchor 'stillShared'
-		return ValueMarkSet.create()
-	end 'stillShared'
-
-	return current
-end 'privateValueMarkSet'
-
-// `privateValueMarkSet` for the KEYED mark (A2m) — the identical discipline, the identical hazard, over the
-// one shape a `Set with ValueId` cannot express. It is a second function and not a second COPY: the two
-// differ only in the type they take, which Maxon cannot abstract over here, and every word of
-// `privateValueMarkSet`'s header applies to this one unchanged.
-function privateValueSlotSurfaceMap(current ValueSlotSurfaceMap, anchor ValueSlotSurfaceMap) returns ValueSlotSurfaceMap
-	if current is anchor 'stillShared'
-		return ValueSlotSurfaceMap.create()
-	end 'stillShared'
-
-	return current
-end 'privateValueSlotSurfaceMap'
-
-// `privateValueMarkSet` for the MERGE-BLAME table — the third and last of these, for the identical
-// discipline and the identical hazard over a third element type. Maxon cannot abstract the three into one
-// here, and every word of `privateValueMarkSet`'s header applies unchanged.
-function privateMergeBlameMap(current MergeBlameMap, anchor MergeBlameMap) returns MergeBlameMap
-	if current is anchor 'stillShared'
-		return MergeBlameMap.create()
-	end 'stillShared'
-
-	return current
-end 'privateMergeBlameMap'
 
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
@@ -12973,8 +12954,8 @@ export type Parser
 	// createModuleStorageSubject`). FILE-scoped and never reset, deliberately: a global's storage is the
 	// same storage in every function of the file, and per-function `BorrowFacts` key on the stand-in's
 	// IDENTITY, so one object per name is exactly what makes `g.get(0)` in one statement and `g.clear()` in
-	// the next the same subject. Points at `sharedEmptyTopLevelBorrowSubjects` until the first mint.
-	var topLevelBorrowSubjects as VarInfoMap
+	// the next the same subject. Holds `noTopLevelBorrowSubjects` until the first mint.
+	var topLevelBorrowSubjects as TopLevelBorrowSubjectTable
 	// Per-function ValueId allocator for the values this function's ops define.
 	// Re-seeded at `paramCount` per function (params implicitly own 0..paramCount-1
 	// by Std-ABI convention), so ids are dense and function-local. The parser is
@@ -13009,7 +12990,7 @@ export type Parser
 	// only "where in the phi/merge ordering does this mutable binding sit", which is the one question
 	// `mutableVars`'s ORDER exists to answer and the one `Scope` cannot.
 	var mutableVarShadowed as MutableVarPositionArray
-	var mutableVarInnermost as MutableVarPositionByName
+	var mutableVarInnermost as MutableVarNameIndex
 	// The enclosing loops, innermost last (M4b). `break`/`continue` resolve their
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
@@ -13469,33 +13450,33 @@ export type Parser
 	// ⭐⭐ **THE `with` ARGUMENTS EACH EXISTENTIAL VALUE'S DECLARED TYPE NAMED (W57)** — see
 	// `ValueExistentialInstanceMap`. Reset per function and SWAPPED across a closure body, exactly like the
 	// sibling value columns, and for their reason: its keys are ids in THIS function's SSA space.
-	var valueExistentialInstance as ValueExistentialInstanceMap
+	var valueExistentialInstance as ValueExistentialInstanceColumn
 	// ⭐⭐ **THE RANGED TYPEALIAS EACH VALUE'S DECLARED TYPE NAMES, where the value's own type columns cannot
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
-	var valueDeclaredAlias as ValueDeclaredAliasMap
+	var valueDeclaredAlias as ValueDeclaredAliasTable
 	// ⭐⭐ **THE INTERVAL A COUNTED LOOP PROVED FOR EACH OF ITS COUNTERS (EC7)** — see `ProvenIntRange` for
 	// what an interval nothing NAMES may and may not decide. Reset per function and SWAPPED across a closure
 	// body, exactly like the sibling value columns, and for their reason: its keys are ids in THIS function's
 	// SSA space. It is the ONE column of this family that also leaves the parser — `commitRangeChecks` hands
 	// it to `FunctionRangeChecks`, where `InlineLeaves` reads it back off the caller's own numbering.
-	var countedValueRanges as ProvenIntRangeMap
+	var countedValueRanges as ProvenIntRangeColumn
 	// ⭐⭐ **THE `.rdata` OP EACH CHARACTER-LITERAL VALUE WAS MATERIALIZED BY** — see `CharLiteralOpMap` for
 	// what an integer position does with it and why the op must be REPLACED rather than orphaned.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
-	var charLiteralOps as CharLiteralOpMap
+	var charLiteralOps as CharLiteralOpTable
 	// ⭐⭐ **WHICH OP PRODUCED EACH `addressableBytes()` BYTE VIEW** — see `StringBytesViewOpMap` for what the
 	// stream-write fold does with it and for the allocation it removes.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
-	var stringBytesViewOps as StringBytesViewOpMap
+	var stringBytesViewOps as StringBytesViewOpTable
 	// ⭐⭐ **WHERE EACH KNOWN-BYTE-POSITION `startIndex()`/`endIndex()` CALL WAS APPENDED** — see
 	// `FoldedIndexCallSite` for the three walks this record replaces and for why a miss is a DECLINE.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
-	var foldedIndexCallSites as FoldedIndexCallSiteMap
+	var foldedIndexCallSites as FoldedIndexCallSiteTable
 	// ⭐ **THE UAX#29 GRAPHEME-WIDTH ANSWER PER STRING LITERAL OP** — see `SingleByteGraphemeLiteralMap`.
 	// Keyed by an OP index and therefore per-FILE: deliberately NOT reset per function, and not swapped
 	// across a closure body, because neither changes what a literal's bytes are.
-	var singleByteGraphemeLiterals as SingleByteGraphemeLiteralMap
+	var singleByteGraphemeLiterals as SingleByteGraphemeTable
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
 	// stops a `let`-declared array's record from being written through a mutable ALIAS.
 	//
@@ -13529,7 +13510,7 @@ export type Parser
 	// doubling, a textbook quadratic — and 39% of `phase:parse` at the top rung, while the `var` control
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
-	var immutableGlobalReads as ValueMarkSet
+	var immutableGlobalReads as ValueMarkColumn
 
 	// ⭐⭐ **HAS THE FUNCTION BEING PARSED BEEN PUBLISHED AS ONE WHOSE RETURN MAY ALIAS AN IMMUTABLE GLOBAL
 	// (W117)?** Read at exactly one place — the `returned` door of `ownedFormOfBorrowedValue` — where it
@@ -13564,7 +13545,7 @@ export type Parser
 	// ⚠ **IT IS THE *IMMEDIATELY* ENCLOSING FUNCTION'S, AND NESTING IS WHY IT IS SAVED/RESTORED LIKE THE
 	// REST.** A closure inside a closure captures out of the closure it sits in, whose marks are by then the
 	// current ones — so the triple hands this field the set that was current at entry, not the outermost.
-	var capturedImmutableGlobalReads as ValueMarkSet
+	var capturedImmutableGlobalReads as ValueMarkColumn
 	// ⭐ **THE MERGE ARMS' E3019 BLAME, CARRIED ONTO THE RESULT PHI** (see `MergeBlameMap`). Written at the
 	// three merges that can join a bare binding reference — the ternary, a `match … gives`, and a
 	// `try … otherwise <expr>` — and read at the one consumer, `expressionImmutableBlame`, whenever the
@@ -13572,7 +13553,7 @@ export type Parser
 	//
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `immutableGlobalReads`: a
 	// phi id names a value in THIS function's SSA space.
-	var mergeImmutableBlame as MergeBlameMap
+	var mergeImmutableBlame as MergeBlameColumn
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF A SLOT THAT CAN BE REBOUND WHILE A NAME STILL HOLDS THE VALUE
 	// (W41)** — a MUTABLE struct field (`self.items`, `h.items`) or a MUTABLE top-level global (`var G`).
 	// The fact that makes such a read OWE A REFERENCE the moment it is bound to a name.
@@ -13604,7 +13585,7 @@ export type Parser
 	//
 	// A SPARSE set, reset per function and SWAPPED across a closure body, exactly like the sibling value
 	// marks — a mark names an id in THIS function's SSA space.
-	var rebindableSlotReads as ValueMarkSet
+	var rebindableSlotReads as ValueMarkColumn
 	// ⭐⭐ **WHICH OPAQUE PARAMETERS ARE `constructedValue` FEEDS — the ones the CALL SITE has already settled
 	// (W41-opaque).** `Box.create(v T)` doing `Self{value: v}` hands `v` to the box the call RETURNS, and the
 	// concrete caller consumed its argument to pay for that; so this store owes no reference, and taking one
@@ -13618,7 +13599,7 @@ export type Parser
 	// a constructor feed must stay what it is.
 	//
 	// A SPARSE set, reset per function and SWAPPED across a closure body, exactly like the sibling value marks.
-	var constructorFeedParams as ValueMarkSet
+	var constructorFeedParams as ValueMarkColumn
 	// ⭐⭐ **WHICH RECORDS THIS SHARED BODY BUILT HOLD A REFERENCE IT TOOK THROUGH THE DESCRIPTOR
 	// (W41-opaque)** — the exact set whose drop, IF IT HAPPENS HERE, must release that reference.
 	//
@@ -13632,7 +13613,7 @@ export type Parser
 	//
 	// A per-VALUE mark and not a per-LAYOUT rule, because the obligation is the STORE's: a record of the
 	// same type filled from an already-owned value took no reference and must not release one.
-	var recordsOwningOpaqueSlots as ValueMarkSet
+	var recordsOwningOpaqueSlots as ValueMarkColumn
 	// ⭐⭐ **WHICH RECORDS THIS BODY BUILT BY FEEDING A BORROWED OPAQUE `T` IT THEN REFERENCED THROUGH THE
 	// DESCRIPTOR (BATCH41 review)** — the PROVENANCE half of the nested-view field refusal, and the half a TYPE
 	// test cannot supply.
@@ -13646,7 +13627,7 @@ export type Parser
 	//
 	// ⚠ Its polarity is the opposite of the mark this rung deleted: that one recorded a feed that took NO
 	// reference, which the constructor-feed retain made unreachable. This one records the feed that DID.
-	var recordsHoldingReferencedOpaqueSlots as ValueMarkSet
+	var recordsHoldingReferencedOpaqueSlots as ValueMarkColumn
 	// ⭐ Did the CALL now being emitted take a descriptor-mediated reference for a feed argument? Set while the
 	// arguments are transferred and read once the call's result exists — the two cannot be one step, because
 	// the result is what carries the mark and the arguments are settled before it is defined.
@@ -13677,7 +13658,7 @@ export type Parser
 	// A SPARSE set for `immutableGlobalReads`' reason — the population is zero in every program that never
 	// names `__ManagedMemory` — sharing the same module-level empty anchor discipline. Reset per function and
 	// SWAPPED across a closure body, exactly like the sibling value marks.
-	var bufferSurfaceValues as ValueMarkSet
+	var bufferSurfaceValues as ValueMarkColumn
 	// ⭐⭐ **THE LITERALS WHOSE PATTERN IS NEGATIVE AND WHOSE VALUE IS NOT — every `u64.max` written in
 	// EXPRESSION position, and nothing else can be in it.**
 	//
@@ -13702,7 +13683,7 @@ export type Parser
 	// A per-value mark is sound here for `emitLiteralIn`'s reason: every literal mints a FRESH ValueId
 	// (no interning), so a mark on one occurrence cannot reach another value. Sparse, reset per function
 	// and SWAPPED across a closure body, exactly like the sibling value marks.
-	var unsignedMaxLiterals as ValueMarkSet
+	var unsignedMaxLiterals as ValueMarkColumn
 	// ⭐⭐ **THE LITERALS THE SOURCE WROTE AS NEGATIVE NUMBERS — `unsignedMaxLiterals`' COMPANION, AND THE
 	// OTHER HALF OF WHAT 64 BITS CANNOT SAY.**
 	//
@@ -13731,7 +13712,7 @@ export type Parser
 	// SWAPPED across a closure body, exactly like the sibling value marks — and HANDED to the function's
 	// `FunctionRangeChecks`, because the reader that raises the E3005 is `InsertRangeChecks` at the Std
 	// tier and a parser field is not visible there.
-	var writtenNegativeLiterals as ValueMarkSet
+	var writtenNegativeLiterals as ValueMarkColumn
 	// ⭐ **WHICH OF A TUPLE VALUE'S SLOTS DENOTE THE BUFFER (A2m)** — `bufferSurfaceValues` one container
 	// deeper, and a SEPARATE carrier because a tuple slot and a whole value are different facts: `p` is an
 	// ordinary tuple record whatever `p.0` denotes. Written where a declaration that spelled a tuple binds its
@@ -13739,7 +13720,7 @@ export type Parser
 	// `let (m, n) = …` and every chain hop funnels through.
 	//
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
-	var bufferSurfaceSlots as ValueSlotSurfaceMap
+	var bufferSurfaceSlots as ValueSlotSurfaceColumn
 	// ⭐ **WHOSE ELEMENTS DENOTE THE BUFFER (A2m)** — an ARRAY value declared through an alias written
 	// `Array with __ManagedMemory`. Read at `emitContainerElementAccessor`, the door every COMPILER-EMITTED
 	// element-yielding array member comes out of — one of two since the corpus took `last`/`pop`/`remove`
@@ -13773,7 +13754,7 @@ export type Parser
 	// column across a `promoteBorrowedToOwned`, and is the site a reader counting resets walks past.
 	//
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
-	var bufferSurfaceElements as ValueMarkSet
+	var bufferSurfaceElements as ValueMarkColumn
 	// ⭐⭐ **WHOSE RECORD IS A *SIZED* CONTAINER'S OWN (W192)** — `bufferSurfaceValues` narrowed to the one
 	// receiver on which a length-changing buffer member is a wrong answer rather than an operation. A
 	// `Vector`'s size is a coordinate of its TYPE (`count()` is `countof(Self)`, folded to a literal), while
@@ -13791,7 +13772,7 @@ export type Parser
 	// `markSizedContainerBuffer`. The refusal reads this column alone for exactly that reason.
 	//
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
-	var sizedContainerBufferValues as ValueMarkSet
+	var sizedContainerBufferValues as ValueMarkColumn
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THE BARE IDENTIFIER `parseVariableReference` LAST RESOLVED**,
 	// empty when that binding may be written through. A scalar hand-off from the ONE resolution that can
 	// answer it to the ONE consumer that needs it (`bareArgImmutableName`, at a call argument), because a
@@ -13970,9 +13951,9 @@ export type Parser
 	// at that reset block.
 	var declaringWitnessParamBase as ValueId
 	var declaringWitnessParamCount as ParamCount
-	// ⭐ The transitive witness SLOT LIST of each interface this file dispatches through, memoized off its
-	// shared empty anchor — see `sharedEmptyWitnessSlots` for the quadratic that put it here.
-	var witnessSlotsByInterface as WitnessSlotsByInterfaceMap
+	// ⭐ The transitive witness SLOT LIST of each interface this file dispatches through — see
+	// `WitnessSlotTable` for the quadratic that put it here.
+	var witnessSlotsByInterface as WitnessSlotTable
 	// ⭐ **THE PARSE-TIME FACTS OF THE MOST RECENTLY EMITTED `witnessDispatch` (P1.7a slice 2b-v)** — its op
 	// INDEX, the interface method's NAME, and the method's declared `throws`. A `try` is written BEFORE its
 	// target, so the only thing that can turn a dispatch into a throwing one is the in-place rewrite
@@ -14004,7 +13985,7 @@ export type Parser
 	// parse agree WITHOUT the whole-program `innerAliases` (which the sweep has not folded yet while it is
 	// still walking this very type). Written by the `typealias` member arm and cleared in lockstep with
 	// `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
-	var enclosingInnerAliases as InnerAliasNameSet
+	var enclosingInnerAliases as InnerAliasRoster
 	// ⭐⭐ **THE GENERIC-INSTANCE TYPEALIASES OF THE `interface` CURRENTLY BEING READ (W61)** —
 	// `typealias ElementArray = Array with Element` inside `interface Holder uses Element`, whose right-hand
 	// side `readInterfaceDeclaration` used to accept and then THROW AWAY. It is the RHS, and only the RHS,
@@ -14029,7 +14010,7 @@ export type Parser
 	// multi-file path, so a shared object would rewrite the whole-program index's ids to one file's.
 	// Memoized so a tuple type written N times in a file adopts one layout and files ONE contribution, rather
 	// than N identical ones for `commitStructTypes` to upsert over. Empty for a file with no tuples.
-	var tupleLayouts as StructLayoutMap
+	var tupleLayouts as TupleLayoutTable
 	// ⭐ Where each GENERIC type declared in THIS file begins its member list (W23c) — the sites
 	// `Queries.foldDescriptorNeeds` re-walks once the whole-program index is complete. A field rather than an
 	// out-parameter for one reason: a callee cannot swap a caller's local for a real array, and the point is
@@ -14091,7 +14072,7 @@ export type Parser
 	// It is the type's WHOLE method set (static and instance), so `contains` answers "is this a sibling?" and the
 	// value answers "does it take a receiver?" from one source — no second decider to drift against the qualified
 	// name the signature index declares.
-	var siblingReceivers as SiblingReceiverMap
+	var siblingReceivers as SiblingReceiverTable
 	// The type `siblingReceivers` was built for — the memo key. Empty until the first lazy build, and compared
 	// against `enclosingType` so a sibling type reuses nothing stale.
 	//
@@ -14146,9 +14127,6 @@ export type Parser
 	// (rather than allocating an empty `uses` list) for a type with no `uses`, and `closeTypeParamScope`
 	// restores it, so a non-generic type declaration allocates nothing here. Never mutated.
 	var emptyTypeParams as ByteArrayArray
-	// P1.6-C's shared-empty inner-alias placeholder is a MODULE-LEVEL global (`sharedEmptyInnerAliases`), not
-	// a per-parser field — one allocation for the whole compile. The working field `enclosingInnerAliases`
-	// INCREFS it as its initial value.
 	// The struct-typed bindings currently IN SCOPE, in declaration order — the values a `return`
 	// must DROP (`emitScopeDrops`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
 	// drained off the end at a block's `end` by the same mark (see `closeBlock`). Reset per function.
@@ -14384,10 +14362,9 @@ export type Parser
 	// parent — which is what stops an outer local silently resolving to a same-named global.
 	var closureCaptureScopes as ScopeArray
 	// ⭐⭐ **THE LOCAL NAMES THIS BODY MUST GIVE A CELL (PBR-2)** — filled once per function by
-	// `collectCellLocalNames` and read at every `var` declaration. Points at `sharedEmptyCellLocalNames` for
-	// every body that needs none, which is every body in a program that neither reassigns a parameter nor
-	// captures a mutated `var`.
-	var cellLocalNames as CellLocalNameSet
+	// `collectCellLocalNames` and read at every `var` declaration. Stays `unwritten` for every body that needs
+	// none, which is every body in a program that neither reassigns a parameter nor captures a mutated `var`.
+	var cellLocalNames as CellLocalNameRoster
 	// ⭐ **DOES THIS FILE SPELL A CLOSURE LITERAL AT ALL?** The per-FILE gate on the capture half of the cell
 	// decision, computed once (`scanForClosureLiterals`) rather than re-derived per function: without a
 	// closure in the file no binding can be captured, so the per-body walk is not worth taking.
@@ -14494,7 +14471,7 @@ export type Parser
 	// ⭐ MEASURED on `print("hi")` against the same tree with every body built: **139.5 ms → 82.6 ms of
 	// compile, 412.0M → 234.0M CPU ticks, `parse` 54.2 → 13.6 ms, and the emitted executable BYTE-IDENTICAL.**
 	let buildsBodies as bool
-	var usedTypeNames as UsedTypeNameSet
+	var usedTypeNames as UsedTypeNameRoster
 	// ⭐⭐ **THE TYPES THIS FILE REACHED INTO THROUGH A VALUE — answers the RESOLVER already computed, kept
 	// (BATCH43).** A file can depend on another file's type without ever writing its name: `for it in h.items`
 	// then `it.n` needs `Item` VISIBLE and never spells it, which is exactly the question E4006 answers at that
@@ -14514,7 +14491,7 @@ export type Parser
 	// file WROTE in a type position" and is E3062's answer; this one holds names the file never wrote. Folding
 	// them together would tell E3062 that a file used an alias it never spelled the day a struct and an alias
 	// can wear one name.
-	var memberAccessedTypeNames as UsedTypeNameSet
+	var memberAccessedTypeNames as UsedTypeNameRoster
 	// ⭐ **DOES THIS WALK COLLECT USES AT ALL?** Set by `parseModule` and false everywhere else, because
 	// `parseModule` is the only entry point that ever REPORTS (`reportUnusedTypeAliases`). The
 	// declaration sweep runs the same `parseTypeReference` over every signature, field and payload type
@@ -14525,12 +14502,12 @@ export type Parser
 	// candidates. An EXPORTED alias never enters (one file cannot see another's uses, so it can only
 	// ever be a false positive), which is why the filter is at the RECORDING site and not at the report:
 	// a candidate that could never be reported should not be built.
-	var declaredTypeAliases as DeferredNameDiagnosticArray
+	var declaredTypeAliases as DeferredNameDiagnosticRoster
 	// ⭐ Every function name this file has REGISTERED, and every overloaded bare name's members (D7). See
 	// `DeclaredFuncNameSet` and `overloadRegistrationNameFor`. The member map stays EMPTY — and so
 	// allocation-neutral against the shared empty — until a name is actually declared twice.
-	var declaredFuncNames as DeclaredFuncNameSet
-	var overloadMembers as OverloadMemberMap
+	var declaredFuncNames as DeclaredFuncNameRoster
+	var overloadMembers as OverloadMemberTable
 	// ⭐ The MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty anchor —
 	// see `sharedEmptySurfaceRoster` for the measurement that put them here, and `MemberSurface` for which
 	// dispatch reads which. (A COUNT stood in this sentence and went stale twice as surfaces retired; the enum
@@ -14559,7 +14536,7 @@ export type Parser
 	// the sweep would serve the early answer for the rest of the file. `scanDescriptorSignalsIn`'s arm is
 	// reached only from `Queries.foldDescriptorNeeds`, which `scanDescriptorNeedsInto`'s header records as
 	// running once the index is whole. A second asker placed inside the sweep must not share this table.
-	var corpusServedContainerMembers as DescriptorNeedMap
+	var corpusServedContainerMembers as CorpusMemberVerdictTable
 	// ⭐⭐ **THE USER CONSTRUCT THIS FILE'S REFUSAL IS REALLY ABOUT (BLAME)** — see `LibraryBlame`, and
 	// `blameLibraryRefusalOnInstantiation`, its one writer today. It is read by `Queries.queryParseOps` on
 	// the parse-failure path, which is why it lives on the parser and not on the `FileParseArtifact`: a
@@ -14633,11 +14610,11 @@ export type Parser
 			artifact: FileParseArtifact.create(filePath, livesUnderStdlibDirectory: livesUnderStdlibDirectory),
 			scope: Scope.create(),
 			libraryBlame: LibraryBlame.unblamed,
-			topLevelBorrowSubjects: sharedEmptyTopLevelBorrowSubjects,
+			topLevelBorrowSubjects: noTopLevelBorrowSubjects,
 			valueIds: ValueIdRef.create(0),
 			mutableVars: VarInfoArray.create(),
 			mutableVarShadowed: sharedEmptyMutableVarShadowed,
-			mutableVarInnermost: sharedEmptyMutableVarInnermost,
+			mutableVarInnermost: noMutableVarInnermost,
 			loops: LoopContextArray.create(),
 			tryBlocks: TryBlockContextArray.create(),
 			tryBlockRoutingSuppressed: false,
@@ -14672,28 +14649,28 @@ export type Parser
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			valueBrandIds: TypeNameIdArray.create(),
-			valueExistentialInstance: sharedEmptyExistentialInstanceMap,
-			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
-			countedValueRanges: sharedEmptyProvenIntRanges,
-			charLiteralOps: sharedEmptyCharLiteralOps,
-			stringBytesViewOps: sharedEmptyStringBytesViewOps,
-			foldedIndexCallSites: sharedEmptyFoldedIndexCallSites,
-			singleByteGraphemeLiterals: sharedEmptySingleByteGraphemeLiterals,
-			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
+			valueExistentialInstance: noValueExistentialInstances,
+			valueDeclaredAlias: noValueDeclaredAliases,
+			countedValueRanges: noProvenIntRanges,
+			charLiteralOps: noCharLiteralOps,
+			stringBytesViewOps: noStringBytesViewOps,
+			foldedIndexCallSites: noFoldedIndexCallSites,
+			singleByteGraphemeLiterals: noSingleByteGraphemeLiterals,
+			immutableGlobalReads: noValueMarks,
 			enclosingFunctionMayReturnAGlobalAlias: false,
-			capturedImmutableGlobalReads: sharedEmptyImmutableGlobalReads,
-			mergeImmutableBlame: sharedEmptyMergeBlames,
-			rebindableSlotReads: sharedEmptyRebindableSlotReads,
-			constructorFeedParams: sharedEmptyConstructorFeedParams,
-			recordsOwningOpaqueSlots: sharedEmptyRecordsOwningOpaqueSlots,
-			recordsHoldingReferencedOpaqueSlots: sharedEmptyReferencedOpaqueRecords,
+			capturedImmutableGlobalReads: noValueMarks,
+			mergeImmutableBlame: noMergeBlames,
+			rebindableSlotReads: noValueMarks,
+			constructorFeedParams: noValueMarks,
+			recordsOwningOpaqueSlots: noValueMarks,
+			recordsHoldingReferencedOpaqueSlots: noValueMarks,
 			callReferencedAnOpaqueFeedSlot: false,
-			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
-			unsignedMaxLiterals: sharedEmptyUnsignedMaxLiterals,
-			writtenNegativeLiterals: sharedEmptyWrittenNegativeLiterals,
-			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
-			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
-			sizedContainerBufferValues: sharedEmptySizedContainerBufferValues,
+			bufferSurfaceValues: noValueMarks,
+			unsignedMaxLiterals: noValueMarks,
+			writtenNegativeLiterals: noValueMarks,
+			bufferSurfaceSlots: noBufferSurfaceSlots,
+			bufferSurfaceElements: noValueMarks,
+			sizedContainerBufferValues: noValueMarks,
 			lastBareBindingImmutableName: EmptySourceText,
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
@@ -14715,7 +14692,7 @@ export type Parser
 			enclosingExtensionConstraints: sharedEmptyWhereConstraints,
 			declaringWitnessParamBase: 0,
 			declaringWitnessParamCount: 0,
-			witnessSlotsByInterface: sharedEmptyWitnessSlots,
+			witnessSlotsByInterface: noWitnessSlots,
 			lastWitnessDispatchIndex: 0,
 			pendingRequirementParamInterface: EmptySourceText,
 			pendingRequirementParamPosition: DeclaredStoragePosition.interfaceRequirementParameter,
@@ -14723,17 +14700,17 @@ export type Parser
 			pendingRequirementParamColumn: 0,
 			lastWitnessDispatchName: EmptySourceText,
 			lastWitnessDispatchThrows: ThrowsClause.none,
-			enclosingInnerAliases: sharedEmptyInnerAliases,
+			enclosingInnerAliases: noInnerAliases,
 			interfaceAliasScratch: sharedEmptyInterfaceAliases,
 			innerAliasesFromIndex: false,
-			tupleLayouts: sharedEmptyTupleLayouts,
+			tupleLayouts: noTupleLayouts,
 			descriptorScanSites: sharedEmptyDescriptorScanSites,
 			functionCarriesLayoutParam: false,
 			functionCarriesFixedElementCountParam: false,
 			fixedElementCountParamValueId: 0,
 			functionDroppedOpaqueWithoutDescriptor: false,
 			functionStoredOpaqueWithoutDescriptor: false,
-			siblingReceivers: sharedEmptySiblingReceivers,
+			siblingReceivers: noSiblingReceivers,
 			siblingReceiverScanType: EmptySourceText,
 			siblingReceiverScanBody: 0,
 			enclosingTypeBodyStart: 0,
@@ -14772,7 +14749,7 @@ export type Parser
 			lastFieldReadOffset: 0,
 			closureReturns: FuncReturnTypeMap.create(),
 			closureCaptureScopes: ScopeArray.create(),
-			cellLocalNames: sharedEmptyCellLocalNames,
+			cellLocalNames: noCellLocalNames,
 			fileHasClosureLiteral: false,
 			cellArgumentTokenIndex: NoCellArgumentRequest,
 			closureParamHint: ClosureParamTypeHint.none,
@@ -14782,12 +14759,12 @@ export type Parser
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
 			compilerMintedNames: compilerMintedNames,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
-			usedTypeNames: sharedEmptyUsedTypeNames,
-			memberAccessedTypeNames: sharedEmptyUsedTypeNames,
+			usedTypeNames: noUsedTypeNames,
+			memberAccessedTypeNames: noUsedTypeNames,
 			collectsTypeNameUses: false,
-			declaredTypeAliases: sharedEmptyDeferredNameDiagnostics,
-			declaredFuncNames: sharedEmptyDeclaredFuncNames,
-			overloadMembers: sharedEmptyOverloadMembers,
+			declaredTypeAliases: noDeferredNameDiagnostics,
+			declaredFuncNames: noDeclaredFuncNames,
+			overloadMembers: noOverloadMembers,
 			arraySurfaceRoster: sharedEmptySurfaceRoster,
 			bufferSurfaceRoster: sharedEmptySurfaceRoster,
 			stringSurfaceRoster: sharedEmptySurfaceRoster,
@@ -14795,7 +14772,7 @@ export type Parser
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
 			cursorSurfaceRoster: sharedEmptySurfaceRoster,
 			arrayDeclarationRoster: sharedEmptySurfaceRoster,
-			corpusServedContainerMembers: sharedEmptyCorpusMemberVerdicts
+			corpusServedContainerMembers: noCorpusMemberVerdicts
 		}
 	end 'create'
 
@@ -15912,7 +15889,7 @@ export type Parser
 		// with the alias in `type Wrapper`'s own body is `E3005 … expected 'WB.Idx', got 'WA.Idx'`. It was
 		// already true of TWO `extension` bodies in ONE file, so it is older than the cross-file rule that made
 		// it reachable a second way. Both cases are `error.*-inner-alias-is-per-instance`.
-		if self.enclosingInnerAliases.count() != 0 or self.innerAliasesFromIndex 'maybeInnerAliasParams'
+		if self.scopeDeclaresAnInnerAlias() or self.innerAliasesFromIndex 'maybeInnerAliasParams'
 			let innerAliasInfo = self.innerAliasParamsIn(paramsStart)
 			if innerAliasInfo.hasInnerAliasMember() 'hasInnerAliasParam'
 				methodInnerAliasParamOut.push(MethodInnerAliasParamEntry.create(funcName, info: innerAliasInfo))
@@ -18149,7 +18126,7 @@ export type Parser
 	// still reach the caller; a STATIC's descriptor comes from its RESULT, not from a receiver, so an edge to
 	// one describes a supply route the call site does not have.
 	function corpusServesArrayMember(member ByteArray) returns bool
-		if let remembered = try self.corpusServedContainerMembers.get(member) 'askedBefore'
+		if let remembered = try self.rememberedCorpusVerdict(member) 'askedBefore'
 			return remembered
 		end 'askedBefore'
 
@@ -18160,11 +18137,8 @@ export type Parser
 			served = served or self.corpusArrayDeclarationServes(declaration, member: member)
 		end 'eachArrayDeclaration'
 
-		if self.corpusServedContainerMembers is sharedEmptyCorpusMemberVerdicts 'firstQuestionThisFileAsks'
-			self.corpusServedContainerMembers = DescriptorNeedMap.create()
-		end 'firstQuestionThisFileAsks'
-
-		self.corpusServedContainerMembers.upsert(member, value: served)
+		var verdicts = self.corpusVerdictsForWrite()
+		verdicts.upsert(member, value: served)
 		return served
 	end 'corpusServesArrayMember'
 
@@ -19984,7 +19958,7 @@ export type Parser
 		// "contest ⇒ the static name" would be three chances to disagree about a symbol.
 		let registrationBase = self.signatures.memberRegistrationKey(base, takesReceiver: takesReceiver)
 		let contested = self.signatures.isContestedExtensionMethod(base) or self.namesACrossFileOverloadedFreeFunction(nameTok)
-		if not contested and not self.declaredFuncNames.contains(registrationBase) 'firstOfThisName'
+		if not contested and not self.fileClaimsFuncName(registrationBase) 'firstOfThisName'
 			// ✅ **A PAIR MEMBER USED TO BE PUT THROUGH THE OVERLOAD REFUSALS HERE, AND W75 RETIRED THAT.** The
 			// four facts those refusals are about — a consume set, a by-reference column, a parameter default
 			// and a `throws` clause — were filed by the sweep under the ONE name the two members share, so
@@ -20206,14 +20180,10 @@ export type Parser
 		return false
 	end 'declaresTransferableParam'
 
-	// Record `name` as claimed by this file, COPY-ON-WRITING off the shared empty set before the first
-	// insert — see `sharedEmptyDeclaredFuncNames`.
+	// Record `name` as claimed by this file, installing the roster on the first declaration.
 	function claimFuncName(name ByteArray)
-		if self.declaredFuncNames is sharedEmptyDeclaredFuncNames 'firstDeclarationInThisFile'
-			self.declaredFuncNames = DeclaredFuncNameSet.create()
-		end 'firstDeclarationInThisFile'
-
-		self.declaredFuncNames.insert(name)
+		var claimed = self.declaredFuncNamesForWrite()
+		claimed.insert(name)
 	end 'claimFuncName'
 
 	// The overload members recorded for `base` so far, MATERIALIZING the incumbent on the first contest.
@@ -20227,23 +20197,18 @@ export type Parser
 	// declaration takes a suffix like every later one. `declaredFuncNames` is the exact test, because that is
 	// what `recordedSignatureOf` needs to be able to find something.
 	function overloadMembersOf(base ByteArray) returns OverloadMemberArray
-		if let existing = try self.overloadMembers.get(base) 'alreadyContested'
+		if let existing = try self.recordedOverloadMembers(base) 'alreadyContested'
 			return existing
 		end 'alreadyContested'
 
-		// COPY-ON-WRITE off the shared empty table before the first overload in this file — see
-		// `sharedEmptyOverloadMembers`.
-		if self.overloadMembers is sharedEmptyOverloadMembers 'firstOverloadInThisFile'
-			self.overloadMembers = OverloadMemberMap.create()
-		end 'firstOverloadInThisFile'
-
 		var members = OverloadMemberArray.create()
-		if self.declaredFuncNames.contains(base) 'thisFileHoldsTheIncumbent'
+		if self.fileClaimsFuncName(base) 'thisFileHoldsTheIncumbent'
 			let incumbent = self.recordedSignatureOf(base)
 			members.push(OverloadMember.create(base, typeSuffix: self.overloadTypeSuffix(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver()), labelSuffix: overloadLabelSuffix(incumbent.paramNames, takesReceiver: incumbent.takesReceiver()), hasTransferableParam: self.declaresTransferableParam(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver())))
 		end 'thisFileHoldsTheIncumbent'
 
-		self.overloadMembers.upsert(base, value: members)
+		var byBase = self.overloadMembersForWrite()
+		byBase.upsert(base, value: members)
 		return members
 	end 'overloadMembersOf'
 
@@ -20273,7 +20238,7 @@ export type Parser
 	function unclaimedRegistrationName(base ByteArray, suffix ByteArray) returns ByteArray
 		var candidate = overloadRegistrationName(base, suffix: suffix)
 		var ordinal = FirstOverloadNameOrdinal
-		while self.declaredFuncNames.contains(candidate) 'claimed'
+		while self.fileClaimsFuncName(candidate) 'claimed'
 			candidate = overloadRegistrationName(base, suffix: overloadSuffixPart(String.from(suffix), part: "{ordinal}").toByteArray())
 			ordinal = ordinal + 1
 		end 'claimed'
@@ -20764,9 +20729,23 @@ export type Parser
 			// A field with no default, and a LITERAL one, declare no function: the literal is emitted
 			// straight into the box (`Parser.fillFieldDefault`) and there is nothing to call.
 			none to literal then return
-			helper(helperName) then entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(try layout.fieldTypes.get(index) otherwise panic("recordScannedFieldDefaultHelper: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`, whose field was just written by `readStructFieldInto`")), declaredSurface: layout.fieldDeclaredSurface(index), visibility: Visibility.file))
+			helper(helperName) then self.recordFieldDefaultHelperReturn(helperName, layout: layout, index: index, entries: entries)
+			bareCreateHelper(helperName) then self.recordFieldDefaultHelperReturn(helperName, layout: layout, index: index, entries: entries)
 		end 'declared'
 	end 'recordScannedFieldDefaultHelper'
+
+	// What both helper-shaped defaults do when a CONSTRUCTION is folded: push the nullary call and file it as
+	// the slot's value. The two arms differ in what the layout HASH says about the expression, never in what
+	// the fold emits, so the body is written once and each arm spends it.
+	function foldFieldDefaultByCall(calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, helperName ByteArray, fields ConstFactoryArgumentValueArray, filled BoolArray, anchor Token) throws ConstEvalError
+		try self.fillConstFieldDefault(calls, layout: layout, index: index, value: ConstFactoryArgumentValue.call(self.pushConstNullaryCall(calls, callee: helperName)), fields: fields, filled: filled, anchor: anchor)
+	end 'foldFieldDefaultByCall'
+
+	// The entry both helper-shaped defaults declare. Its return type is the FIELD's declared type, which is
+	// what binds an expression default by the ordinary `return` rules.
+	function recordFieldDefaultHelperReturn(helperName ByteArray, layout StructLayout, index FieldIndex, entries FuncReturnTypeEntryArray)
+		entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(try layout.fieldTypes.get(index) otherwise panic("recordFieldDefaultHelperReturn: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`, whose field was just written by `readStructFieldInto`")), declaredSurface: layout.fieldDeclaredSurface(index), visibility: Visibility.file))
+	end 'recordFieldDefaultHelperReturn'
 
 	// ⭐ **CONSUME A WHOLE `interface` DECLARATION IN THE TOLERANT SWEEP (P1.7a slice 1)** — the twin of
 	// `recordScannedType`/`recordScannedEnum`, and it MUST walk the body itself for a sharp reason: an
@@ -21700,7 +21679,7 @@ export type Parser
 		self.enclosingType = name
 		self.enclosingTypeIsEnum = isEnum
 		self.enclosingTypeParams = self.emptyTypeParams
-		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		self.enclosingInnerAliases = noInnerAliases
 		self.innerAliasesFromIndex = false
 		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
 		self.enclosingExtensionConstraints = sharedEmptyWhereConstraints
@@ -21804,7 +21783,7 @@ export type Parser
 		// Restored to the SHARED empty in lockstep (P1.6-C) so a bare `Idx` at file scope, after a type that
 		// declared one, resolves as an ordinary named type rather than a stale inner alias — and allocates
 		// nothing, exactly as `emptyTypeParams` restores.
-		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		self.enclosingInnerAliases = noInnerAliases
 		// Restored in lockstep for the same reason, one layer up: a drained default's index-scoped answer must
 		// not survive into the next declaration, where the set above is the only truth again.
 		self.innerAliasesFromIndex = false
@@ -22063,8 +22042,11 @@ export type Parser
 		try requireNotACallerLocationDefault(annotatedDefaultTok.value, at: annotatedDefaultTok)
 
 		if not self.defaultRegionIsLiteral(self.pos, regionEnd: defaultEnd) 'anExpression'
+			// Read BEFORE the capture, which moves the cursor to the region's end.
+			let bareCreate = self.defaultRegionIsABareCreate(self.pos, regionEnd: defaultEnd)
 			let helperName = self.captureFieldDefault(layout.name, fieldName: nameTok.value, fieldType: fieldType, regionEnd: defaultEnd)
-			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.helper(helperName), declaredSurface: declaredSurface, declaredBrand: declaredBrand)
+			let expressionDefault = FieldDefault.bareCreateHelper(helperName) if bareCreate else FieldDefault.helper(helperName)
+			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: expressionDefault, declaredSurface: declaredSurface, declaredBrand: declaredBrand)
 			return
 		end 'anExpression'
 
@@ -22160,6 +22142,30 @@ export type Parser
 
 		return (q + 1) as TokenIndex == regionEnd
 	end 'defaultRegionIsLiteral'
+
+	// ⭐⭐ **IS THE DEFAULT EXACTLY `<Type>.create()` — the one expression shape whose RESULT a reader in
+	// another file can describe without running it (`FieldDefault.bareCreateHelper`)?** Five tokens and the
+	// region's end, so an argument, a receiver or anything trailing answers no.
+	//
+	// ⚠ **IT ASKS ONLY ABOUT THE TOKENS, and every question about WHAT the name denotes is the reader's.**
+	// This walk is shared with the declaration SWEEP, which may not resolve an alias at all: what the shape
+	// buys is the guarantee that the value is whatever `create()` builds, and the field's own declared type
+	// is what says which container that is.
+	function defaultRegionIsABareCreate(start TokenIndex, regionEnd TokenIndex) returns bool
+		if self.kindAt(start) != TokenKind.identifier or self.kindAt((start + BareCreateDotOffset) as TokenIndex) != TokenKind.dot 'notADottedName'
+			return false
+		end 'notADottedName'
+
+		if not self.tokenIsTheName((start + BareCreateNameOffset) as TokenIndex, wanted: CreateMethod) 'notTheFactory'
+			return false
+		end 'notTheFactory'
+
+		if self.kindAt((start + BareCreateOpenParenOffset) as TokenIndex) != TokenKind.leftParen or self.kindAt((start + BareCreateCloseParenOffset) as TokenIndex) != TokenKind.rightParen 'notNullary'
+			return false
+		end 'notNullary'
+
+		return (start + BareCreateTokenCount) as TokenIndex == regionEnd
+	end 'defaultRegionIsABareCreate'
 
 	// Capture one field's `= <expression>` for the drain and leave the cursor at the token that ENDS it, so
 	// the field reader resumes exactly as it would have without a default. The cursor arrives just PAST the
@@ -22422,7 +22428,8 @@ export type Parser
 			return
 		end 'notAnUnusedCandidate'
 
-		self.declaredTypeAliases = appendDeferredNameDiagnostic(self.declaredTypeAliases, entry: DeferredNameDiagnostic.create(nameTok.value, filePath: self.filePath, line: nameTok.line, column: nameTok.column))
+		var recorded = self.declaredTypeAliasesForWrite()
+		recorded.push(DeferredNameDiagnostic.create(nameTok.value, filePath: self.filePath, line: nameTok.line, column: nameTok.column))
 	end 'recordTypeName'
 
 	// ⭐ **RECORD THAT THIS FILE WROTE A TYPE NAME IN A TYPE POSITION (P1.9) — the E3062 "used" half.**
@@ -22458,10 +22465,8 @@ export type Parser
 			return
 		end 'notTheReportingWalk'
 
-		if self.usedTypeNames is sharedEmptyUsedTypeNames 'stillShared'
-			self.usedTypeNames = UsedTypeNameSet.create()
-		end 'stillShared'
-		self.usedTypeNames.insert(name)
+		var names = self.usedTypeNamesForWrite()
+		names.insert(name)
 	end 'recordTypeNameUse'
 
 	// ⭐ **A TYPE THIS FILE REACHED INTO — `recordTypeNameUse`'s twin for the fact a written name cannot
@@ -22476,10 +22481,8 @@ export type Parser
 			return
 		end 'notTheReportingWalk'
 
-		if self.memberAccessedTypeNames is sharedEmptyUsedTypeNames 'stillShared'
-			self.memberAccessedTypeNames = UsedTypeNameSet.create()
-		end 'stillShared'
-		self.memberAccessedTypeNames.insert(name)
+		var names = self.memberAccessedTypeNamesForWrite()
+		names.insert(name)
 	end 'recordMemberAccessedTypeName'
 
 	// ⭐ **E3062, ONCE PER FILE, AT THE END OF ITS PARSE** — every non-exported top-level typealias whose
@@ -22495,8 +22498,17 @@ export type Parser
 	// genuinely invisible at the use.) The exemption is applied at `recordTypeName`, so an exported
 	// alias is never even a candidate.
 	function reportUnusedTypeAliases()
-		for candidate in self.declaredTypeAliases 'each'
-			if self.usedTypeNames.contains(candidate.name) 'usedInABody'
+		match self.declaredTypeAliases 'walk'
+			unwritten then return
+			entries(recorded) then self.reportEachUnusedTypeAlias(recorded)
+		end 'walk'
+	end 'reportUnusedTypeAliases'
+
+	// The walk behind the door above — its own function because a `match` arm may not open a `for`, and a
+	// file that declared no candidate never reaches it.
+	function reportEachUnusedTypeAlias(recorded DeferredNameDiagnosticArray)
+		for candidate in recorded 'each'
+			if self.fileWroteTypeName(candidate.name) 'usedInABody'
 				continue
 			end 'usedInABody'
 
@@ -22509,7 +22521,7 @@ export type Parser
 
 			self.artifact.recordUnusedTypeAlias(candidate)
 		end 'each'
-	end 'reportUnusedTypeAliases'
+	end 'reportEachUnusedTypeAlias'
 
 	// ⭐ A TOP-LEVEL `let` IS A COMPILE-TIME CONSTANT, AND THE DECLARATION IS WHERE ITS DIAGNOSTIC
 	// LANDS — but not where its VALUE is computed.
@@ -23035,10 +23047,8 @@ export type Parser
 	// the shared one). Shared by both nested-alias shapes, so ranged and generic aliases enter the set the
 	// same way.
 	function recordInnerAliasName(name ByteArray)
-		if self.enclosingInnerAliases is sharedEmptyInnerAliases 'stillShared'
-			self.enclosingInnerAliases = InnerAliasNameSet.create()
-		end 'stillShared'
-		self.enclosingInnerAliases.insert(name)
+		var declared = self.innerAliasesForWrite()
+		declared.insert(name)
 	end 'recordInnerAliasName'
 
 	// ⭐⭐ **A CONFORMANCE ARGUMENT MAY NAME THE TYPE'S OWN NESTED TYPEALIAS, AND THE CLAUSE IS READ BEFORE
@@ -23223,7 +23233,7 @@ export type Parser
 	// Put the shared empty set back after the clause — see the door above for why the pre-scanned names are
 	// deliberately NOT left in scope for the body.
 	function closeConformanceClauseAliasScope()
-		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		self.enclosingInnerAliases = noInnerAliases
 	end 'closeConformanceClauseAliasScope'
 
 	// The MEMBER a nested typealias declaration starting at `index` names, or the empty source text when the
@@ -27028,7 +27038,7 @@ export type Parser
 		self.valueIds = ValueIdRef.create(paramCount as ValueId)
 		self.mutableVars = VarInfoArray.create()
 		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
-		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
+		self.mutableVarInnermost = noMutableVarInnermost
 		// Re-CREATED, not cleared, exactly as every other per-function column is: a stray owned
 		// binding carried across a function boundary would emit a `__mm_decref` of a value from the
 		// PREVIOUS function's SSA space — a wild pointer, and one the leak gate could not even
@@ -27100,41 +27110,41 @@ export type Parser
 		self.declaringWitnessParamBase = (paramCount - witnessParamCount) as ValueId
 		self.declaringWitnessParamCount = witnessParamCount
 		self.valueBrandIds = TypeNameIdArray.create()
-		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
+		self.valueExistentialInstance = noValueExistentialInstances
 		// Per-function for the identical reason: a value's declared ranged alias names an id in THIS
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
-		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
-		self.countedValueRanges = sharedEmptyProvenIntRanges
-		self.charLiteralOps = sharedEmptyCharLiteralOps
-		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
-		self.foldedIndexCallSites = sharedEmptyFoldedIndexCallSites
+		self.valueDeclaredAlias = noValueDeclaredAliases
+		self.countedValueRanges = noProvenIntRanges
+		self.charLiteralOps = noCharLiteralOps
+		self.stringBytesViewOps = noStringBytesViewOps
+		self.foldedIndexCallSites = noFoldedIndexCallSites
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
-		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
-		self.mergeImmutableBlame = sharedEmptyMergeBlames
+		self.immutableGlobalReads = noValueMarks
+		self.mergeImmutableBlame = noMergeBlames
 		// ⭐ **W117: WHAT THE SWEEP PUBLISHED ABOUT *THIS* DECLARATION**, read once here rather than at each
 		// `return` — the answer cannot change while one body is parsed, and the door that reads it sits on the
 		// promotion path of every returned aggregate.
 		self.enclosingFunctionMayReturnAGlobalAlias = self.functionMayReturnAGlobalAlias(name)
 		// A DECLARED function captures nothing — only a closure body has an enclosing frame to inherit a mark
 		// from — so the capture view is empty here and is filled only by `parseClosureExpression`'s triple.
-		self.capturedImmutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.capturedImmutableGlobalReads = noValueMarks
 		// The rebindable-slot reads (W41) are per-function for that same reason — see `rebindableSlotReads`.
-		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
-		self.constructorFeedParams = sharedEmptyConstructorFeedParams
-		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
-		self.recordsHoldingReferencedOpaqueSlots = sharedEmptyReferencedOpaqueRecords
+		self.rebindableSlotReads = noValueMarks
+		self.constructorFeedParams = noValueMarks
+		self.recordsOwningOpaqueSlots = noValueMarks
+		self.recordsHoldingReferencedOpaqueSlots = noValueMarks
 		self.callReferencedAnOpaqueFeedSlot = false
 		// The buffer-surface marks (R4.4, A2m) are per-function for exactly that reason too — see
 		// `bufferSurfaceValues`. All THREE reset together, because they describe one value space.
-		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
-		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
-		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
-		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
+		self.bufferSurfaceValues = noValueMarks
+		self.bufferSurfaceSlots = noBufferSurfaceSlots
+		self.bufferSurfaceElements = noValueMarks
+		self.sizedContainerBufferValues = noValueMarks
 		// The two written-provenance literal marks are per-function for the same reason: ValueIds are
 		// function-local, so a mark left standing would name a DIFFERENT value in the next function.
-		self.unsignedMaxLiterals = sharedEmptyUnsignedMaxLiterals
-		self.writtenNegativeLiterals = sharedEmptyWrittenNegativeLiterals
+		self.unsignedMaxLiterals = noValueMarks
+		self.writtenNegativeLiterals = noValueMarks
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias name
 		// and the PARAMETER alias names are fixed by the DECLARED signature and known here, before the
 		// body is parsed and before `resolveTypes` erases either; the three site lists fill as the body
@@ -27535,7 +27545,7 @@ export type Parser
 		// EC7 rides the same channel and files on the same terms: a function whose only side data is a
 		// counted loop's interval still files an entry, because that interval is how this function's own
 		// CALL SITES are proved at the Std tier (`InlineLeaves`) — a fact nobody but this function can state.
-		let hasProvenRanges = self.countedValueRanges.count() != 0
+		let hasProvenRanges = self.functionProvedAnInterval()
 		// ⚠ A RANGED PARAMETER IS ENOUGH ON ITS OWN, even for a function with no site of its own: the entry is
 		// how this function's CALLERS learn what its parameters were declared as (`paramSites`) and where its own
 		// entry guard goes, and the caller's site names it by the name this map is keyed by.
@@ -27947,9 +27957,9 @@ export type Parser
 	// ⭐ **THE GUARD IS `innermostMutableVarPosition`, NOT `scope.contains`, and it is the QUESTION rather
 	// than a cheap proxy for it**: only a `var` in scope can ever be an E3077 candidate, so a name that is
 	// not one — a `let`, a parameter, a global, an undeclared token the sweep happened to walk past — has
-	// nothing to mark. It is also what makes this affordable on the parse path: the index is the SHARED
-	// EMPTY map for any function that declares no `var` (`sharedEmptyMutableVarInnermost`), so such a
-	// function pays one lookup that cannot hit, and the argument sweep never reaches this at all.
+	// nothing to mark. It is also what makes this affordable on the parse path: the index is `unwritten` for
+	// any function that declares no `var`, so such a function answers off the tag without hashing, and the
+	// argument sweep never reaches this at all.
 	//
 	// ⚠ **THE BINDING IT THEN MARKS MAY BE A `let` THAT SHADOWS THAT `var`, AND THAT IS CORRECT.** The
 	// verdict is name-scoped (see `mutabilityExercisedNames`), so what matters is that the NAME lands in
@@ -28670,7 +28680,7 @@ export type Parser
 		self.valueIds = ValueIdRef.create(helperParamCount)
 		self.mutableVars = VarInfoArray.create()
 		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
-		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
+		self.mutableVarInnermost = noMutableVarInnermost
 		self.ownedBindings = VarInfoArray.create()
 		self.promiseConsumes = PromiseConsumeRecordArray.create()
 		self.enumAccessorReads = EnumAccessorReadArray.create()
@@ -28711,9 +28721,9 @@ export type Parser
 		self.declaringWitnessParamBase = 0
 		self.declaringWitnessParamCount = 0
 		self.valueBrandIds = TypeNameIdArray.create()
-		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
-		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
-		self.countedValueRanges = sharedEmptyProvenIntRanges
+		self.valueExistentialInstance = noValueExistentialInstances
+		self.valueDeclaredAlias = noValueDeclaredAliases
+		self.countedValueRanges = noProvenIntRanges
 		// ⭐⭐ **BOTH WRITTEN-PROVENANCE MARKS, for `parseFunction`'s stated reason — ValueIds are
 		// FUNCTION-LOCAL, so a mark left standing names a DIFFERENT value here.** This site reset neither,
 		// and a default helper is the one function body that cannot be reached by re-entering
@@ -28734,13 +28744,13 @@ export type Parser
 		// on file for it, because the values whose signed and unsigned readings differ are bit-63-set
 		// patterns and inside a one-expression helper those fold before `comparisonSignedness` is asked.
 		// A soundness invariant the field header states is not owed a witness to be kept.
-		self.unsignedMaxLiterals = sharedEmptyUnsignedMaxLiterals
-		self.writtenNegativeLiterals = sharedEmptyWrittenNegativeLiterals
-		self.charLiteralOps = sharedEmptyCharLiteralOps
-		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
-		self.foldedIndexCallSites = sharedEmptyFoldedIndexCallSites
-		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
-		self.mergeImmutableBlame = sharedEmptyMergeBlames
+		self.unsignedMaxLiterals = noValueMarks
+		self.writtenNegativeLiterals = noValueMarks
+		self.charLiteralOps = noCharLiteralOps
+		self.stringBytesViewOps = noStringBytesViewOps
+		self.foldedIndexCallSites = noFoldedIndexCallSites
+		self.immutableGlobalReads = noValueMarks
+		self.mergeImmutableBlame = noMergeBlames
 		// ⭐⭐ **W117, ASKED OF THE HELPER'S OWN MINTED NAME — WHICH IS WHAT SEPARATES THE LANGUAGE'S TWO
 		// DEFAULT DOORS HERE, AND THE SEPARATION IS THE KEY RATHER THAN A CASE.** A PARAMETER default's helper
 		// is published by the sweep (`recordDefaultHelperGlobalAliasReturn`), so `f(p T = A)` is admitted and
@@ -28762,12 +28772,12 @@ export type Parser
 		// A refusal is the direction this rule may err in; a silent acceptance is not. It comes off the day a
 		// field store carries the mark.
 		self.enclosingFunctionMayReturnAGlobalAlias = self.functionMayReturnAGlobalAlias(helperName)
-		self.capturedImmutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.capturedImmutableGlobalReads = noValueMarks
 		// W41's mark crosses the same boundary and for the same reason — see `rebindableSlotReads`.
-		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
-		self.constructorFeedParams = sharedEmptyConstructorFeedParams
-		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
-		self.recordsHoldingReferencedOpaqueSlots = sharedEmptyReferencedOpaqueRecords
+		self.rebindableSlotReads = noValueMarks
+		self.constructorFeedParams = noValueMarks
+		self.recordsOwningOpaqueSlots = noValueMarks
+		self.recordsHoldingReferencedOpaqueSlots = noValueMarks
 		self.callReferencedAnOpaqueFeedSlot = false
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
 		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
@@ -28776,10 +28786,10 @@ export type Parser
 		// help with — the detach protects the shared module-level anchor, not the parser field. MEASURED:
 		// `function useBufferPair(p (__ManagedMemory, Int))` last in the file, then a default expression
 		// reading `.0.length()` off a `(ByteArray, Int)` call, COMPILED AND RAN — both are ValueId 0.
-		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
-		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
-		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
-		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
+		self.bufferSurfaceValues = noValueMarks
+		self.bufferSurfaceSlots = noBufferSurfaceSlots
+		self.bufferSurfaceElements = noValueMarks
+		self.sizedContainerBufferValues = noValueMarks
 		self.inMatchArmBody = false
 		self.rangeCheckSites = RangeCheckSiteArray.create()
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
@@ -29168,8 +29178,8 @@ export type Parser
 			// `moveOpaqueValueInto` to read, which is the one place that has to tell this parameter from a
 			// borrow the body itself produced. Guarded by the same tag test, first, for its measured reason.
 			if self.tagOf(i as ValueId) == ValueTypeTag.typeParameter and self.signatures.paramFeedOf(funcName, index: i).isFeed() 'anyOpaqueFeed'
-				self.constructorFeedParams = privateValueMarkSet(self.constructorFeedParams, anchor: sharedEmptyConstructorFeedParams)
-				self.constructorFeedParams.insert(i as ValueId)
+				var marked = self.constructorFeedParamsForWrite()
+				marked.insert(i as ValueId)
 			end 'anyOpaqueFeed'
 		end 'eachParam'
 	end 'bindParameters'
@@ -30284,7 +30294,7 @@ export type Parser
 			return true
 		end 'aMemberDeclaredElsewhere'
 
-		return self.enclosingInnerAliases.contains(name)
+		return self.namesAnEnclosingInnerAlias(name)
 	end 'namesInnerAliasHere'
 
 	// ⭐⭐ **THE WHOLE-PROGRAM `genericAliases` KEY A WRITTEN BASE NAME DENOTES — the one home of "which
@@ -31035,7 +31045,7 @@ export type Parser
 		// `retainFunc@16`. This decides only WHETHER a promotion is owed.
 		var boundValue = value
 		var boundBareLocal = rhsWasBareLocal
-		if (mutable or self.rebindableSlotReads.contains(value)) and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
+		if (mutable or valueIsMarked(self.rebindableSlotReads, value: value)) and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
 			boundValue = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.binding, range: SourceRange.ofToken(nameTok))
 			boundBareLocal = false
 		end 'promoteBorrowedBinding'
@@ -31048,7 +31058,7 @@ export type Parser
 		// ⚠ A `let` never qualifies and the gate is not merely an optimization: an immutable binding cannot
 		// be reassigned by its own frame, and passing one to a parameter a callee reassigns is E3019 — so a
 		// cell for it would be storage nothing could ever legally write.
-		if mutable and self.cellLocalNames.contains(nameTok.value) 'livesInACell'
+		if mutable and self.nameLivesInACell(nameTok.value) 'livesInACell'
 			try self.declareCellLocal(func, nameTok: nameTok, boundValue: boundValue, rhsWasBareLocal: boundBareLocal)
 			return
 		end 'livesInACell'
@@ -31892,16 +31902,17 @@ export type Parser
 	// THE ONE PLACE ALL THREE GROW, so they cannot grow apart: the shadow column is written before
 	// the name index, because the position it records is the one the name index is about to lose.
 	function pushMutableVar(binding VarInfo)
-		// COPY-ON-WRITE off the shared empties before the first push — see
-		// `sharedEmptyMutableVarShadowed`. One guard covers both because both are written right below,
-		// and a function that declares no `var` keeps the shared pair for its whole life.
+		// Copy-on-write off the shared empty shadow column before the first push — see
+		// `sharedEmptyMutableVarShadowed`. The name index below carries a spelled state and is installed
+		// by its own door, so this guard speaks for the array alone.
 		if self.mutableVarShadowed is sharedEmptyMutableVarShadowed 'firstVarInThisFunction'
 			self.mutableVarShadowed = MutableVarPositionArray.create()
-			self.mutableVarInnermost = MutableVarPositionByName.create()
 		end 'firstVarInThisFunction'
 
 		self.mutableVarShadowed.push(self.innermostMutableVarPosition(binding.name))
-		self.mutableVarInnermost.upsert(binding.name, value: self.mutableVars.count() as MutableVarPosition)
+		let position = self.mutableVars.count() as MutableVarPosition
+		var byName = self.mutableVarIndexForWrite()
+		byName.upsert(binding.name, value: position)
 		self.mutableVars.push(binding)
 	end 'pushMutableVar'
 
@@ -31916,18 +31927,23 @@ export type Parser
 		let dropped = try self.mutableVars.pop() otherwise panic("popMutableVar: mutableVars.pop failed on a non-empty stack")
 		let shadowed = try self.mutableVarShadowed.pop() otherwise panic("popMutableVar: the shadow column ran out before `mutableVars` did — the two grew apart")
 		if shadowed == NoMutableVar 'nothingShadowed'
-			_ = self.mutableVarInnermost.remove(dropped.name)
+			var byName = self.mutableVarIndexForWrite()
+			_ = byName.remove(dropped.name)
 			return
 		end 'nothingShadowed'
 
-		self.mutableVarInnermost.upsert(dropped.name, value: shadowed)
+		var byName = self.mutableVarIndexForWrite()
+		byName.upsert(dropped.name, value: shadowed)
 	end 'popMutableVar'
 
 	// Where the innermost mutable binding named `name` sits in `mutableVars`, or `NoMutableVar` when
 	// no `var` of that name is in scope (a `let`, a self-field, a payload binding, an undeclared name
 	// — none of which can carry a phi).
 	function innermostMutableVarPosition(name ByteArray) returns MutableVarPosition
-		return try self.mutableVarInnermost.get(name) otherwise NoMutableVar
+		match self.mutableVarInnermost 'function'
+			unwritten then return NoMutableVar
+			entries(byName) then return try byName.get(name) otherwise NoMutableVar
+		end 'function'
 	end 'innermostMutableVarPosition'
 
 	// Parse a lexical block's statements into `block`, through its closing `end [label]`.
@@ -33652,13 +33668,22 @@ export type Parser
 	end 'publishDebugLocals'
 
 	function publishExistentialInstances(func IrFunction)
-		func.valueExistentialInstances = self.valueExistentialInstance
+		// The state stops here — see `IrFunction.valueExistentialInstances` for the pool-worker aliasing that
+		// keeps that field a map. A function that recorded nothing hands over nothing and the target keeps its
+		// own empty one.
+		match self.valueExistentialInstance 'function'
+			unwritten then break 'function'
+			entries(byValue) then func.valueExistentialInstances = byValue
+		end 'function'
 		// ⭐ **W117's per-value marks travel to SemanticCheck the same way, at the same moment, for the same
 		// reason**: they name ids in THIS function's SSA space, so they must be handed over while that space is
 		// still the current one. The call-site half of the rule cannot run in the parser — whether `bump(a)` is
 		// legal depends on `bump`'s BODY, which may be in another file — which is precisely the split E3019
 		// already has. The shared-empty set rides across unchanged for a function that marked nothing.
-		func.immutableGlobalAliasValues = self.immutableGlobalReads as GlobalAliasValueSet
+		match self.immutableGlobalReads 'function'
+			unwritten then break 'function'
+			entries(marked) then func.immutableGlobalAliasValues = marked as GlobalAliasValueSet
+		end 'function'
 	end 'publishExistentialInstances'
 
 	// ⭐⭐ **RECORD THE `with` ARGUMENTS AN EXISTENTIAL VALUE'S DECLARED TYPE NAMED (W57)** — see
@@ -33670,10 +33695,8 @@ export type Parser
 	function recordValueExistentialInstance(value ValueId, instance GenericInstanceId)
 		// COPY-ON-WRITE off the shared empty map, exactly as `readNestedRangedAlias` does and for its
 		// reason: a function with no parameterized-interface value never allocates one.
-		if self.valueExistentialInstance is sharedEmptyExistentialInstanceMap 'stillShared'
-			self.valueExistentialInstance = ValueExistentialInstanceMap.create()
-		end 'stillShared'
-		self.valueExistentialInstance.upsert(value, value: instance)
+		var byValue = self.valueExistentialInstancesForWrite()
+		byValue.upsert(value, value: instance)
 	end 'recordValueExistentialInstance'
 
 	// ⭐ **RECORD THE RANGED TYPEALIAS A VALUE'S DECLARED TYPE NAMES** (see `ValueDeclaredAliasMap` for what
@@ -33696,10 +33719,9 @@ export type Parser
 	function recordValueDeclaredAliasName(value ValueId, aliasName ByteArray)
 		// COPY-ON-WRITE off the shared empty map, exactly as `readNestedRangedAlias` does and for its
 		// reason: a function with no float-alias value and no `as` cast never allocates one.
-		if self.valueDeclaredAlias is sharedEmptyDeclaredAliasMap 'stillShared'
-			self.valueDeclaredAlias = ValueDeclaredAliasMap.create()
-		end 'stillShared'
-		self.valueDeclaredAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
+		let aliasId = self.artifact.typeNames.intern(aliasName)
+		var recorded = self.valueDeclaredAliasesForWrite()
+		recorded.upsert(value, value: aliasId)
 	end 'recordValueDeclaredAliasName'
 
 	// ⭐ **THE RANGED TYPEALIAS AN EXPRESSION'S VALUE DENOTES** — the SOURCE half of every containment
@@ -33724,7 +33746,7 @@ export type Parser
 	// and that difference is the whole of why there are two (see `domainDeclaringAlias`); the lookup
 	// itself is one fact and lives in one place.
 	function recordedCastAlias(value ValueId) returns DeclaredAlias
-		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return DeclaredAlias.undeclared
+		let aliasId = try self.castAliasOf(value) otherwise return DeclaredAlias.undeclared
 		return self.declaredAliasOfNameId(aliasId)
 	end 'recordedCastAlias'
 
@@ -33793,7 +33815,7 @@ export type Parser
 	// IS an identity cannot, and spelled in ids this silently read the first typealias in every file as
 	// unnamed — so `p + i` over two aliases adopted the right-hand one instead of being refused.
 	function operandAliasName(value ValueId) returns ByteArray
-		if let recorded = try self.valueDeclaredAlias.get(value) 'aCastNamedIt'
+		if let recorded = try self.castAliasOf(value) 'aCastNamedIt'
 			return self.signatures.rangedAliasIdentityOf(self.internedName(recorded), readerFilePath: self.filePath)
 		end 'aCastNamedIt'
 
@@ -33860,19 +33882,17 @@ export type Parser
 	// what an interval nothing NAMES may and may not decide, and `mintCountedBodyCounter` for why the value
 	// it is recorded against is the BODY's block-arg rather than the loop header's phi.
 	function recordProvenIntRange(value ValueId, low ParsedInt, high ParsedInt)
-		// COPY-ON-WRITE off the shared empty, exactly as `recordValueDeclaredAliasName` does and for its
-		// reason: a function with no counted loop never allocates one.
-		if self.countedValueRanges is sharedEmptyProvenIntRanges 'stillShared'
-			self.countedValueRanges = ProvenIntRangeMap.create()
-		end 'stillShared'
-		self.countedValueRanges.upsert(value, value: ProvenIntRange.create(low, high: high))
+		// The column is installed on the first interval, exactly as `recordValueDeclaredAliasName`'s is and
+		// for its reason: a function with no counted loop never allocates one.
+		var proven = self.countedValueRangesForWrite()
+		proven.upsert(value, value: ProvenIntRange.create(low, high: high))
 	end 'recordProvenIntRange'
 
 	// ⭐ **DOES THE INTERVAL A COUNTED LOOP PROVED FOR `value` LIE INSIDE `target`?** The map probe and the
 	// one containment, spelled here so the joiner below reads as the two sentences it is. A function with no
-	// counted loop answers off the shared empty map and allocates nothing.
+	// counted loop answers off the unwritten column and allocates nothing.
 	function countedRangeCovers(value ValueId, target RangedTypeAlias) returns bool
-		let proven = try self.countedValueRanges.get(value) otherwise return false
+		let proven = try provenIntRangeOf(self.countedValueRanges, value: value) otherwise return false
 		return rangeCoversIntBounds(target, low: proven.low, high: proven.high)
 	end 'countedRangeCovers'
 
@@ -38203,7 +38223,7 @@ export type Parser
 		// dictionary destructor is a fact about the TYPE, and nothing structurally keeps a value from carrying
 		// both. Where it does, the destructor is the correct releaser, because it fires at refcount ZERO and
 		// this arm fires unconditionally.
-		if self.recordsOwningOpaqueSlots.contains(value) and not isDictionaryDestructorCallee(callee) 'ownsOpaqueSlots'
+		if valueIsMarked(self.recordsOwningOpaqueSlots, value: value) and not isDictionaryDestructorCallee(callee) 'ownsOpaqueSlots'
 			self.emitOpaqueSlotReleases(value, range: range)
 		end 'ownsOpaqueSlots'
 
@@ -39934,7 +39954,7 @@ export type Parser
 			self.markBufferSurfaceElements(promoted)
 		end 'sourceHoldsBuffers'
 
-		self.markBufferSurfaceSlots(promoted, surface: try self.bufferSurfaceSlots.get(from) otherwise sharedEmptyDeclaredSurface)
+		self.markBufferSurfaceSlots(promoted, surface: self.slotSurfaceOf(from))
 	end 'carryDeclaredSurface'
 
 	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because a
@@ -39958,6 +39978,15 @@ export type Parser
 		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
 			return self.emitRetainExistentialCall(source, range: range)
 		end 'existential'
+
+		// ⭐⭐ **A DECLARED GENERIC'S CONTAINER BOX IS THE THIRD REPRESENTATION WITH AN IMMORTAL MEMBER**, and
+		// it earns an arm HERE rather than in `retainCalleeForValue` for one reason: its entry takes the
+		// instance's own cloner as a SECOND argument, which a callee selector cannot express. The buffer
+		// record's fork is `__managed_retain`'s, off `capacity@16`; this one is `__mm_own_deep`'s, off the
+		// allocation header, because a declared generic's `@16` is an author-declared field.
+		if self.valueIsAnImageableContainerBox(source) 'containerBox'
+			return self.emitOwnContainerBoxCopy(source, range: range)
+		end 'containerBox'
 
 		// `__mm_retain` gives `source`'s box a second owner exactly as `__mm_incref` does, so the source is
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
@@ -40068,9 +40097,37 @@ export type Parser
 			return self.emitOwnBoxForSink(value, range: range)
 		end 'plainStructBox'
 
+		// ⭐⭐⭐ **A DECLARED GENERIC'S CONTAINER BOX — a `Map`, a `Set`, and every base written the way they
+		// are — TAKES THE IMMORTAL-AWARE RETAIN, exactly as the buffer record at the top does.** It is
+		// `genericInstance`-tagged, so it matches neither arm above; and an empty one is IMAGE DATA
+		// (`declaredContainerBoxIsImageData`), whose incref does nothing. Left to the bare incref below, the
+		// sink would hold the module-level `let` itself and the first `upsert` through it would write a
+		// read-only page.
+		if self.valueIsAnImageableContainerBox(value) 'containerBox'
+			return self.emitOwnContainerBoxCopy(value, range: range)
+		end 'containerBox'
+
 		self.emitIncref(value, range: range)
 		return value
 	end 'coOwnConcreteRecordForSink'
+
+	// ⭐⭐ **IS THIS VALUE A BOX A `let` COULD HAVE LAID DOWN AS BYTES — a `Map`, a `Set`, and every declared
+	// generic written the way they are?** The admission is `declaredContainerBoxIsImageData` itself, which
+	// is why it is EXACT rather than conservative: an instance that predicate refuses has no imaged box
+	// anywhere in the program, so no value of that type can be image data and the plain incref stays right.
+	//
+	// ⛔ **A SERVICE HANDLE IS EXCLUDED HERE AND NOT ONLY AT THE SINK DOOR.** A handle's box NAMES a mailbox
+	// whose drop steps two shares; a copy of it is a second name holding one share, which
+	// `coOwnConcreteRecordForSink`'s handle arm records as a measured wrong answer. Its `create()` does not
+	// construct from params today, so the predicate below would refuse it anyway — but this door is the one
+	// that decides which boxes get COPIED, and that gate belongs where the decision is.
+	function valueIsAnImageableContainerBox(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.genericInstance or self.valueIsAServiceHandle(value) 'notADeclaredContainer'
+			return false
+		end 'notADeclaredContainer'
+
+		return self.signatures.declaredContainerBoxIsImageData(self.valueInstanceId(value))
+	end 'valueIsAnImageableContainerBox'
 
 	// ⭐⭐ **IS THIS VALUE A SERVICE HANDLE? — THE VALUE TIER'S ONE SPELLING, over both tags a handle can
 	// stand at.** A monomorphic service's handle is `structRef` at its companion's name; a generic one's is
@@ -40107,6 +40164,23 @@ export type Parser
 		self.markValueCoOwnsHeap(value)
 		return self.emitRuntimeCall(MmOwnName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 	end 'emitOwnBoxForSink'
+
+	// ⭐⭐ **THE RETURNING `__mm_own_deep` A CONTAINER BOX OWES — `emitOwnBoxForSink`'s twin over the shape
+	// whose SLOTS address other records.** The two differ in the one thing that matters: this one's copy arm
+	// is the instance's own `__clone_<mangled>`, stamped as the second argument, where that door's is a byte
+	// blit. `MmRuntime.buildMmOwnDeep` carries why a blit cannot serve one.
+	//
+	// ⚠ **ONLY AN IMMORTAL BOX IS COPIED, WHICH IS WHAT KEEPS THE ALIASING `emitOwnBoxForSink`'S HEADER
+	// RESERVES.** An ordinary heap container goes through the counted arm, so `var q = m` still shows
+	// `q.upsert(…)` through to `m`; an image record has no aliasing to preserve, because nothing can write
+	// it. It is `__managed_retain`'s bargain one representation over.
+	//
+	// The result is a distinct ValueId either way, which the caller needs for `emitRetainCall`'s reason.
+	function emitOwnContainerBoxCopy(value ValueId, range SourceRange) returns ValueId
+		self.markValueCoOwnsHeap(value)
+		let cloner = self.emitRuntimeFuncAddr(self.signatures.genericInstanceBoxCloneCallee(self.valueInstanceId(value)), range: range)
+		return self.emitRuntimeCall(MmOwnDeepName, args: pairArgs(value, second: cloner), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+	end 'emitOwnContainerBoxCopy'
 
 	// ⭐⭐ **THE REFERENCE A REBIND FROM AN IMMUTABLE SOURCE OWES — the assignment door's half of the
 	// 2026-08-04 alias ruling** (`rebindSourceIsAnImmutableAlias` carries the rule; this is what it costs
@@ -40281,7 +40355,7 @@ export type Parser
 			end 'anElementBorrowTheCalleeCanFree'
 		end 'eachPendingBorrow'
 
-		if not self.rebindableSlotReads.contains(value) 'notReadOutOfARebindableSlot'
+		if not valueIsMarked(self.rebindableSlotReads, value: value) 'notReadOutOfARebindableSlot'
 			return false
 		end 'notReadOutOfARebindableSlot'
 
@@ -40573,7 +40647,7 @@ export type Parser
 			// be published against — the value would escape into a caller with no idea what it holds, and the
 			// original refusal is what stops it. That fallback is what lets the sweep be narrow: a shape it
 			// misses costs this refusal, never a silent acceptance.
-			if self.immutableGlobalReads.contains(value) 'immutableSource'
+			if valueIsMarked(self.immutableGlobalReads, value: value) 'immutableSource'
 				if door == BorrowLaunderDoor.returned and not self.enclosingFunctionMayReturnAGlobalAlias 'escapesUntracked'
 					throw ParseError.unsupported(borrowLaunderRefusal(door), line: range.line, column: range.column)
 				end 'escapesUntracked'
@@ -43687,19 +43761,15 @@ export type Parser
 	// per-access receiver bindings would not do. Interning is what makes `g.get(0)` on line 4 and
 	// `g.clear()` on line 5 the SAME subject.
 	//
-	// COPY-ON-WRITE off the shared empty (`sharedEmptyTopLevelBorrowSubjects`), the
-	// `sharedEmptyIterationLocks` pattern with its invariant: a `Parser` is built per top-level constant by
-	// `SignatureIndex.walkConstInitializer`, so an unconditional `create()` in the constructor would be one
-	// map per constant in the program, and the overwhelming majority of files name no writable global at a
-	// borrow subject at all.
+	// The table is installed on the first mint (`TopLevelBorrowSubjectTable`): a `Parser` is built per
+	// top-level constant by `SignatureIndex.walkConstInitializer`, so an unconditional `create()` in the
+	// constructor would be one map per constant in the program, and the overwhelming majority of files name
+	// no writable global at a borrow subject at all.
 	function topLevelBorrowSubjectOf(subjectName ByteArray) returns VarInfo
-		let existing = try self.topLevelBorrowSubjects.get(subjectName) otherwise 'mint'
-			if self.topLevelBorrowSubjects is sharedEmptyTopLevelBorrowSubjects 'firstSubjectInThisFile'
-				self.topLevelBorrowSubjects = VarInfoMap.create()
-			end 'firstSubjectInThisFile'
-
+		let existing = try self.internedBorrowSubject(subjectName) otherwise 'mint'
 			let minted = VarInfo.createModuleStorageSubject(subjectName, varType: self.moduleStorageTypeOf(subjectName))
-			self.topLevelBorrowSubjects.upsert(subjectName, value: minted)
+			var interned = self.borrowSubjectsForWrite()
+			interned.upsert(subjectName, value: minted)
 			return minted
 		end 'mint'
 		return existing
@@ -46807,7 +46877,7 @@ export type Parser
 			return false
 		end 'armHoldsNothing'
 
-		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not self.immutableGlobalReads.contains(give)
+		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not valueIsMarked(self.immutableGlobalReads, value: give)
 	end 'giveBorrowsIntoDyingRecords'
 
 	// ⭐⭐ **DOES THIS GIVE NAME A VALUE AN IMMUTABLE BINDING GOES ON OWNING PAST THE MERGE?** The three
@@ -46897,7 +46967,7 @@ export type Parser
 	// which is right, and can never hold the record itself, which is the property this rests on.
 	function propagateImmutableGlobalReadToPhi(phi ValueId, gives ValueIdArray)
 		for give in gives 'eachGive'
-			if self.immutableGlobalReads.contains(give) 'markedArm'
+			if valueIsMarked(self.immutableGlobalReads, value: give) 'markedArm'
 				self.markImmutableGlobalRead(phi)
 				return
 			end 'markedArm'
@@ -49250,7 +49320,7 @@ export type Parser
 		// would then withhold the site whose E3005 says so. The float arm passes `false` because a float
 		// alias's bounds are IEEE-754 patterns that `floatOrderKey` already orders by VALUE, so there is no
 		// signed/unsigned ambiguity for a mark to resolve.
-		return self.constIsKnown(value) and literalInRange(self.constOf(value), low: alias.low, high: alias.high, isFloat: false, writtenNegative: self.writtenNegativeLiterals.contains(value))
+		return self.constIsKnown(value) and literalInRange(self.constOf(value), low: alias.low, high: alias.high, isFloat: false, writtenNegative: valueIsMarked(self.writtenNegativeLiterals, value: value))
 	end 'edgeProvesAlias'
 
 	// The phi a MERGED BINDING carries: its type is the binding's declared one, which the
@@ -52423,7 +52493,7 @@ export type Parser
 		// other folded constant does: a LITERAL fits an unsigned reading and does not ASK for one, so
 		// `u64.max > u64.max` (two literals, no declared type anywhere) keeps the signed compare it has
 		// always emitted — and answers `false`, which is right in both readings.
-		if self.unsignedMaxLiterals.contains(value) 'theUnsignedExtreme'
+		if valueIsMarked(self.unsignedMaxLiterals, value: value) 'theUnsignedExtreme'
 			return IntegerValueDomain.provablyNonNegative
 		end 'theUnsignedExtreme'
 
@@ -53164,7 +53234,7 @@ export type Parser
 	// with), and the `u64.max` literal itself (`unsignedMaxLiterals` — the one constant whose stored
 	// pattern is negative and whose value is not).
 	function operandReachesAboveSignedMax(value ValueId) returns bool
-		if self.unsignedMaxLiterals.contains(value) 'theUnsignedExtreme'
+		if valueIsMarked(self.unsignedMaxLiterals, value: value) 'theUnsignedExtreme'
 			return true
 		end 'theUnsignedExtreme'
 
@@ -54427,21 +54497,482 @@ export type Parser
 			throw self.tupleElementError(rejection, anchor: anchor)
 		end 'rejected'
 
-		if let known = try self.tupleLayouts.get(name) 'alreadyAdopted'
+		if let known = try self.filedTupleLayout(name) 'alreadyAdopted'
 			return known
 		end 'alreadyAdopted'
 
-		// Copy-on-write off the shared empty, keyed on its `is`-identity: a file that mints no tuple must
-		// never allocate a table (`sharedEmptyTupleLayouts`), and the shared one must never be written.
-		if self.tupleLayouts is sharedEmptyTupleLayouts 'firstTupleInThisFile'
-			self.tupleLayouts = StructLayoutMap.create()
-		end 'firstTupleInThisFile'
-
 		let layout = self.signatures.adoptTupleLayout(name, into: self.artifact.typeNames)
-		self.tupleLayouts.upsert(name, value: layout)
+		var filed = self.tupleLayoutsForWrite()
+		filed.upsert(name, value: layout)
 		self.artifact.recordStructType(layout)
 		return layout
 	end 'internTupleLayout'
+
+	// The layout this file already adopted for `name`. A file that has minted no tuple holds no table and
+	// answers the miss without hashing.
+	function filedTupleLayout(name ByteArray) returns StructLayout throws MapError
+		match self.tupleLayouts 'file'
+			unwritten then throw MapError.keyNotFound
+			entries(filed) then return try filed.get(name)
+		end 'file'
+	end 'filedTupleLayout'
+
+	// The witness slots this file already built for `name`.
+	function builtWitnessSlots(name ByteArray) returns CollectedInterfaceMethodArray throws MapError
+		match self.witnessSlotsByInterface 'file'
+			unwritten then throw MapError.keyNotFound
+			entries(byInterface) then return try byInterface.get(name)
+		end 'file'
+	end 'builtWitnessSlots'
+
+	// The verdict this file already reached for container member `member`.
+	function rememberedCorpusVerdict(member ByteArray) returns bool throws MapError
+		match self.corpusServedContainerMembers 'file'
+			unwritten then throw MapError.keyNotFound
+			entries(verdicts) then return try verdicts.get(member)
+		end 'file'
+	end 'rememberedCorpusVerdict'
+
+	// Does this file declare a function called `name`? A file that has declared none holds no roster and
+	// answers without hashing.
+	function fileClaimsFuncName(name ByteArray) returns bool
+		match self.declaredFuncNames 'file'
+			unwritten then return false
+			entries(claimed) then return claimed.contains(name)
+		end 'file'
+	end 'fileClaimsFuncName'
+
+	// The overload members this file recorded for `base`.
+	function recordedOverloadMembers(base ByteArray) returns OverloadMemberArray throws MapError
+		match self.overloadMembers 'file'
+			unwritten then throw MapError.keyNotFound
+			entries(byBase) then return try byBase.get(base)
+		end 'file'
+	end 'recordedOverloadMembers'
+
+	// Does the enclosing declaration declare any nested typealias at all?
+	function scopeDeclaresAnInnerAlias() returns bool
+		match self.enclosingInnerAliases 'scope'
+			unwritten then return false
+			entries(declared) then return declared.count() != 0
+		end 'scope'
+	end 'scopeDeclaresAnInnerAlias'
+
+	// The declared buffer surface recorded for the slots `value` holds, or the empty one.
+	function slotSurfaceOf(value ValueId) returns DeclaredSurface
+		match self.bufferSurfaceSlots 'function'
+			unwritten then return sharedEmptyDeclaredSurface
+			entries(bySlot) then return try bySlot.get(value) otherwise sharedEmptyDeclaredSurface
+		end 'function'
+	end 'slotSurfaceOf'
+
+	// Does the declaration being parsed declare a member called `name`?
+	function siblingReceiverDeclared(name ByteArray) returns bool
+		match self.siblingReceivers 'declaration'
+			unwritten then return false
+			entries(members) then return members.contains(name)
+		end 'declaration'
+	end 'siblingReceiverDeclared'
+
+	// Does that member take a receiver?
+	function siblingReceiverTakesReceiver(name ByteArray) returns bool throws MapError
+		match self.siblingReceivers 'declaration'
+			unwritten then throw MapError.keyNotFound
+			entries(members) then return try members.get(name)
+		end 'declaration'
+	end 'siblingReceiverTakesReceiver'
+
+	// Must a local called `name` live in a cell?
+	function nameLivesInACell(name ByteArray) returns bool
+		match self.cellLocalNames 'body'
+			unwritten then return false
+			entries(names) then return names.contains(name)
+		end 'body'
+	end 'nameLivesInACell'
+
+	// ⭐⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3019 at the
+	// bootstrap oracle), so a table cannot be written in the arm that reads it. Each door below installs the
+	// table on the first write and ANSWERS it; the caller binds the answer to a `var` and writes through that.
+
+	// Did this file's parse write `name` in a type position?
+	function fileWroteTypeName(name ByteArray) returns bool
+		match self.usedTypeNames 'walk'
+			unwritten then return false
+			entries(names) then return names.contains(name)
+		end 'walk'
+	end 'fileWroteTypeName'
+
+	// The written-type-name roster.
+	function usedTypeNamesForWrite() returns UsedTypeNameSet
+		match self.usedTypeNames 'state'
+			unwritten then break 'state'
+			entries(names) then return names
+		end 'state'
+
+		let fresh = UsedTypeNameSet.create()
+		self.usedTypeNames = UsedTypeNameRoster.entries(fresh)
+		return fresh
+	end 'usedTypeNamesForWrite'
+
+	// The reached-into-type roster.
+	function memberAccessedTypeNamesForWrite() returns UsedTypeNameSet
+		match self.memberAccessedTypeNames 'state'
+			unwritten then break 'state'
+			entries(names) then return names
+		end 'state'
+
+		let fresh = UsedTypeNameSet.create()
+		self.memberAccessedTypeNames = UsedTypeNameRoster.entries(fresh)
+		return fresh
+	end 'memberAccessedTypeNamesForWrite'
+
+	// The counted-loop interval column.
+	function countedValueRangesForWrite() returns ProvenIntRangeMap
+		match self.countedValueRanges 'state'
+			unwritten then break 'state'
+			entries(proven) then return proven
+		end 'state'
+
+		let fresh = ProvenIntRangeMap.create()
+		self.countedValueRanges = ProvenIntRangeColumn.entries(fresh)
+		return fresh
+	end 'countedValueRangesForWrite'
+
+	// Did a counted loop prove an interval anywhere in this function?
+	function functionProvedAnInterval() returns bool
+		match self.countedValueRanges 'function'
+			unwritten then return false
+			entries(proven) then return proven.count() != 0
+		end 'function'
+	end 'functionProvedAnInterval'
+
+	// The written-negative literal column.
+	function writtenNegativeLiteralsForWrite() returns ValueMarkSet
+		self.writtenNegativeLiterals = installedValueMarks(self.writtenNegativeLiterals)
+		return markSetOf(self.writtenNegativeLiterals)
+	end 'writtenNegativeLiteralsForWrite'
+
+	// The parameterized-interface instance column.
+	function valueExistentialInstancesForWrite() returns ValueExistentialInstanceMap
+		match self.valueExistentialInstance 'state'
+			unwritten then break 'state'
+			entries(byValue) then return byValue
+		end 'state'
+
+		let fresh = ValueExistentialInstanceMap.create()
+		self.valueExistentialInstance = ValueExistentialInstanceColumn.entries(fresh)
+		return fresh
+	end 'valueExistentialInstancesForWrite'
+
+	// The instance `value`'s declared existential type named, if one did.
+	function existentialInstanceOfValue(value ValueId) returns GenericInstanceId throws MapError
+		match self.valueExistentialInstance 'function'
+			unwritten then throw MapError.keyNotFound
+			entries(byValue) then return try byValue.get(value)
+		end 'function'
+	end 'existentialInstanceOfValue'
+
+	// The deferred-diagnostic candidate list.
+	function declaredTypeAliasesForWrite() returns DeferredNameDiagnosticArray
+		match self.declaredTypeAliases 'state'
+			unwritten then break 'state'
+			entries(recorded) then return recorded
+		end 'state'
+
+		let fresh = DeferredNameDiagnosticArray.create()
+		self.declaredTypeAliases = DeferredNameDiagnosticRoster.entries(fresh)
+		return fresh
+	end 'declaredTypeAliasesForWrite'
+
+	// The borrow-subject stand-in table.
+	function borrowSubjectsForWrite() returns VarInfoMap
+		match self.topLevelBorrowSubjects 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = VarInfoMap.create()
+		self.topLevelBorrowSubjects = TopLevelBorrowSubjectTable.entries(fresh)
+		return fresh
+	end 'borrowSubjectsForWrite'
+
+	// The array-element surface column.
+	function bufferSurfaceElementsForWrite() returns ValueMarkSet
+		self.bufferSurfaceElements = installedValueMarks(self.bufferSurfaceElements)
+		return markSetOf(self.bufferSurfaceElements)
+	end 'bufferSurfaceElementsForWrite'
+
+	// The tuple-slot surface column.
+	function bufferSurfaceSlotsForWrite() returns ValueSlotSurfaceMap
+		match self.bufferSurfaceSlots 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = ValueSlotSurfaceMap.create()
+		self.bufferSurfaceSlots = ValueSlotSurfaceColumn.entries(fresh)
+		return fresh
+	end 'bufferSurfaceSlotsForWrite'
+
+	// The buffer-surface column.
+	function bufferSurfaceValuesForWrite() returns ValueMarkSet
+		self.bufferSurfaceValues = installedValueMarks(self.bufferSurfaceValues)
+		return markSetOf(self.bufferSurfaceValues)
+	end 'bufferSurfaceValuesForWrite'
+
+	// The character-literal op table.
+	function charLiteralOpsForWrite() returns CharLiteralOpMap
+		match self.charLiteralOps 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = CharLiteralOpMap.create()
+		self.charLiteralOps = CharLiteralOpTable.entries(fresh)
+		return fresh
+	end 'charLiteralOpsForWrite'
+
+	// The constructor-feed parameter column.
+	function constructorFeedParamsForWrite() returns ValueMarkSet
+		self.constructorFeedParams = installedValueMarks(self.constructorFeedParams)
+		return markSetOf(self.constructorFeedParams)
+	end 'constructorFeedParamsForWrite'
+
+	// The corpus-member verdict memo.
+	function corpusVerdictsForWrite() returns DescriptorNeedMap
+		match self.corpusServedContainerMembers 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = DescriptorNeedMap.create()
+		self.corpusServedContainerMembers = CorpusMemberVerdictTable.entries(fresh)
+		return fresh
+	end 'corpusVerdictsForWrite'
+
+	// The roster of names this file declares.
+	function declaredFuncNamesForWrite() returns DeclaredFuncNameSet
+		match self.declaredFuncNames 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = DeclaredFuncNameSet.create()
+		self.declaredFuncNames = DeclaredFuncNameRoster.entries(fresh)
+		return fresh
+	end 'declaredFuncNamesForWrite'
+
+	// The folded index-call site table.
+	function foldedIndexCallSitesForWrite() returns FoldedIndexCallSiteMap
+		match self.foldedIndexCallSites 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = FoldedIndexCallSiteMap.create()
+		self.foldedIndexCallSites = FoldedIndexCallSiteTable.entries(fresh)
+		return fresh
+	end 'foldedIndexCallSitesForWrite'
+
+	// The single-byte-grapheme verdict memo.
+	function graphemeVerdictsForWrite() returns SingleByteGraphemeLiteralMap
+		match self.singleByteGraphemeLiterals 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = SingleByteGraphemeLiteralMap.create()
+		self.singleByteGraphemeLiterals = SingleByteGraphemeTable.entries(fresh)
+		return fresh
+	end 'graphemeVerdictsForWrite'
+
+	// The immutable-global read column.
+	function immutableGlobalReadsForWrite() returns ValueMarkSet
+		self.immutableGlobalReads = installedValueMarks(self.immutableGlobalReads)
+		return markSetOf(self.immutableGlobalReads)
+	end 'immutableGlobalReadsForWrite'
+
+	// The nested-typealias roster of the enclosing declaration.
+	function innerAliasesForWrite() returns InnerAliasNameSet
+		match self.enclosingInnerAliases 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = InnerAliasNameSet.create()
+		self.enclosingInnerAliases = InnerAliasRoster.entries(fresh)
+		return fresh
+	end 'innerAliasesForWrite'
+
+	// The merge-blame column.
+	function mergeBlamesForWrite() returns MergeBlameMap
+		match self.mergeImmutableBlame 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = MergeBlameMap.create()
+		self.mergeImmutableBlame = MergeBlameColumn.entries(fresh)
+		return fresh
+	end 'mergeBlamesForWrite'
+
+	// The mutable-binding name index.
+	function mutableVarIndexForWrite() returns MutableVarPositionByName
+		match self.mutableVarInnermost 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = MutableVarPositionByName.create()
+		self.mutableVarInnermost = MutableVarNameIndex.entries(fresh)
+		return fresh
+	end 'mutableVarIndexForWrite'
+
+	// The overload-member table.
+	function overloadMembersForWrite() returns OverloadMemberMap
+		match self.overloadMembers 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = OverloadMemberMap.create()
+		self.overloadMembers = OverloadMemberTable.entries(fresh)
+		return fresh
+	end 'overloadMembersForWrite'
+
+	// The rebindable-slot read column.
+	function rebindableSlotReadsForWrite() returns ValueMarkSet
+		self.rebindableSlotReads = installedValueMarks(self.rebindableSlotReads)
+		return markSetOf(self.rebindableSlotReads)
+	end 'rebindableSlotReadsForWrite'
+
+	// The opaque-slot owner column.
+	function recordsOwningOpaqueSlotsForWrite() returns ValueMarkSet
+		self.recordsOwningOpaqueSlots = installedValueMarks(self.recordsOwningOpaqueSlots)
+		return markSetOf(self.recordsOwningOpaqueSlots)
+	end 'recordsOwningOpaqueSlotsForWrite'
+
+	// The referenced-opaque-slot column.
+	function referencedOpaqueRecordsForWrite() returns ValueMarkSet
+		self.recordsHoldingReferencedOpaqueSlots = installedValueMarks(self.recordsHoldingReferencedOpaqueSlots)
+		return markSetOf(self.recordsHoldingReferencedOpaqueSlots)
+	end 'referencedOpaqueRecordsForWrite'
+
+	// The sized-container record column.
+	function sizedContainerBufferValuesForWrite() returns ValueMarkSet
+		self.sizedContainerBufferValues = installedValueMarks(self.sizedContainerBufferValues)
+		return markSetOf(self.sizedContainerBufferValues)
+	end 'sizedContainerBufferValuesForWrite'
+
+	// The byte-view op table.
+	function stringBytesViewOpsForWrite() returns StringBytesViewOpMap
+		match self.stringBytesViewOps 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = StringBytesViewOpMap.create()
+		self.stringBytesViewOps = StringBytesViewOpTable.entries(fresh)
+		return fresh
+	end 'stringBytesViewOpsForWrite'
+
+	// The tuple-layout table.
+	function tupleLayoutsForWrite() returns StructLayoutMap
+		match self.tupleLayouts 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = StructLayoutMap.create()
+		self.tupleLayouts = TupleLayoutTable.entries(fresh)
+		return fresh
+	end 'tupleLayoutsForWrite'
+
+	// The unsigned-extreme literal column.
+	function unsignedMaxLiteralsForWrite() returns ValueMarkSet
+		self.unsignedMaxLiterals = installedValueMarks(self.unsignedMaxLiterals)
+		return markSetOf(self.unsignedMaxLiterals)
+	end 'unsignedMaxLiteralsForWrite'
+
+	// The declared-alias column.
+	function valueDeclaredAliasesForWrite() returns ValueDeclaredAliasMap
+		match self.valueDeclaredAlias 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = ValueDeclaredAliasMap.create()
+		self.valueDeclaredAlias = ValueDeclaredAliasTable.entries(fresh)
+		return fresh
+	end 'valueDeclaredAliasesForWrite'
+
+	// The witness-slot memo.
+	function witnessSlotsForWrite() returns WitnessSlotsByInterfaceMap
+		match self.witnessSlotsByInterface 'state'
+			unwritten then break 'state'
+			entries(table) then return table
+		end 'state'
+
+		let fresh = WitnessSlotsByInterfaceMap.create()
+		self.witnessSlotsByInterface = WitnessSlotTable.entries(fresh)
+		return fresh
+	end 'witnessSlotsForWrite'
+
+	// Is `name` a nested typealias of the enclosing declaration?
+	function namesAnEnclosingInnerAlias(name ByteArray) returns bool
+		match self.enclosingInnerAliases 'scope'
+			unwritten then return false
+			entries(declared) then return declared.contains(name)
+		end 'scope'
+	end 'namesAnEnclosingInnerAlias'
+
+	// The ranged alias a cast recorded on `value`.
+	function castAliasOf(value ValueId) returns TypeNameId throws MapError
+		match self.valueDeclaredAlias 'function'
+			unwritten then throw MapError.keyNotFound
+			entries(recorded) then return try recorded.get(value)
+		end 'function'
+	end 'castAliasOf'
+
+	// The op `emitCharacterLiteral` filed for `value`.
+	function filedCharLiteralOp(value ValueId) returns OpIndex throws MapError
+		match self.charLiteralOps 'function'
+			unwritten then throw MapError.keyNotFound
+			entries(filed) then return try filed.get(value)
+		end 'function'
+	end 'filedCharLiteralOp'
+
+	// The op the byte-view producer filed for `value`.
+	function filedStringBytesViewOp(value ValueId) returns OpIndex throws MapError
+		match self.stringBytesViewOps 'function'
+			unwritten then throw MapError.keyNotFound
+			entries(filed) then return try filed.get(value)
+		end 'function'
+	end 'filedStringBytesViewOp'
+
+	// Where the index call that produced `value` was emitted.
+	function filedIndexCallSite(value ValueId) returns FoldedIndexCallSite throws MapError
+		match self.foldedIndexCallSites 'function'
+			unwritten then throw MapError.keyNotFound
+			entries(filed) then return try filed.get(value)
+		end 'function'
+	end 'filedIndexCallSite'
+
+	// The verdict an earlier fold reached for literal op `literalOp`.
+	function scannedGraphemeVerdict(literalOp OpIndex) returns bool throws MapError
+		match self.singleByteGraphemeLiterals 'function'
+			unwritten then throw MapError.keyNotFound
+			entries(scanned) then return try scanned.get(literalOp)
+		end 'function'
+	end 'scannedGraphemeVerdict'
+
+	// The stand-in this file already interned for top-level name `subjectName`.
+	function internedBorrowSubject(subjectName ByteArray) returns VarInfo throws MapError
+		match self.topLevelBorrowSubjects 'file'
+			unwritten then throw MapError.keyNotFound
+			entries(interned) then return try interned.get(subjectName)
+		end 'file'
+	end 'internedBorrowSubject'
 
 	// Turn a whole-program tuple-element rejection into a POSITIONED diagnostic. The index raises it (only it
 	// knows what a canonical element is); the parser is the only party holding a token to anchor it on, which
@@ -54573,7 +55104,7 @@ export type Parser
 	// The op INDEX comes from `charLiteralOps`, filed by `emitCharacterLiteral` — an O(1) read where
 	// `ValueOriginTable.lookup` is a linear scan its own header calls THE COLD PATH.
 	function retypeCharLiteralAsCodepoint(value ValueId, codepoint ParsedInt, tok Token) returns ValueId
-		let opIndex = try self.charLiteralOps.get(value) otherwise panic("retypeCharLiteralAsCodepoint: v{value} is tagged `character` at a lone charLiteral token '{String.from(tok.value)}' but `emitCharacterLiteral` filed no op for it — every character-tagged literal is minted there")
+		let opIndex = try self.filedCharLiteralOp(value) otherwise panic("retypeCharLiteralAsCodepoint: v{value} is tagged `character` at a lone charLiteral token '{String.from(tok.value)}' but `emitCharacterLiteral` filed no op for it — every character-tagged literal is minted there")
 		try self.artifact.module.ops.set(opIndex, value: MaxonOp.literal(value, value: codepoint, valueType: MaxonType.integer)) otherwise panic("retypeCharLiteralAsCodepoint: ops.set({opIndex}) OOB — the index was filed by `emitCharacterLiteral` as it appended that very op")
 		self.retypeValue(value, valueType: MaxonType.integer)
 		self.recordConst(value, folded: codepoint)
@@ -54598,19 +55129,15 @@ export type Parser
 	// File the op a byte-view value was produced by, so the stream-write intrinsic can rewrite it in place.
 	// `recordCharLiteralOp`'s twin — same COW-off-the-shared-empty discipline, same reason.
 	function recordStringBytesViewOp(value ValueId, opIndex OpIndex)
-		if self.stringBytesViewOps is sharedEmptyStringBytesViewOps 'stillShared'
-			self.stringBytesViewOps = StringBytesViewOpMap.create()
-		end 'stillShared'
-		self.stringBytesViewOps.upsert(value, value: opIndex)
+		var filed = self.stringBytesViewOpsForWrite()
+		filed.upsert(value, value: opIndex)
 	end 'recordStringBytesViewOp'
 
 	function recordCharLiteralOp(value ValueId, opIndex OpIndex)
 		// COPY-ON-WRITE off the shared empty map, exactly as `readNestedRangedAlias` does and for its
 		// reason: a function that writes no character literal never allocates one.
-		if self.charLiteralOps is sharedEmptyCharLiteralOps 'stillShared'
-			self.charLiteralOps = CharLiteralOpMap.create()
-		end 'stillShared'
-		self.charLiteralOps.upsert(value, value: opIndex)
+		var filed = self.charLiteralOpsForWrite()
+		filed.upsert(value, value: opIndex)
 	end 'recordCharLiteralOp'
 
 	// Decode a character literal to the CODEPOINT its pattern bound denotes, or the same positioned
@@ -56214,7 +56741,10 @@ export type Parser
 				// E3086, and `requireAllFieldsInitialized` is what says so — not this function.
 				none then continue
 				literal(payload, tag, writtenNegative) then self.fillFieldDefault(layout, index: i, given: ConstValue.create(payload, tag: tag, writtenNegative: writtenNegative), fieldValues: fieldValues, filled: filled, range: range)
+				// A bare `<Type>.create()` default is CALLED here exactly as any other expression default is:
+				// the fold that describes it instead belongs to a top-level `let`, which builds no box at all.
 				helper(helperName) then try self.fillFieldDefaultFromHelper(helperName, index: i, fieldValues: fieldValues, filled: filled, anchor: anchor)
+				bareCreateHelper(helperName) then try self.fillFieldDefaultFromHelper(helperName, index: i, fieldValues: fieldValues, filled: filled, anchor: anchor)
 			end 'declared'
 		end 'eachField'
 	end 'applyFieldDefaults'
@@ -56548,18 +57078,18 @@ export type Parser
 		return box
 	end 'emitStructLiteral'
 
-	// The ONE writer of `recordsOwningOpaqueSlots` (W41-opaque) — `markRebindableSlotRead`'s twin, for the
-	// identical copy-on-write reason and through the same one home for it (`privateValueMarkSet`).
+	// The ONE writer of `recordsOwningOpaqueSlots` (W41-opaque) — `markRebindableSlotRead`'s twin, through
+	// the same install door discipline (`ValueMarkColumn`).
 	function markRecordOwningOpaqueSlots(box ValueId)
-		self.recordsOwningOpaqueSlots = privateValueMarkSet(self.recordsOwningOpaqueSlots, anchor: sharedEmptyRecordsOwningOpaqueSlots)
-		self.recordsOwningOpaqueSlots.insert(box)
+		var marked = self.recordsOwningOpaqueSlotsForWrite()
+		marked.insert(box)
 	end 'markRecordOwningOpaqueSlots'
 
 	// The ONE writer of `recordsHoldingReferencedOpaqueSlots` — its twin above, through the same copy-on-write
 	// home and for the identical reason.
 	function markRecordHoldingReferencedOpaqueSlot(box ValueId)
-		self.recordsHoldingReferencedOpaqueSlots = privateValueMarkSet(self.recordsHoldingReferencedOpaqueSlots, anchor: sharedEmptyReferencedOpaqueRecords)
-		self.recordsHoldingReferencedOpaqueSlots.insert(box)
+		var marked = self.referencedOpaqueRecordsForWrite()
+		marked.insert(box)
 	end 'markRecordHoldingReferencedOpaqueSlot'
 
 	// ⭐ **ALLOCATE THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN, AND ENROL IT AS THIS STATEMENT'S OWNED
@@ -58554,7 +59084,7 @@ export type Parser
 		// consumed its argument precisely because this store takes ownership of it, so a reference here would be
 		// a second one and the caller's would leak. It reads as a BORROW to the ownership bit — deliberately, so
 		// the shared body drops nothing (`bindParameters`) — which is exactly why it needs its own mark.
-		if self.constructorFeedParams.contains(value) 'settledByTheCallSite'
+		if valueIsMarked(self.constructorFeedParams, value: value) 'settledByTheCallSite'
 			return false
 		end 'settledByTheCallSite'
 
@@ -65233,7 +65763,7 @@ export type Parser
 			return
 		end 'namesNoInstance'
 
-		if not self.recordsHoldingReferencedOpaqueSlots.contains(arg) 'thisFrameReferencedNothingInIt'
+		if not valueIsMarked(self.recordsHoldingReferencedOpaqueSlots, value: arg) 'thisFrameReferencedNothingInIt'
 			return
 		end 'thisFrameReferencedNothingInIt'
 
@@ -66888,7 +67418,7 @@ export type Parser
 	// `markImmutableGlobalRead`'s only producers are a global load, a promotion of one and a call result — all
 	// of them minted above the parameter block, so 0 is never in the set and the coincidence cannot fire.
 	function bindingAliasesAnImmutableGlobal(binding VarInfo) returns bool
-		return self.immutableGlobalReads.contains(binding.boundValue)
+		return valueIsMarked(self.immutableGlobalReads, value: binding.boundValue)
 	end 'bindingAliasesAnImmutableGlobal'
 
 	// ⭐⭐ **MAY THE STORAGE THIS NAME DENOTES BE WRITTEN THROUGH?** — and it is NOT `binding.mutable`,
@@ -67412,8 +67942,8 @@ export type Parser
 	end 'appendInterfaceDispatchCandidates'
 
 	// `iface`'s transitive witness slot list, built on this file's FIRST dispatch through that interface and
-	// held after — see `sharedEmptyWitnessSlots` for the measured quadratic this removes and for why the memo
-	// is per `Parser` rather than on `ProgramSignatures`.
+	// held after — see `WitnessSlotTable` for the measured quadratic this removes and for why the memo is
+	// per `Parser` rather than on `ProgramSignatures`.
 	//
 	// The list is a pure function of the interface DECLARATION INDEX, which `ProgramSignatures` fixes before
 	// any parse begins and no parse can move, so one answer serves the whole file — the same property that
@@ -67428,17 +67958,13 @@ export type Parser
 	// `interfaceWitnessSlots(map, iface)` — which already owns the walk's accumulators — and a second door
 	// onto one store is what this rung spent its `interfaceOf` → `interfaceMap` widening removing.
 	function witnessSlotsOf(iface IrInterface) returns CollectedInterfaceMethodArray
-		if let existing = try self.witnessSlotsByInterface.get(iface.name) 'alreadyBuilt'
+		if let existing = try self.builtWitnessSlots(iface.name) 'alreadyBuilt'
 			return existing
 		end 'alreadyBuilt'
 
-		// COPY-ON-WRITE off the shared empty map before the first dispatch in this file.
-		if self.witnessSlotsByInterface is sharedEmptyWitnessSlots 'firstDispatchInThisFile'
-			self.witnessSlotsByInterface = WitnessSlotsByInterfaceMap.create()
-		end 'firstDispatchInThisFile'
-
 		let slots = interfaceWitnessSlots(self.signatures.interfaceMap(), iface: iface)
-		self.witnessSlotsByInterface.upsert(iface.name, value: slots)
+		var byInterface = self.witnessSlotsForWrite()
+		byInterface.upsert(iface.name, value: slots)
 		return slots
 	end 'witnessSlotsOf'
 
@@ -67578,7 +68104,7 @@ export type Parser
 	// numbered against a list that is not this interface's, and a site binding fewer arguments than the
 	// interface declares is E3016's to report and claims nothing here.
 	function associatedReturnThroughReceiverInstance(target WitnessDispatchTarget, receiver ValueId) returns MaxonType throws MapError
-		let instance = try self.valueExistentialInstance.get(receiver)
+		let instance = try self.existentialInstanceOfValue(receiver)
 		let dispatched = self.signatures.interfaceNameAtDeclIndex(target.interfaceDeclIndex)
 		if not target.declaringInterfaceName.equals(dispatched) 'aProjectedParentRequirement'
 			throw MapError.keyNotFound
@@ -67717,7 +68243,7 @@ export type Parser
 		// can say; carried here, `current()` on it resolves through the arm one function up. A receiver with no
 		// instantiation to inherit from — a bare `Bag` parameter — passes nothing on, which is correct: it
 		// bound nothing.
-		if let receiverInstance = try self.valueExistentialInstance.get(receiver) 'theReceiverKnowsItsArguments'
+		if let receiverInstance = try self.existentialInstanceOfValue(receiver) 'theReceiverKnowsItsArguments'
 			if let heldInstance = try self.signatures.instanceArgHeldInstance(receiverInstance, position: held.position) 'thatArgumentIsItselfInstantiated'
 				self.recordValueExistentialInstance(result, instance: heldInstance)
 			end 'thatArgumentIsItselfInstantiated'
@@ -68169,9 +68695,10 @@ export type Parser
 	// and the ONE call the corpus needs is exempted BY LOCATION at the shared refusal above rather than by a
 	// name here — a name would have to be right about which of `ArrayIterator`'s members merely read.
 	function refuseASizedContainersRecordEscapingIntoACall(args ValueIdArray, argRanges SourceRangeArray) throws ParseError
-		if self.sizedContainerBufferValues is sharedEmptySizedContainerBufferValues 'thisFunctionHoldsNoSuchRecord'
-			return
-		end 'thisFunctionHoldsNoSuchRecord'
+		match self.sizedContainerBufferValues 'function'
+			unwritten then return
+			entries then break 'function'
+		end 'function'
 
 		for i in 0 upto args.count() 'eachArgument'
 			let argRange = try argRanges.get(i) otherwise panic("refuseASizedContainersRecordEscapingIntoACall: argRanges.get OOB at {i} — `emitCall` builds the argument columns in lockstep with `args`")
@@ -71665,14 +72192,14 @@ export type Parser
 			try self.consume(TokenKind.dot)
 			let nameTok = self.staticMemberNameToken(baseTok, memberTok: try self.consumeMemberNameToken())
 			match self.managedReceiverBindingOf(nameTok) 'binding'
-				// A managed CONSTANT (a `String`, a `b"…"`), an IMAGED record and an INLINED scalar have no
-				// field to chain through, so all three take the `undefinedVariable` an unknown base does —
-				// the arm below's own choice, spelled at the QUALIFIED name because that is what this chain
-				// is rooted at.
+				// A managed CONSTANT (a `String`, a `b"…"`) and an INLINED scalar have no field to chain
+				// through, so both take the `undefinedVariable` an unknown base does — the arm below's own
+				// choice, spelled at the QUALIFIED name because that is what this chain is rooted at.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
 				imageStruct(bytes, typeName) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(nameTok)), valueType: self.imageStructType(typeName), mutable: false)
-				none to imageRecord then break 'binding'
+				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), valueType: image.valueType, mutable: false)
+				none then break 'binding'
 			end 'binding'
 
 			throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
@@ -71689,13 +72216,16 @@ export type Parser
 		// needs no ownership bookkeeping it did not already have.
 		if self.managedTopLevelBaseAt(baseIndex) 'managedTopLevelBase'
 			match self.managedReceiverBindingOf(baseTok) 'binding'
-				// A managed CONSTANT is a `String` or a `b"…"` and an IMAGED record is an array, none of which
-				// has a field, so each takes the same `undefinedVariable` an unknown base does rather than an
-				// arm that could only refuse.
+				// A managed CONSTANT is a `String` or a `b"…"`, which has no field, so it takes the same
+				// `undefinedVariable` an unknown base does rather than an arm that could only refuse. An
+				// IMAGED record MAY have fields — see `ManagedReceiverBinding.imageRecord` — so it chains
+				// through the value like every other base, and a member the record has not got is then the
+				// chain's own diagnostic rather than a claim that the base does not exist.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
 				imageStruct(bytes, typeName) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageStructRead(bytes, typeName: typeName, range: SourceRange.ofToken(baseTok)), valueType: self.imageStructType(typeName), mutable: false)
-				none to imageRecord then break 'binding'
+				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), valueType: image.valueType, mutable: false)
+				none then break 'binding'
 			end 'binding'
 		end 'managedTopLevelBase'
 
@@ -73983,8 +74513,8 @@ export type Parser
 		// second derivation of it. Every other extreme (`i64.max`, `u32.max`, `i8.min`) materializes a
 		// pattern whose signed reading IS its value, so none of them needs marking and none is marked.
 		if bound.namesUnsignedMax 'wroteTheUnsignedExtreme'
-			self.unsignedMaxLiterals = privateValueMarkSet(self.unsignedMaxLiterals, anchor: sharedEmptyUnsignedMaxLiterals)
-			self.unsignedMaxLiterals.insert(value)
+			var marked = self.unsignedMaxLiteralsForWrite()
+			marked.insert(value)
 		end 'wroteTheUnsignedExtreme'
 
 		// ⭐ **THE SAME HAND-OFF, THE OTHER DIRECTION** (`writtenNegativeLiterals`): `i8.min` … `i64.min` name
@@ -74291,8 +74821,8 @@ export type Parser
 	//
 	// ⚡ Both sets are the shared empty one for every program that declares no aggregate `let` global, so this
 	// is a membership test on an empty set.
-	function carryImmutableGlobalMark(marks ValueMarkSet, from ValueId, to ValueId)
-		if marks.contains(from) 'sourceMayAliasAnImmutableGlobal'
+	function carryImmutableGlobalMark(marks ValueMarkColumn, from ValueId, to ValueId)
+		if valueIsMarked(marks, value: from) 'sourceMayAliasAnImmutableGlobal'
 			self.markImmutableGlobalRead(to)
 		end 'sourceMayAliasAnImmutableGlobal'
 	end 'carryImmutableGlobalMark'
@@ -74415,6 +74945,9 @@ export type Parser
 			constBlob to emptyContainer then self.emitImagedConstArrayLiteral(result, image: image, range: range)
 			// A table of ADDRESSES: N payloads, and no heap spelling to be told apart from — its own op.
 			stringTable(texts, elementDestroy) then self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStringTable(result, texts: texts, elementSize: image.elementSize, elementDestroy: elementDestroy), range: range)
+			// A declared container's BOX: `bytes` is the record and the columns are the slots addressing the
+			// other image objects — the struct-record op, whose scalar-struct spelling carries no columns.
+			containerBox(columns) then self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, bytes: image.bytes, columns: columns), range: range)
 		end 'shape'
 		self.markImmutableGlobalRead(result)
 		return result
@@ -74443,7 +74976,7 @@ export type Parser
 
 	function emitImageStructRead(bytes ByteArray, typeName ByteArray, range SourceRange) returns ValueId
 		let result = self.mintValue(ValueTypeTag.structRef, nameId: typeNameIdOf(self.imageStructType(typeName)))
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, bytes: bytes), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, bytes: bytes, columns: sharedEmptyImmortalBoxColumns), range: range)
 		self.markImmutableGlobalRead(result)
 		return result
 	end 'emitImageStructRead'
@@ -74530,16 +75063,11 @@ export type Parser
 		return value
 	end 'recordGlobalReadValue'
 
-	// ⭐⭐ **THE ONE WRITER OF `immutableGlobalReads`** — the read that mints a mark and the merge that
-	// PROPAGATES one both come through here (P1.7 slice 2b), because the copy-on-write off the shared empty
-	// set is the half of this that is dangerous to write twice: a second insert site that skipped the
-	// identity test would insert into `sharedEmptyImmutableGlobalReads` itself, and that value is MODULE
-	// level and shared across the per-file parse fan-out — every other function in every other file would
-	// then see a mark naming an unrelated value in its own SSA space, and a program would be refused for a
-	// binding it never wrote. One home makes that unwritable rather than merely unwritten.
+	// ⭐ **THE ONE WRITER OF `immutableGlobalReads`** — the read that mints a mark and the merge that
+	// PROPAGATES one both come through here (P1.7 slice 2b), so the install-on-first-mark is stated once.
 	function markImmutableGlobalRead(value ValueId)
-		self.immutableGlobalReads = privateValueMarkSet(self.immutableGlobalReads, anchor: sharedEmptyImmutableGlobalReads)
-		self.immutableGlobalReads.insert(value)
+		var marked = self.immutableGlobalReadsForWrite()
+		marked.insert(value)
 	end 'markImmutableGlobalRead'
 
 	// ⭐⭐ **DID THE WHOLE-PROGRAM SWEEP PUBLISH THIS NAME AS ONE WHOSE RESULT MAY ALIAS A `let`-DECLARED
@@ -74568,22 +75096,21 @@ export type Parser
 			return
 		end 'nothingToBlame'
 
-		self.mergeImmutableBlame = privateMergeBlameMap(self.mergeImmutableBlame, anchor: sharedEmptyMergeBlames)
-		self.mergeImmutableBlame.upsert(phi, value: blamed)
+		var recorded = self.mergeBlamesForWrite()
+		recorded.upsert(phi, value: blamed)
 	end 'recordMergeBlame'
 
-	// The blame a merge phi carries, or empty. Gated on the table being non-empty so a program with no
-	// blamed merge — nearly every program — answers with one field read and never hashes.
+	// The blame a merge phi carries, or empty. A function whose merges blamed nothing — nearly every one —
+	// answers off the unwritten state and never hashes.
 	function mergeBlameOf(value ValueId) returns ByteArray
-		if self.mergeImmutableBlame.count() == 0 'noMergeBlamedAnything'
-			return EmptySourceText
-		end 'noMergeBlamedAnything'
-
-		return try self.mergeImmutableBlame.get(value) otherwise EmptySourceText
+		match self.mergeImmutableBlame 'function'
+			unwritten then return EmptySourceText
+			entries(recorded) then return try recorded.get(value) otherwise EmptySourceText
+		end 'function'
 	end 'mergeBlameOf'
 
-	// ⭐⭐ **THE ONE WRITER OF `rebindableSlotReads` (W41)** — `markImmutableGlobalRead`'s twin, for the
-	// identical copy-on-write hazard and through the same one home for it (`privateValueMarkSet`).
+	// ⭐⭐ **THE ONE WRITER OF `rebindableSlotReads` (W41)** — `markImmutableGlobalRead`'s twin, through the
+	// same install door discipline (`ValueMarkColumn`).
 	//
 	// Its THREE producers are the three ways a managed value comes out of storage a later statement can
 	// overwrite: `emitFieldLoad` (every `self.items`, `h.items` and chain hop funnels through it),
@@ -74604,12 +75131,12 @@ export type Parser
 	// DERIVED by grepping `self.markRebindableSlotRead(` rather than remembered — the census
 	// `markBufferSurface` keeps two functions down, for this reason.
 	function markRebindableSlotRead(value ValueId)
-		self.rebindableSlotReads = privateValueMarkSet(self.rebindableSlotReads, anchor: sharedEmptyRebindableSlotReads)
-		self.rebindableSlotReads.insert(value)
+		var marked = self.rebindableSlotReadsForWrite()
+		marked.insert(value)
 	end 'markRebindableSlotRead'
 
-	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
-	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
+	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, through the
+	// same install door discipline (`ValueMarkColumn`).
 	//
 	// Its EIGHT call sites in SEVEN functions, DERIVED by grepping `self.markBufferSurface(` rather than
 	// remembered — the six producers of a buffer VALUE:
@@ -74650,8 +75177,8 @@ export type Parser
 	// site that binds the value, and marks it here. There is no second surface mechanism: this mark stays the
 	// one authority, and `dispatchArrayMethod` needed no change for it.
 	function markBufferSurface(value ValueId)
-		self.bufferSurfaceValues = privateValueMarkSet(self.bufferSurfaceValues, anchor: sharedEmptyBufferSurfaceValues)
-		self.bufferSurfaceValues.insert(value)
+		var marked = self.bufferSurfaceValuesForWrite()
+		marked.insert(value)
 	end 'markBufferSurface'
 
 	// ⭐ `markBufferSurface`'s inverse — the value no longer denotes a buffer because the record it denoted no
@@ -74663,7 +75190,7 @@ export type Parser
 	function unmarkBufferSurface(value ValueId)
 		// The removal's "was it there?" answer is not a fact worth asking: the caller has just proved the
 		// value IS a byte view, and this door exists to make the mark's absence true, not to report on it.
-		_ = self.bufferSurfaceValues.remove(value)
+		unmarkValue(self.bufferSurfaceValues, value: value)
 		// ⚠ **AND THE SIZED COLUMN WITH IT, BECAUSE THE INVARIANT IS "EVERY SIZED VALUE IS ALSO A BUFFER
 		// VALUE" AND A ONE-COLUMN REMOVAL WOULD BREAK IT (W192 second review).** Not reachable today — the
 		// only caller folds a `String.addressableBytes` view, which no sized container's record can be — so
@@ -74671,7 +75198,7 @@ export type Parser
 		// alternative is the premise this compiler keeps finding false: a value marked sized and NOT marked
 		// as a buffer would be refused a length change while being served the `Array` roster one line down,
 		// which is the exact disagreement `markSizedContainerBuffer`'s door invariant exists to prevent.
-		_ = self.sizedContainerBufferValues.remove(value)
+		unmarkValue(self.sizedContainerBufferValues, value: value)
 	end 'unmarkBufferSurface'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceSlots` (A2m)** — `markBufferSurface`'s twin for a TUPLE value,
@@ -74685,15 +75212,15 @@ export type Parser
 			return
 		end 'notATupleWithSlots'
 
-		self.bufferSurfaceSlots = privateValueSlotSurfaceMap(self.bufferSurfaceSlots, anchor: sharedEmptyBufferSurfaceSlots)
-		self.bufferSurfaceSlots.upsert(value, value: surface)
+		var bySlot = self.bufferSurfaceSlotsForWrite()
+		bySlot.upsert(value, value: surface)
 	end 'markBufferSurfaceSlots'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceElements` (A2m)** — `markBufferSurface`'s twin for an ARRAY whose
 	// ELEMENTS are buffers, on the same discipline and against the same anchor hazard.
 	function markBufferSurfaceElements(value ValueId)
-		self.bufferSurfaceElements = privateValueMarkSet(self.bufferSurfaceElements, anchor: sharedEmptyBufferSurfaceElements)
-		self.bufferSurfaceElements.insert(value)
+		var marked = self.bufferSurfaceElementsForWrite()
+		marked.insert(value)
 	end 'markBufferSurfaceElements'
 
 	// ⭐ **THE ONE WRITER OF `sizedContainerBufferValues` (W192)** — `markBufferSurface`'s twin for the one
@@ -74707,12 +75234,12 @@ export type Parser
 	// today already holds a value the buffer mark is written on — each of them marks it through
 	// `markDeclaredSurface` or through `bufferSurfaceOf` a line earlier — so this line adds nothing to any
 	// path that exists; it is what makes the invariant a property of the DOOR instead of a rule each caller
-	// remembers, which is the same argument `privateValueMarkSet` makes one level down. ⚠ **DELIBERATELY NOT
+	// remembers, which is the same argument `ValueMarkColumn`'s doors make one level down. ⚠ **DELIBERATELY NOT
 	// A CALL-SITE LIST**: `markBufferSurface`'s header records that exact sentence being wrong five times.
 	function markSizedContainerBuffer(value ValueId)
 		self.markBufferSurface(value)
-		self.sizedContainerBufferValues = privateValueMarkSet(self.sizedContainerBufferValues, anchor: sharedEmptySizedContainerBufferValues)
-		self.sizedContainerBufferValues.insert(value)
+		var marked = self.sizedContainerBufferValuesForWrite()
+		marked.insert(value)
 	end 'markSizedContainerBuffer'
 
 	// ⭐⭐ **THE ONE DECISION: A TYPE SPELLED `__ManagedMemory` DENOTES THE BUFFER (A2j).** ⚖ **USER RULING,
@@ -75036,7 +75563,7 @@ export type Parser
 	// mark above — asked once per array-method dispatch, and `Set.contains` on the shared zero-capacity set
 	// returns before it hashes anything, so a program that never names `__ManagedMemory` does not pay to ask.
 	function valueIsBufferSurface(value ValueId) returns bool
-		return self.bufferSurfaceValues.contains(value)
+		return valueIsMarked(self.bufferSurfaceValues, value: value)
 	end 'valueIsBufferSurface'
 
 	// Does `value` denote a SIZED container's own record (W192)? The read side of `markSizedContainerBuffer`,
@@ -75044,7 +75571,7 @@ export type Parser
 	// shared zero-capacity set returns before it hashes anything, so a program that names no sized container's
 	// buffer does not pay to ask.
 	function valueIsASizedContainersBuffer(value ValueId) returns bool
-		return self.sizedContainerBufferValues.contains(value)
+		return valueIsMarked(self.sizedContainerBufferValues, value: value)
 	end 'valueIsASizedContainersBuffer'
 
 	// ⭐ **THE SURFACE OF ELEMENT `slot` OF THE TUPLE `value` — A WHOLE SURFACE, NOT A BIT (A2m).** The read
@@ -75055,7 +75582,7 @@ export type Parser
 	//
 	// A value with no entry is plain, which is every tuple in a program that never writes the alias.
 	function valueSlotSurface(value ValueId, slot FieldIndex) returns DeclaredSurface
-		let surface = try self.bufferSurfaceSlots.get(value) otherwise sharedEmptyDeclaredSurface
+		let surface = self.slotSurfaceOf(value)
 		if slot >= surfaceSlotCount(surface) 'noSuchMarkedSlot'
 			return sharedEmptyDeclaredSurface
 		end 'noSuchMarkedSlot'
@@ -75066,7 +75593,7 @@ export type Parser
 	// Do the ELEMENTS of the array `value` denote buffers (A2m)? The read side of
 	// `markBufferSurfaceElements`, asked at `emitContainerElementAccessor`.
 	function valueElementIsBufferSurface(value ValueId) returns bool
-		return self.bufferSurfaceElements.contains(value)
+		return valueIsMarked(self.bufferSurfaceElements, value: value)
 	end 'valueElementIsBufferSurface'
 
 	// ⭐ **A BARE FUNCTION NAME USED AS A VALUE → a `functionRef`** (P1.5-A1), the last resort a name
@@ -75469,7 +75996,7 @@ export type Parser
 		self.valueIds = ValueIdRef.create((((paramCount + 1) as ParamCount) as ValueId))
 		self.mutableVars = VarInfoArray.create()
 		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
-		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
+		self.mutableVarInnermost = noMutableVarInnermost
 		self.ownedBindings = VarInfoArray.create()
 		// Fresh for the reason above it: a closure body is a function of its own, so a thread the ENCLOSING
 		// frame consumed is recorded against a `ValueId` that means something else in here.
@@ -75539,14 +76066,14 @@ export type Parser
 		// being reachable. Nothing inside a closure body writes the pair, so the SAVE block above has nothing
 		// to save either — the pair is absent from all three lists, on purpose.
 		self.valueBrandIds = TypeNameIdArray.create()
-		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
-		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
-		self.countedValueRanges = sharedEmptyProvenIntRanges
-		self.charLiteralOps = sharedEmptyCharLiteralOps
-		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
-		self.foldedIndexCallSites = sharedEmptyFoldedIndexCallSites
-		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
-		self.mergeImmutableBlame = sharedEmptyMergeBlames
+		self.valueExistentialInstance = noValueExistentialInstances
+		self.valueDeclaredAlias = noValueDeclaredAliases
+		self.countedValueRanges = noProvenIntRanges
+		self.charLiteralOps = noCharLiteralOps
+		self.stringBytesViewOps = noStringBytesViewOps
+		self.foldedIndexCallSites = noFoldedIndexCallSites
+		self.immutableGlobalReads = noValueMarks
+		self.mergeImmutableBlame = noMergeBlames
 		self.enclosingFunctionMayReturnAGlobalAlias = false
 		// ⭐ **NOT CLEARED — HANDED THE SET THE BODY IS ABOUT TO CAPTURE OUT OF.** The line above and this one
 		// are the two halves of the closure boundary: the RETURN fact cannot cross it (no static callee), and
@@ -75570,15 +76097,15 @@ export type Parser
 		// reader hunting the roster refusal would not have found it, and a reader trusting the old wording
 		// would think a roster answered here.
 		self.capturedImmutableGlobalReads = savedImmutableGlobalReads
-		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
-		self.constructorFeedParams = sharedEmptyConstructorFeedParams
-		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
-		self.recordsHoldingReferencedOpaqueSlots = sharedEmptyReferencedOpaqueRecords
+		self.rebindableSlotReads = noValueMarks
+		self.constructorFeedParams = noValueMarks
+		self.recordsOwningOpaqueSlots = noValueMarks
+		self.recordsHoldingReferencedOpaqueSlots = noValueMarks
 		self.callReferencedAnOpaqueFeedSlot = false
-		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
-		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
-		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
-		self.sizedContainerBufferValues = sharedEmptySizedContainerBufferValues
+		self.bufferSurfaceValues = noValueMarks
+		self.bufferSurfaceSlots = noBufferSurfaceSlots
+		self.bufferSurfaceElements = noValueMarks
+		self.sizedContainerBufferValues = noValueMarks
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
@@ -75607,8 +76134,8 @@ export type Parser
 		self.functionReturnBrand = EmptySourceText
 		// Fresh per-closure literal-provenance marks, for the reason the save block gives: the closure body
 		// numbers its own values.
-		self.unsignedMaxLiterals = sharedEmptyUnsignedMaxLiterals
-		self.writtenNegativeLiterals = sharedEmptyWrittenNegativeLiterals
+		self.unsignedMaxLiterals = noValueMarks
+		self.writtenNegativeLiterals = noValueMarks
 		// No ranged parameter is the common case and it is now SAID rather than encoded in an empty list:
 		// the producer throws, and the column keeps the shared read-only empty this file already holds for it.
 		self.rangeCheckParamSites = try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise sharedEmptyParamSites
@@ -77265,7 +77792,8 @@ export type Parser
 				// `requireAllFieldsInitialized` is what says so — not this function.
 				none then continue
 				literal(payload, tag, writtenNegative) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(payload, tag: tag, writtenNegative: writtenNegative))), fields: fields, filled: filled, anchor: anchor)
-				helper(helperName) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.call(self.pushConstNullaryCall(calls, callee: helperName)), fields: fields, filled: filled, anchor: anchor)
+				helper(helperName) then try self.foldFieldDefaultByCall(calls, layout: layout, index: i, helperName: helperName, fields: fields, filled: filled, anchor: anchor)
+				bareCreateHelper(helperName) then try self.foldFieldDefaultByCall(calls, layout: layout, index: i, helperName: helperName, fields: fields, filled: filled, anchor: anchor)
 			end 'declared'
 		end 'eachField'
 	end 'applyConstFieldDefaults'
@@ -78548,7 +79076,7 @@ export type Parser
 			return false
 		end 'notInType'
 		self.ensureSiblingReceivers()
-		if self.siblingReceivers.contains(name) 'declaredInTheBodyBeingParsed'
+		if self.siblingReceiverDeclared(name) 'declaredInTheBodyBeingParsed'
 			return true
 		end 'declaredInTheBodyBeingParsed'
 
@@ -78648,7 +79176,7 @@ export type Parser
 	// would be two readings of one declaration, and the pair that disagreed would call a `static` on an instance.
 	// The caller has already established that one of the two answers exists.
 	function siblingTakesReceiver(name ByteArray) returns bool
-		if let takesReceiver = try self.siblingReceivers.get(name) 'declaredInTheBodyBeingParsed'
+		if let takesReceiver = try self.siblingReceiverTakesReceiver(name) 'declaredInTheBodyBeingParsed'
 			return takesReceiver
 		end 'declaredInTheBodyBeingParsed'
 
@@ -78659,8 +79187,8 @@ export type Parser
 	// unless it is already built for this type. It is not the whole sibling set — a method declared by another
 	// declaration of the same type is reached through the index instead (`isImplicitSelfMethod`) — because a
 	// token walk can only read the body it is standing in. LAZY so a type whose methods make no calls — the
-	// whole scale corpus — never builds it and allocates nothing (the field keeps its
-	// `sharedEmptySiblingReceivers` placeholder). A file-local token walk of the type body, so it sees every
+	// whole scale corpus — never builds it and allocates nothing (the field stays `unwritten`). A file-local
+	// token walk of the type body, so it sees every
 	// sibling regardless of declaration order: a forward reference resolves exactly as a backward one, and
 	// recursion sees the method itself. It is the ONE source of both "is this a sibling?" (`contains`) and
 	// "does it take a receiver?" (the value) FOR THE MEMBERS IT CARRIES, so those two facts cannot drift
@@ -78728,7 +79256,7 @@ export type Parser
 			end 'eachRequirement'
 		end 'inAnExtensionBody'
 
-		self.siblingReceivers = map
+		self.siblingReceivers = SiblingReceiverTable.entries(map)
 		self.siblingReceiverScanType = self.enclosingType
 		self.siblingReceiverScanBody = self.enclosingTypeBodyStart
 	end 'ensureSiblingReceivers'
@@ -79911,7 +80439,7 @@ export type Parser
 
 		// ⭐⭐ **THE VIEW THIS WRITE WOULD HAVE CONSUMED IS FOLDED AWAY WHEN THE WRITE IS ITS ONLY CONSUMER.**
 		// See `foldByteViewIntoStreamWrite` for the two conditions and for what the fold is worth.
-		if let viewOpIdx = try self.stringBytesViewOps.get(arg) 'aByteViewOfAString'
+		if let viewOpIdx = try self.filedStringBytesViewOp(arg) 'aByteViewOfAString'
 			if self.pendingTempsContain(arg) and self.byteViewCallStillSitsAt(viewOpIdx) 'thisWriteIsItsSoleConsumer'
 				return self.foldByteViewIntoStreamWrite(arg, viewOpIdx: viewOpIdx, runtimeName: runtimeName)
 			end 'thisWriteIsItsSoleConsumer'
@@ -80885,7 +81413,7 @@ export type Parser
 		// reconstructing the source text of the expression would be a second renderer of what the author wrote.
 		// The sentence it lands in — "cannot pass '…' to function that mutates parameter 'b'" — is true of the
 		// noun, and the LINE is the call's own.
-		if self.immutableGlobalReads.contains(value) 'aliasesAnImmutableGlobal'
+		if valueIsMarked(self.immutableGlobalReads, value: value) 'aliasesAnImmutableGlobal'
 			return ImmutableGlobalAliasBlame
 		end 'aliasesAnImmutableGlobal'
 
@@ -81227,17 +81755,15 @@ export type Parser
 	// keyed by it and survives for the whole file parse: the answer is a fact about the bytes and nothing a
 	// function boundary can change.
 	function literalHasSingleByteGraphemes(literalOp OpIndex, bytes ByteArray) returns bool
-		if let alreadyScanned = try self.singleByteGraphemeLiterals.get(literalOp) 'scannedOnAnEarlierFold'
+		if let alreadyScanned = try self.scannedGraphemeVerdict(literalOp) 'scannedOnAnEarlierFold'
 			return alreadyScanned
 		end 'scannedOnAnEarlierFold'
 
 		let answer = bytesAreSingleByteGraphemes(bytes)
 		// COPY-ON-WRITE off the shared empty map, exactly as `recordCharLiteralOp` does and for its reason: a
 		// file that folds no `length:` slice never allocates one.
-		if self.singleByteGraphemeLiterals is sharedEmptySingleByteGraphemeLiterals 'stillShared'
-			self.singleByteGraphemeLiterals = SingleByteGraphemeLiteralMap.create()
-		end 'stillShared'
-		self.singleByteGraphemeLiterals.upsert(literalOp, value: answer)
+		var scanned = self.graphemeVerdictsForWrite()
+		scanned.upsert(literalOp, value: answer)
 
 		return answer
 	end 'literalHasSingleByteGraphemes'
@@ -81302,7 +81828,7 @@ export type Parser
 			return
 		end 'someoneElseHoldsIt'
 
-		if let site = try self.foldedIndexCallSites.get(value) 'itsCallSiteIsOnFile'
+		if let site = try self.filedIndexCallSite(value) 'itsCallSiteIsOnFile'
 			if self.currentBlockStillHoldsFiledOp(site) 'andTheBlockStillBearsItOut'
 				self.removeCurrentBlockOpAt(site.blockOpPos, siteMark: site.siteMark)
 				self.removeFromPendingTemps(value)
@@ -81332,12 +81858,11 @@ export type Parser
 	// drop it without hunting. `recordCharLiteralOp`'s twin — same COW-off-the-shared-empty discipline, same
 	// reason — differing only in what a site is: see `FoldedIndexCallSite` for why it takes four numbers.
 	function recordFoldedIndexCallSite(value ValueId, opIndex OpIndex)
-		if self.foldedIndexCallSites is sharedEmptyFoldedIndexCallSites 'stillShared'
-			self.foldedIndexCallSites = FoldedIndexCallSiteMap.create()
-		end 'stillShared'
 
 		let landedAt = self.currentBlock.opRefs.count() - 1
-		self.foldedIndexCallSites.upsert(value, value: FoldedIndexCallSite.create(self.currentBlock.id, blockOpPos: landedAt, opIndex: opIndex, siteMark: self.rangeCheckSites.count()))
+		let site = FoldedIndexCallSite.create(self.currentBlock.id, blockOpPos: landedAt, opIndex: opIndex, siteMark: self.rangeCheckSites.count())
+		var filed = self.foldedIndexCallSitesForWrite()
+		filed.upsert(value, value: site)
 	end 'recordFoldedIndexCallSite'
 
 	// ⚠⚠ **AN OP'S ORDINAL IN ITS BLOCK IS A KEY, SO REMOVING ONE MOVES EVERY RANGE-CHECK SITE BEHIND IT.**
@@ -83898,8 +84423,8 @@ export type Parser
 			return
 		end 'notNegative'
 
-		self.writtenNegativeLiterals = privateValueMarkSet(self.writtenNegativeLiterals, anchor: sharedEmptyWrittenNegativeLiterals)
-		self.writtenNegativeLiterals.insert(result)
+		var marked = self.writtenNegativeLiteralsForWrite()
+		marked.insert(result)
 	end 'markWrittenNegative'
 
 	// Append a `literal` op into the CURRENT block; return the ValueId it defines.
@@ -84304,7 +84829,7 @@ export type Parser
 	// closure half then costs one linear walk per body, and only in a FILE that spells a closure literal at
 	// all. A body that reaches neither test is answered before a token is read.
 	function collectCellLocalNames(bodyStart TokenIndex)
-		self.cellLocalNames = sharedEmptyCellLocalNames
+		self.cellLocalNames = noCellLocalNames
 		if not self.signatures.programTakesAParamByRef() and not self.fileHasClosureLiteral 'nothingCouldWantACell'
 			return
 		end 'nothingCouldWantACell'
@@ -84376,12 +84901,13 @@ export type Parser
 			q = q + 1
 		end 'walk'
 
-		self.cellLocalNames = handedOverByReference
 		for name in mentionedInsideAClosure 'eachCapture'
 			if assigned.contains(name) 'capturedAndWritten'
-				self.cellLocalNames.insert(name)
+				handedOverByReference.insert(name)
 			end 'capturedAndWritten'
 		end 'eachCapture'
+
+		self.cellLocalNames = CellLocalNameRoster.entries(handedOverByReference)
 	end 'collectCellLocalNames'
 
 	// Is the argument beginning at `index` EXACTLY one name and nothing else? The by-reference call site's

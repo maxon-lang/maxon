@@ -542,6 +542,11 @@ export typealias ImmortalEmptyArrayLabelSet = Set with String
 // address relocation per element slot.
 export typealias ImmortalStringTableLabelSet = Set with String
 
+// The imaged STRUCT BOXES whose per-slot column relocations have already been recorded, keyed by the box's
+// label. Its own set for `ImmortalStringTableLabelSet`'s reason — a box of scalars owes no relocation at
+// all, and a container's box owes one per column slot.
+export typealias ImmortalStructBoxLabelSet = Set with String
+
 // The set of witness-slot ABI adapters already REQUESTED (WASM3) — keyed on the adapter's symbol, which is
 // the `(conformer, interface, method)` triple by construction (`witnessSlotAdapterSymbol`). One conformer's
 // slot can be reached from several tables — a requirement inherited through `extends` sits in the derived
@@ -1030,6 +1035,8 @@ type MaxonToStdLowering
 	var emittedImmortalEmptyArrays as ImmortalEmptyArrayLabelSet
 	// The imaged string-table records already relocated — see `ImmortalStringTableLabelSet`.
 	var emittedImmortalStringTables as ImmortalStringTableLabelSet
+	// The imaged struct boxes whose column slots are already relocated — see `ImmortalStructBoxLabelSet`.
+	var emittedImmortalStructBoxes as ImmortalStructBoxLabelSet
 	// The witness-slot ABI adapters already requested (WASM3) — see `WitnessAdapterNameSet`.
 	var emittedWitnessAdapters as WitnessAdapterNameSet
 	// The adapters whose bodies are still to be built — see `WitnessAdapterRequest`. Drained ONCE, after the
@@ -1217,7 +1224,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1607,7 +1614,7 @@ type MaxonToStdLowering
 			serviceSend then self.lowerServiceSend(hlOp, dstBlock: dstBlock)
 			serviceReplyCell then self.lowerServiceReplyCell(hlOp, dstBlock: dstBlock)
 			// W197: a module-level `let` holding a constructed struct of scalars — its box IS the image.
-			immortalStructRecord(result, bytes) then self.lowerImmortalStructRecord(result, bytes: bytes, dstBlock: dstBlock)
+			immortalStructRecord then self.lowerImmortalStructRecord(hlOp, dstBlock: dstBlock)
 			// A module-level `let` holding an array of string literals. Routed through a SMALL re-match so
 			// `texts` is bound in a single-call arm, never in this big one — the tail-slot-`Array` corruption
 			// `lowerIndirectCall` documents.
@@ -1649,19 +1656,82 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: table.recordLabel.toByteArray()))
 	end 'emitImmortalStringTable'
 
-	// ⭐⭐ **A CONSTRUCTED STRUCT `let`'s BOX, IN `.rdata`, ADDRESSED BY ONE `lea`.** The payload is the
-	// synthetic allocation header (`MmRuntime.immortalBoxHeaderBytes`, whose refcount says "never counted")
-	// followed by the box itself, and the label names the BOX — so the address this answers is a pointer to
-	// the first field, exactly as `__mm_alloc` would have returned.
+	// ⭐⭐ **AN IMAGED RECORD BOX, IN `.rdata`, ADDRESSED BY ONE `lea`.** The payload is the synthetic
+	// allocation header (`MmRuntime.immortalBoxHeaderBytes`, whose refcount says "never counted") followed by
+	// the box itself, and the label names the BOX — so the address this answers is a pointer to the first
+	// field, exactly as `__mm_alloc` would have returned.
 	//
 	// ⭐ **BYTE-DEDUPED, WHICH IS WHAT MAKES EVERY READ OF ONE DECLARATION REACH ONE OBJECT.** A storage-less
 	// `let` re-materializes at each read (`Parser.emitImageStructRead`), so the reads share a record only
 	// because the table pools them — `registerImmortalByteArrayRecord`'s property, over a shape whose bytes
 	// are its fields.
-	function lowerImmortalStructRecord(result ValueId, bytes ByteArray, dstBlock IrBlock)
-		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: bytes, kind: RdataPayloadKind.structRecord, shape: ImmortalRecordShape.userStruct, debugStream: self.debugStream)
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
+	//
+	// Routed through a SMALL re-match so `columns` is bound in a single-call arm, never in `lowerOp`'s big
+	// one — the tail-slot-`Array` corruption `lowerIndirectCall` documents.
+	function lowerImmortalStructRecord(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 's'
+			immortalStructRecord(result, bytes, columns) then self.emitImmortalStructRecord(result, bytes: bytes, columns: columns, dstBlock: dstBlock)
+			default panic("lowerImmortalStructRecord: expected an `immortalStructRecord` op, got a different MaxonOp variant — `lowerOp` routes only `immortalStructRecord` here")
+		end 's'
 	end 'lowerImmortalStructRecord'
+
+	function emitImmortalStructRecord(result ValueId, bytes ByteArray, columns ImmortalBoxColumnArray, dstBlock IrBlock)
+		let label = self.ensureImmortalStructRecord(bytes, columns: columns)
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
+	end 'emitImmortalStructRecord'
+
+	// ⭐⭐ **THE COLUMNS FIRST, THEN THE BOX THAT NAMES THEM** — a `Map`/`Set` `let`'s five `.rdata` objects.
+	// Each column is `ensureImmortalEmptyArrayRecord`'s own record, so a column and a body's `create()` of the
+	// same shape reach one object; the box's slot is SEEDED with that record's `.rdata` offset and the
+	// absolute data-to-data relocation overwrites the seed with its address.
+	//
+	// ⭐ **THE SEED IS WHAT KEEPS BYTE DEDUP HONEST** — `registerImmortalStringTableRecord`'s rule, for its
+	// reason: a box left zero in its pointer slots would collapse every same-SIZE box onto one label, and each
+	// collapsed box's relocations would then overwrite the others' slots. Seeded, two boxes are byte-equal
+	// exactly when they name the same columns in the same slots, which is when they ARE the same record.
+	//
+	// ⭐ **THE RELOCATIONS ARE RECORDED EXACTLY ONCE PER LABEL** — `emitImmortalStringTable`'s memo, for its
+	// reason: a second entry patching one slot is what Mach-O's chained-rebase list does not tolerate.
+	function ensureImmortalStructRecord(bytes ByteArray, columns ImmortalBoxColumnArray) returns String
+		var columnLabels = StringArray.create()
+		for column in columns 'eachColumn'
+			columnLabels.push(self.ensureImmortalEmptyArrayRecord(column.elementSize, elementDestroy: column.elementDestroy))
+		end 'eachColumn'
+
+		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: self.seededBoxBytes(bytes, columns: columns, columnLabels: columnLabels), kind: RdataPayloadKind.structRecord, shape: ImmortalRecordShape.userStruct, debugStream: self.debugStream)
+		if self.emittedImmortalStructBoxes.contains(label) 'alreadyRelocated'
+			return label
+		end 'alreadyRelocated'
+
+		self.emittedImmortalStructBoxes.insert(label)
+		for i in 0 upto columns.count() 'eachSlot'
+			let column = try columns.get(i) otherwise panic("ensureImmortalStructRecord: columns.get OOB at {i} below count {columns.count()}")
+			self.globalData.recordRdataAbs64InRdata(try columnLabels.get(i) otherwise panic("ensureImmortalStructRecord: columnLabels.get OOB at {i} — the loop above pushed one label per column"), rdataLabel: label, offsetInLabel: column.offset)
+		end 'eachSlot'
+
+		return label
+	end 'ensureImmortalStructRecord'
+
+	// The box with each pointer slot SEEDED with its column's `.rdata` offset — a COPY, because the bytes
+	// ride the op and a lowering may reach the same op's payload again.
+	function seededBoxBytes(bytes ByteArray, columns ImmortalBoxColumnArray, columnLabels StringArray) returns ByteArray
+		if columns.count() == 0 'aBoxOfScalars'
+			return bytes
+		end 'aBoxOfScalars'
+
+		var record = bytes.clone()
+		for i in 0 upto columns.count() 'eachColumn'
+			let column = try columns.get(i) otherwise panic("seededBoxBytes: columns.get OOB at {i} below count {columns.count()}")
+			let seed = scalarImage(self.globalData.rdataOffsetOf(try columnLabels.get(i) otherwise panic("seededBoxBytes: columnLabels.get OOB at {i} — the caller pushed one label per column")) as ParsedInt, byteCount: MachineWordBytes as BytePos)
+			var at = column.offset
+			for b in seed 'eachByte'
+				try record.set(at as ElementIndex, value: b) otherwise panic("seededBoxBytes: a pointer slot at offset {column.offset} runs past a {record.count()}-byte box — the box size and the slot offsets both come from the one `StructLayout`")
+				at = at + 1
+			end 'eachByte'
+		end 'eachColumn'
+
+		return record
+	end 'seededBoxBytes'
 
 	// Lower a block terminator. A `literal` here is a parser bug (a literal is
 	// never a block terminator).
@@ -1765,6 +1835,7 @@ type MaxonToStdLowering
 				constBlob gives registerImmortalByteArrayRecord(self.globalData, elementSize: elementSize, elementCount: elementCount, bytes: bytes, debugStream: self.debugStream)
 				emptyContainer(elementDestroy) gives self.ensureImmortalEmptyArrayRecord(elementSize, elementDestroy: elementDestroy)
 				stringTable panic("lowerConstArrayLiteral: a `constArrayLiteral` site is marked as a STRING TABLE, whose payload is N separate literals this op cannot carry — `Parser.emitImageRecordRead` emits `immortalStringTable` for that shape and files no mark")
+				containerBox panic("lowerConstArrayLiteral: a `constArrayLiteral` site is marked as a CONTAINER BOX, which is a struct box and not a `__ManagedMemory` record — `Parser.emitImageRecordRead` emits `immortalStructRecord` for that shape and files no mark")
 			end 'shape'
 			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
 			return

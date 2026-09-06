@@ -310,12 +310,6 @@ let sharedEmptyGuardChainBase = BlockOpPosArray.create()
 // exactly as the two columns above are.
 let sharedEmptyGuardChainSource = PreSplitOpsByBlock.create()
 
-// The `writtenNegativeLiterals` an emitter starts with, before `run` swaps in the function's own — shared
-// and read-only for `sharedEmptyGuardChainTail`'s reason: an emitter is built for every function carrying
-// ANY range-check side data, and a `ValueMarkSet.create()` in `create` would be one allocation per such
-// function for a set that is replaced one line into `run`.
-let sharedEmptyWrittenNegatives = ValueMarkSet.create()
-
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
 type RangeCheckEmitter
@@ -335,7 +329,7 @@ type RangeCheckEmitter
 	// `0xFFFFFFFFFFFFFFFE` are the same 64 bits. Handed over by the parser on `FunctionRangeChecks` and
 	// stashed in `run` beside `collectConsts`, for the same reason: `needsRuntimeGuard` asks it per value
 	// and does not otherwise hold the function's checks. See `Parser.writtenNegativeLiterals`.
-	var writtenNegativeLiterals as ValueMarkSet
+	var writtenNegativeLiterals as ValueMarkColumn
 	// Where each of this function's blocks currently ENDS — a blockRef index (+1, `buildBlockIdIndex`'s
 	// sentinel encoding) per block id. It starts as the plain block-id => blockRef index (every block is
 	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
@@ -365,7 +359,7 @@ type RangeCheckEmitter
 	var guardChainSource as PreSplitOpsByBlock
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: sharedEmptyWrittenNegatives, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -828,7 +822,7 @@ type RangeCheckEmitter
 		let literals = self.floatConsts if isFloat else self.intConsts
 		if literals.contains(value) 'literal'
 			let v = literals.constantOf(value)
-			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: self.writtenNegativeLiterals.contains(value)) 'outOfRange'
+			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: valueIsMarked(self.writtenNegativeLiterals, value: value)) 'outOfRange'
 				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high, isFloat: isFloat), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 			return false

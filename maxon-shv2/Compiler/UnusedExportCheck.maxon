@@ -609,18 +609,27 @@ function collectFileTypeReferences(project Project, signatures ProgramSignatures
 	for path in userFiles 'eachFile'
 		let artifact = try queryParseOps(project, path: path)
 		let readerModuleDirectory = signatures.moduleDirectoryOf(path)
-		noteEveryTypeName(signatures, tracked: tracked, names: artifact.usedTypeNames, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
-		noteEveryTypeName(signatures, tracked: tracked, names: artifact.memberAccessedTypeNames, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
+		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.usedTypeNames, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
+		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.memberAccessedTypeNames, readerFilePath: path, readerModuleDirectory: readerModuleDirectory)
 	end 'eachFile'
 end 'collectFileTypeReferences'
 
 // Both of a file's recorded name sets are credited the same way — the two differ in what they MEAN, not in
 // what a reference to one of their names does, so the crediting is written once.
-function noteEveryTypeName(signatures ProgramSignatures, tracked TrackedDecls, names UsedTypeNameSet, readerFilePath FilePath, readerModuleDirectory String)
+// A walk that recorded nothing has no roster to walk — a `match` arm may not open a `for`, so the state is
+// unwrapped here and the loop stays one function down.
+function noteEveryTypeName(signatures ProgramSignatures, tracked TrackedDecls, roster UsedTypeNameRoster, readerFilePath FilePath, readerModuleDirectory String)
+	match roster 'walk'
+		unwritten then break 'walk'
+		entries(names) then noteEachTypeName(signatures, tracked: tracked, names: names, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+	end 'walk'
+end 'noteEveryTypeName'
+
+function noteEachTypeName(signatures ProgramSignatures, tracked TrackedDecls, names UsedTypeNameSet, readerFilePath FilePath, readerModuleDirectory String)
 	for name in names 'eachName'
 		noteTypeName(signatures, tracked: tracked, name: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'eachName'
-end 'noteEveryTypeName'
+end 'noteEachTypeName'
 
 // v1's `crossFileConstReads`, in shv2's spelling — see `ProgramSignatures.notedConstantValue` for why an
 // inlined constant cannot be found in the IR at all.

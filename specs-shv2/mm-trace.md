@@ -317,3 +317,48 @@ end 'main'
 ```
 ```mm-trace
 ```
+
+<!-- test: module-let-empty-map-and-set-cost-no-allocation -->
+An empty `Map` and an empty `Set` at module scope are constants, and must cost nothing. The golden is EMPTY.
+
+⭐ **THIS IS THE SHAPE WHOSE COST IS NOT ITS OWN RECORD.** `Map.create()` is `return Self{}` — as trivial as
+a factory gets — but a `Map` is a struct whose four container fields carry DEFAULTS, so constructing one
+builds four empty column arrays and then the struct that points at them. A `Set` builds three and its own.
+Measured, for the two globals below:
+
+    mm_alloc ArrayRecord #1 size=48      keys
+    mm_alloc ArrayRecord #2 size=48      values
+    mm_alloc ArrayRecord #3 size=48      states
+    mm_alloc ArrayRecord #4 size=48      hashes
+    mm_alloc Map #5 size=48
+    mm_alloc ArrayRecord #6 size=48
+    mm_alloc ArrayRecord #7 size=48
+    mm_alloc ArrayRecord #8 size=48
+    mm_alloc Set #9 size=40
+
+**Nine records, freed nine times, in a program that reads two counts.** The compiler's own source declares
+22 such maps and 18 such sets, so this shape alone is 182 allocations before `main` and 182 frees after it.
+
+⚠ **Nothing here is a new mechanism; it is the first shape that needs three of them at once.** The mark
+cannot live in the record (a `Map`'s offset 16 is a field, not a capacity) so it needs the header. The
+struct's four slots address other image objects, so it needs the absolute data-to-data relocation. And the
+bytes are not in the source the way a literal's are — `Self{}` names four factory calls — so the compiler
+has to EVALUATE the construction rather than transcribe it. The first two shipped; this pins the third.
+<!-- MmTrace -->
+```maxon
+typealias Key = int(0 to 1000)
+typealias KeyMap = Map with (Key, Key)
+typealias KeySet = Set with Key
+
+let Empty = KeyMap.create()
+let Seen = KeySet.create()
+
+function main() returns ExitCode
+	return (Empty.count() as ExitCode) + (Seen.count() as ExitCode)
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+```

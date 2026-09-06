@@ -340,6 +340,10 @@ export let MmRetainName = b"__mm_retain"
 // ⭐⭐ **`__mm_own(box) -> box` — the co-own a DURABLE SINK owes a plain box: `__mm_retain` for a heap one
 // and a private COPY for an image record.** See `buildMmOwn` for the defect the plain incref was.
 export let MmOwnName = b"__mm_own"
+
+// ⭐⭐ **`__mm_own_deep(box, cloner) -> box` — the co-own a DURABLE SINK owes a box whose SLOTS address
+// other records.** `__mm_own`'s blit is sound only for a box of scalars; see `buildMmOwnDeep`.
+export let MmOwnDeepName = b"__mm_own_deep"
 export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
@@ -794,6 +798,9 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesMmOwn 'own'
 		buildMmOwn(module)
 	end 'own'
+	if usage.usesMmOwnDeep 'ownDeep'
+		buildMmOwnDeep(module)
+	end 'ownDeep'
 	if usage.usesMmIsNull 'isNull'
 		buildMmIsNull(module)
 	end 'isNull'
@@ -2012,6 +2019,51 @@ function buildMmOwn(module StdModule)
 
 	module.functions.push(func)
 end 'buildMmOwn'
+
+// ⭐⭐⭐ **`__mm_own_deep(box, cloner) -> box` — `__mm_own` FOR A BOX WHOSE SLOTS ADDRESS OTHER RECORDS.**
+// A declared generic's container (`Map`, `Set`, and every base written the way they are) is such a box: an
+// empty one is image data (`ProgramSignatures.declaredContainerBoxIsImageData`), its slots hold the imaged
+// empty column arrays, and a durable sink holding it writes a read-only page at the first `upsert` — a
+// fault on x64 and, on wasm32-wasi, which has no read-only section, a silent rewrite of the constant that
+// only the leak gate catches.
+//
+// ⛔⛔ **`__mm_own`'S BLIT CANNOT SERVE IT, ON BOTH HALVES.** That copy is sound only where every field of
+// the imaged box is a scalar, which a container box's slots are not; and a blit leaves the copy's own slots
+// addressing the `.rdata` columns, so the second owner writes the image through one more indirection. The
+// copy must therefore be the instance's OWN deep cloner, which allocates a fresh box and replaces every
+// managed slot with an independent record.
+//
+// ⚠ **THE CLONER IS AN ARGUMENT RATHER THAN A PER-INSTANCE ENTRY** for `__managed_clone_managed`'s reason
+// one tier down: the fork, the count and the routing are one body over every instance, and only the
+// `(box) -> newBox` differs. The caller stamps it as `funcAddr(__clone_<mangled>)`, which is what roots the
+// synthesis (`RuntimeUsage.recordFunctionRefUsage`).
+//
+// ⚠ **AND THE FORK IS AT RUN TIME BECAUSE PROVENANCE IS NOT A COMPILE-TIME FACT** — a merge phi may join an
+// imaged box with a heap one, exactly as `buildMmOwn`'s header records for the scalar-struct half.
+function buildMmOwnDeep(module StdModule)
+	var func = IrFunction.createFromStd(MmOwnDeepName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var cloned = module.addBlock(func, label: b"cloned")
+	var counted = module.addBlock(func, label: b"counted")
+
+	emitParams(module, block: entry, count: 2)
+	let box = 0 as ValueId
+	let cloner = 1 as ValueId
+
+	emitRouteAwayFromImmortalBox(module, block: entry, ptr: box, immortal: cloned, counted: counted, ids: ids)
+
+	let fresh = ids.mint()
+	module.appendOp(cloned, op: StdOp.callIndirect(fresh, calleeReg: cloner, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(box)))
+	module.setTerminator(cloned, op: StdOp.ret(fresh))
+
+	let priorCount = emitAdjustRefcount(module, block: counted, ptr: box, delta: OneMore, ids: ids)
+	var out = emitMmIncrefEvent(module, func: func, block: counted, ptr: box, priorCount: priorCount, ids: ids)
+	module.setTerminator(out, op: StdOp.ret(box))
+
+	module.functions.push(func)
+end 'buildMmOwnDeep'
 
 // ⭐⭐ **`__mm_sole_box(box)` — PROVE THIS BOX HAS ONE OWNER, OR ABORT.** The leaf of the soleness walk:
 // `emitIsSharedAllocation` owns what the count means (`owners - 1`, so sole is 0), so this reads literally

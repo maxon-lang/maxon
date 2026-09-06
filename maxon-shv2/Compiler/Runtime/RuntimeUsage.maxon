@@ -199,6 +199,11 @@ export type RuntimeUsage
 	// have independent callers, and folding either into the other would install an unreachable copy of the
 	// unused one.
 	export var usesMmOwn as bool
+	// ⭐⭐ Does the program hand a DECLARED GENERIC's container box to a durable sink? — the bit behind
+	// `__mm_own_deep`, whose immortal arm calls the instance's own cloner where `__mm_own`'s blits. Its OWN
+	// bit for the reason the one above states: a program that co-owns only plain boxes must not carry the
+	// deep entry, and one that co-owns only container boxes must not carry the blitting one.
+	export var usesMmOwnDeep as bool
 	// ⭐ The program declares at least one MANAGED top-level `var` (P1.7 slice 2a), so it carries
 	// `__module_init` + `__maxon_global_cleanup` and every entry stub calls them around `main`. Set NOT by
 	// this Maxon-module scan but by `installManagedGlobalInit`, which is where the decision is made — the
@@ -537,7 +542,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesFaultProbe: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesDebugStream: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesFaultProbe: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesDebugStream: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -984,6 +989,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesStrCopy = true
 		usage.usesHeap = true
 	end 'own'
+	// A `__mm_own_deep` the PARSER emitted (a declared generic's container box co-owned into storage that
+	// outlives the statement). It needs no `usesStrCopy`: its copy arm `callIndirect`s the cloner the SECOND
+	// argument names, and that `funcAddr` declares the cloner's own transitive needs at its own site.
+	if callee.equals(MmOwnDeepName) 'ownDeep'
+		usage.usesMmOwnDeep = true
+		usage.usesHeap = true
+	end 'ownDeep'
 	// ⛔ **`__mbox_handle_retain_box` INCREFS THE HANDLE BOX INSIDE ITS OWN Std BODY**
 	// (`MailboxRuntime.buildMboxHandleRetainBox`), which this Maxon-module scan cannot see — the shape the
 	// list arm below carries. MEASURED as a compiler PANIC and not a miscompile: a service handle co-owned

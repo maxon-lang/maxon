@@ -285,6 +285,12 @@ let FieldShapeDefaulted = 19 as HashDigest
 // must hash differently from both. It rides ALONE — see `mixFieldDefault` for why the expression must not.
 let FieldShapeDefaultHelper = 75 as HashDigest
 
+// ⭐ A field whose default is a bare `<Type>.create()` (`FieldDefault.bareCreateHelper`) — a FOURTH constant
+// beside the three above, and the only one whose EXPRESSION a reader in another file depends on: the empty
+// container that call builds is laid down as bytes, so an edit between `IntArray.create()` and
+// `IntArray.withCapacity(4)` changes what every reader emits and must move every reader's memo.
+let FieldShapeDefaultBareCreate = 115 as HashDigest
+
 // ⭐ Whether a LITERAL default's number was written with a leading minus — two constants beside the pair
 // above for their exact reason, one step further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the same kind
 // of negative `ParsedInt` and accept different programs (the first is E3005 in an `int(0 to u64.max)` field
@@ -953,10 +959,79 @@ end 'ConstArrayElement'
 
 export typealias ConstArrayElementArray = Array with ConstArrayElement
 
+// ⭐⭐⭐ **"NOTHING IS CONTESTED" IS A SPELLED STATE, NOT A SHARED EMPTY CONTAINER** — `Parser`'s columns
+// one index over, and here for the same reason: a test against a shared empty asks whether a field holds
+// one particular record, and a module-level `let` container is image data a durable sink may duplicate.
+//
+// ⚠ A `ProgramSignatures` is built ONCE per compile, so what the spelled state buys here is the removed
+// dependence rather than an allocation.
+union GenericAliasContestTable
+	unwritten
+	entries(byName ContestedGenericAliasMap)
+end 'GenericAliasContestTable'
+
+let noGenericAliasContests = GenericAliasContestTable.unwritten
+
+// The alias names a SECOND declaration disagrees with — `settleGenericAliasContest`'s gate.
+union DisagreeingAliasNameRoster
+	unwritten
+	entries(names DisagreeingAliasNameSet)
+end 'DisagreeingAliasNameRoster'
+
+let noDisagreeingAliasNames = DisagreeingAliasNameRoster.unwritten
+
+// The names several KINDS of declaration hold at once.
+union CrossKindContestTable
+	unwritten
+	entries(byName CrossKindContestMap)
+end 'CrossKindContestTable'
+
+let noCrossKindContests = CrossKindContestTable.unwritten
+
+// The nameable instance each contested alias carries — written in lockstep with the contest table above,
+// which is why the two install together at the one door that records a contest.
+union NameableGenericAliasTable
+	unwritten
+	entries(byName NameableGenericAliasMap)
+end 'NameableGenericAliasTable'
+
+let noNameableGenericAliases = NameableGenericAliasTable.unwritten
+
 // The element list every EMPTY container global carries — one shared array, never mutated, for the reason
 // every other `sharedEmpty*` in this compiler exists: a `var g = IntArray.create()` allocates nothing to say
 // it has no elements, and `ItemArray.create()` is the commonest managed global in the corpus.
 export let sharedEmptyConstArrayElements = ConstArrayElementArray.create()
+
+// The column list an imaged box of SCALARS carries — one shared array, never mutated, for
+// `sharedEmptyConstArrayElements`' reason: a struct of scalars addresses no other image object, and it is
+// the commoner of the two shapes the one struct-record op serves.
+export let sharedEmptyImmortalBoxColumns = ImmortalBoxColumnArray.create()
+
+// The `element_size@24` an imaged struct BOX carries, which is none: a box is not a `__ManagedMemory`
+// record and has no elements to stride over. Named rather than a bare 0 because 0 IS a live stride in the
+// other direction — `__managed_create` aborts on one (`RuntimeAbort.arrayElementSizeZero`).
+let NoImmortalBoxStride = 0 as ElementStride
+
+// ⭐⭐ **WHAT ONE SLOT OF AN EMPTY DECLARED CONTAINER'S BOX HOLDS.** Its own union rather than a bool
+// because the two admitted answers are laid down by different mechanisms and at different tiers: a scalar's
+// bytes go straight into the box here, while a column is a SECOND image object the lowering registers and
+// then addresses by relocation — so the caller that builds the image needs to know which, and the caller
+// that merely decides admissibility needs only that it is one of them.
+union ContainerBoxSlot
+	scalar(field GlobalStructField)
+	column(slot ImmortalBoxColumn)
+	notImageable
+end 'ContainerBoxSlot'
+
+// The contested names, in table order — a `match` arm may not open a `for`, so the walk is its own function.
+function keysOfCrossKindContests(byName CrossKindContestMap) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	for (name, _) in byName 'eachContestedName'
+		names.push(name)
+	end 'eachContestedName'
+
+	return names
+end 'keysOfCrossKindContests'
 
 // ⭐ **DOES A FOLDED MEMBER FIT A SET'S DECLARED KEY TYPE?** The folding twin of the member argument
 // `Parser.parseSetMemberList` parses,
@@ -7414,20 +7489,11 @@ typealias GenericAliasSpellingBitsMap = Map with (GenericInstanceId, DeclaredSur
 // instance, every mangled symbol and every committed golden where it was.
 typealias ContestedGenericAliasMap = Map with (ByteArray, GenericAliasByDeclaringFile)
 
-// ⭐ THE ONE EMPTY contest map every index is born holding — so a program with no contested generic alias,
-// which is every program in the corpus, allocates NO index for a question whose answer is "none". The
-// discipline `sharedEmptyRangeContests` established, for its reason: copy-on-write off this handle at the
-// single writer (`settleGenericAliasContest`); NEVER mutated.
-let sharedEmptyGenericAliasContests = ContestedGenericAliasMap.create()
-
 // A contested generic-alias name ⇒ the instance a declaration NAMEABLE FROM ANYWHERE gives it, last-wins
 // (N3). Tier 2 of `ProgramSignatures.scopedGenericAliasInstance`, and the exact twin of
 // `RangedAliasRegistry.nameable`: a file that declares none of a contested name must resolve to a
 // declaration it may actually WRITE DOWN, never to whichever file-private one folded last.
 typealias NameableGenericAliasMap = Map with (ByteArray, GenericInstanceId)
-
-// The shared empty twin of the above, for the same reason and written by the same single writer.
-let sharedEmptyNameableGenericAliases = NameableGenericAliasMap.create()
 
 // The generic-alias names ONE ROUND of the contest found declarations disagreeing about — the first pass's
 // whole output, and the filter its second pass builds groups through. It is a name SET and not a group map
@@ -7439,10 +7505,6 @@ let sharedEmptyNameableGenericAliases = NameableGenericAliasMap.create()
 // answer narrowing the same walk, and the outer one is what makes the whole contest free: a name only ONE
 // declaration mentions cannot disagree with anything, whatever any scoping does to it.
 typealias DisagreeingAliasNameSet = Set with ByteArray
-
-// ⭐ THE ONE EMPTY set both of those start from — copy-on-write at their single `insert` sites, following
-// `sharedEmptyRangeContests` and its family. NEVER mutated.
-let sharedEmptyDisagreeingAliasNames = DisagreeingAliasNameSet.create()
 
 // ⭐ **EVERY DECLARATION OF ONE DISAGREEING GENERIC-ALIAS NAME, ACCUMULATED** — the working record the
 // contest's SECOND pass builds, and exactly what `ContestedGenericAliasMap` and `NameableGenericAliasMap`
@@ -7680,12 +7742,6 @@ function everyClaimMayCoexist(claims TypeNameClaimArray) returns bool
 
 	return not (userNominals > 0 and userAliases > 0)
 end 'everyClaimMayCoexist'
-
-// ⭐ THE ONE EMPTY cross-kind table every index is born holding — so a program in which each type name is
-// held by one kind of declaration, which is every program in the corpus, allocates NO index for a question
-// whose answer is "none". The discipline `sharedEmptyGenericAliasContests` established, for its reason:
-// copy-on-write off this handle at the single writer (`noteCrossKindContest`); NEVER mutated.
-let sharedEmptyCrossKindContests = CrossKindContestMap.create()
 
 // ⭐ HOW NEAR ONE DECLARATION IS TO THE FILE READING IT — the four tiers of
 // `ProgramSignatures.contestedTypeNameKindFor`, as a rank so the cascade is ONE classification per claim
@@ -8504,6 +8560,11 @@ export typealias DescriptorNeedNameSet = Set with ByteArray
 // `sharedEmptyWhereConstraints`' reason: the whole scale corpus declares no generic type, and one allocation
 // per compile for an answer that is always empty is exactly the linear regression `typeDescriptorNeeds`'
 // own header refused.
+// ⚠ **A SHARED EMPTY THAT STAYS ONE, WHERE THE MEMO COLUMNS BECAME SPELLED STATES.** Nothing tests its
+// identity: `recordDescriptorNeeds` REPLACES the field wholesale and every reader asks `contains`/`count`,
+// so there is no state inferred from which record a field holds and nothing to retire. A
+// `ProgramSignatures` is built once per compile, so the two fields seeded from it hold two clones for the
+// whole run.
 let sharedEmptyDescriptorNeeds = DescriptorNeedNameSet.create()
 
 // The `uses` list an UNDECLARED name answers with — none, shared, for `sharedEmptyDescriptorNeeds`' reason.
@@ -9503,8 +9564,8 @@ export type ProgramSignatures
 	// spelling it saw and the real parse the canonical one, exactly as every other tuple name does.
 	var tupleAliases as DeclaredTupleAliasMap
 	// ⭐ Which type names more than one KIND of declaration holds — see `settleCrossKindContests`, its one
-	// writer. Born as the shared empty, which is where it stays for every program in the corpus.
-	var crossKindContests as CrossKindContestMap
+	// writer. Born `unwritten`, which is where it stays for every program in the corpus.
+	var crossKindContests as CrossKindContestTable
 	// ⭐ **DOES ANY FILE IN THE PROGRAM MATERIALIZE A `[<identifier>…]` ARRAY LITERAL?** (P1.7 slice 3.) Set
 	// by the sweep, read ONCE by `queryProgramSignatures` after the last file folds, which is what makes
 	// `internLiteralContainerInstances` a single whole-program walk instead of a per-file one. A bool
@@ -9589,7 +9650,7 @@ export type ProgramSignatures
 	// Two files declaring `typealias Counts = Array with Count` over one `Count` intern the SAME instance, so
 	// there is nothing to choose between and nothing moves — which is the entire existing corpus, and why not
 	// one golden changes.
-	var contestedGenericAliases as ContestedGenericAliasMap
+	var contestedGenericAliases as GenericAliasContestTable
 	// ⭐⭐ **THE GENERIC-ALIAS NAMES MORE THAN ONE DECLARATION MENTIONS (N3)** — the gate that makes the whole
 	// contest cost NOTHING for a program that has none, which is every program in the corpus. A name only one
 	// declaration mentions cannot disagree with anything, so an EMPTY set here is a complete answer and
@@ -9600,7 +9661,7 @@ export type ProgramSignatures
 	// of a map already in hand rather than a second index of its own. It is `RangedAliasRegistry`'s
 	// `multiplyDeclared` invariant exactly, narrowed to the half this side needs: WHICH names, not which
 	// declarations, because the declarations are retained in `genericAliasDecls` already.
-	var multiplyDeclaredGenericAliases as DisagreeingAliasNameSet
+	var multiplyDeclaredGenericAliases as DisagreeingAliasNameRoster
 	// ⛔⛔ **THE DECLARATION THE CONTEST FIXPOINT GAVE UP ON, OR `none` (N3 review).** A round mints a contested
 	// argument a spelling derived from that argument's instance, so each round adds one nesting level — which
 	// converges on an acyclic declaration graph, whose nesting is bounded by its depth, and never converges on
@@ -9615,7 +9676,7 @@ export type ProgramSignatures
 	var divergedGenericAliasDecl as AliasCycleResult
 	// Tier 2 of the same lookup — see `NameableGenericAliasMap`. Written by the same single writer, over the
 	// same declarations, so the two indexes cannot come to disagree about which declarations exist.
-	var nameableGenericAliases as NameableGenericAliasMap
+	var nameableGenericAliases as NameableGenericAliasTable
 	// ⭐ Every `typealias X = Base with Args` INSTANTIATION SITE (P1.7a slice 2a), with its source anchor — the
 	// list the where-constraint check (E3017) walks to validate each concrete argument conforms to the
 	// interface its type parameter is constrained to. A LIST, not a map: an instance may be named by several
@@ -10449,7 +10510,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -11950,7 +12011,7 @@ export type ProgramSignatures
 	// spelling — which is `scopedGenericAliasInstance`'s own discipline and matters for the same reason: this
 	// is asked of every identifier written in a type position.
 	function readerScopedAliasName(name ByteArray, readerFilePath FilePath) returns ByteArray
-		if not self.contestedGenericAliases.contains(name) 'oneDeclarationOfThisNameOrNone'
+		if not self.genericAliasSpellingIsSuperseded(name) 'oneDeclarationOfThisNameOrNone'
 			return name
 		end 'oneDeclarationOfThisNameOrNone'
 
@@ -13306,10 +13367,8 @@ export type ProgramSignatures
 		// two declarations mention is the only kind that can ever be contested, so this is what lets
 		// `settleGenericAliasContest` cost nothing at all for a program with none.
 		if self.genericAliases.contains(entry.aliasName) 'anotherDeclarationAlreadyMentionsThisName'
-			if self.multiplyDeclaredGenericAliases is sharedEmptyDisagreeingAliasNames 'stillShared'
-				self.multiplyDeclaredGenericAliases = DisagreeingAliasNameSet.create()
-			end 'stillShared'
-			self.multiplyDeclaredGenericAliases.insert(entry.aliasName)
+			var names = self.disagreeingAliasNamesForWrite()
+			names.insert(entry.aliasName)
 		end 'anotherDeclarationAlreadyMentionsThisName'
 
 		self.genericAliases.upsert(entry.aliasName, value: giid)
@@ -13644,6 +13703,7 @@ export type ProgramSignatures
 			none gives Hasher.combined(state, value: FieldShapeNoDefault)
 			literal(payload, tag, writtenNegative) gives self.mixDefaultLiteral(state, payload: payload, tag: tag, writtenNegative: writtenNegative)
 			helper gives Hasher.combined(state, value: FieldShapeDefaultHelper)
+			bareCreateHelper gives Hasher.combined(state, value: FieldShapeDefaultBareCreate)
 		end 'shape'
 	end 'mixFieldDefault'
 
@@ -14846,17 +14906,251 @@ export type ProgramSignatures
 	// ['a', 'e']` global's record is built by `create` then one insert per member, and nothing here can
 	// reproduce the table those inserts land in.
 	//
-	// ⛔ **AND AN `Array with T`, because the immortality mark lives at `capacity@16`.** Every runtime entry
-	// that must decline to count, free or detach an imaged record reads that one slot
-	// (`BufferOwnership.emitRecordIsImmortal`); a `Map`/`Set`/`Vector` is a declared generic whose box has an
-	// arbitrary field there, so an imaged one would be indistinguishable from an ordinary heap box.
+	// ⭐ **THE TWO SHAPES ARE MARKED DIFFERENTLY, WHICH IS WHY THE ANSWER FORKS ON THE INSTANCE.** An
+	// `Array with T`'s immortality is a sentinel in its own `capacity@16`, the slot every runtime entry that
+	// must decline to count, free or detach an imaged record reads (`BufferOwnership.emitRecordIsImmortal`).
+	// A declared generic's box has an author-declared field at that offset, so its mark lives in the
+	// allocation header instead and the whole box has to be described slot by slot.
 	function emptyContainerIsImageData(giid GenericInstanceId, elements ConstArrayElementArray) returns bool
 		if elements.count() > 0 'filled'
 			return false
 		end 'filled'
 
-		return self.isArrayInstance(giid)
+		if self.isArrayInstance(giid) 'aManagedRecord'
+			return true
+		end 'aManagedRecord'
+
+		return self.declaredContainerBoxIsImageData(giid)
 	end 'emptyContainerIsImageData'
+
+	// ⭐⭐⭐ **CAN A DECLARED CONTAINER'S WHOLE BOX BE LAID DOWN AS BYTES — `Map`, `Set`, and every generic
+	// written the way they are?** The `Array` shape one tier out, and the first whose value is not in the
+	// source at all: `Map.create()` is `return Self{}`, so the record it builds is four empty column arrays
+	// and a struct pointing at them, and nothing about it can be TRANSCRIBED. It has to be EVALUATED, from
+	// the declaration the shared body itself is compiled from.
+	//
+	// ⛔⛔ **THE FACTORY'S BODY MUST BE NOTHING BUT `Self{}`, AND THAT IS THE WHOLE OF WHAT MAKES THE
+	// EVALUATION HONEST.** `functionConstructsFromParams` is the sweep's proof that the body is one `return`
+	// of a record literal over its own parameters and nothing else (`Parser.noteConstructsFromParams`), and a
+	// NULLARY one is `Self{}` exactly. A `create()` that computes — that sizes a table, that reads a clock —
+	// answers false there, and the global is built before `main` as it always was.
+	//
+	// ⛔ **AND THE INSTANCE MUST BE CONCRETE.** Every column's destructor is read off THIS instance's own
+	// arguments, so an instance still standing at a type parameter has no answer to give.
+	export function declaredContainerBoxIsImageData(giid GenericInstanceId) returns bool
+		// ⚡ **THE TWO ALLOCATION-FREE REFUSALS COME FIRST, BECAUSE THIS IS ASKED AT EVERY CONTAINER CO-OWN
+		// SITE.** An `Array` is the commonest instance in the language and is marked at `capacity@16` rather
+		// than in the header (`emptyContainerIsImageData`), so it belongs to the other fork entirely; a
+		// layout-less instance has no box to describe. Both answers are map probes, where the arms below
+		// build a qualified method name and walk the base's fields.
+		if self.isArrayInstance(giid) or not self.genericInstanceHasBaseLayout(giid) 'notADeclaredContainersBox'
+			return false
+		end 'notADeclaredContainersBox'
+
+		if self.instanceMentionsTypeParameter(giid) 'notConcrete'
+			return false
+		end 'notConcrete'
+
+		let create = qualifiedMethodName(self.genericInstanceBaseName(giid), methodName: CreateMethod)
+		if not self.functionConstructsFromParams(create) 'createComputes'
+			return false
+		end 'createComputes'
+
+		match self.constFactoryConstructionOf(create) 'known'
+			unfoldable then return false
+			folds(layout, paramNames) then return paramNames.count() == 0 and self.everyContainerSlotIsImageData(giid, layout: layout)
+		end 'known'
+	end 'declaredContainerBoxIsImageData'
+
+	// The walk behind the verdict above — split out because a `match` arm may not open a `for`. The box-size
+	// agreement is checked here because the image is sized from the INSTANCE and its slots offset from the
+	// LAYOUT: a disagreement would place a column past the end of the box it belongs to.
+	function everyContainerSlotIsImageData(giid GenericInstanceId, layout StructLayout) returns bool
+		if layout.sizeBytes() != self.genericInstanceBoxSize(giid) 'boxDisagrees'
+			return false
+		end 'boxDisagrees'
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			// Spelled arm by arm rather than as a range: a case appended to `ContainerBoxSlot` must be
+			// classified here rather than swallowed by a range whose text does not move with it.
+			let laysDownAsBytes = match self.containerBoxSlot(giid, layout: layout, index: i) 'slot'
+				scalar gives true
+				column gives true
+				notImageable gives false
+			end 'slot'
+
+			if not laysDownAsBytes 'notBytes'
+				return false
+			end 'notBytes'
+		end 'eachField'
+
+		return true
+	end 'everyContainerSlotIsImageData'
+
+	// ⭐⭐ **WHAT ONE SLOT OF AN EMPTY DECLARED CONTAINER HOLDS — THE ONE DECIDER, asked by the verdict above
+	// and by the builder below**, so a box admitted as bytes and a box laid down as bytes cannot be described
+	// by two readings of one declaration.
+	//
+	// ⛔ **ONLY A DECLARED DEFAULT CAN ANSWER, BECAUSE `Self{}` WRITES NOTHING.** A slot with no default is
+	// E3086 at the factory itself, and a slot filled by an arbitrary expression is produced by RUNNING CODE,
+	// so neither has bytes to lay down.
+	function containerBoxSlot(giid GenericInstanceId, layout StructLayout, index FieldIndex) returns ContainerBoxSlot
+		match layout.fieldDefault(index) 'declared'
+			none then return ContainerBoxSlot.notImageable
+			literal(payload, tag, writtenNegative) then return self.containerBoxScalarSlot(layout, index: index, payload: payload, tag: tag, writtenNegative: writtenNegative)
+			helper then return ContainerBoxSlot.notImageable
+			bareCreateHelper then return self.containerBoxColumnSlot(giid, layout: layout, index: index)
+		end 'declared'
+	end 'containerBoxSlot'
+
+	// A LITERAL default's slot. Only an INTEGRAL literal into an INTEGRAL slot is admitted: a float default's
+	// payload is widened where a construction is folded (`Parser.requireConstFieldValueFits`), and this door
+	// has no construction to widen against — laying its raw `ParsedInt` down would write an integer's bits
+	// where the slot holds a double.
+	function containerBoxScalarSlot(layout StructLayout, index FieldIndex, payload ParsedInt, tag ValueTypeTag, writtenNegative bool) returns ContainerBoxSlot
+		if writtenNegative or not tagIsIntegral(tag) 'notAPlainIntegralLiteral'
+			return ContainerBoxSlot.notImageable
+		end 'notAPlainIntegralLiteral'
+
+		let fieldType = self.fieldTypeOf(layout, index: index, into: self.typeNames)
+		if not tagIsIntegral(maxonTypeTag(fieldType)) 'notAnIntegralSlot'
+			return ContainerBoxSlot.notImageable
+		end 'notAnIntegralSlot'
+
+		return ContainerBoxSlot.scalar(GlobalStructField.create(layout.offsetOfField(index), storageType: slotStorageType(self, declared: fieldType, typeNames: self.typeNames, readerFilePath: layout.declFilePath), value: GlobalInitArgumentValue.scalar(payload), valueType: fieldType))
+	end 'containerBoxScalarSlot'
+
+	// ⭐⭐ **A COLUMN SLOT, IN THE TERMS THE SHARED BODY BUILDS IT** — which is the one thing this whole shape
+	// turns on. A generic's `create()` is compiled ONCE for every instantiation, so a column over one of the
+	// base's own type parameters is born at the fixed opaque slot width and takes its `element_destroy@40`
+	// from the caller's layout descriptor at RUN TIME (`Parser.emitOpaqueArrayCreateOp`). The image has to BE
+	// that record and not a record over the substituted argument: a `Map with (Byte, Byte)`'s key column is
+	// eight-byte-strided, and imaging it at the argument's own one-byte stride would hand the shared body a
+	// record it indexes by a different geometry.
+	//
+	// A CONCRETE column — a `Map`'s `states`, whose element is a declared enum — is born at its own stride
+	// with its own destructor, so it reads the two facts every other imaged empty container reads.
+	function containerBoxColumnSlot(giid GenericInstanceId, layout StructLayout, index FieldIndex) returns ContainerBoxSlot
+		let declared = self.fieldTypeOf(layout, index: index, into: self.typeNames)
+		if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'notAContainerSlot'
+			return ContainerBoxSlot.notImageable
+		end 'notAContainerSlot'
+
+		let column = genericInstanceIdOf(declared)
+		if not self.isArrayInstance(column) 'notAnArrayColumn'
+			return ContainerBoxSlot.notImageable
+		end 'notAnArrayColumn'
+
+		if not self.containerElementIsOpaque(column) 'aConcreteColumn'
+			return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), elementSize: self.arrayElementSize(column), elementDestroy: self.imageElementDestroyOf(column)))
+		end 'aConcreteColumn'
+
+		let element = self.containerElementType(column)
+		// A parameter of some OTHER declaration cannot be resolved against this instance's argument list, and
+		// a field of this layout can only name its own — refused rather than asserted, because a position read
+		// against the wrong `uses` list picks another argument's destructor.
+		if not self.opaqueTypeParamDeclaredBy(element, typeName: layout.name) 'notThisDeclarationsParameter'
+			return ContainerBoxSlot.notImageable
+		end 'notThisDeclarationsParameter'
+
+		return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES as ElementStride, elementDestroy: self.typeParamDropCallee(giid, position: self.opaqueTypeParamPosition(element))))
+	end 'containerBoxColumnSlot'
+
+	// ⭐ **THE CONTEST COLUMNS' READ AND INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is
+	// ONE statement (E3019 at the bootstrap oracle), so a table cannot be written in the arm that reads it:
+	// each install door answers the table and the caller writes through a `var` alias.
+
+	// The claims recorded against a cross-kind contested `name`.
+	function crossKindClaimsOf(name ByteArray) returns TypeNameClaimArray throws MapError
+		match self.crossKindContests 'index'
+			unwritten then throw MapError.keyNotFound
+			entries(byName) then return try byName.get(name)
+		end 'index'
+	end 'crossKindClaimsOf'
+
+	function crossKindContestsForWrite() returns CrossKindContestMap
+		match self.crossKindContests 'state'
+			unwritten then break 'state'
+			entries(byName) then return byName
+		end 'state'
+
+		let fresh = CrossKindContestMap.create()
+		self.crossKindContests = CrossKindContestTable.entries(fresh)
+		return fresh
+	end 'crossKindContestsForWrite'
+
+	// Is ANY generic alias name contested? The gate two whole-program settles open with.
+	function anyGenericAliasNameContested() returns bool
+		match self.contestedGenericAliases 'index'
+			unwritten then return false
+			entries(byName) then return byName.count() > 0
+		end 'index'
+	end 'anyGenericAliasNameContested'
+
+	// The declaring-file group a contested alias name carries.
+	function genericAliasClaimantsOf(name ByteArray) returns GenericAliasByDeclaringFile throws MapError
+		match self.contestedGenericAliases 'index'
+			unwritten then throw MapError.keyNotFound
+			entries(byName) then return try byName.get(name)
+		end 'index'
+	end 'genericAliasClaimantsOf'
+
+	function genericAliasContestsForWrite() returns ContestedGenericAliasMap
+		match self.contestedGenericAliases 'state'
+			unwritten then break 'state'
+			entries(byName) then return byName
+		end 'state'
+
+		let fresh = ContestedGenericAliasMap.create()
+		self.contestedGenericAliases = GenericAliasContestTable.entries(fresh)
+		return fresh
+	end 'genericAliasContestsForWrite'
+
+	// Does a SECOND declaration disagree with `name`?
+	function aliasNameIsDisagreedWith(name ByteArray) returns bool
+		match self.multiplyDeclaredGenericAliases 'roster'
+			unwritten then return false
+			entries(names) then return names.contains(name)
+		end 'roster'
+	end 'aliasNameIsDisagreedWith'
+
+	// Does any name have a second declaration at all?
+	function anyAliasNameIsDisagreedWith() returns bool
+		match self.multiplyDeclaredGenericAliases 'roster'
+			unwritten then return false
+			entries(names) then return names.count() > 0
+		end 'roster'
+	end 'anyAliasNameIsDisagreedWith'
+
+	function disagreeingAliasNamesForWrite() returns DisagreeingAliasNameSet
+		match self.multiplyDeclaredGenericAliases 'state'
+			unwritten then break 'state'
+			entries(names) then return names
+		end 'state'
+
+		let fresh = DisagreeingAliasNameSet.create()
+		self.multiplyDeclaredGenericAliases = DisagreeingAliasNameRoster.entries(fresh)
+		return fresh
+	end 'disagreeingAliasNamesForWrite'
+
+	// The nameable instance recorded for a contested alias name.
+	function nameableGenericAliasOf(name ByteArray) returns GenericInstanceId throws MapError
+		match self.nameableGenericAliases 'index'
+			unwritten then throw MapError.keyNotFound
+			entries(byName) then return try byName.get(name)
+		end 'index'
+	end 'nameableGenericAliasOf'
+
+	function nameableGenericAliasesForWrite() returns NameableGenericAliasMap
+		match self.nameableGenericAliases 'state'
+			unwritten then break 'state'
+			entries(byName) then return byName
+		end 'state'
+
+		let fresh = NameableGenericAliasMap.create()
+		self.nameableGenericAliases = NameableGenericAliasTable.entries(fresh)
+		return fresh
+	end 'nameableGenericAliasesForWrite'
 
 	// Settle a decl that produced no value: it either OWNS the defect or merely inherited one.
 	function recordFailure(decl TopLevelDecl, error ConstEvalError) returns ConstEvalOutcome
@@ -16542,13 +16836,51 @@ export type ProgramSignatures
 		return TopLevelImageRecord.create(ImmortalRecordKind.constBlob, elementSize: blob.stride, elementCount: blob.elementCount, bytes: blob.bytes, valueType: valueType, brand: EmptySourceText)
 	end 'constBlobImageOf'
 
-	// An empty container's image: no payload, and the element's DESTRUCTOR, which is the one fact an empty
-	// container has that a blob does not. Nothing is ever read out of the record — its `length@8` is 0 — but
-	// everything derived FROM it inherits `element_destroy@40`, and a clone off it is exactly what a mutable
-	// sink is handed.
+	// An empty `Array with T`'s image: no payload, and the element's DESTRUCTOR, which is the one fact an
+	// empty container has that a blob does not. Nothing is ever read out of the record — its `length@8` is 0
+	// — but everything derived FROM it inherits `element_destroy@40`, and a clone off it is exactly what a
+	// mutable sink is handed.
+	//
+	// A DECLARED generic's container is a struct box over columns of this very shape, and forks away here for
+	// `emptyContainerIsImageData`'s reason — the two are marked at different offsets.
 	function emptyContainerImageOf(giid GenericInstanceId, valueType MaxonType, brand ByteArray) returns TopLevelImageRecord
+		if not self.isArrayInstance(giid) 'aDeclaredContainersBox'
+			return self.declaredContainerBoxImageOf(giid, valueType: valueType, brand: brand)
+		end 'aDeclaredContainersBox'
+
 		return TopLevelImageRecord.create(ImmortalRecordKind.emptyContainer(self.imageElementDestroyOf(giid)), elementSize: self.arrayElementSize(giid), elementCount: 0, bytes: EmptySourceText, valueType: valueType, brand: brand)
 	end 'emptyContainerImageOf'
+
+	// ⭐⭐ **THE BOX AN EMPTY `Map`/`Set` `let` IS — built through `containerBoxSlot`, the very decider that
+	// admitted it**, so a slot cannot be judged one way and laid down another. The scalars are written into
+	// the box here; the columns are named for the lowering, which is the only tier that can address one
+	// image object from inside another.
+	//
+	// The refusal is an invariant break rather than a reachable case: only a box every slot of which that
+	// decider admitted reaches this door (`declaredContainerBoxIsImageData`).
+	function declaredContainerBoxImageOf(giid GenericInstanceId, valueType MaxonType, brand ByteArray) returns TopLevelImageRecord
+		let layout = self.containerBoxLayoutOf(giid)
+		var scalars = GlobalStructFieldArray.create()
+		var columns = ImmortalBoxColumnArray.create()
+		for i in 0 upto layout.fieldCount() 'eachField'
+			match self.containerBoxSlot(giid, layout: layout, index: i) 'slot'
+				scalar(field) then scalars.push(field)
+				column(entry) then columns.push(entry)
+				notImageable then panic("ProgramSignatures.declaredContainerBoxImageOf: field {i} of `type {String.from(layout.name)}` lays down as no bytes, in a box `declaredContainerBoxIsImageData` admitted — that predicate is the one thing that decides imaging and it walks these very slots")
+			end 'slot'
+		end 'eachField'
+
+		return TopLevelImageRecord.create(ImmortalRecordKind.containerBox(columns), elementSize: NoImmortalBoxStride, elementCount: 0, bytes: structBoxImageBytes(self.genericInstanceBoxSize(giid), fields: scalars), valueType: valueType, brand: brand)
+	end 'declaredContainerBoxImageOf'
+
+	// The base layout an imaged container's box is described by — read back through the SAME door the
+	// admission read it through, so the fold's proof and the image's field walk cannot be about two layouts.
+	function containerBoxLayoutOf(giid GenericInstanceId) returns StructLayout
+		match self.constFactoryConstructionOf(qualifiedMethodName(self.genericInstanceBaseName(giid), methodName: CreateMethod)) 'known'
+			folds(layout, _) then return layout
+			unfoldable then panic("ProgramSignatures.containerBoxLayoutOf: generic instance {giid} is imaged but its base declares no foldable `{String.from(CreateMethod)}` — `declaredContainerBoxIsImageData` answers false for exactly that, and it is the one thing that decides imaging")
+		end 'known'
+	end 'containerBoxLayoutOf'
 
 	// The element drop callee an imaged empty container names, or EMPTY when the element owns nothing. It
 	// reads `columnDestroyStamp` — the one decider of which columns own what — rather than asking
@@ -17115,8 +17447,8 @@ export type ProgramSignatures
 		// ⭐⭐ **THE CROSS-FORM HALF FIRST, because the ranged registry cannot see it.** Two files that
 		// export one name in two different FORMS are contested in NEITHER registry's own multi-declaration
 		// index — each holds one declaration — while a bare reference from a third file could mean either.
-		// One `Map.contains` on a map that is empty in every program that contests nothing.
-		if self.crossKindContests.contains(name) 'severalKindsHoldTheName'
+		// One column read, unwritten in every program that contests nothing.
+		if self.crossKindContested(name) 'severalKindsHoldTheName'
 			return self.crossKindAmbiguousCandidates(name, readerFilePath: readerFilePath)
 		end 'severalKindsHoldTheName'
 
@@ -17194,7 +17526,7 @@ export type ProgramSignatures
 	// declaration that a reader could ALSO name never coexists with an alias in the first place
 	// (`typeNamePairMayCoexist`) — so one reaching here would be a claim the contest should not hold.
 	function crossKindAmbiguousCandidates(name ByteArray, readerFilePath FilePath) returns StringArray
-		let claims = try self.crossKindContests.get(name) otherwise panic("ProgramSignatures.crossKindAmbiguousCandidates: '{String.from(name)}' is not cross-kind contested — the caller asks `crossKindContests.contains` first")
+		let claims = try self.crossKindClaimsOf(name) otherwise panic("ProgramSignatures.crossKindAmbiguousCandidates: '{String.from(name)}' is not cross-kind contested — the caller asks `crossKindContested` first")
 		let readerDirectory = self.moduleDirectoryOf(readerFilePath)
 		let readerPath = readerFilePath.toString()
 		var reachable = 0 as ElementIndex
@@ -17362,7 +17694,7 @@ export type ProgramSignatures
 	// as "no other kind holds it". That is the right answer: the SITE that offered the name is then the
 	// only declaration of it.
 	function noteCrossKindContest(name ByteArray, offeredAs TypeDeclKind, interfaceSitesByName InterfaceDeclSiteByName)
-		if self.crossKindContests.contains(name) 'alreadySettled'
+		if self.crossKindContested(name) 'alreadySettled'
 			return
 		end 'alreadySettled'
 
@@ -17376,11 +17708,8 @@ export type ProgramSignatures
 			return
 		end 'thePairIsADuplicateDeclaration'
 
-		if self.crossKindContests is sharedEmptyCrossKindContests 'stillShared'
-			self.crossKindContests = CrossKindContestMap.create()
-		end 'stillShared'
-
-		self.crossKindContests.upsert(name, value: claims)
+		var byName = self.crossKindContestsForWrite()
+		byName.upsert(name, value: claims)
 	end 'noteCrossKindContest'
 
 	// EVERY declaration of `name`, across every registry that can hold one. Reached only for a name
@@ -17452,12 +17781,10 @@ export type ProgramSignatures
 	//
 	// ⚠ Empty for every program in the corpus, which is what keeps both settles at one `count()`.
 	export function crossKindScopedAliasNames() returns ByteArrayArray
-		var names = ByteArrayArray.create()
-		for (name, _) in self.crossKindContests 'eachContestedName'
-			names.push(name)
-		end 'eachContestedName'
-
-		return names
+		match self.crossKindContests 'index'
+			unwritten then return ByteArrayArray.create()
+			entries(byName) then return keysOfCrossKindContests(byName)
+		end 'index'
 	end 'crossKindScopedAliasNames'
 
 	// ⭐ **IS `name` HELD BY MORE THAN ONE KIND OF DECLARATION?** The allocation-free gate every
@@ -17475,8 +17802,12 @@ export type ProgramSignatures
 		return isInterfaceName(self.interfaces, name: name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath)
 	end 'containsInterfaceFor'
 
+	// Do several KINDS of declaration hold `name`? A column nothing has contested answers without hashing.
 	export function crossKindContested(name ByteArray) returns bool
-		return self.crossKindContests.contains(name)
+		match self.crossKindContests 'index'
+			unwritten then return false
+			entries(byName) then return byName.contains(name)
+		end 'index'
 	end 'crossKindContested'
 
 	// ⭐⭐ **THE KIND A CROSS-KIND-CONTESTED NAME MEANS WHEN READ FROM `readerFilePath`** — the ONE decision
@@ -17505,7 +17836,7 @@ export type ProgramSignatures
 	//      becomes indistinguishable from "one does, elsewhere, and did not export it" (E2003) — the
 	//      argument `RangedAliasRegistry.lookup`'s `byName` fallback states in full.
 	export function contestedTypeNameKindFor(name ByteArray, readerFilePath FilePath) returns TypeDeclKind
-		let claims = try self.crossKindContests.get(name) otherwise panic("ProgramSignatures.contestedTypeNameKindFor: '{String.from(name)}' is not cross-kind contested — every caller asks `crossKindContested` first")
+		let claims = try self.crossKindClaimsOf(name) otherwise panic("ProgramSignatures.contestedTypeNameKindFor: '{String.from(name)}' is not cross-kind contested — every caller asks `crossKindContested` first")
 		let readerPath = readerFilePath.toString()
 
 		// ⚠ **A READER WITH NO FILE IS IN NO LAYER, so tier 2 cannot answer for it** — and that is the right
@@ -17564,7 +17895,7 @@ export type ProgramSignatures
 	// struct/enum/interface — and `denotedNamedType`'s header records the +36 × 2^n allocations across the
 	// scale ladder that ONE boxed union at this door cost.
 	export function aliasShadowsNominalFor(name ByteArray, readerFilePath FilePath) returns bool
-		if not self.crossKindContests.contains(name) 'noSecondKindHoldsTheName'
+		if not self.crossKindContested(name) 'noSecondKindHoldsTheName'
 			return false
 		end 'noSecondKindHoldsTheName'
 
@@ -17626,7 +17957,7 @@ export type ProgramSignatures
 	// `aliasUnderlyingInAnyFile` — and that probe is what keeps the common answer free, since a name no
 	// registry of that form holds never reaches here at all.
 	export function readerMeansKind(name ByteArray, readerFilePath FilePath, kind TypeDeclKind) returns bool
-		if not self.crossKindContests.contains(name) 'onlyOneKindHoldsTheName'
+		if not self.crossKindContested(name) 'onlyOneKindHoldsTheName'
 			return true
 		end 'onlyOneKindHoldsTheName'
 
@@ -17815,7 +18146,7 @@ export type ProgramSignatures
 	// namespace or file that tells the two apart (`unambiguousAliasSpelling`), exactly as every other
 	// diagnostic quotes a contested alias.
 	export function brandDisplayName(brand ByteArray, gid GenericInstanceId) returns ByteArray
-		if self.contestedGenericAliases.contains(brand) 'twoFilesDeclareThisName'
+		if self.genericAliasSpellingIsSuperseded(brand) 'twoFilesDeclareThisName'
 			return self.instanceDisplayName(gid)
 		end 'twoFilesDeclareThisName'
 
@@ -17830,7 +18161,7 @@ export type ProgramSignatures
 	// own; a brand would only add a spelling whose display is a per-file question this file-less door cannot
 	// answer (`unambiguousAliasSpelling` would path-qualify it). The instance display renders the value.
 	export function instanceBrandOfSpelling(spelling ByteArray) returns ByteArray
-		if containsQualifier(spelling) or bytesStartWith(spelling, prefix: ReservedTypeNamePrefix) or self.contestedGenericAliases.contains(spelling) 'notAPlainBrand'
+		if containsQualifier(spelling) or bytesStartWith(spelling, prefix: ReservedTypeNamePrefix) or self.genericAliasSpellingIsSuperseded(spelling) 'notAPlainBrand'
 			return EmptySourceText
 		end 'notAPlainBrand'
 
@@ -19874,7 +20205,7 @@ export type ProgramSignatures
 	// over an append-only registry that still holds pre-settle instances. That is not a bypass of this refusal;
 	// it is the one case where the refusal is right and the caller must nevertheless not stop. See there.
 	export function genericAliasInstanceInAnyFile(name ByteArray) returns GenericInstanceId
-		if self.contestedGenericAliases.contains(name) 'contestedAndThisDoorNamesNoReader'
+		if self.genericAliasSpellingIsSuperseded(name) 'contestedAndThisDoorNamesNoReader'
 			panic("ProgramSignatures.genericAliasInstance: '{String.from(name)}' is declared by two files over different instances, and this door names no reader to choose between them — `settleGenericAliasContest` resolves every recorded declared type against its declaring file, so a spelling reaching here is one that pass does not cover")
 		end 'contestedAndThisDoorNamesNoReader'
 
@@ -19914,7 +20245,10 @@ export type ProgramSignatures
 	// unrelated whole-program walks — while the single-file program compiles. The `Container with Bag`
 	// deep-clone twin reaches it from `requireOpaqueArrayCopyable`.
 	function genericAliasSpellingIsSuperseded(name ByteArray) returns bool
-		return self.contestedGenericAliases.contains(name)
+		match self.contestedGenericAliases 'index'
+			unwritten then return false
+			entries(byName) then return byName.contains(name)
+		end 'index'
 	end 'genericAliasSpellingIsSuperseded'
 
 	// ⭐⭐ **THE SAME QUESTION ASKED OF A TYPE RATHER THAN A NAME (A3k review)** — for the one classifier door
@@ -19973,12 +20307,12 @@ export type ProgramSignatures
 	// That is `RangedAliasRegistry.lookup`'s discipline and it matters for the same reason: this is asked at
 	// every generic-alias type reference and every `IntArray.create()` base.
 	function scopedGenericAliasInstance(name ByteArray, readerFilePath FilePath) returns GenericInstanceId
-		if let byFile = try self.contestedGenericAliases.get(name) 'contested'
+		if let byFile = try self.genericAliasClaimantsOf(name) 'contested'
 			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
 				return own
 			end 'readersOwnFile'
 
-			if let nameableHere = try self.nameableGenericAliases.get(name) 'someDeclarationIsNameable'
+			if let nameableHere = try self.nameableGenericAliasOf(name) 'someDeclarationIsNameable'
 				return nameableHere
 			end 'someDeclarationIsNameable'
 		end 'contested'
@@ -20800,6 +21134,14 @@ export type ProgramSignatures
 	// merely installs a leaf runtime function it never calls"). A false TRUE would leave a baked reloc naming
 	// a `.text` VA that was never installed — the `resolveCallFixups` panic — which is why the walk may only
 	// ever be narrowed by something structural.
+	// ⚠⚠ **ITS TWO READERS TAKE OPPOSITE POLARITIES, SO "THE SAFE DIRECTION" IS NOT A PROPERTY OF THIS
+	// ANSWER.** A false NEGATIVE — reporting concrete for an instance that still stands at a parameter —
+	// costs a descriptor nothing needs at the door that reserves one, and ADMITS a box for imaging at
+	// `declaredContainerBoxIsImageData`, where the bytes are then laid down against arguments the instance
+	// does not have. That door does not rest on this answer alone: `containerBoxColumnSlot` refuses a column
+	// whose element is an opaque parameter this layout does not declare, so an admission survives only where
+	// every slot is concrete anyway. Widening this walk is still the fix if a shape is ever found that
+	// reaches it.
 	export function instanceMentionsTypeParameter(id GenericInstanceId) returns bool
 		for position in 0 upto self.genericInstanceArgCount(id) 'eachArg'
 			if self.typeMentionsTypeParameter(self.substitutedInstanceArg(id, position: position)) 'opaqueSomewhere'
@@ -22709,7 +23051,7 @@ export type ProgramSignatures
 	// range-only: that pass mints RANGE variants and has nothing to do for a generic contest. Its gate
 	// answers a different question that happens to mention the same map.
 	function anythingContested() returns bool
-		return self.typeAliases.anyRangeContest() or self.contestedGenericAliases.count() > 0
+		return self.typeAliases.anyRangeContest() or self.anyGenericAliasNameContested()
 	end 'anythingContested'
 
 	// ⭐⭐ **THE SAME INSTANCE, WITH EVERY CONTESTED NAME IN IT SPELLED THE WAY `filePath` MEANS IT (N2 + N3)**
@@ -22891,7 +23233,7 @@ export type ProgramSignatures
 	// stopped refusing, because `stdlib/File.maxon`'s `ByteArray` kept its bare element and the reader's own
 	// `int(0 to 1000)` then scoped it — the exact wrong answer N2 exists to prevent.
 	export function settleGenericAliasContest()
-		if self.multiplyDeclaredGenericAliases.count() > 0 'someNameHasASECONDDeclarationToDisagreeWith'
+		if self.anyAliasNameIsDisagreedWith() 'someNameHasASECONDDeclarationToDisagreeWith'
 			var rounds = 0 as GenericAliasRoundCount
 			while self.settleGenericAliasContestRound() 'aRoundFoundANewContest'
 				rounds = rounds + 1
@@ -22919,7 +23261,7 @@ export type ProgramSignatures
 	function firstContestedDeclaration() returns AliasCycleResult
 		for i in 0 upto self.genericAliasDecls.count() 'eachDeclaration'
 			let entry = try self.genericAliasDecls.get(i) otherwise panic("ProgramSignatures.firstContestedDeclaration: genericAliasDecls.get OOB at {i}")
-			if self.contestedGenericAliases.contains(entry.aliasName) 'itsNameIsContested'
+			if self.genericAliasSpellingIsSuperseded(entry.aliasName) 'itsNameIsContested'
 				return AliasCycleResult.at(i)
 			end 'itsNameIsContested'
 		end 'eachDeclaration'
@@ -22960,7 +23302,7 @@ export type ProgramSignatures
 			// Only a name a SECOND declaration mentions can disagree with anything, so the walk narrows to
 			// those and the map it fills holds one entry per such name rather than one per alias in the
 			// program — see `multiplyDeclaredGenericAliases`.
-			if not self.multiplyDeclaredGenericAliases.contains(entry.aliasName) 'itIsTheOnlyDeclarationOfThisName'
+			if not self.aliasNameIsDisagreedWith(entry.aliasName) 'itIsTheOnlyDeclarationOfThisName'
 				continue
 			end 'itIsTheOnlyDeclarationOfThisName'
 
@@ -23003,7 +23345,7 @@ export type ProgramSignatures
 
 		var foundANewContest = false
 		for (aliasName, group) in byName 'eachName'
-			foundANewContest = foundANewContest or not self.contestedGenericAliases.contains(aliasName)
+			foundANewContest = foundANewContest or not self.genericAliasSpellingIsSuperseded(aliasName)
 			self.recordGenericAliasContest(aliasName, group: group)
 		end 'eachName'
 
@@ -23043,18 +23385,14 @@ export type ProgramSignatures
 		self.genericAliasSites = scoped
 	end 'rekeyScopedGenericAliases'
 
-	// File one contested name into both contest indexes and mint an entry per distinct instance. Copy-on-write
-	// off the shared empties happens HERE, at the single writer, so a program with no contest never allocates
-	// either index.
+	// File one contested name into both contest indexes and mint an entry per distinct instance. Both indexes
+	// are installed HERE, at the single writer, so a program with no contest allocates neither.
 	function recordGenericAliasContest(aliasName ByteArray, group GenericAliasDeclarationGroup)
-		if self.contestedGenericAliases is sharedEmptyGenericAliasContests 'stillShared'
-			self.contestedGenericAliases = ContestedGenericAliasMap.create()
-			self.nameableGenericAliases = NameableGenericAliasMap.create()
-		end 'stillShared'
-
-		self.contestedGenericAliases.upsert(aliasName, value: group.byDeclaringFile)
+		var byName = self.genericAliasContestsForWrite()
+		byName.upsert(aliasName, value: group.byDeclaringFile)
 		if group.anyNameable 'someDeclarationMayBeWrittenAnywhere'
-			self.nameableGenericAliases.upsert(aliasName, value: group.nameableInstance)
+			var nameable = self.nameableGenericAliasesForWrite()
+			nameable.upsert(aliasName, value: group.nameableInstance)
 		end 'someDeclarationMayBeWrittenAnywhere'
 
 		// ⭐ The MINT — one entry per DISTINCT instance, which falls out of the spelling being DERIVED from the
@@ -23116,7 +23454,7 @@ export type ProgramSignatures
 	// comment: the set of places a declared type is RECORDED is a thing this rung must get right, and getting
 	// it wrong has to be loud.
 	function resolveRecordedGenericAliasTypes()
-		if self.contestedGenericAliases.count() == 0 'noNameIsContested'
+		if not self.anyGenericAliasNameContested() 'noNameIsContested'
 			return
 		end 'noNameIsContested'
 
@@ -23588,7 +23926,7 @@ export type ProgramSignatures
 		end 'namesNoAlias'
 
 		let name = self.nameOfId(typeNameIdOf(declared))
-		if not self.contestedGenericAliases.contains(name) 'notContested'
+		if not self.genericAliasSpellingIsSuperseded(name) 'notContested'
 			throw MapError.keyNotFound
 		end 'notContested'
 
@@ -25092,7 +25430,7 @@ export type ProgramSignatures
 	// author recognizes and is used; where they are not, the declaring FILE is the qualifier, because the file
 	// IS the scope that resolves the name.
 	function unambiguousAliasSpelling(entry GenericAliasEntry) returns ByteArray
-		if not self.contestedGenericAliases.contains(entry.aliasName) 'onlyOneTypeInThisProgramWearsThisName'
+		if not self.genericAliasSpellingIsSuperseded(entry.aliasName) 'onlyOneTypeInThisProgramWearsThisName'
 			return entry.aliasName
 		end 'onlyOneTypeInThisProgramWearsThisName'
 
@@ -25107,7 +25445,7 @@ export type ProgramSignatures
 	// spelling separate them. Walked rather than indexed: it runs once per contested alias declaration, and the
 	// corpus contests none.
 	function contestedAliasNamespacesAreDistinct(aliasName ByteArray) returns bool
-		let claimants = try self.contestedGenericAliases.get(aliasName) otherwise panic("ProgramSignatures.contestedAliasNamespacesAreDistinct: '{String.from(aliasName)}' is contested but carries no declaring-file group — `recordGenericAliasContest` writes both indexes together")
+		let claimants = try self.genericAliasClaimantsOf(aliasName) otherwise panic("ProgramSignatures.contestedAliasNamespacesAreDistinct: '{String.from(aliasName)}' is contested but carries no declaring-file group — `recordGenericAliasContest` writes both indexes together")
 		var seen = ModuleDirectorySet.create()
 		for (declFilePath, _) in claimants 'eachClaimant'
 			let moduleDirectory = self.moduleDirectoryOfPathText(declFilePath)
@@ -26909,6 +27247,21 @@ export type ProgramSignatures
 		return managedFieldCascadeStrategy(self, typeNames: self.typeNames, fieldType: self.substituteInstanceFieldType(id, index: index), asElement: false, action: action)
 	end 'genericInstanceFieldCascadeStrategy'
 
+	// ⭐⭐ **THE `(box) -> newBox` DEEP CLONE AN INSTANCE BOX TAKES — the copy a DURABLE SINK stamps into
+	// `__mm_own_deep`.** It is `instanceCascadeStrategy`'s own answer, so a box copied at a sink and the same
+	// box copied as a FIELD of some other record cannot be copied by two entries.
+	//
+	// The refusal is an invariant break rather than a reachable case: only an instance
+	// `declaredContainerBoxIsImageData` admitted reaches this door, and that predicate already requires the
+	// base layout `instanceCascadeStrategy` needs to answer `direct`.
+	export function genericInstanceBoxCloneCallee(id GenericInstanceId) returns ByteArray
+		match instanceCascadeStrategy(self, id: id, asElement: false, action: CascadeAction.clone) 'strategy'
+			direct(callee) then return callee
+			managedElements then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} copies through an element-bearing record's 2-argument entry, which no box co-own can call — `declaredContainerBoxIsImageData` admits no `Array`/chain box")
+			unsupported then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} has no deep cloner — `declaredContainerBoxIsImageData` requires the base layout that `__clone_<mangled>` cascades over")
+		end 'strategy'
+	end 'genericInstanceBoxCloneCallee'
+
 	// Is substituted instance field `index` an existential — `structFieldIsExistential`'s instance twin, asked
 	// over the SUBSTITUTED type for `genericInstanceFieldDropCallee`'s reason: the drop KIND and the drop
 	// CALLEE must classify one type. A type ARGUMENT can never be an existential (`checkGenericArgType`
@@ -27188,7 +27541,7 @@ export type ProgramSignatures
 	// scalar, which `typeIsManaged` never classifies managed" — for a value the parser had correctly typed
 	// as the user's struct, because the MM tier has no reading file and took the stranger's tier.
 	export function declaredFormOf(name ByteArray, readerFilePath FilePath) returns TypeDeclKind throws MapError
-		if self.crossKindContests.contains(name) 'severalKindsHoldIt'
+		if self.crossKindContested(name) 'severalKindsHoldIt'
 			return self.contestedTypeNameKindFor(name, readerFilePath: readerFilePath)
 		end 'severalKindsHoldIt'
 
@@ -28292,7 +28645,7 @@ export type ProgramSignatures
 	// caller asking "may I ignore what the whole-program registry says". This one is false unless a contest
 	// is really in play.
 	export function contestGivesThisReaderAScalar(name ByteArray, readerFilePath FilePath) returns bool
-		if not self.crossKindContests.contains(name) 'oneKindHoldsTheName'
+		if not self.crossKindContested(name) 'oneKindHoldsTheName'
 			return false
 		end 'oneKindHoldsTheName'
 

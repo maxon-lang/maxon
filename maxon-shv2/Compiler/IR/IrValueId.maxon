@@ -40,14 +40,58 @@ export typealias BlockIdSet = Set with BlockId
 // DECIDES and why a set rather than a list.
 //
 // ⭐ **ONE ALIAS RATHER THAN ONE PER MARK, BECAUSE THE PURPOSE IS THE SHARED ONE (review, R4.4).** What a
-// name has to describe here is the shape the copy-on-write discipline is written against — see
-// `Parser.privateValueMarkSet`, which is one function precisely because there is one type for it to take.
-// The per-mark purpose is carried by the FIELD name, which is where it varies.
+// name has to describe here is the shape every mark column is written against — `ValueMarkColumn` below is
+// one type for the same reason. The per-mark purpose is carried by the FIELD name, which is where it varies.
 //
 // ⚠ **IT LIVES BESIDE `ValueId` RATHER THAN IN THE PARSER BECAUSE ONE OF THESE MARKS CROSSES THE TIER
 // BOUNDARY.** `writtenNegativeLiterals` is read by `InsertRangeChecks` at the Std tier, so it rides
 // `FunctionRangeChecks` (`Project.maxon`) — and a type three files must name is not the parser's to hold.
 export typealias ValueMarkSet = Set with ValueId
+
+// ⭐⭐ **"THIS FUNCTION MARKED NOTHING" AS A SPELLED STATE, ONE COLUMN TYPE FOR EVERY PER-VALUE MARK.** A
+// shared empty `ValueMarkSet` cannot carry it: a module-level `let` container is IMAGE DATA, so a
+// construction literal seeded from one holds a private DEEP COPY, and a test asking whether a field holds
+// the shared record answers false whatever it was seeded with.
+//
+// ⚠ **IT LIVES BESIDE `ValueMarkSet` FOR THAT ALIAS'S OWN REASON**: `writtenNegativeLiterals` crosses the
+// tier boundary on `FunctionRangeChecks` and is read by `InsertRangeChecks`, so a type three files must
+// name is not the parser's to hold.
+export union ValueMarkColumn
+	unwritten
+	entries(marked ValueMarkSet)
+end 'ValueMarkColumn'
+
+export let noValueMarks = ValueMarkColumn.unwritten
+
+// ⭐ **THE INSTALL, ONCE FOR EVERY MARK COLUMN.** Ten fields hold one of these and differ only in which
+// field that is, which Maxon cannot abstract over — so the two halves a write needs are written here and
+// each field's door is the two lines that spend them. `unwritten` is a state the caller REPLACES, so the
+// install ANSWERS the column rather than writing through it.
+export function installedValueMarks(column ValueMarkColumn) returns ValueMarkColumn
+	match column 'state'
+		unwritten then break 'state'
+		entries then return column
+	end 'state'
+
+	return ValueMarkColumn.entries(ValueMarkSet.create())
+end 'installedValueMarks'
+
+// The set an installed column holds. The refusal is an invariant break rather than a reachable case: every
+// caller stores `installedValueMarks`' answer first.
+export function markSetOf(column ValueMarkColumn) returns ValueMarkSet
+	match column 'state'
+		unwritten then panic("markSetOf: the column holds no set — a writer stores `installedValueMarks`' answer before asking")
+		entries(marked) then return marked
+	end 'state'
+end 'markSetOf'
+
+// Is `value` in this column? A column nothing has written answers without hashing.
+export function valueIsMarked(column ValueMarkColumn, value ValueId) returns bool
+	match column 'state'
+		unwritten then return false
+		entries(marked) then return marked.contains(value)
+	end 'state'
+end 'valueIsMarked'
 
 // The DISTINCT case targets of a dense `switch`'s block-id table, in FIRST-APPEARANCE order, with
 // `exclude` (the default) removed — the "which successors does this table actually have?" question the

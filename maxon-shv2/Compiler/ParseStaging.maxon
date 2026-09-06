@@ -21,7 +21,7 @@
 // at all — points its field at one of these shared, never-mutated singletons rather than allocating an
 // empty array it will never push into. The matching `record*` copies on write at the first push
 // (`count() == 0` uniquely identifies "still the shared empty", since each of those functions is its
-// array's only writer). This is the same pay-for-use discipline `sharedEmptyInnerAliases`/`emptyTypeParams`
+// array's only writer). This is the same pay-for-use discipline `sharedEmptyWhereConstraints`/`emptyTypeParams`
 // follow, and it keeps the artifact allocation-neutral for a program that declares none (measured for the
 // interface pair: the eager form cost +2 empty arrays per artifact, a linear delta scaling with the file
 // count).
@@ -53,11 +53,6 @@ let sharedEmptyTransformArities = PendingTransformArityArray.create()
 // A statement that uses NONE of a call's result is rarer than either — one spelling opens the door
 // (`(_, _) = f()`) and almost no file writes it — so the empty column is shared for the reason above it.
 let sharedEmptyDiscardedResults = PendingDiscardedResultArray.create()
-
-// Overloading a name is rare, so the overwhelming file contributes NO overload set. It is shared for
-// `typeNameDecls`' stronger reason too: only the real parse can fill it, and the tolerant declaration
-// sweep builds an artifact per file that would otherwise pay for an empty map each.
-let sharedEmptyOverloadSets = OverloadSetMap.create()
 
 // One `funcReturnTypes` registry contribution: a function's name and its
 // declared return type, recorded by the parser. Ordered in an array so the
@@ -273,7 +268,7 @@ export type FileParseArtifact
 	// resolver's tie-breaks read them), and that order lives inside each value. The KEY order decides
 	// nothing — the commit is one independent upsert per name. Empty for every file that overloads nothing,
 	// so the shared empty map keeps a non-overloading parse allocation-identical.
-	export var overloadSets as OverloadSetMap
+	export var overloadSets as OverloadSetTable
 	// This file's recorded function-value merges awaiting whole-program signature agreement (P1.5 #81).
 	// Appended to `project.pendingFnMergeChecks` by `commitPendingFnMergeChecks`; the check itself is
 	// drained after merge, before resolution (see PendingFnMergeCheck).
@@ -328,7 +323,7 @@ export type FileParseArtifact
 	// Shares E3062's answer rather than deriving a second one â and it is the only source that survives
 	// ERASURE, which is why the check cannot read param types instead: a ranged alias in a signature is
 	// `integer` by the time any pass sees it.
-	export var usedTypeNames as UsedTypeNameSet
+	export var usedTypeNames as UsedTypeNameRoster
 	// ⭐⭐ **THE TYPES THIS FILE REACHED INTO THROUGH A VALUE, AND NEVER NAMED (BATCH43)** — the set
 	// `Parser.requireFieldAccessible` (a struct's field) and `Parser.emitEnumTagOf` (an enum's or union's tag)
 	// record at the lines the compile already had to reach to emit the access.
@@ -336,7 +331,7 @@ export type FileParseArtifact
 	// the resolver's answer: without it E3092 advised dropping an `export` that E4006 then required, and the
 	// program had no legal spelling. Two sets and not one because they hold two facts — see
 	// `Parser.memberAccessedTypeNames`.
-	export var memberAccessedTypeNames as UsedTypeNameSet
+	export var memberAccessedTypeNames as UsedTypeNameRoster
 	// This file's `type X implements …` conformance declarations (P1.7a slice 1). Each carries the
 	// type-name token position so the whole-program `checkConformance` can anchor an E3015/E3016 on it.
 	// Remap-free (all names are plain ByteArrays). Folded into `project.conformances` by `mergeArtifact`.
@@ -387,8 +382,8 @@ export type FileParseArtifact
 	// Two lists rather than one with a kind tag, because the ORDER BETWEEN THEM is the entire reason
 	// they are deferred: every unused-alias diagnostic in the program precedes every hidden-name one,
 	// and a single list would have to re-derive that split at the drain.
-	export var unusedTypeAliases as DeferredNameDiagnosticArray
-	export var hiddenTypeNames as DeferredNameDiagnosticArray
+	export var unusedTypeAliases as DeferredNameDiagnosticRoster
+	export var hiddenTypeNames as DeferredNameDiagnosticRoster
 	// ⭐ THE DECLARATION-HYGIENE DIAGNOSTICS this file's function bodies earned (E3012 unused, E3077
 	// var-should-be-let), kept OUT of `diagnostics` above so they cannot gate the pipeline ahead of the
 	// checks that could explain the body instead. `mergeArtifact` folds them into
@@ -415,7 +410,7 @@ export type FileParseArtifact
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
-			overloadSets: sharedEmptyOverloadSets,
+			overloadSets: noOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			pendingFunctionTypeDoors: sharedEmptyFunctionTypeDoors,
 			pendingTransformArities: sharedEmptyTransformArities,
@@ -427,29 +422,30 @@ export type FileParseArtifact
 			enumTypes: EnumLayoutArray.create(),
 			interfaces: sharedEmptyInterfaces,
 			typeNameDecls: sharedEmptyTypeNameDecls,
-			usedTypeNames: sharedEmptyUsedTypeNames,
-			memberAccessedTypeNames: sharedEmptyUsedTypeNames,
+			usedTypeNames: noUsedTypeNames,
+			memberAccessedTypeNames: noUsedTypeNames,
 			conformances: sharedEmptyConformances,
 			literalInitSites: sharedEmptyLiteralInitSites,
 			inferredInstantiationSites: sharedEmptyInferredInstantiationSites,
 			typeNames: TypeNameInterner.create(),
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(),
-			unusedTypeAliases: sharedEmptyDeferredNameDiagnostics,
-			hiddenTypeNames: sharedEmptyDeferredNameDiagnostics,
+			unusedTypeAliases: noDeferredNameDiagnostics,
+			hiddenTypeNames: noDeferredNameDiagnostics,
 			bindingHygieneDiagnostics: DiagnosticArray.create()
 		}
 	end 'create'
 
 	// Record an alias this file declared and never named, and an `as` target naming an alias this file
-	// cannot see. Both go through `appendDeferredNameDiagnostic`, the one copy-on-write writer for every
-	// list that starts as the shared empty — so neither carries its own copy of the identity test.
+	// cannot see. Each installs its own list on the first entry (`DeferredNameDiagnosticRoster`).
 	export function recordUnusedTypeAlias(entry DeferredNameDiagnostic)
-		self.unusedTypeAliases = appendDeferredNameDiagnostic(self.unusedTypeAliases, entry: entry)
+		var recorded = self.unusedTypeAliasesForWrite()
+		recorded.push(entry)
 	end 'recordUnusedTypeAlias'
 
 	export function recordHiddenTypeName(entry DeferredNameDiagnostic)
-		self.hiddenTypeNames = appendDeferredNameDiagnostic(self.hiddenTypeNames, entry: entry)
+		var recorded = self.hiddenTypeNamesForWrite()
+		recorded.push(entry)
 	end 'recordHiddenTypeName'
 
 	// THE emit choke point for a Maxon body op — the only way the parser creates
@@ -597,14 +593,48 @@ export type FileParseArtifact
 	// the parser hands back the complete list every time a member joins, which is what keeps this table a
 	// projection of the parser's own records rather than a second accumulation to keep in step.
 	export function recordOverloadSet(base ByteArray, members ByteArrayArray)
-		// COPY-ON-WRITE off the shared empty table before this file's first overload — see
-		// `sharedEmptyOverloadSets`.
-		if self.overloadSets is sharedEmptyOverloadSets 'firstOverloadInThisFile'
-			self.overloadSets = OverloadSetMap.create()
-		end 'firstOverloadInThisFile'
-
-		self.overloadSets.upsert(base, value: members)
+		var byBase = self.overloadSetsForWrite()
+		byBase.upsert(base, value: members)
 	end 'recordOverloadSet'
+
+	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3019 at the
+	// bootstrap oracle), so a list cannot be written in the arm that reads it: each door below installs the
+	// list on the first entry and ANSWERS it, and the caller writes through a `var` alias of that answer.
+
+	// The unused-alias list this file defers into.
+	function unusedTypeAliasesForWrite() returns DeferredNameDiagnosticArray
+		match self.unusedTypeAliases 'state'
+			unwritten then break 'state'
+			entries(recorded) then return recorded
+		end 'state'
+
+		let fresh = DeferredNameDiagnosticArray.create()
+		self.unusedTypeAliases = DeferredNameDiagnosticRoster.entries(fresh)
+		return fresh
+	end 'unusedTypeAliasesForWrite'
+
+	// The hidden-name list, its twin.
+	function hiddenTypeNamesForWrite() returns DeferredNameDiagnosticArray
+		match self.hiddenTypeNames 'state'
+			unwritten then break 'state'
+			entries(recorded) then return recorded
+		end 'state'
+
+		let fresh = DeferredNameDiagnosticArray.create()
+		self.hiddenTypeNames = DeferredNameDiagnosticRoster.entries(fresh)
+		return fresh
+	end 'hiddenTypeNamesForWrite'
+
+	function overloadSetsForWrite() returns OverloadSetMap
+		match self.overloadSets 'state'
+			unwritten then break 'state'
+			entries(byBase) then return byBase
+		end 'state'
+
+		let fresh = OverloadSetMap.create()
+		self.overloadSets = OverloadSetTable.entries(fresh)
+		return fresh
+	end 'overloadSetsForWrite'
 
 	// Record a function's range-check sites as this file's contribution to `project.rangeChecks`
 	// (P1.9). Called by the parser at function completion, and ONLY when the function actually has
@@ -820,13 +850,25 @@ end 'mergeArtifact'
 // rather than reported, because their whole point is to be reported LATER and in a fixed order — see
 // `DeferredNameDiagnostic` for why, and `TypeResolution.reportDeferredNameDiagnostics` for the drain.
 function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifact)
-	for entry in artifact.unusedTypeAliases 'eachUnused'
-		project.unusedTypeAliasDiagnostics.push(entry)
-	end 'eachUnused'
-	for entry in artifact.hiddenTypeNames 'eachHidden'
-		project.hiddenTypeNameDiagnostics.push(entry)
-	end 'eachHidden'
+	match artifact.unusedTypeAliases 'unused'
+		unwritten then break 'unused'
+		entries(recorded) then pushEachDeferredDiagnostic(project.unusedTypeAliasDiagnostics, recorded: recorded)
+	end 'unused'
+
+	match artifact.hiddenTypeNames 'hidden'
+		unwritten then break 'hidden'
+		entries(recorded) then pushEachDeferredDiagnostic(project.hiddenTypeNameDiagnostics, recorded: recorded)
+	end 'hidden'
 end 'commitDeferredNameDiagnostics'
+
+// Append one recorded list to a whole-program one — its own function because a `match` arm may not open a
+// `for`, and a walk that deferred nothing never reaches it.
+function pushEachDeferredDiagnostic(into DeferredNameDiagnosticArray, recorded DeferredNameDiagnosticArray)
+	var target = into
+	for entry in recorded 'each'
+		target.push(entry)
+	end 'each'
+end 'pushEachDeferredDiagnostic'
 
 // Fold this file's parser-raised diagnostics into `project.diagnostics` (P1.6-A) — the last
 // contribution, and the one that carries no ids to remap (a `Diagnostic` is a finished
@@ -1516,7 +1558,16 @@ end 'parameterSpellingCollisionMessage'
 // is no longer "declaration order" in any sense the author of a single file can see, which is why the
 // diagnostic says which candidates rather than which came first.
 function commitOverloadSets(project Project, artifact FileParseArtifact)
-	for (base, members) in artifact.overloadSets 'each'
+	match artifact.overloadSets 'file'
+		unwritten then break 'file'
+		entries(byBase) then commitEachOverloadSet(project, byBase: byBase)
+	end 'file'
+end 'commitOverloadSets'
+
+// The walk behind the door above — its own function because a `match` arm may not open a `for`, and a file
+// that overloads nothing never reaches it.
+function commitEachOverloadSet(project Project, byBase OverloadSetMap)
+	for (base, members) in byBase 'each'
 		var accumulated = try project.overloadSets.get(base) otherwise ByteArrayArray.create()
 		for member in members 'eachMember'
 			if not namesInclude(accumulated, name: member) 'notYetCommitted'
@@ -1525,7 +1576,7 @@ function commitOverloadSets(project Project, artifact FileParseArtifact)
 		end 'eachMember'
 		project.overloadSets.upsert(base, value: accumulated)
 	end 'each'
-end 'commitOverloadSets'
+end 'commitEachOverloadSet'
 
 // Append this file's recorded function-value merge checks to the whole-program list (P1.5 #81). Unlike
 // the signature commit above there is NO dedup: each entry is a DISTINCT merge SITE (its own position),

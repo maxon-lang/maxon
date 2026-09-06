@@ -945,6 +945,16 @@ export union ImmortalRecordKind
 	// separate literals, so `Parser.emitImageRecordRead` emits `MaxonOp.immortalStringTable` for it and
 	// `LowerMaxonToStd.lowerConstArrayLiteral` panics if this shape reaches the mark.
 	stringTable(texts ByteArrayArray, elementDestroy ByteArray)
+	// ⭐⭐ **A DECLARED CONTAINER'S BOX — a `Map`/`Set` `let` whose `create()` is nothing but `Self{}`.** The
+	// box itself is `TopLevelImageRecord.bytes`, exactly as a `constBlob`'s payload is; `columns` names the
+	// slots that hold its empty `Array` columns, each of which the lowering registers as an image record of
+	// its own and addresses by an absolute data-to-data relocation.
+	//
+	// ⚠ **IT NEVER APPEARS IN `ImmortalConstArraySiteMap` BELOW**, for `stringTable`'s reason: its box is
+	// not a `__ManagedMemory` record and no `constArrayLiteral` op can carry it.
+	//
+	// ⚠ APPENDED PAST `stringTable`, per the band-append invariant.
+	containerBox(columns ImmortalBoxColumnArray)
 end 'ImmortalRecordKind'
 
 // ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation, each carrying
@@ -3207,6 +3217,24 @@ end 'ProvenIntRange'
 // VERBATIM, so the Std tier reads the parser's own numbering with no remap.
 export typealias ProvenIntRangeMap = Map with (ValueId, ProvenIntRange)
 
+// ⭐ **"THIS FUNCTION HAS NO COUNTED LOOP" AS A SPELLED STATE** — `ValueMarkColumn`'s reason, over the
+// interval table. It rides `FunctionRangeChecks` to `InlineLeaves`, so the state crosses the tier boundary
+// with the column rather than being unwrapped at the border.
+export union ProvenIntRangeColumn
+	unwritten
+	entries(proven ProvenIntRangeMap)
+end 'ProvenIntRangeColumn'
+
+export let noProvenIntRanges = ProvenIntRangeColumn.unwritten
+
+// The interval a counted loop proved for `value`, if one did.
+export function provenIntRangeOf(column ProvenIntRangeColumn, value ValueId) returns ProvenIntRange throws MapError
+	match column 'state'
+		unwritten then throw MapError.keyNotFound
+		entries(proven) then return try proven.get(value)
+	end 'state'
+end 'provenIntRangeOf'
+
 // ⭐⭐ **ONE NARROWED-RANGE PARAMETER OF A FUNCTION — AND IT IS A SITE, NOT MERELY A PUBLICATION (A1f).**
 // It began as `paramAliasNames`, a name per parameter that no check in the declaring function read: the
 // pre-erasure alias each PARAMETER was declared with, captured where `returnAliasName` is and for the
@@ -3296,7 +3324,7 @@ export type FunctionRangeChecks
 	// function no parameter of which is a ranged alias, which is most of them.
 	export var paramSites as RangeCheckParamSiteArray
 	// EC7 — see `ProvenIntRangeMap`. Empty for a function with no counted loop over constant bounds.
-	export var provenValueRanges as ProvenIntRangeMap
+	export var provenValueRanges as ProvenIntRangeColumn
 
 	// ⭐⭐ **WHICH OF THIS FUNCTION'S VALUES THE SOURCE WROTE AS NEGATIVE NUMBERS** — see
 	// `Parser.writtenNegativeLiterals` for what the mark decides and why the value's 64 bits cannot say it.
@@ -3313,9 +3341,9 @@ export type FunctionRangeChecks
 	// from the other and neither may be read for the other's question.
 	//
 	// Empty (the parser's shared read-only anchor) for every function that writes no negative literal.
-	export var writtenNegativeLiterals as ValueMarkSet
+	export var writtenNegativeLiterals as ValueMarkColumn
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeMap, writtenNegativeLiterals ValueMarkSet) returns FunctionRangeChecks
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, writtenNegativeLiterals ValueMarkColumn) returns FunctionRangeChecks
 		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals}
 	end 'create'
 end 'FunctionRangeChecks'
@@ -3758,6 +3786,19 @@ export union FieldDefault
 	// `Parser.fillFieldDefault` states the reason: a literal is folded away entirely by `InsertRangeChecks`
 	// and a call result cannot be.
 	helper(name ByteArray)
+	// ⭐⭐ **THE DEFAULT IS A BARE `<Type>.create()`, AND THAT IS THE ONE EXPRESSION SHAPE A READER IN
+	// ANOTHER FILE CAN DESCRIBE WITHOUT RUNNING IT.** It synthesizes the same helper the arm above does, and
+	// every reader that wants only the callee treats the two alike; what this arm adds is that the slot's
+	// value is the EMPTY container its declared type denotes — which is what lets a `let` holding a `Map` or
+	// a `Set` be laid down as bytes (`ProgramSignatures.declaredContainerBoxIsImageData`).
+	//
+	// ⚠ **SO IT RIDES THE LAYOUT HASH AS A DISTINCT SHAPE, WHERE `helper` MIXES ONLY ITS PRESENCE.** That
+	// arm's argument — what a reader copies out is byte-identical whatever the expression says — stops
+	// holding here: rewriting `IntArray.create()` to `IntArray.withCapacity(4)` changes the bytes a reader
+	// lays down, so it must change the hash.
+	//
+	// ⚠ APPENDED PAST `helper`, per the band-append invariant.
+	bareCreateHelper(name ByteArray)
 end 'FieldDefault'
 
 export typealias FieldDefaultArray = Array with FieldDefault
@@ -3896,7 +3937,7 @@ end 'renderWhereConstraints'
 // The SHARED EMPTY `whereConstraints` a StructLayout holds until a `where` clause is recorded (P1.7a slice
 // 2a) — an unconstrained (or non-generic) type, which is every type on the scale corpus. `recordWhereConstraints`
 // REPLACES the field wholesale (copy-on-write), and it is never mutated in place, so one allocation serves
-// every unconstrained struct — the same discipline `sharedEmptyInnerAliases` / Slice 1's shared-empty
+// every unconstrained struct — the same discipline `sharedEmptyWhereConstraints` / Slice 1's shared-empty
 // `interfaces`/`conformances` use to keep the per-struct parse path allocation-free.
 let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 
@@ -4749,7 +4790,7 @@ export let UnionTagOffset = 0 as ByteOffset
 let UnionTagBytes = 8 as ByteOffset
 
 // The conformance list of a declaration that writes no `implements` clause — ONE shared empty for the
-// whole compile, following `sharedEmptyInnerAliases` and its family: nearly every declaration in the corpus
+// whole compile, following `sharedEmptyWhereConstraints` and its family: nearly every declaration in the corpus
 // declares nothing, and a fresh empty array per declaration would be an allocation for a fact that is the
 // absence of one. Read-only; `Parser.readOptionalImplementsClause` builds a real list only for a real clause.
 //
@@ -6505,6 +6546,16 @@ export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 // `SemanticCheck.overloadCandidates` — but "harmless because a second mechanism catches it" is the
 // arrangement this compiler keeps paying for.)
 export typealias OverloadSetMap = Map with (ByteArray, ByteArrayArray)
+
+// ⭐ **"THIS FILE OVERLOADS NOTHING" AS A SPELLED STATE** — `Parser`'s columns' reason: a shared empty
+// container seed is IMAGE DATA, so the artifact holds a private clone of it and a test asking whether the
+// field holds the shared record answers false whatever it was seeded with.
+export union OverloadSetTable
+	unwritten
+	entries(byBase OverloadSetMap)
+end 'OverloadSetTable'
+
+export let noOverloadSets = OverloadSetTable.unwritten
 
 // ⭐⭐ **WHICH MEMBER SATISFIES EACH WITNESS-TABLE SLOT — THE CONFORMANCE DECISION, WRITTEN DOWN ONCE (R10).**
 // `witnessSlotImplKey(<conformer>, <interface>, <method>)` ⇒ the REGISTRATION name of the member
