@@ -20739,7 +20739,8 @@ export type Parser
 	// the slot's value. The two arms differ in what the layout HASH says about the expression, never in what
 	// the fold emits, so the body is written once and each arm spends it.
 	function foldFieldDefaultByCall(calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, helperName ByteArray, fields ConstFactoryArgumentValueArray, filled BoolArray, anchor Token) throws ConstEvalError
-		try self.fillConstFieldDefault(calls, layout: layout, index: index, value: ConstFactoryArgumentValue.call(self.pushConstNullaryCall(calls, callee: helperName)), fields: fields, filled: filled, anchor: anchor)
+		let helperCall = ConstFactoryCall.call(helperName, args: ConstFactoryArgumentArray.create())
+		try self.fillConstFieldDefault(calls, layout: layout, index: index, value: ConstFactoryArgumentValue.call(self.pushConstNode(calls, node: helperCall)), fields: fields, filled: filled, anchor: anchor)
 	end 'foldFieldDefaultByCall'
 
 	// The entry both helper-shaped defaults declare. Its return type is the FIELD's declared type, which is
@@ -77126,10 +77127,7 @@ export type Parser
 		var args = ConstFactoryArgumentArray.create()
 		args.push(ConstFactoryArgument.create(EmptySourceText, value: ConstFactoryArgumentValue.folded(try self.constLiteralInitOperand(form))))
 
-		let id = calls.count()
-		calls.push(ConstFactoryCall.call(callee, args: args))
-
-		return id
+		return self.pushConstNode(calls, node: ConstFactoryCall.call(callee, args: args))
 	end 'evalConstLiteralInitInto'
 
 	// The folded argument each form hands its `init`. Both DECODE the literal here rather than carrying the
@@ -77176,9 +77174,8 @@ export type Parser
 	// to order; it is one feature for all three positions and belongs to whichever rung takes it.
 	//
 	// ⭐⭐ **WALK ONE CALL INTO THE ARENA AND ANSWER WHICH ENTRY IT BECAME** — the recursion, and the whole of
-	// what admitting a nested call costs. Its ARGUMENTS are walked first, so an inner call has already taken
-	// its slot by the time this one takes its own; the id handed back is therefore stable the moment it is
-	// minted, and nothing ever rewrites an entry.
+	// what admitting a nested call costs. The node is complete before `pushConstNode` gives it a slot, so the
+	// id handed back is stable the moment it is minted and nothing ever rewrites an entry.
 	//
 	// ⚠ **`nested` DECIDES WHICH RETURN RULE APPLIES, AND ONLY THAT.** Both positions demand a record and
 	// neither demands anything else — the visibility of the type, the visibility of the callee and the
@@ -77206,12 +77203,9 @@ export type Parser
 		end 'hasArguments'
 		try self.consumeConstToken(TokenKind.rightParen)
 
-		// The slot this call is about to occupy. Read BEFORE the push and AFTER the arguments, which is what
-		// makes it this call's own index: every nested call the walk above found has already appended itself.
-		let id = calls.count()
-		calls.push(try self.constFactoryNode(callee, args: args, calls: calls))
+		let node = try self.constFactoryNode(callee, args: args, calls: calls)
 
-		return id
+		return self.pushConstNode(calls, node: node)
 	end 'evalConstFactoryCallInto'
 
 	// ⭐⭐⭐ **A FACTORY THAT IS NOTHING BUT ITS OWN `Self{…}` IS FOLDED INTO THAT CONSTRUCTION (W197)** — the
@@ -77454,13 +77448,7 @@ export type Parser
 		// committed (`ProgramSignatures.constInferredInstantiationSites`).
 		self.signatures.recordConstInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: firstKeyTok.line, nameColumn: firstKeyTok.column, filePath: self.filePath))
 
-		// The slot this node is about to occupy. Read BEFORE the push and AFTER the pairs, which is what makes
-		// it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason: every nested node
-		// the walk above found has already appended itself.
-		let id = calls.count()
-		calls.push(ConstFactoryCall.mapLiteral(giid, entries: entries))
-
-		return id
+		return self.pushConstNode(calls, node: ConstFactoryCall.mapLiteral(giid, entries: entries))
 	end 'evalConstMapLiteralInto'
 
 	// ONE `k: v` pair. Both halves go through `evalConstNodeValue` — the very walk a factory ARGUMENT and a
@@ -77593,13 +77581,7 @@ export type Parser
 			throw ConstEvalError.defective(err)
 		end 'unfilledSlot'
 
-		// The slot this construction is about to occupy. Read BEFORE the push and AFTER the fields, which is
-		// what makes it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason: every
-		// nested node the walk above found has already appended itself.
-		let id = calls.count()
-		calls.push(ConstFactoryCall.construct(layout.name, fields: fields))
-
-		return id
+		return self.pushConstNode(calls, node: ConstFactoryCall.construct(layout.name, fields: fields))
 	end 'evalConstStructConstructionInto'
 
 	// ⭐⭐ **`Op.add(7)` AS A TOP-LEVEL INITIALIZER, OR AS A FIELD/ARGUMENT/ELEMENT OF ONE** — the SAME
@@ -77636,12 +77618,7 @@ export type Parser
 			throw ConstEvalError.defective(err)
 		end 'unfilledSlot'
 
-		// The slot this construction is about to occupy. Read BEFORE the push and AFTER the payloads, which is
-		// what makes it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason.
-		let id = calls.count()
-		calls.push(ConstFactoryCall.unionCase(typeTok.value, caseName: caseTok.value, payloads: payloads))
-
-		return id
+		return self.pushConstNode(calls, node: ConstFactoryCall.unionCase(typeTok.value, caseName: caseTok.value, payloads: payloads))
 	end 'evalConstUnionCaseInto'
 
 	// The `(…)` list, into the slot-parallel columns — `parsePayloadArgs` without the ops. The caller is on the
@@ -77755,12 +77732,7 @@ export type Parser
 		// door a container is born through with no `with T` to anchor a constraint refusal on.
 		self.signatures.recordConstInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: firstTok.line, nameColumn: firstTok.column, filePath: self.filePath))
 
-		// The slot this node is about to occupy. Read BEFORE the push and AFTER the elements, which is what makes
-		// it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason.
-		let id = calls.count()
-		calls.push(ConstFactoryCall.arrayLiteral(giid, elements: elements))
-
-		return id
+		return self.pushConstNode(calls, node: ConstFactoryCall.arrayLiteral(giid, elements: elements))
 	end 'evalConstRecordArrayLiteralInto'
 
 	// Every element must belong to the array the first one typed — the folding walk's homogeneity rule, over
@@ -77843,15 +77815,27 @@ export type Parser
 		try filled.set(index, value: true) otherwise panic("fillConstFieldDefault: filled.set OOB at {index} — the columns are sized to the layout's field count")
 	end 'fillConstFieldDefault'
 
-	// Append a no-argument call to the arena and answer which entry it became — the field-default helper's
-	// whole shape. It takes its slot the same way every other node does (after its arguments, of which it has
-	// none), so nothing about the arena's numbering is special-cased for it.
-	function pushConstNullaryCall(calls ConstFactoryCallArray, callee ByteArray) returns InitializerCallId
+	// ⭐⭐ **THE ONE DOOR A NODE ENTERS THE ARENA THROUGH, AND TAKING THE SLOT HERE IS WHAT MAKES THE ID
+	// SOUND.** A node is fully BUILT before it can be handed over, so every nested node its construction
+	// appended — an argument's own call, a folded factory's field defaults — already holds a lower slot, and
+	// nothing can append between the count and the push.
+	//
+	// ⛔ **A CALLER THAT TOOK ITS SLOT AHEAD OF BUILDING ITS NODE WOULD NAME ONE OF THE NODES THAT BUILD
+	// APPENDED**, which is why the two steps may not be written apart. For a global that is a factory call the
+	// id is its `root` — what types the `.data` slot and what `__module_init` materializes — so the binding
+	// would BE its own first helper-shaped field default, in both type and contents.
+	//
+	// ⚠ **AND SUCH A NODE IS ALWAYS AN ORPHAN, WHICH IS WHY THE WRONG ID READS AS WELL-FORMED.** Appending
+	// and bailing are one event: a helper default's value is a `call`, so `everyConstFieldIsAFoldedScalar` is
+	// false and `constFactoryConstruction` returns the `call` form carrying the original arguments. The
+	// appended defaults are unreachable from the root and exist only so `requireConstFieldValueFits` can type
+	// them — so a root that names one is a live slot pointing into nodes nothing else reads.
+	function pushConstNode(calls ConstFactoryCallArray, node ConstFactoryCall) returns InitializerCallId
 		let id = calls.count()
-		calls.push(ConstFactoryCall.call(callee, args: ConstFactoryArgumentArray.create()))
+		calls.push(node)
 
 		return id
-	end 'pushConstNullaryCall'
+	end 'pushConstNode'
 
 	// ⭐⭐ **MAY THIS CONSTANT FILL THIS SLOT — and if it may only after a widening, WHICH VALUE ACTUALLY GOES
 	// IN** (W116). The VERDICT is `ProgramSignatures.constStructFieldCheck`'s, because both halves of the
