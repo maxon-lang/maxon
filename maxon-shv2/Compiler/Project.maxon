@@ -945,16 +945,17 @@ export union ImmortalRecordKind
 	// separate literals, so `Parser.emitImageRecordRead` emits `MaxonOp.immortalStringTable` for it and
 	// `LowerMaxonToStd.lowerConstArrayLiteral` panics if this shape reaches the mark.
 	stringTable(texts ByteArrayArray, elementDestroy ByteArray)
-	// ⭐⭐ **A DECLARED CONTAINER'S BOX — a `Map`/`Set` `let` whose `create()` is nothing but `Self{}`.** The
-	// box itself is `TopLevelImageRecord.bytes`, exactly as a `constBlob`'s payload is; `columns` names the
-	// slots that hold its empty `Array` columns, each of which the lowering registers as an image record of
-	// its own and addresses by an absolute data-to-data relocation.
+	// ⭐⭐ **A DECLARED CONTAINER'S BOX — a `Map`/`Set` `let` whose `create()` is nothing but `Self{}`.**
+	// `nodes` is the whole record tree and `root` names its outermost box; each node's `columns` name the
+	// slots that hold its empty `Array` columns and its nested boxes, every one of which the lowering
+	// registers as an image object of its own and addresses by an absolute data-to-data relocation.
+	// `TopLevelImageRecord.bytes` carries nothing for this shape — a node's bytes are the node's.
 	//
 	// ⚠ **IT NEVER APPEARS IN `ImmortalConstArraySiteMap` BELOW**, for `stringTable`'s reason: its box is
 	// not a `__ManagedMemory` record and no `constArrayLiteral` op can carry it.
 	//
 	// ⚠ APPENDED PAST `stringTable`, per the band-append invariant.
-	containerBox(columns ImmortalBoxColumnArray)
+	containerBox(nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId)
 end 'ImmortalRecordKind'
 
 // ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation, each carrying

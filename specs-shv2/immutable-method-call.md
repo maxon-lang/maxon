@@ -409,3 +409,47 @@ end 'main'
 ```maxoncstderr
 error E3019: specs/fragments/immutable-method-call/push-on-let-self-field-array-error.test:13:9: cannot pass 'items' to function that mutates parameter 'self' (in Bag.add)
 ```
+
+⭐⭐ **AND A CHAIN THROUGH A MODULE-LEVEL `let` REFUSES IT TOO, WHICH IS THE HALF NO DOOR COULD SEE.** The
+case above is a `let` FIELD reached from inside the type; this is a `let` GLOBAL reached through a field
+chain, where the receiver of the mutating call is the field's own record rather than the binding's.
+`SharedFacts.counts` is three tokens, so the bare-name test says nothing about it, and the chain asked only
+whether an enclosing `for` had locked the base — so the write compiled. When such a global's every field is
+image data the record is `.rdata`: the push reaches `__mm_cow_detach` and writes a page mapped read-only,
+which is a fault on x64 and, on wasm32-wasi, a silent rewrite of the constant.
+
+⛔ **THE RULE IS ASKED OF A TOP-LEVEL BASE ONLY, AND THAT BOUND IS MEASURED.** The runnable oracle judges a
+CHAIN more narrowly than a BINDING: `let e = try xs.get(0)` then `e.counts.push(1)` is E3019 there, while
+`e.counts.set(0, value: 9)` COMPILES — a chain turns on whether the callee REPUBLISHES the receiver's
+record, a split shv2's mutation summary does not carry. Applied to every local `let`, the rule refuses
+`IrModule.rewriteFuncBlockRefs`' own `func.blockRefs.set(…)`, which the oracle compiles. A top-level
+immutable base needs no such split: no callee may write an imaged record at all.
+
+⚠ **A `self`-ROOTED CHAIN AND A LOCAL ARE BOTH UNTOUCHED** — `self` is a parameter, a borrowed reference to
+the caller's record, so `self.items.push(v)` inside the type's own method stays legal, which is what
+`parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` pins.
+
+<!-- test: error.push-through-a-field-chain-off-a-module-let -->
+```maxon
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+
+type Facts
+	export var counts as CountArray = CountArray.create()
+
+	export static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+let SharedFacts = Facts.create()
+
+function main() returns ExitCode
+	SharedFacts.counts.push(1)
+
+	return SharedFacts.counts.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:16:21: cannot pass 'SharedFacts' to function that mutates parameter 'self' (in main)
+```

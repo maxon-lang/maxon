@@ -10221,7 +10221,7 @@ union ManagedReceiverBinding
 	// box is `.rdata` too, so it is immutable for the arm above's reason, and it differs in carrying its
 	// bytes, its type NAME and the tag its value stands at rather than a record description: a box has no
 	// stride, count or element destructor to describe.
-	imageBox(bytes ByteArray, typeName ByteArray, tag ValueTypeTag)
+	imageBox(nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId, typeName ByteArray, tag ValueTypeTag)
 end 'ManagedReceiverBinding'
 
 // ⭐ **DID A TOP-LEVEL MANAGED RECEIVER ANSWER THIS CALL?** — `dispatchOnManagedTopLevelReceiver`'s two
@@ -39976,14 +39976,14 @@ export type Parser
 			return self.emitRetainExistentialCall(source, range: range)
 		end 'existential'
 
-		// ⭐⭐ **A DECLARED GENERIC'S CONTAINER BOX IS THE THIRD REPRESENTATION WITH AN IMMORTAL MEMBER**, and
-		// it earns an arm HERE rather than in `retainCalleeForValue` for one reason: its entry takes the
-		// instance's own cloner as a SECOND argument, which a callee selector cannot express. The buffer
-		// record's fork is `__managed_retain`'s, off `capacity@16`; this one is `__mm_own_deep`'s, off the
-		// allocation header, because a declared generic's `@16` is an author-declared field.
-		if self.valueIsAnImageableContainerBox(source) 'containerBox'
-			return self.emitOwnContainerBoxCopy(source, range: range)
-		end 'containerBox'
+		// ⭐⭐ **A BOX WHOSE SLOTS ADDRESS OTHER RECORDS IS THE THIRD REPRESENTATION WITH AN IMMORTAL MEMBER**,
+		// and it earns an arm HERE rather than in `retainCalleeForValue` for one reason: its entry takes the
+		// box's own cloner as a SECOND argument, which a callee selector cannot express. The buffer record's
+		// fork is `__managed_retain`'s, off `capacity@16`; this one is `__mm_own_deep`'s, off the allocation
+		// header, because a declared generic's `@16` — and a struct's — is an author-declared field.
+		if self.valueIsAnImageableDeepBox(source) 'aBoxWithPointerSlots'
+			return self.emitOwnDeepBoxCopy(source, range: range)
+		end 'aBoxWithPointerSlots'
 
 		// `__mm_retain` gives `source`'s box a second owner exactly as `__mm_incref` does, so the source is
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
@@ -40090,41 +40090,45 @@ export type Parser
 			return value
 		end 'aServiceHandle'
 
-		if self.tagOf(value) == ValueTypeTag.structRef 'plainStructBox'
+		// ⭐⭐⭐ **A BOX WHOSE SLOTS ADDRESS OTHER RECORDS TAKES THE DEEP COPY, exactly as the buffer record at
+		// the top does.** A `Map`, a `Set` and every declared generic written the way they are; and a struct
+		// whose own fields hold such records. An empty one of either is IMAGE DATA, whose incref does nothing
+		// — left to a bare incref or to `__mm_own`'s blit, the sink would come to hold the module-level
+		// `let`'s own columns, and the first write through them would hit a read-only page.
+		if self.valueIsAnImageableDeepBox(value) 'aBoxWithPointerSlots'
+			return self.emitOwnDeepBoxCopy(value, range: range)
+		end 'aBoxWithPointerSlots'
+
+		if tagIsStructRef(self.tagOf(value)) 'plainStructBox'
 			return self.emitOwnBoxForSink(value, range: range)
 		end 'plainStructBox'
-
-		// ⭐⭐⭐ **A DECLARED GENERIC'S CONTAINER BOX — a `Map`, a `Set`, and every base written the way they
-		// are — TAKES THE IMMORTAL-AWARE RETAIN, exactly as the buffer record at the top does.** It is
-		// `genericInstance`-tagged, so it matches neither arm above; and an empty one is IMAGE DATA
-		// (`declaredContainerBoxIsImageData`), whose incref does nothing. Left to the bare incref below, the
-		// sink would hold the module-level `let` itself and the first `upsert` through it would write a
-		// read-only page.
-		if self.valueIsAnImageableContainerBox(value) 'containerBox'
-			return self.emitOwnContainerBoxCopy(value, range: range)
-		end 'containerBox'
 
 		self.emitIncref(value, range: range)
 		return value
 	end 'coOwnConcreteRecordForSink'
 
-	// ⭐⭐ **IS THIS VALUE A BOX A `let` COULD HAVE LAID DOWN AS BYTES — a `Map`, a `Set`, and every declared
-	// generic written the way they are?** The admission is `declaredContainerBoxIsImageData` itself, which
-	// is why it is EXACT rather than conservative: an instance that predicate refuses has no imaged box
-	// anywhere in the program, so no value of that type can be image data and the plain incref stays right.
+	// ⭐⭐ **IS THIS VALUE A BOX A `let` COULD HAVE LAID DOWN AS BYTES WITH SLOTS ADDRESSING OTHER RECORDS —
+	// a `Map`, a `Set`, every declared generic written the way they are, and a struct holding one of those?**
+	// The admissions are `declaredContainerBoxIsImageData` and `structBoxIsImageableWithSlots` themselves,
+	// which is why this is EXACT rather than conservative: a type either predicate refuses has no such imaged
+	// box anywhere in the program, so no value of it can be one and the cheaper acquire stays right.
 	//
 	// ⛔ **A SERVICE HANDLE IS EXCLUDED HERE AND NOT ONLY AT THE SINK DOOR.** A handle's box NAMES a mailbox
 	// whose drop steps two shares; a copy of it is a second name holding one share, which
 	// `coOwnConcreteRecordForSink`'s handle arm records as a measured wrong answer. Its `create()` does not
-	// construct from params today, so the predicate below would refuse it anyway — but this door is the one
+	// construct from params today, so the predicates below would refuse it anyway — but this door is the one
 	// that decides which boxes get COPIED, and that gate belongs where the decision is.
-	function valueIsAnImageableContainerBox(value ValueId) returns bool
-		if self.tagOf(value) != ValueTypeTag.genericInstance or self.valueIsAServiceHandle(value) 'notADeclaredContainer'
+	function valueIsAnImageableDeepBox(value ValueId) returns bool
+		if self.valueIsAServiceHandle(value) 'aServiceHandle'
 			return false
-		end 'notADeclaredContainer'
+		end 'aServiceHandle'
 
-		return self.signatures.declaredContainerBoxIsImageData(self.valueInstanceId(value))
-	end 'valueIsAnImageableContainerBox'
+		if self.tagOf(value) == ValueTypeTag.genericInstance 'aDeclaredContainersBox'
+			return self.signatures.declaredContainerBoxIsImageData(self.valueInstanceId(value))
+		end 'aDeclaredContainersBox'
+
+		return tagIsStructRef(self.tagOf(value)) and self.signatures.structBoxIsImageableWithSlots(self.internedName(self.valueNameId(value)))
+	end 'valueIsAnImageableDeepBox'
 
 	// ⭐⭐ **IS THIS VALUE A SERVICE HANDLE? — THE VALUE TIER'S ONE SPELLING, over both tags a handle can
 	// stand at.** A monomorphic service's handle is `structRef` at its companion's name; a generic one's is
@@ -40162,22 +40166,33 @@ export type Parser
 		return self.emitRuntimeCall(MmOwnName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 	end 'emitOwnBoxForSink'
 
-	// ⭐⭐ **THE RETURNING `__mm_own_deep` A CONTAINER BOX OWES — `emitOwnBoxForSink`'s twin over the shape
-	// whose SLOTS address other records.** The two differ in the one thing that matters: this one's copy arm
-	// is the instance's own `__clone_<mangled>`, stamped as the second argument, where that door's is a byte
+	// ⭐⭐ **THE RETURNING `__mm_own_deep` A BOX WITH POINTER SLOTS OWES — `emitOwnBoxForSink`'s twin over the
+	// shape whose SLOTS address other records.** The two differ in the one thing that matters: this one's
+	// copy arm is the box's own `__clone_<…>`, stamped as the second argument, where that door's is a byte
 	// blit. `MmRuntime.buildMmOwnDeep` carries why a blit cannot serve one.
 	//
 	// ⚠ **ONLY AN IMMORTAL BOX IS COPIED, WHICH IS WHAT KEEPS THE ALIASING `emitOwnBoxForSink`'S HEADER
-	// RESERVES.** An ordinary heap container goes through the counted arm, so `var q = m` still shows
+	// RESERVES.** An ordinary heap box goes through the counted arm, so `var q = m` still shows
 	// `q.upsert(…)` through to `m`; an image record has no aliasing to preserve, because nothing can write
 	// it. It is `__managed_retain`'s bargain one representation over.
 	//
 	// The result is a distinct ValueId either way, which the caller needs for `emitRetainCall`'s reason.
-	function emitOwnContainerBoxCopy(value ValueId, range SourceRange) returns ValueId
+	function emitOwnDeepBoxCopy(value ValueId, range SourceRange) returns ValueId
 		self.markValueCoOwnsHeap(value)
-		let cloner = self.emitRuntimeFuncAddr(self.signatures.genericInstanceBoxCloneCallee(self.valueInstanceId(value)), range: range)
+		let cloner = self.emitRuntimeFuncAddr(self.deepBoxCloneCallee(value), range: range)
 		return self.emitRuntimeCall(MmOwnDeepName, args: pairArgs(value, second: cloner), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
-	end 'emitOwnContainerBoxCopy'
+	end 'emitOwnDeepBoxCopy'
+
+	// The `(box) -> newBox` the door above stamps: a declared generic's container clones through its
+	// INSTANCE's cloner, a struct through its TYPE's. The value's own tag says which, and it is the tag
+	// `valueIsAnImageableDeepBox` forked on to admit it.
+	function deepBoxCloneCallee(value ValueId) returns ByteArray
+		if self.tagOf(value) == ValueTypeTag.genericInstance 'aDeclaredContainersBox'
+			return self.signatures.genericInstanceBoxCloneCallee(self.valueInstanceId(value))
+		end 'aDeclaredContainersBox'
+
+		return self.signatures.structBoxCloneCallee(self.internedName(self.valueNameId(value)))
+	end 'deepBoxCloneCallee'
 
 	// ⭐⭐ **THE REFERENCE A REBIND FROM AN IMMUTABLE SOURCE OWES — the assignment door's half of the
 	// 2026-08-04 alias ruling** (`rebindSourceIsAnImmutableAlias` carries the rule; this is what it costs
@@ -43684,6 +43699,9 @@ export type Parser
 	// wider than `Scope`: a MODULE-storage subject has a stand-in `VarInfo` that no scope holds, and
 	// `getInfo` panics on a name it does not have. A stand-in is never pushed by `lockIterationSource`
 	// (which locks only what `Scope` holds), so it correctly answers "not locked" by identity.
+	//
+	// ⚠ **IT IS HALF THE CHAIN'S ANSWER AND NO LONGER THE WHOLE OF IT** — see `fieldChainImmutableNameAt`,
+	// which asks it first and then asks the chain's BASE.
 	function iterationLockNameOf(subjectName ByteArray) returns ByteArray
 		if subjectName.isEmpty() 'namesNoStorage'
 			return EmptySourceText
@@ -43695,6 +43713,77 @@ export type Parser
 
 		return subjectName
 	end 'iterationLockNameOf'
+
+	// ⭐⭐⭐ **THE E3019 BLAME FOR A WRITE REACHED THROUGH A FIELD CHAIN — the enclosing `for`'s LOCK, or a
+	// chain rooted at an IMMUTABLE TOP-LEVEL BINDING.**
+	//
+	// ⛔⛔ **THE SECOND HALF EXISTS BECAUSE THE RECORD MAY BE `.rdata`.** A module-level `let` whose fields
+	// are image data reserves no storage at all, so `SharedFacts.counts.push(1)` reaches `__mm_cow_detach`,
+	// which writes a page mapped READ-ONLY — MEASURED on x64; on wasm32-wasi, which has no read-only
+	// section, the same write rewrites the constant and only the leak gate notices. The BINDING door already
+	// refuses the identical write on a bare imaged global (`noteReceiverWrite`), and
+	// `moduleStorageSubjectName` declines to mint a subject for an immutable global on the stated premise
+	// that *"every write door refuses it already"*. This chain was the door that did not.
+	//
+	// ⛔⛔ **AND IT IS DELIBERATELY NOT ASKED OF A LOCAL `let` — A BOUND THAT IS MEASURED, NOT CHOSEN.** The
+	// oracle judges a CHAIN more narrowly than a BINDING: `let e = try xs.get(0)` then `e.counts.push(1)` is
+	// E3019 there, while `e.counts.set(0, value: 9)` COMPILES — so a chain turns on whether the callee
+	// REPUBLISHES the receiver's record, which `maskOf` cannot say (it carries `push` and `set` alike, and
+	// the binding door refuses both on either compiler). Asked of every local `let`, this rule refuses
+	// `IrModule.rewriteFuncBlockRefs`' own `func.blockRefs.set(…)` — a line the oracle compiles. A TOP-LEVEL
+	// immutable base needs no such split, because no callee at all may write an imaged record.
+	//
+	// ⚠ **THE BLAME IS THE BASE'S NAME AND NOT THE SUBJECT'S, and the two differ exactly where it matters.**
+	// E3070's subject for `self.items.clear()` is `items`, because that is the storage a borrow came out of;
+	// what decides whether the WRITE is legal is what the base PROMISED.
+	function fieldChainImmutableNameAt(baseIndex TokenIndex, subjectName ByteArray) returns ByteArray
+		let locked = self.iterationLockNameOf(subjectName)
+		if not locked.isEmpty() 'lockedByAnEnclosingFor'
+			return locked
+		end 'lockedByAnEnclosingFor'
+
+		return self.immutableTopLevelChainBase(baseIndex)
+	end 'fieldChainImmutableNameAt'
+
+	// The chain's base when it names a top-level binding this file may READ but not write through, and
+	// EMPTY for everything the header above bounds out — a local, a capture, a parameter, `self`.
+	//
+	// ⚠ SCOPE FIRST, exactly as `borrowSubjectNameAt` orders the same two lookups and for its reason: a
+	// local that shadows a global's name reads as the local.
+	function immutableTopLevelChainBase(baseIndex TokenIndex) returns ByteArray
+		let baseTok = self.tokenAt(baseIndex)
+		if self.baseNamesAValueInScope(baseTok) 'aBindingOfThisFrame'
+			return EmptySourceText
+		end 'aBindingOfThisFrame'
+
+		return baseTok.value if self.namesImmutableTopLevelBinding(baseTok.value) else EmptySourceText
+	end 'immutableTopLevelChainBase'
+
+	// Does `name` denote a top-level binding this file may READ but not WRITE through? It is
+	// `namesTopLevelBinding`'s pair of probes with the mutability asked of each: a CONSTANT is a `let` by
+	// construction — a `var` never reaches the constant registry — and a slot-backed binding carries the
+	// keyword on its own declaration.
+	//
+	// ⚠ **`moduleStorageSubjectName` CANNOT ANSWER THIS**, and its own header says why: it excludes an
+	// immutable top-level binding deliberately, on the premise that every write door already refuses one.
+	// The field-chain door was the one that did not.
+	function namesImmutableTopLevelBinding(name ByteArray) returns bool
+		let isConstant = match self.signatures.constantValueOf(name, readerFilePath: self.filePath) 'constant'
+			found to foundManaged gives true
+			foundImageRecord gives true
+			foundImageBox gives true
+			notFound gives false
+		end 'constant'
+
+		if isConstant 'anInlinedOrImagedLet'
+			return true
+		end 'anInlinedOrImagedLet'
+
+		return match self.signatures.globalDeclFor(name, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
+			found(_, _, _, mutable) gives not mutable
+			notFound gives false
+		end 'global'
+	end 'namesImmutableTopLevelBinding'
 
 	// ⭐⭐ **THE STORAGE A CHAIN AT `baseIndex` NAMES, or empty when it names none** — `iterationSubjectNameAt`
 	// (THE one derivation of *which binding a write goes through*) plus the one test that says the name denotes
@@ -60452,7 +60541,7 @@ export type Parser
 			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed))
 			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok), reader: self.moduleSlotReaderOf(tok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed))
 			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), varType: image.valueType, mutable: false, resultUsed: resultUsed))
-			imageBox(bytes, typeName, tag) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)), varType: self.imageBoxType(typeName, tag: tag), mutable: false, resultUsed: resultUsed))
+			imageBox(nodes, root, typeName, tag) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)), varType: self.imageBoxType(typeName, tag: tag), mutable: false, resultUsed: resultUsed))
 			none then return ManagedTopLevelDispatch.notAManagedReceiver
 		end 'binding'
 	end 'dispatchOnManagedTopLevelReceiver'
@@ -61358,7 +61447,7 @@ export type Parser
 			found then break 'constant'
 			foundManaged(bytes, kind) then return ManagedReceiverBinding.constant(bytes, kind: kind)
 			foundImageRecord(image) then return ManagedReceiverBinding.imageRecord(image)
-			foundImageBox(bytes, typeName, tag) then return ManagedReceiverBinding.imageBox(bytes, typeName: typeName, tag: tag)
+			foundImageBox(nodes, root, typeName, tag) then return ManagedReceiverBinding.imageBox(nodes, root: root, typeName: typeName, tag: tag)
 			notFound then break 'constant'
 		end 'constant'
 
@@ -68419,7 +68508,7 @@ export type Parser
 		let baseIndex = self.pos
 		let receiver = try self.parseFieldAccess()
 		let subjectName = self.borrowSubjectNameAt(baseIndex)
-		return try self.parsePostfix(func, value: try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(receiver, immutableName: self.iterationLockNameOf(subjectName), subjectName: subjectName), resultUsed: resultUsed), resultUsed: resultUsed)
+		return try self.parsePostfix(func, value: try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(receiver, immutableName: self.fieldChainImmutableNameAt(baseIndex, subjectName: subjectName), subjectName: subjectName), resultUsed: resultUsed), resultUsed: resultUsed)
 	end 'parseFieldChainCall'
 
 	// ⭐ **WHICH ROSTER ANSWERS FOR THIS SURFACE** — the ONE place a member list is picked, so every
@@ -72268,7 +72357,7 @@ export type Parser
 				// choice, spelled at the QUALIFIED name because that is what this chain is rooted at.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
-				imageBox(bytes, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
+				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), valueType: image.valueType, mutable: false)
 				none then break 'binding'
 			end 'binding'
@@ -72294,7 +72383,7 @@ export type Parser
 				// chain's own diagnostic rather than a claim that the base does not exist.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
-				imageBox(bytes, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
+				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), valueType: image.valueType, mutable: false)
 				none then break 'binding'
 			end 'binding'
@@ -74925,7 +75014,7 @@ export type Parser
 			found(payload, tag, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
-			foundImageBox(bytes, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(bytes, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)))
+			foundImageBox(nodes, root, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)))
 			notFound then break 'constant'
 		end 'constant'
 
@@ -75016,9 +75105,9 @@ export type Parser
 			constBlob to emptyContainer then self.emitImagedConstArrayLiteral(result, image: image, range: range)
 			// A table of ADDRESSES: N payloads, and no heap spelling to be told apart from — its own op.
 			stringTable(texts, elementDestroy) then self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStringTable(result, texts: texts, elementSize: image.elementSize, elementDestroy: elementDestroy), range: range)
-			// A declared container's BOX: `bytes` is the record and the columns are the slots addressing the
-			// other image objects — the struct-record op, whose scalar-struct spelling carries no columns.
-			containerBox(columns) then self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, bytes: image.bytes, columns: columns), range: range)
+			// A declared container's BOX: the arena holds the record and every image object its slots address
+			// — the struct-record op, whose scalar-struct spelling is one node with no columns.
+			containerBox(nodes, root) then self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, nodes: nodes, root: root), range: range)
 		end 'shape'
 		self.markImmutableGlobalRead(result)
 		return result
@@ -75054,9 +75143,9 @@ export type Parser
 	// ⚠ **NO OWNED TEMP AND NO DROP**, for the twin's reason: an immortal record is never created, so a
 	// statement-end drop on one would be a write to a read-only page. The W117 immutable-global mark is still
 	// taken — imaging changes where the record lives, not what `let` means.
-	function emitImageBoxRead(bytes ByteArray, typeName ByteArray, tag ValueTypeTag, range SourceRange) returns ValueId
+	function emitImageBoxRead(nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId, typeName ByteArray, tag ValueTypeTag, range SourceRange) returns ValueId
 		let result = self.mintValue(tag, nameId: typeNameIdOf(self.imageBoxType(typeName, tag: tag)))
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, bytes: bytes, columns: sharedEmptyImmortalBoxColumns), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.immortalStructRecord(result, nodes: nodes, root: root), range: range)
 		self.markImmutableGlobalRead(result)
 		return result
 	end 'emitImageBoxRead'
@@ -77213,9 +77302,9 @@ export type Parser
 	//
 	// ⭐⭐ **WHY IT MATTERS THAT THEY BECOME THE SAME NODE.** A `call` entry is an instruction: `__module_init`
 	// runs the factory before `main`, which allocates a box and stores into it. A `construct` entry is a
-	// DESCRIPTION — a size and one value per declared field — so when every value is a folded scalar the
-	// whole record is decided at compile time and the binding can be IMAGE DATA (`recordShapeHasAnImage`)
-	// instead of a slot filled at startup. The fold is what puts the overwhelmingly common spelling of a
+	// DESCRIPTION — a size and one value per declared field — so when every value's own bytes are decided at
+	// compile time the whole record is, and the binding can be IMAGE DATA (`recordShapeHasAnImage`) instead
+	// of a slot filled at startup. The fold is what puts the overwhelmingly common spelling of a
 	// constant record, `T.create(…)`, on the same footing as the one only the type's own body may write.
 	//
 	// ⚠ **EVERY UNCERTAINTY ANSWERS "IT IS AN ORDINARY CALL"**, which is the same direction the sweep fact
@@ -77282,7 +77371,7 @@ export type Parser
 		// `call` runs the factory, which has none of them. Folding unconditionally would refuse programs that
 		// compile today and would move where several diagnostics are blamed. Bounded to the case the fold
 		// exists for, the rewrite is invisible except that the global stops being built at all.
-		if not self.signatures.everyConstFieldIsAFoldedScalar(fields) 'notARecordAnImageCanHold'
+		if not self.signatures.constConstructionIsImageData(layout.name, fields: fields, calls: calls, below: calls.count() as InitializerCallId, declName: callee.name, elementFilePath: self.filePath) 'notARecordAnImageCanHold'
 			return ConstFactoryCall.call(callee.name, args: args)
 		end 'notARecordAnImageCanHold'
 
@@ -77825,11 +77914,11 @@ export type Parser
 	// id is its `root` — what types the `.data` slot and what `__module_init` materializes — so the binding
 	// would BE its own first helper-shaped field default, in both type and contents.
 	//
-	// ⚠ **AND SUCH A NODE IS ALWAYS AN ORPHAN, WHICH IS WHY THE WRONG ID READS AS WELL-FORMED.** Appending
-	// and bailing are one event: a helper default's value is a `call`, so `everyConstFieldIsAFoldedScalar` is
-	// false and `constFactoryConstruction` returns the `call` form carrying the original arguments. The
-	// appended defaults are unreachable from the root and exist only so `requireConstFieldValueFits` can type
-	// them — so a root that names one is a live slot pointing into nodes nothing else reads.
+	// ⚠ **AND SUCH A NODE CAN BE AN ORPHAN, WHICH IS WHY THE WRONG ID READS AS WELL-FORMED.** A field default
+	// that buys no image and a bail are one event: `constFactoryConstruction` then returns the `call` form
+	// carrying the original arguments, and the appended defaults are unreachable from the root, existing only
+	// so `requireConstFieldValueFits` can type them — so a root that names one is a live slot pointing into
+	// nodes nothing else reads.
 	function pushConstNode(calls ConstFactoryCallArray, node ConstFactoryCall) returns InitializerCallId
 		let id = calls.count()
 		calls.push(node)

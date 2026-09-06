@@ -1666,55 +1666,75 @@ type MaxonToStdLowering
 	// because the table pools them — `registerImmortalByteArrayRecord`'s property, over a shape whose bytes
 	// are its fields.
 	//
-	// Routed through a SMALL re-match so `columns` is bound in a single-call arm, never in `lowerOp`'s big
+	// Routed through a SMALL re-match so `nodes` is bound in a single-call arm, never in `lowerOp`'s big
 	// one — the tail-slot-`Array` corruption `lowerIndirectCall` documents.
 	function lowerImmortalStructRecord(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
-			immortalStructRecord(result, bytes, columns) then self.emitImmortalStructRecord(result, bytes: bytes, columns: columns, dstBlock: dstBlock)
+			immortalStructRecord(result, nodes, root) then self.emitImmortalStructRecord(result, nodes: nodes, root: root, dstBlock: dstBlock)
 			default panic("lowerImmortalStructRecord: expected an `immortalStructRecord` op, got a different MaxonOp variant — `lowerOp` routes only `immortalStructRecord` here")
 		end 's'
 	end 'lowerImmortalStructRecord'
 
-	function emitImmortalStructRecord(result ValueId, bytes ByteArray, columns ImmortalBoxColumnArray, dstBlock IrBlock)
-		let label = self.ensureImmortalStructRecord(bytes, columns: columns)
+	function emitImmortalStructRecord(result ValueId, nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId, dstBlock IrBlock)
+		let label = self.ensureImmortalBoxNode(nodes, node: root, below: nodes.count() as ImmortalBoxNodeId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
 	end 'emitImmortalStructRecord'
 
-	// ⭐⭐ **THE COLUMNS FIRST, THEN THE BOX THAT NAMES THEM** — a `Map`/`Set` `let`'s five `.rdata` objects.
-	// Each column is `ensureImmortalEmptyArrayRecord`'s own record, so a column and a body's `create()` of the
-	// same shape reach one object; the box's slot is SEEDED with that record's `.rdata` offset and the
-	// absolute data-to-data relocation overwrites the seed with its address.
+	// ⭐⭐ **THE SLOTS' OBJECTS FIRST, THEN THE BOX THAT NAMES THEM** — a `Map`/`Set` `let`'s five `.rdata`
+	// objects, and every nested box of a struct built the same way. An empty column is
+	// `ensureImmortalEmptyArrayRecord`'s own record, so a column and a body's `create()` of the same shape
+	// reach one object; a nested box recurses through this very door, so a box named twice in one tree
+	// registers once. The naming slot is SEEDED with the object's `.rdata` offset and the absolute
+	// data-to-data relocation overwrites the seed with its address.
 	//
 	// ⭐ **THE SEED IS WHAT KEEPS BYTE DEDUP HONEST** — `registerImmortalStringTableRecord`'s rule, for its
 	// reason: a box left zero in its pointer slots would collapse every same-SIZE box onto one label, and each
 	// collapsed box's relocations would then overwrite the others' slots. Seeded, two boxes are byte-equal
-	// exactly when they name the same columns in the same slots, which is when they ARE the same record.
+	// exactly when they name the same objects in the same slots, which is when they ARE the same record.
 	//
 	// ⭐ **THE RELOCATIONS ARE RECORDED EXACTLY ONCE PER LABEL** — `emitImmortalStringTable`'s memo, for its
 	// reason: a second entry patching one slot is what Mach-O's chained-rebase list does not tolerate.
-	function ensureImmortalStructRecord(bytes ByteArray, columns ImmortalBoxColumnArray) returns String
-		var columnLabels = StringArray.create()
-		for column in columns 'eachColumn'
-			columnLabels.push(self.ensureImmortalEmptyArrayRecord(column.elementSize, elementDestroy: column.elementDestroy))
-		end 'eachColumn'
+	//
+	// ⛔ **A NAMED NODE'S ID IS STRICTLY BELOW ITS NAMER'S, AND `below` IS WHAT HOLDS IT THERE — that bound
+	// is what makes this recursion TERMINATE.** The builder appends a FINISHED node, so every node a
+	// construction named already holds a lower slot (`Parser.pushConstNode`'s discipline, one tier up); an
+	// arena that violated it would describe a box containing itself, which no allocation can be.
+	function ensureImmortalBoxNode(nodes ImmortalBoxNodeArray, node ImmortalBoxNodeId, below ImmortalBoxNodeId) returns String
+		if node >= below 'notBelowItsNamer'
+			panic("ensureImmortalBoxNode: node {node} is named from a slot that may only reach below {below}, in a {nodes.count()}-entry arena — the tree is built bottom-up, so a forward reference is a box that contains itself")
+		end 'notBelowItsNamer'
 
-		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: self.seededBoxBytes(bytes, columns: columns, columnLabels: columnLabels), kind: RdataPayloadKind.structRecord, shape: ImmortalRecordShape.userStruct, debugStream: self.debugStream)
+		let entry = try nodes.get(node as ElementIndex) otherwise panic("ensureImmortalBoxNode: node id {node} is outside a {nodes.count()}-entry arena — the op carries the whole tree its root names")
+		var slotLabels = StringArray.create()
+		for column in entry.columns 'eachSlot'
+			slotLabels.push(self.immortalBoxSlotLabel(nodes, below: node, value: column.value))
+		end 'eachSlot'
+
+		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: self.seededBoxBytes(entry.bytes, columns: entry.columns, slotLabels: slotLabels), kind: RdataPayloadKind.structRecord, shape: ImmortalRecordShape.userStruct, debugStream: self.debugStream)
 		if self.emittedImmortalStructBoxes.contains(label) 'alreadyRelocated'
 			return label
 		end 'alreadyRelocated'
 
 		self.emittedImmortalStructBoxes.insert(label)
-		for i in 0 upto columns.count() 'eachSlot'
-			let column = try columns.get(i) otherwise panic("ensureImmortalStructRecord: columns.get OOB at {i} below count {columns.count()}")
-			self.globalData.recordRdataAbs64InRdata(try columnLabels.get(i) otherwise panic("ensureImmortalStructRecord: columnLabels.get OOB at {i} — the loop above pushed one label per column"), rdataLabel: label, offsetInLabel: column.offset)
+		for i in 0 upto entry.columns.count() 'eachSlot'
+			let column = try entry.columns.get(i) otherwise panic("ensureImmortalBoxNode: columns.get OOB at {i} below count {entry.columns.count()}")
+			self.globalData.recordRdataAbs64InRdata(try slotLabels.get(i) otherwise panic("ensureImmortalBoxNode: slotLabels.get OOB at {i} — the loop above pushed one label per slot"), rdataLabel: label, offsetInLabel: column.offset)
 		end 'eachSlot'
 
 		return label
-	end 'ensureImmortalStructRecord'
+	end 'ensureImmortalBoxNode'
 
-	// The box with each pointer slot SEEDED with its column's `.rdata` offset — a COPY, because the bytes
+	// The `.rdata` label one pointer slot addresses — the two shapes an image object can be, dispatched once.
+	function immortalBoxSlotLabel(nodes ImmortalBoxNodeArray, below ImmortalBoxNodeId, value ImmortalBoxSlotValue) returns String
+		match value 'slot'
+			emptyArray(elementSize, elementDestroy) then return self.ensureImmortalEmptyArrayRecord(elementSize, elementDestroy: elementDestroy)
+			box(child) then return self.ensureImmortalBoxNode(nodes, node: child, below: below)
+		end 'slot'
+	end 'immortalBoxSlotLabel'
+
+	// The box with each pointer slot SEEDED with its object's `.rdata` offset — a COPY, because the bytes
 	// ride the op and a lowering may reach the same op's payload again.
-	function seededBoxBytes(bytes ByteArray, columns ImmortalBoxColumnArray, columnLabels StringArray) returns ByteArray
+	function seededBoxBytes(bytes ByteArray, columns ImmortalBoxColumnArray, slotLabels StringArray) returns ByteArray
 		if columns.count() == 0 'aBoxOfScalars'
 			return bytes
 		end 'aBoxOfScalars'
@@ -1722,7 +1742,7 @@ type MaxonToStdLowering
 		var record = bytes.clone()
 		for i in 0 upto columns.count() 'eachColumn'
 			let column = try columns.get(i) otherwise panic("seededBoxBytes: columns.get OOB at {i} below count {columns.count()}")
-			let seed = scalarImage(self.globalData.rdataOffsetOf(try columnLabels.get(i) otherwise panic("seededBoxBytes: columnLabels.get OOB at {i} — the caller pushed one label per column")) as ParsedInt, byteCount: MachineWordBytes as BytePos)
+			let seed = scalarImage(self.globalData.rdataOffsetOf(try slotLabels.get(i) otherwise panic("seededBoxBytes: slotLabels.get OOB at {i} — the caller pushed one label per slot")) as ParsedInt, byteCount: MachineWordBytes as BytePos)
 			var at = column.offset
 			for b in seed 'eachByte'
 				try record.set(at as ElementIndex, value: b) otherwise panic("seededBoxBytes: a pointer slot at offset {column.offset} runs past a {record.count()}-byte box — the box size and the slot offsets both come from the one `StructLayout`")

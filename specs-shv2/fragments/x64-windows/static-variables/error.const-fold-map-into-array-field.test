@@ -1,0 +1,21 @@
+// Test: error.const-fold-map-into-array-field
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+typealias Counts = Map with (String, Num)
+
+type Holder
+	export var xs as NumArray
+
+	export static function create(xs NumArray) returns Holder
+		return Self{xs: xs}
+	end 'create'
+end 'Holder'
+
+let H = Holder.create(Counts.create())
+
+function main() returns ExitCode
+	return H.xs.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: :14:9: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'

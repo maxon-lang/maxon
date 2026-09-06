@@ -387,6 +387,12 @@ let ConstShapeBoxedUnionValue = 108 as HashDigest
 let RecordStorageShapeSlot = 116 as HashDigest
 let RecordStorageShapeImage = 117 as HashDigest
 
+// Which image object one pointer slot of an imaged box addresses, mixed so a column and a nested box cannot
+// hash alike on the terms the two do not share. 118 and 119 for `RecordStorageShapeSlot`'s reason — the
+// space is written down rather than derived.
+let ImageBoxSlotShapeEmptyArray = 118 as HashDigest
+let ImageBoxSlotShapeNestedBox = 119 as HashDigest
+
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
@@ -1012,9 +1018,9 @@ let noNameableGenericAliases = NameableGenericAliasTable.unwritten
 export let sharedEmptyConstArrayElements = ConstArrayElementArray.create()
 
 // The column list an imaged box of SCALARS carries — one shared array, never mutated, for
-// `sharedEmptyConstArrayElements`' reason: a struct of scalars addresses no other image object, and it is
-// the commoner of the two shapes the one struct-record op serves.
-export let sharedEmptyImmortalBoxColumns = ImmortalBoxColumnArray.create()
+// `sharedEmptyConstArrayElements`' reason: a box of scalars addresses no other image object, and it is the
+// commoner of the two shapes the one struct-record op serves.
+let sharedEmptyImmortalBoxColumns = ImmortalBoxColumnArray.create()
 
 // The `element_size@24` an imaged struct BOX carries, which is none: a box is not a `__ManagedMemory`
 // record and has no elements to stride over. Named rather than a bare 0 because 0 IS a live stride in the
@@ -1031,6 +1037,54 @@ union ContainerBoxSlot
 	column(slot ImmortalBoxColumn)
 	notImageable
 end 'ContainerBoxSlot'
+
+// ⭐⭐ **WHAT ONE FIELD OF A CONSTRUCTED STRUCT LAYS DOWN — `ContainerBoxSlot`'s twin over the shape whose
+// slots are decided by a FOLD rather than by the declaration's defaults.** It carries no resolved field for
+// the scalar arm, because a constructed box's scalars are laid down through `globalStructConstruct` — the
+// very routine `__module_init` builds the same record from — and re-deriving one here is how an imaged box
+// and a stored one would come to differ in bytes.
+union ConstFieldImageSlot
+	scalar
+	pointer(slot ImmortalBoxSlotValue)
+	notImageable
+end 'ConstFieldImageSlot'
+
+// The verdict on one constructed struct's whole box: the arena node it was appended as, or the refusal that
+// keeps the whole record on the runtime path. A half-imaged record is not a thing that can exist, so a
+// single field with no bytes answers for all of them.
+union ConstStructBoxOutcome
+	described(node ImmortalBoxNodeId)
+	notImageable
+end 'ConstStructBoxOutcome'
+
+// ⭐ **WHAT ONE DECLARED FIELD'S TYPE COULD LAY DOWN AS** — the TYPE-level reading of `ConstFieldImageSlot`,
+// which decides per VALUE. A durable sink cannot ask the value question: which record it is handed is not a
+// compile-time fact. See `ProgramSignatures.structBoxIsImageableWithSlots`.
+union StructImageSlotKind
+	scalar
+	pointer
+	notImageable
+end 'StructImageSlotKind'
+
+// ⭐⭐ **THE ONE DOOR A NODE ENTERS THE IMAGE ARENA THROUGH, AND TAKING THE SLOT HERE IS WHAT MAKES THE ID
+// SOUND** — `Parser.pushConstNode`'s discipline over the tree an imaged record becomes. A node is fully
+// BUILT before it can be handed over, so every node its columns name already holds a lower slot, which is
+// the bound `LowerMaxonToStd.ensureImmortalBoxNode` terminates its walk on.
+// A describe walk run for its VERDICT, its arena thrown away — the shape both admission doors take, so
+// "admitted" and "described" are one answer read one way.
+function imageBoxWasDescribed(outcome ConstStructBoxOutcome) returns bool
+	return match outcome 'outcome'
+		described gives true
+		notImageable gives false
+	end 'outcome'
+end 'imageBoxWasDescribed'
+
+function pushImageBoxNode(nodes ImmortalBoxNodeArray, node ImmortalBoxNode) returns ImmortalBoxNodeId
+	let id = nodes.count() as ImmortalBoxNodeId
+	nodes.push(node)
+
+	return id
+end 'pushImageBoxNode'
 
 // The contested names, in table order — a `match` arm may not open a `for`, so the walk is its own function.
 function keysOfCrossKindContests(byName CrossKindContestMap) returns ByteArrayArray
@@ -2182,11 +2236,12 @@ export union TopLevelConstantLookup
 	// rule): the two `found to foundManaged` range arms that ask only whether a constant EXISTS then keep
 	// EXCLUDING this case, so each has to be visited and decided rather than silently widened.
 	foundImageRecord(image TopLevelImageRecord)
-	// ⭐⭐ **AN IMAGE-DATA `let` HOLDING A BOX OF SCALARS** — a constructed struct whose every field was
-	// decided at compile time, or a boxed union's payload-free case, whose bytes are its tag. Either way the
-	// whole record is `bytes` and a read is one `.rdata` address. It is a SEPARATE arm from
-	// `foundImageRecord` because the two describe different things: that one carries a
-	// `__ManagedMemory`-shaped record's stride, count and element destructor, none of which a box has.
+	// ⭐⭐ **AN IMAGE-DATA `let` HOLDING A BOX** — a constructed struct whose every field was decided at
+	// compile time, or a boxed union's payload-free case, whose bytes are its tag. Either way the whole
+	// record TREE is `nodes`, `root` names the box the value stands at, and a read is one `.rdata` address.
+	// It is a SEPARATE arm from `foundImageRecord` because the two describe different things: that one
+	// carries a `__ManagedMemory`-shaped record's stride, count and element destructor, none of which a box
+	// has.
 	//
 	// ⭐ **`tag` IS THE ONE THING THE TWO SHAPES DISAGREE ON** — a struct's value stands at `structRef` and a
 	// union's at `named`, which is what routes its `match` and its drop — so it rides beside the bytes rather
@@ -2196,7 +2251,7 @@ export union TopLevelConstantLookup
 	// ⚠ **THE TYPE CROSSES AS A NAME, NOT AS AN INTERNED ID** — `found`'s rule, and it is the difference
 	// between a value the reading file can mint and a panic: every `structRef` and `named` id is minted from
 	// the FILE's own interner, and an id minted here names something else there.
-	foundImageBox(bytes ByteArray, typeName ByteArray, tag ValueTypeTag)
+	foundImageBox(nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId, typeName ByteArray, tag ValueTypeTag)
 end 'TopLevelConstantLookup'
 
 // ⭐⭐ **EVERYTHING A USE SITE NEEDS TO MATERIALIZE AN IMAGE-DATA `let`** — the record's SHAPE, its payload
@@ -3279,26 +3334,77 @@ end 'payloadValueTypeOf'
 // written at its own offset and width. The rest stays zero, which is what `__mm_alloc` gives a heap box — so
 // an imaged record and a built one are byte-for-byte the same record. Both imaged shapes come through it: a
 // constructed STRUCT's fields, and a payload-free union case's lone TAG slot.
-function structBoxImageOf(built GlobalInitCall) returns ByteArray
+//
+// ⭐ **A SLOT THAT ADDRESSES ANOTHER IMAGE OBJECT IS LEFT ZERO HERE**, and its describing entry rides the
+// node's `columns` instead: only the lowering can name one `.rdata` object from inside another, so it seeds
+// the slot with the object's offset and relocates it (`LowerMaxonToStd.seededBoxBytes`). A zero left for it
+// to overwrite is what keeps this walk free of any address at all.
+function structBoxImageOf(built GlobalInitCall, columns ImmortalBoxColumnArray) returns ByteArray
 	match built 'built'
-		construct(sizeBytes, fields) then return structBoxImageBytes(sizeBytes, fields: fields)
+		construct(sizeBytes, fields) then return structBoxImageBytes(sizeBytes, fields: fields, columns: columns)
 		call then panic("structBoxImageOf: `globalStructConstruct` answered a `call` — it has one return statement and it is a `construct`")
 		mapLiteral to arrayLiteral then panic("structBoxImageOf: `globalStructConstruct` answered a container literal — it has one return statement and it is a `construct`")
 	end 'built'
 end 'structBoxImageOf'
 
-function structBoxImageBytes(sizeBytes ByteOffset, fields GlobalStructFieldArray) returns ByteArray
+function structBoxImageBytes(sizeBytes ByteOffset, fields GlobalStructFieldArray, columns ImmortalBoxColumnArray) returns ByteArray
 	var image = ByteArray.create()
 	image.growFilled(sizeBytes as ElementIndex, value: 0)
 	for field in fields 'eachSlot'
 		match field.value 'produced'
 			scalar(payload) then writeImageSlot(image, offset: field.offset, value: payload, byteCount: stdTypeStorageBytes(maxonTypeToStdType(field.storageType)))
-			record to call then panic("structBoxImageBytes: a slot is produced by running code, in a record admitted as bytes — imaging is decided by `constStructIsImageData` for a constructed struct and by `boxedUnionCaseIsImageData` for a union case, and neither admits a slot a fold did not settle to a scalar")
+			record to call then requireImageSlotIsNamedByAColumn(field.offset, columns: columns)
 		end 'produced'
 	end 'eachSlot'
 
 	return image
 end 'structBoxImageBytes'
+
+// ⛔ **A SLOT PRODUCED BY RUNNING CODE IS LEFT ZERO HERE *ONLY* BECAUSE A COLUMN NAMES IT.** The lowering
+// seeds that slot with its object's `.rdata` offset and relocates it; a slot nothing names keeps the zero,
+// which is a NULL pointer in a live field of a record nothing will ever fault on writing. The walk that
+// records the columns and the walk that writes the bytes are the same walk (`describeConstStructBox`), so a
+// miss here is those two having come apart.
+function requireImageSlotIsNamedByAColumn(offset ByteOffset, columns ImmortalBoxColumnArray)
+	for column in columns 'eachSlot'
+		if column.offset == offset 'namedForTheLowering'
+			return
+		end 'namedForTheLowering'
+	end 'eachSlot'
+
+	panic("structBoxImageBytes: the slot at offset {offset} is produced by running code and no column names it — a record admitted as bytes carries one column per pointer slot, and a zero left with no relocation behind it is a NULL in a live field")
+end 'requireImageSlotIsNamedByAColumn'
+
+// ⭐⭐ **WHAT AN IMAGED BOX CONTRIBUTES TO ITS READERS' KEY IS THE TREE ITSELF** — the very arena the read
+// emits (`Parser.emitImageBoxRead`), walked from the root the value stands at, so a key and the bytes it
+// stands for cannot come to describe two records. Nodes the walk left orphaned contribute nothing, exactly
+// as they reach no `.rdata` object.
+//
+// ⛔ **`below` IS THE SAME BOUND `LowerMaxonToStd.ensureImmortalBoxNode` HOLDS, CHECKED THE SAME WAY.** The
+// two walk one arena, and a walk that trusted the bound its twin asserts would meet a broken arena as a
+// stack overflow here and a named panic there.
+function mixImageBoxTree(state HashDigest, nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId, below ImmortalBoxNodeId) returns HashDigest
+	if root >= below 'notBelowItsNamer'
+		panic("mixImageBoxTree: node {root} is named from a slot that may only reach below {below}, in a {nodes.count()}-entry arena — the tree is built bottom-up, so a forward reference is a box that contains itself")
+	end 'notBelowItsNamer'
+
+	let node = try nodes.get(root as ElementIndex) otherwise panic("mixImageBoxTree: node id {root} is outside a {nodes.count()}-entry arena — the walk that built it answers with a root it appended")
+	var mixed = Hasher.combined(mixBytes(state, bytes: node.bytes), value: node.columns.count() as HashDigest)
+	for column in node.columns 'eachSlot'
+		mixed = mixImageBoxSlot(Hasher.combined(mixed, value: column.offset as HashDigest), nodes: nodes, below: root, value: column.value)
+	end 'eachSlot'
+
+	return mixed
+end 'mixImageBoxTree'
+
+// One slot's own contribution. A COLUMN is the two facts that identify its record; a nested BOX is that
+// whole subtree, recursed through the door above under the bound that door enforces.
+function mixImageBoxSlot(state HashDigest, nodes ImmortalBoxNodeArray, below ImmortalBoxNodeId, value ImmortalBoxSlotValue) returns HashDigest
+	return match value 'slot'
+		emptyArray(elementSize, elementDestroy) gives mixBytes(Hasher.combined(Hasher.combined(state, value: ImageBoxSlotShapeEmptyArray), value: elementSize as HashDigest), bytes: elementDestroy)
+		box(child) gives mixImageBoxTree(Hasher.combined(state, value: ImageBoxSlotShapeNestedBox), nodes: nodes, root: child, below: below)
+	end 'slot'
+end 'mixImageBoxSlot'
 
 // One slot, at the width the STORE would move. Narrow deliberately: a `bool` field is a byte and a negative
 // value in a narrow slot must not sign-extend across its neighbours.
@@ -8725,6 +8831,45 @@ let sharedEmptyMethodWitnessConstraints = WhereConstraintArray.create()
 export function maxonTypesDenoteSame(a MaxonType, b MaxonType) returns bool
 	return maxonTypeTag(a) == maxonTypeTag(b) and typeNameIdOf(a) == typeNameIdOf(b)
 end 'maxonTypesDenoteSame'
+
+// ⭐⭐ **MAY THIS CONSTANT STAND IN THIS SLOT — the TAG, and the IDENTITY wherever the value carries one.**
+// `maxonTypesDenoteSame` with the one exemption `ProgramSignatures.constStructFieldCheck`'s header states
+// and measures: an instance the value INFERRED from its own contents is not a claim about which container
+// the author meant, so comparing it would refuse a program the corpus pins.
+function constSlotIdentityHolds(slot MaxonType, held MaxonType, value ConstFactoryArgumentValue) returns bool
+	if maxonTypeTag(slot) != maxonTypeTag(held) 'differentKinds'
+		return false
+	end 'differentKinds'
+
+	if maxonTypeTag(slot) == ValueTypeTag.genericInstance and constValueInfersItsInstance(value) 'typedByItsOwnElements'
+		return true
+	end 'typedByItsOwnElements'
+
+	return typeNameIdOf(slot) == typeNameIdOf(held)
+end 'constSlotIdentityHolds'
+
+// Is this value's INSTANCE inferred from its contents rather than stated by the author? Only an ARRAY
+// LITERAL is: `constArrayValueType` types `[1, 2, 3]` from its first element's kind. Spelled arm by arm
+// rather than as a range, `ConstFoldedValue`'s own discipline: a case appended there must be classified
+// here rather than swallowed by a range whose text does not move with it.
+function constValueInfersItsInstance(value ConstFactoryArgumentValue) returns bool
+	return match value 'value'
+		// A nested node is typed by its callee's DECLARED return, which is a statement about the type.
+		call gives false
+		folded(folded) gives constFoldedInfersItsInstance(folded)
+	end 'value'
+end 'constValueInfersItsInstance'
+
+// The folded half of the question above.
+function constFoldedInfersItsInstance(folded ConstFoldedValue) returns bool
+	return match folded 'kind'
+		arrayLiteral gives true
+		scalar gives false
+		managed gives false
+		containerCreate gives false
+		boxedUnionCase gives false
+	end 'kind'
+end 'constFoldedInfersItsInstance'
 
 // ⭐⭐ **WHAT A DECLARATION MAKES A TYPE NAME *MEAN*** — the thing a redeclaration of a COMPILER-OWNED name
 // has to be compared against, because W3's rule is that a name has ONE meaning and not that the compiler
@@ -14786,7 +14931,7 @@ export type ProgramSignatures
 	// be left off the next one; here it cannot be.
 	function settleRecordValue(decl TopLevelDecl, outcome TopLevelConstant) returns ConstEvalOutcome
 		decl.outcome = outcome
-		decl.hasStorage = decl.mutable or not self.recordShapeHasAnImage(outcome)
+		decl.hasStorage = decl.mutable or not self.recordShapeHasAnImage(outcome, declName: decl.name, elementFilePath: decl.declFilePath)
 		self.managedTopLevelNames.insert(decl.name)
 		return ConstEvalOutcome.notFound
 	end 'settleRecordValue'
@@ -14795,12 +14940,12 @@ export type ProgramSignatures
 	// reader of the imaging verdict asks `hasStorage`, which is derived from this; a second enumeration of
 	// the shapes would be a roster free to go stale the day one joins, and stale here is a global that still
 	// allocates while the rule that permits it says none do.
-	function recordShapeHasAnImage(outcome TopLevelConstant) returns bool
+	function recordShapeHasAnImage(outcome TopLevelConstant, declName ByteArray, elementFilePath FilePath) returns bool
 		return match outcome 'shape'
 			pending to managedValue gives false
 			arrayValue(elements, element) gives self.constArrayLiteralIsImageData(elements, element: element)
 			containerValue(giid, _, elements) gives self.emptyContainerIsImageData(giid, elements: elements)
-			factoryValue(calls, root, _) gives self.constStructIsImageData(calls, root: root)
+			factoryValue(calls, root, _) gives self.constStructIsImageData(calls, root: root, declName: declName, elementFilePath: elementFilePath)
 			boxedUnionValue(typeName, caseName) gives self.boxedUnionCaseIsImageData(typeName, caseName: caseName)
 		end 'shape'
 	end 'recordShapeHasAnImage'
@@ -14830,50 +14975,213 @@ export type ProgramSignatures
 	// construction it stands for (`Parser.constFactoryNode`); an entry still spelling a `call` is an
 	// instruction and answers false, exactly as it did before that fold existed.
 	//
-	// ⛔⛔ **EVERY SLOT MUST BE A FOLDED SCALAR, AND THAT BOUND IS THE POINTER CHANNEL AND NOT TIDINESS.** A
-	// managed field holds an ADDRESS, and the address of one `.rdata` payload written into another is a
-	// data→data relocation this compiler deliberately does not have (`constArrayLiteralIsImageData`'s own
-	// bound, one shape over). A slot filled by a nested node or by a synthesized default helper is worse
-	// again: its value is produced by RUNNING CODE, so there are no bytes to lay down at all.
+	// ⭐⭐ **THE BOUND IS "EVERY FIELD'S OWN BYTES ARE DECIDED AT COMPILE TIME", WHICH AN IMAGED FIELD MEETS
+	// EXACTLY AS A SCALAR DOES.** A managed field holds an ADDRESS, and the address of one `.rdata` object
+	// written into another is an absolute data-to-data relocation — which this compiler DOES have, for the
+	// slots of a `Map`/`Set` box (`declaredContainerBoxIsImageData`, one shape over). So an empty container,
+	// a nested construction and a payload-free union case are admitted here, each as a slot the lowering
+	// seeds and relocates; a field that must be BUILT is not, and keeps the WHOLE record on the runtime path.
 	//
 	// ⚠ **THE MARK FOR THIS SHAPE IS NOT `capacity@16`.** A user struct's offset 16 is whatever field the
 	// author declared there, so the immortality mark lives in the synthetic allocation header the record is
 	// registered behind (`MmRuntime.immortalBoxHeaderBytes`) — which is what makes a record of ARBITRARY
 	// shape markable at all, and why this shape could not be imaged before that header existed.
-	function constStructIsImageData(calls ConstFactoryCallArray, root InitializerCallId) returns bool
-		match factoryCallAt(calls, id: root) 'node'
-			construct(_, fields) then return everyConstFieldIsAFoldedScalar(fields)
-			call then return false
-			mapLiteral to arrayLiteral then return false
-		end 'node'
+	//
+	// ⛔ **THE VERDICT IS `describeConstStructBox` RUN FOR ITS ANSWER AND NOT FOR ITS ARENA**, which the
+	// scratch list throws away: a box admitted here is a box that walk has already described, so the
+	// admission and the image cannot be two readings of one fold.
+	function constStructIsImageData(calls ConstFactoryCallArray, root InitializerCallId, declName ByteArray, elementFilePath FilePath) returns bool
+		var scratch = ImmortalBoxNodeArray.create()
+		return imageBoxWasDescribed(self.constStructBoxNode(calls, root: root, declName: declName, elementFilePath: elementFilePath, nodes: scratch))
 	end 'constStructIsImageData'
 
-	// ⭐ **DOES THIS CONSTRUCTION LAY DOWN AS BYTES?** Read by the imaging verdict above and by the const
+	// ⭐ **DOES THIS CONSTRUCTION LAY DOWN AS AN IMAGE?** Read by the verdict above and by the const
 	// evaluator, which folds a factory call into a construction ONLY when the answer is yes — see
 	// `Parser.constFactoryConstruction` for why a fold that buys no image must not happen at all.
-	export function everyConstFieldIsAFoldedScalar(fields ConstFactoryArgumentValueArray) returns bool
-		for field in fields 'eachSlot'
-			let laysDownAsBytes = match field 'value'
-				folded(value) gives constFoldedIsAScalar(value)
-				call gives false
-			end 'value'
+	//
+	// ⚠ **`below` IS THE ARENA COUNT AT THE EVALUATOR'S DOOR AND THE ROOT'S OWN ID AT THIS ONE**, which is
+	// the same bound stated at the two moments: the evaluator asks before its node exists, so every node its
+	// fields appended is below the slot it will take; the verdict asks after, so they are below the root.
+	export function constConstructionIsImageData(typeName ByteArray, fields ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, below InitializerCallId, declName ByteArray, elementFilePath FilePath) returns bool
+		var scratch = ImmortalBoxNodeArray.create()
+		return imageBoxWasDescribed(self.describeConstStructBox(typeName, fields: fields, calls: calls, below: below, declName: declName, elementFilePath: elementFilePath, nodes: scratch))
+	end 'constConstructionIsImageData'
 
-			if not laysDownAsBytes 'notBytes'
-				return false
-			end 'notBytes'
-		end 'eachSlot'
+	// ⭐ **THE ARENA NODE ONE INITIALIZER'S ROOT BECOMES, OR THE REFUSAL.** A root still spelling a `call` is
+	// an instruction and a container literal is a record of a different shape entirely; neither has a box.
+	function constStructBoxNode(calls ConstFactoryCallArray, root InitializerCallId, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstStructBoxOutcome
+		match factoryCallAt(calls, id: root) 'node'
+			construct(typeName, fields) then return self.describeConstStructBox(typeName, fields: fields, calls: calls, below: root, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
+			call then return ConstStructBoxOutcome.notImageable
+			mapLiteral to arrayLiteral then return ConstStructBoxOutcome.notImageable
+		end 'node'
+	end 'constStructBoxNode'
 
-		return true
-	end 'everyConstFieldIsAFoldedScalar'
+	// ⭐⭐⭐ **THE IMAGE ONE CONSTRUCTED STRUCT LAYS DOWN, APPENDED TO THE ARENA — THE ONE DECIDER.** The
+	// predicate that admits a `let` runs it for its verdict, the lookup that materializes one runs it for the
+	// arena, and a field holding a nested construction runs it for its own box. So a slot cannot be judged
+	// one way and laid down another, and the recursion is ONE walk rather than a predicate and a builder that
+	// have to agree.
+	//
+	// ⛔ **A SINGLE FIELD WITH NO BYTES ANSWERS FOR ALL OF THEM**, because a half-imaged record is not a
+	// thing that can exist: the scalars cannot go in the image while the rest are built before `main`, so the
+	// refusal is the whole record's.
+	//
+	// The nodes a refused walk already appended are ORPHANS and are left where they are —
+	// `LowerMaxonToStd.ensureImmortalBoxNode` reaches only what the root names, exactly as
+	// `Parser.pushConstNode`'s header records for the fold arena one tier up.
+	function describeConstStructBox(typeName ByteArray, fields ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, below InitializerCallId, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstStructBoxOutcome
+		let layout = self.constStructLayoutOf(typeName, declName: declName)
+		if fields.count() != layout.fieldCount() 'notLayoutParallel'
+			panic("ProgramSignatures.describeConstStructBox: '{String.from(declName)}' constructs `{String.from(typeName)}` with {fields.count()} field value(s) against a layout of {layout.fieldCount()} — the fold tier fills one entry per DECLARED field (`Parser.evalConstStructConstructionInto`), from the literal or from the field's default, and refuses the declaration otherwise")
+		end 'notLayoutParallel'
 
-	// A folded value the image can hold is a NUMBER and nothing else: a String or a container is an address,
-	// and a boxed case is a box.
-	function constFoldedIsAScalar(value ConstFoldedValue) returns bool
-		return match value 'kind'
-			scalar gives true
-			managed to boxedUnionCase gives false
+		var columns = ImmortalBoxColumnArray.create()
+		for i in 0 upto fields.count() 'eachField'
+			let field = try fields.get(i) otherwise panic("ProgramSignatures.describeConstStructBox: fields.get OOB at {i} below the count this loop was just held to")
+			match self.constFieldImageSlot(field, calls: calls, layout: layout, index: i, below: below, declName: declName, elementFilePath: elementFilePath, nodes: nodes) 'slot'
+				scalar then continue
+				pointer(value) then columns.push(ImmortalBoxColumn.create(layout.offsetOfField(i), value: value))
+				notImageable then return ConstStructBoxOutcome.notImageable
+			end 'slot'
+		end 'eachField'
+
+		// The BYTES come from `globalStructConstruct`, the very routine `__module_init` builds the same record
+		// from, so an imaged binding and a stored one lay down the same fields at the same offsets at the same
+		// widths. A pointer slot's bytes are left ZERO there and seeded by the lowering, which is the only tier
+		// that can name one `.rdata` object from inside another.
+		return ConstStructBoxOutcome.described(pushImageBoxNode(nodes, node: ImmortalBoxNode.create(structBoxImageOf(self.globalStructConstructOf(layout, typeName: typeName, fields: fields, calls: calls, declName: declName, elementFilePath: elementFilePath), columns: columns), columns: columns)))
+	end 'describeConstStructBox'
+
+	// ⭐ **ONE FIELD'S ANSWER: a number, an address the image can name, or nothing the image can hold.** Read
+	// by the walk above and by nothing else — the two doors a field's value can arrive through are the two
+	// arms of `ConstFactoryArgumentValue`, and both are classified here.
+	function constFieldImageSlot(field ConstFactoryArgumentValue, calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, below InitializerCallId, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		match field 'value'
+			folded(value) then return self.foldedFieldImageSlot(value, nodes: nodes)
+			call(id) then return self.nodeFieldImageSlot(id, calls: calls, layout: layout, index: index, below: below, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
+		end 'value'
+	end 'constFieldImageSlot'
+
+	// ⭐ **A FOLDED FIELD VALUE'S SLOT.** A number goes into the box; an empty container and a payload-free
+	// union case are image objects the box can address.
+	//
+	// ⛔ **A MANAGED LITERAL AND AN ARRAY LITERAL ARE REFUSED, AND THE BOUND IS THE SLOT DESCRIPTION AND NOT
+	// THE VALUE.** Both are already image data as a BINDING, but their records are `__ManagedMemory` records
+	// carrying a payload blob of their own — a stride, a count and an element destructor, none of which an
+	// `ImmortalBoxSlotValue` describes. A field holding one keeps the whole record on the runtime path until
+	// that union has an arm for it.
+	// Spelled arm by arm rather than as a range, `everyContainerSlotIsImageData`'s discipline and for its
+	// reason: a case appended to `ConstFoldedValue` must be classified here rather than swallowed by a range
+	// whose text does not move with it.
+	function foldedFieldImageSlot(value ConstFoldedValue, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		match value 'kind'
+			scalar then return ConstFieldImageSlot.scalar
+			managed then return ConstFieldImageSlot.notImageable
+			arrayLiteral then return ConstFieldImageSlot.notImageable
+			containerCreate(giid, _, elements) then return self.emptyContainerFieldSlot(giid, elements: elements, nodes: nodes)
+			boxedUnionCase(typeName, caseName) then return self.boxedUnionCaseFieldSlot(typeName, caseName: caseName, nodes: nodes)
 		end 'kind'
-	end 'constFoldedIsAScalar'
+	end 'foldedFieldImageSlot'
+
+	// ⭐⭐ **AN EMPTY CONTAINER FIELD — the shape this rung exists for.** The admission is
+	// `emptyContainerIsImageData` itself, so a container a `let` of its own could not be imaged as cannot
+	// become imageable by being a field; what is added here is only WHICH image object the slot names, which
+	// forks on the instance for that predicate's own reason — an `Array` is one record, a declared
+	// generic's container is a whole box.
+	//
+	// ⛔ **AN OPAQUE ELEMENT IS REFUSED**, `containerBoxColumnSlot`'s bound and for its reason: a column over
+	// one of the base's own type parameters is born at the fixed opaque slot width by the SHARED body, and
+	// this door has no instance to read a substituted stride against.
+	function emptyContainerFieldSlot(giid GenericInstanceId, elements ConstArrayElementArray, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		if not self.emptyContainerIsImageData(giid, elements: elements) 'notAnImagedContainer'
+			return ConstFieldImageSlot.notImageable
+		end 'notAnImagedContainer'
+
+		if not self.isArrayInstance(giid) 'aDeclaredContainersBox'
+			return ConstFieldImageSlot.pointer(ImmortalBoxSlotValue.box(self.declaredContainerBoxNode(giid, nodes: nodes)))
+		end 'aDeclaredContainersBox'
+
+		if self.containerElementIsOpaque(giid) 'aSharedBodysColumn'
+			return ConstFieldImageSlot.notImageable
+		end 'aSharedBodysColumn'
+
+		return ConstFieldImageSlot.pointer(ImmortalBoxSlotValue.emptyArray(self.arrayElementSize(giid), elementDestroy: self.imageElementDestroyOf(giid)))
+	end 'emptyContainerFieldSlot'
+
+	// A payload-free union case in a field: a box whose entire content is its tag, which is the same bytes an
+	// imaged `let` of that case lays down (`boxedUnionCaseImageBytes`) and admitted by the same predicate.
+	function boxedUnionCaseFieldSlot(typeName ByteArray, caseName ByteArray, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		if not self.boxedUnionCaseIsImageData(typeName, caseName: caseName) 'aPayloadCarryingCase'
+			return ConstFieldImageSlot.notImageable
+		end 'aPayloadCarryingCase'
+
+		return ConstFieldImageSlot.pointer(ImmortalBoxSlotValue.box(pushImageBoxNode(nodes, node: ImmortalBoxNode.create(self.boxedUnionCaseImageBytes(typeName, caseName: caseName), columns: sharedEmptyImmortalBoxColumns))))
+	end 'boxedUnionCaseFieldSlot'
+
+	// ⭐ **A FIELD WHOSE VALUE IS AN ARENA NODE — the recursion.** A nested CONSTRUCTION is a box of its own,
+	// described through the same walk; a nested CALL is code, except for the one call shape a declaration can
+	// describe without running it.
+	//
+	// ⛔ **THE NESTED ID MUST BE BELOW ITS NAMER'S, WHICH IS WHAT MAKES THE RECURSION TERMINATE.** The fold
+	// arena appends a FINISHED node (`Parser.pushConstNode`), so a construction's own nodes always hold lower
+	// slots; a forward reference would describe a record containing itself, and it is REFUSED rather than
+	// asserted because every ambiguity in this family resolves toward imaging nothing.
+	function nodeFieldImageSlot(id InitializerCallId, calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, below InitializerCallId, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		if id >= below 'notBelowItsNamer'
+			return ConstFieldImageSlot.notImageable
+		end 'notBelowItsNamer'
+
+		match factoryCallAt(calls, id: id) 'node'
+			construct then return self.nestedConstStructFieldSlot(id, calls: calls, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
+			call(callee, args) then return self.helperDefaultFieldSlot(callee, args: args, layout: layout, index: index, nodes: nodes)
+			mapLiteral to arrayLiteral then return ConstFieldImageSlot.notImageable
+		end 'node'
+	end 'nodeFieldImageSlot'
+
+	// The tail of the recursion above, split out because a `match` arm may not open one: a nested box that
+	// describes becomes this slot's address, and one that does not takes the whole record down with it.
+	function nestedConstStructFieldSlot(id InitializerCallId, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		match self.constStructBoxNode(calls, root: id, declName: declName, elementFilePath: elementFilePath, nodes: nodes) 'outcome'
+			described(node) then return ConstFieldImageSlot.pointer(ImmortalBoxSlotValue.box(node))
+			notImageable then return ConstFieldImageSlot.notImageable
+		end 'outcome'
+	end 'nestedConstStructFieldSlot'
+
+	// ⭐⭐ **A SLOT FILLED BY ITS DECLARED `<Type>.create()` DEFAULT HOLDS THE EMPTY CONTAINER THAT TYPE
+	// DENOTES**, which is the one expression shape a reader in another file can describe without running it
+	// — `FieldDefault.bareCreateHelper`'s whole reason for being a distinct arm, spent here as it is at
+	// `containerBoxSlot` one shape over. Every other call is code, and code has no bytes.
+	//
+	// ⚠ **THE ARENA NODE IS LEFT WHERE IT IS.** `factoryInitializerCallees` walks it to name everything a
+	// top-level initializer calls, which is what roots the synthesized helper for the branch where this
+	// record is built before `main`; reading the default here does not unroot it.
+	function helperDefaultFieldSlot(callee ByteArray, args ConstFactoryArgumentArray, layout StructLayout, index FieldIndex, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		if args.count() > 0 'anArgumentIsCode'
+			return ConstFieldImageSlot.notImageable
+		end 'anArgumentIsCode'
+
+		match layout.fieldDefault(index) 'declared'
+			bareCreateHelper(helperName) then return self.declaredContainerFieldSlot(callee, helperName: helperName, layout: layout, index: index, nodes: nodes)
+			none to helper then return ConstFieldImageSlot.notImageable
+		end 'declared'
+	end 'helperDefaultFieldSlot'
+
+	// The tail of the door above. The callee is compared against the slot's OWN default helper rather than
+	// trusted: a nullary call in a field the declaration defaults differently is some other function, and its
+	// value is whatever that body computes.
+	function declaredContainerFieldSlot(callee ByteArray, helperName ByteArray, layout StructLayout, index FieldIndex, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		if not callee.equals(helperName) 'notThisSlotsDefault'
+			return ConstFieldImageSlot.notImageable
+		end 'notThisSlotsDefault'
+
+		let declared = self.fieldTypeOf(layout, index: index, into: self.typeNames)
+		if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'notAContainerSlot'
+			return ConstFieldImageSlot.notImageable
+		end 'notAContainerSlot'
+
+		return self.emptyContainerFieldSlot(genericInstanceIdOf(declared), elements: sharedEmptyConstArrayElements, nodes: nodes)
+	end 'declaredContainerFieldSlot'
 
 	// ⭐⭐ **CAN AN ARRAY LITERAL'S RECORD BE LAID DOWN AS BYTES?** — the constant-blob half of the ⚖ *a
 	// `let` is image data* ruling. It asks EXACTLY the question `containerRecordOf` asks before it lays a
@@ -14964,6 +15272,103 @@ export type ProgramSignatures
 		end 'known'
 	end 'declaredContainerBoxIsImageData'
 
+	// ⭐⭐⭐ **COULD A BOX OF THIS DECLARED STRUCT BE LAID DOWN AS BYTES WITH POINTER SLOTS?** —
+	// `declaredContainerBoxIsImageData`'s twin over the shape whose fields the AUTHOR declared, and the
+	// question a durable sink asks before choosing between a byte blit and a deep clone.
+	//
+	// ⛔⛔ **IT IS A TYPE QUESTION BECAUSE PROVENANCE IS NOT A COMPILE-TIME FACT.** Which record a sink is
+	// handed may be a merge phi joining an imaged box with a heap one (`MmRuntime.buildMmOwn`'s header), so
+	// the run-time fork has to be armed for every value of a type SOME box of which could be an image. It
+	// therefore reads the DECLARATION, where `constFieldImageSlot` reads the folded VALUE, and answers yes
+	// wherever that walk could: a struct it refuses has no imaged box with slots anywhere in the program.
+	//
+	// ⛔ **AND THE CLONER MUST EXIST**, which is the second half and not a nicety: the deep road stamps
+	// `__clone_<T>`, and a struct with an OS-handle field has no deep clone at all
+	// (`managedNameCascadeStrategy`'s `unsupported`). Such a struct can never be imaged either — no fold
+	// produces a handle — so declining it here declines nothing an image could reach.
+	export function structBoxIsImageableWithSlots(typeName ByteArray) returns bool
+		match self.structInAnyFile(typeName) 'declared'
+			declared(layout) then return self.everyStructSlotIsImageable(layout) and self.structBoxHasADeepCloner(typeName)
+			undeclared then return false
+		end 'declared'
+	end 'structBoxIsImageableWithSlots'
+
+	// The walk behind the verdict above — split out because a `match` arm may not open a `for`. A struct of
+	// SCALARS answers false: its image addresses no other object, so the blit is right for it and the deep
+	// road would buy a cloner nothing needs.
+	function everyStructSlotIsImageable(layout StructLayout) returns bool
+		var addressesAnImageObject = false
+		for i in 0 upto layout.fieldCount() 'eachField'
+			match self.structImageSlotKind(layout, index: i) 'slot'
+				scalar then continue
+				pointer then addressesAnImageObject = true
+				notImageable then return false
+			end 'slot'
+		end 'eachField'
+
+		return addressesAnImageObject
+	end 'everyStructSlotIsImageable'
+
+	// ⭐ **WHAT ONE DECLARED FIELD COULD LAY DOWN AS — the TYPE-level reading of `constFieldImageSlot`,
+	// admitting exactly the objects that walk admits.** A String, a Character and an existential are refused
+	// there as folded values and are refused here as types, so the two readings cannot come apart.
+	function structImageSlotKind(layout StructLayout, index FieldIndex) returns StructImageSlotKind
+		let declared = self.fieldTypeOf(layout, index: index, into: self.typeNames)
+		if not self.typeIsManaged(declared, from: self.typeNames) 'aNumber'
+			return StructImageSlotKind.scalar
+		end 'aNumber'
+
+		let tag = maxonTypeTag(declared)
+		if tag == ValueTypeTag.genericInstance 'aContainer'
+			return self.containerSlotImageKind(genericInstanceIdOf(declared))
+		end 'aContainer'
+
+		// A declared struct or boxed union is a nested BOX, which `nestedConstStructFieldSlot` and
+		// `boxedUnionCaseFieldSlot` do lay down. Nothing else can be: a byte record carries a payload blob
+		// no slot description names, and an existential is a pair the image has no shape for.
+		if tagIsStructRef(tag) or tag == ValueTypeTag.named 'aNestedBox'
+			return StructImageSlotKind.pointer
+		end 'aNestedBox'
+
+		return StructImageSlotKind.notImageable
+	end 'structImageSlotKind'
+
+	// A container field's kind, forked on the instance for `emptyContainerFieldSlot`'s reason — an `Array` is
+	// one record and a declared generic's container is a whole box, and both are addresses.
+	function containerSlotImageKind(giid GenericInstanceId) returns StructImageSlotKind
+		if self.isArrayInstance(giid) 'aManagedRecord'
+			return StructImageSlotKind.pointer
+		end 'aManagedRecord'
+
+		if self.declaredContainerBoxIsImageData(giid) 'aDeclaredContainersBox'
+			return StructImageSlotKind.pointer
+		end 'aDeclaredContainersBox'
+
+		return StructImageSlotKind.notImageable
+	end 'containerSlotImageKind'
+
+	// Has this struct a `(box) -> newBox` cloner at all? Asked through the very strategy the stamp is read
+	// off, so the gate and the callee cannot disagree about a name. It refuses only the compiler-owned
+	// OS-handle aggregates, which no fold can produce — it is the gate stated where the decision is, not a
+	// filter the corpus exercises.
+	function structBoxHasADeepCloner(typeName ByteArray) returns bool
+		return match managedNameCascadeStrategy(self, declaredName: typeName, asElement: false, action: CascadeAction.clone) 'strategy'
+			direct to managedElements gives true
+			unsupported gives false
+		end 'strategy'
+	end 'structBoxHasADeepCloner'
+
+	// ⭐ **THE `(box) -> newBox` A STRUCT BOX IS DEEP-COPIED THROUGH** — `genericInstanceBoxCloneCallee`'s
+	// twin, resolved through `managedNameCascadeStrategy` rather than spelling `__clone_<T>` here, so the
+	// symbol a sink stamps and the symbol `installStructCascades` synthesizes are one derivation.
+	export function structBoxCloneCallee(typeName ByteArray) returns ByteArray
+		match managedNameCascadeStrategy(self, declaredName: typeName, asElement: false, action: CascadeAction.clone) 'strategy'
+			direct(callee) then return callee
+			managedElements then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` copies through an element-bearing record's 2-argument entry, which no box co-own can call — a declared struct's strategy is the `direct` per-type cloner")
+			unsupported then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` has no deep cloner — `structBoxIsImageableWithSlots` asks this very strategy before a value reaches this road")
+		end 'strategy'
+	end 'structBoxCloneCallee'
+
 	// The walk behind the verdict above — split out because a `match` arm may not open a `for`. The box-size
 	// agreement is checked here because the image is sized from the INSTANCE and its slots offset from the
 	// LAYOUT: a disagreement would place a column past the end of the box it belongs to.
@@ -15044,7 +15449,7 @@ export type ProgramSignatures
 		end 'notAnArrayColumn'
 
 		if not self.containerElementIsOpaque(column) 'aConcreteColumn'
-			return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), elementSize: self.arrayElementSize(column), elementDestroy: self.imageElementDestroyOf(column)))
+			return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), value: ImmortalBoxSlotValue.emptyArray(self.arrayElementSize(column), elementDestroy: self.imageElementDestroyOf(column))))
 		end 'aConcreteColumn'
 
 		let element = self.containerElementType(column)
@@ -15055,7 +15460,7 @@ export type ProgramSignatures
 			return ContainerBoxSlot.notImageable
 		end 'notThisDeclarationsParameter'
 
-		return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES as ElementStride, elementDestroy: self.typeParamDropCallee(giid, position: self.opaqueTypeParamPosition(element))))
+		return ContainerBoxSlot.column(ImmortalBoxColumn.create(layout.offsetOfField(index), value: ImmortalBoxSlotValue.emptyArray(LAYOUT_TYPE_PARAM_SLOT_BYTES as ElementStride, elementDestroy: self.typeParamDropCallee(giid, position: self.opaqueTypeParamPosition(element)))))
 	end 'containerBoxColumnSlot'
 
 	// ⭐ **THE CONTEST COLUMNS' READ AND INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is
@@ -16097,7 +16502,13 @@ export type ProgramSignatures
 	// resolves against THIS index's interner and registries, which is the discipline
 	// `GlobalInitCall.construct` states.
 	function globalStructConstruct(typeName ByteArray, fields ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCall
-		let layout = self.constStructLayoutOf(typeName, declName: declName)
+		return self.globalStructConstructOf(self.constStructLayoutOf(typeName, declName: declName), typeName: typeName, fields: fields, calls: calls, declName: declName, elementFilePath: elementFilePath)
+	end 'globalStructConstruct'
+
+	// The same construction over a layout the caller ALREADY resolved — `describeConstStructBox` walks these
+	// very fields to describe the box's slots and would otherwise look the declaration up twice and carry a
+	// second copy of the arity refusal below.
+	function globalStructConstructOf(layout StructLayout, typeName ByteArray, fields ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCall
 		if fields.count() != layout.fieldCount() 'notLayoutParallel'
 			panic("ProgramSignatures.globalStructConstruct: '{String.from(declName)}' constructs `{String.from(typeName)}` with {fields.count()} field value(s) against a layout of {layout.fieldCount()} — the fold tier fills one entry per DECLARED field (`Parser.evalConstStructConstructionInto`), from the literal or from the field's default, and refuses the declaration otherwise")
 		end 'notLayoutParallel'
@@ -16110,7 +16521,7 @@ export type ProgramSignatures
 		end 'eachField'
 
 		return GlobalInitCall.construct(layout.sizeBytes(), fields: resolved)
-	end 'globalStructConstruct'
+	end 'globalStructConstructOf'
 
 	// ⭐⭐ **A MAP LITERAL'S RECORD, RESOLVED** — the instance's `create` description plus one resolved pair per
 	// entry. The description comes from `containerCreateCall`, the SAME router a `MapAlias.create()` global's
@@ -16235,12 +16646,26 @@ export type ProgramSignatures
 	// lacks: `TypeResolution`'s E3011 for a name no file declares, and
 	// `existentialFieldOfConstConstruction`'s E2015 for the interface case, at the real parse.
 	//
-	// ⛔ **A GENERIC INSTANCE IS DELIBERATELY *NOT* COMPARED BY IDENTITY, and comparing it would REFUSE A
-	// PROGRAM THE ORACLE RUNS.** A top-level array literal is typed by the canonical instance its ELEMENT KIND
-	// fixes (`constArrayValueType` — `Array with Integer`), never by the alias the slot was declared with, so
-	// `Holder{xs: [1, 2, 3]}` against `var xs as CountArray` is two instance ids for one array. That is the
-	// fold tier's own typing rule and not something this door may overrule; the argument position has never
-	// compared them either.
+	// ⛔⛔ **THE COMPARISON IS THE FULL `(tag, id)` IDENTITY, AND A TAG-ONLY ONE WAS THREE MISCOMPILES.**
+	// `named` covers every declared enum AND every boxed union, so `Status.idle` "agreed" with a `Colour`
+	// slot and a `Beta` case with an `Alpha` one; `genericInstance` covers every container, so a `Map` box
+	// "agreed" with an `Array with Num` slot. MEASURED on all three: the runnable oracle refuses each with
+	// E3005 at the argument, and shv2 compiled them — reading a `Status` box back through a `Colour` match
+	// is a null dereference, an `Alpha` match over a `Beta` box silently answers 0, and `H.xs.count()` reads
+	// a `Map` box as a `__ManagedMemory` record and range-check-panics.
+	//
+	// ⛔⛔ **WITH ONE EXEMPTION, AND IT IS A MEASURED ONE: AN INSTANCE THE VALUE *INFERS* CANNOT BE
+	// COMPARED.** A top-level array literal is typed by the canonical instance its ELEMENT KIND fixes
+	// (`constArrayValueType` — `Array with Integer`), never by the alias the slot was declared with, so
+	// `Holder{xs: [1, 2, 3]}` against `var xs as CountArray` is two instance ids for one array and
+	// `lazy-static.struct-literal-array-field` pins it as legal. Every OTHER producer of a `genericInstance`
+	// NAMES it — `containerCreate` carries the giid the alias resolved to, a nested call its callee's
+	// declared return — so those are compared and the `Map`-into-`Array` miscompile above is refused.
+	// `constValueInfersItsInstance` is where that line is drawn.
+	//
+	// ⚠ **THE FOLD IS WHERE IT HAS TO BITE.** A construction that stays a `call` is run by `__module_init`,
+	// and the real parse then raises E3005 at the call site; a construction that FOLDS has no call site left
+	// to blame, so this is the only door between the two spellings.
 	export function constStructFieldCheck(layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns ConstStructFieldCheck
 		return self.constSlotCheck(self.constSlotTypeOf(self.fieldTypeOf(layout, index: index, into: self.typeNames), slotScopeFilePath: layout.declFilePath), value: value, calls: calls, declName: declName, elementFilePath: elementFilePath)
 	end 'constStructFieldCheck'
@@ -16261,7 +16686,7 @@ export type ProgramSignatures
 		end 'thisTierCannotSay'
 
 		let held = self.constNodeValueType(value, calls: calls, declName: declName, elementFilePath: elementFilePath)
-		if maxonTypeTag(slot) == maxonTypeTag(held) and (maxonTypeTag(slot) != ValueTypeTag.structRef or typeNameIdOf(slot) == typeNameIdOf(held)) 'fits'
+		if constSlotIdentityHolds(slot, held: held, value: value) 'fits'
 			return ConstStructFieldCheck.agrees
 		end 'fits'
 
@@ -16600,7 +17025,7 @@ export type ProgramSignatures
 		var fields = GlobalStructFieldArray.create()
 		fields.push(unionTagSlot(layout, caseIndex: layout.indexOfCase(caseName)))
 
-		return structBoxImageBytes(layout.boxSizeBytes(), fields: fields)
+		return structBoxImageBytes(layout.boxSizeBytes(), fields: fields, columns: sharedEmptyImmortalBoxColumns)
 	end 'boxedUnionCaseImageBytes'
 
 	// ⭐ **THE BOX SHAPE `__module_init` BUILDS FOR ONE PAYLOAD-FREE CASE, READ OFF THE LAYOUT.** The evaluator
@@ -16734,10 +17159,19 @@ export type ProgramSignatures
 			// tag beside zeroed slots, so it answers the struct arm's `foundImageBox` with the bytes the
 			// layout already fixes and no fold at all. It stands at `named`, the tag `Parser.emitEnumBox`
 			// mints a body's box at, which is what lets a `match` on the read recognize it.
-			boxedUnionValue(typeName, caseName) then return TopLevelConstantLookup.foundImageBox(self.boxedUnionCaseImageBytes(typeName, caseName: caseName), typeName: typeName, tag: ValueTypeTag.named)
+			boxedUnionValue(typeName, caseName) then return self.imageUnionCaseLookup(typeName, caseName: caseName)
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
+
+	// A payload-free case's box is a one-node tree: its bytes are the tag beside zeroed slots, and it
+	// addresses nothing.
+	function imageUnionCaseLookup(typeName ByteArray, caseName ByteArray) returns TopLevelConstantLookup
+		var nodes = ImmortalBoxNodeArray.create()
+		let root = pushImageBoxNode(nodes, node: ImmortalBoxNode.create(self.boxedUnionCaseImageBytes(typeName, caseName: caseName), columns: sharedEmptyImmortalBoxColumns))
+
+		return TopLevelConstantLookup.foundImageBox(nodes, root: root, typeName: typeName, tag: ValueTypeTag.named)
+	end 'imageUnionCaseLookup'
 
 	// ⭐⭐ **THE IMAGE ONE IMAGED `let` MATERIALIZES AS — built HERE, off the same two answers the `.data`
 	// construction is built off**, so a binding's bytes do not depend on which of the two storage models it
@@ -16762,12 +17196,22 @@ export type ProgramSignatures
 	// stored one lay down the same fields at the same offsets at the same widths; the two storage models
 	// differ in WHERE the box lives and in nothing else.
 	function imageStructLookup(calls ConstFactoryCallArray, root InitializerCallId, decl TopLevelDecl) returns TopLevelConstantLookup
-		match factoryCallAt(calls, id: root) 'node'
-			construct(typeName, fields) then return TopLevelConstantLookup.foundImageBox(structBoxImageOf(self.globalStructConstruct(typeName, fields: fields, calls: calls, declName: decl.name, elementFilePath: decl.declFilePath)), typeName: typeName, tag: ValueTypeTag.structRef)
-			call then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root is a `call` — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
-			mapLiteral to arrayLiteral then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root is a container literal — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
-		end 'node'
+		var nodes = ImmortalBoxNodeArray.create()
+		match self.constStructBoxNode(calls, root: root, declName: decl.name, elementFilePath: decl.declFilePath, nodes: nodes) 'outcome'
+			described(node) then return TopLevelConstantLookup.foundImageBox(nodes, root: node, typeName: self.constStructTypeName(calls, root: root, declName: decl.name), tag: ValueTypeTag.structRef)
+			notImageable then panic("ProgramSignatures.imageStructLookup: '{String.from(decl.name)}' is imaged but its arena root describes no box — `constStructIsImageData` runs this very walk, and it is the one thing that decides imaging")
+		end 'outcome'
 	end 'imageStructLookup'
+
+	// The struct a `construct` root builds, as the reading file must spell it. Its own door because a match
+	// arm's binding may not escape the arm, and the caller needs the NAME beside a node the same walk built.
+	function constStructTypeName(calls ConstFactoryCallArray, root InitializerCallId, declName ByteArray) returns ByteArray
+		match factoryCallAt(calls, id: root) 'node'
+			construct(typeName, _) then return typeName
+			call then panic("ProgramSignatures.constStructTypeName: '{String.from(declName)}' is imaged but its arena root is a `call` — `constStructBoxNode` describes only a `construct`, and it is the one thing that decides imaging")
+			mapLiteral to arrayLiteral then panic("ProgramSignatures.constStructTypeName: '{String.from(declName)}' is imaged but its arena root is a container literal — `constStructBoxNode` describes only a `construct`, and it is the one thing that decides imaging")
+		end 'node'
+	end 'constStructTypeName'
 
 	// ⭐ **WHICH OF THE TWO ARRAY-LITERAL IMAGES THIS ONE IS — the split `constArrayLiteralIsImageData` made,
 	// read back off the same element kind so the gate and the builder cannot disagree about a literal.** A
@@ -16833,6 +17277,15 @@ export type ProgramSignatures
 	// The refusal is an invariant break rather than a reachable case: only a box every slot of which that
 	// decider admitted reaches this door (`declaredContainerBoxIsImageData`).
 	function declaredContainerBoxImageOf(giid GenericInstanceId, valueType MaxonType, brand ByteArray) returns TopLevelImageRecord
+		var nodes = ImmortalBoxNodeArray.create()
+		let root = self.declaredContainerBoxNode(giid, nodes: nodes)
+
+		return TopLevelImageRecord.create(ImmortalRecordKind.containerBox(nodes, root: root), elementSize: NoImmortalBoxStride, elementCount: 0, bytes: EmptySourceText, valueType: valueType, brand: brand)
+	end 'declaredContainerBoxImageOf'
+
+	// The arena node one empty declared container's box IS — the same walk whether the box is a `let`'s own
+	// record or a FIELD of one, so a `Map` global and a `Map` field lay down one description.
+	function declaredContainerBoxNode(giid GenericInstanceId, nodes ImmortalBoxNodeArray) returns ImmortalBoxNodeId
 		let layout = self.containerBoxLayoutOf(giid)
 		var scalars = GlobalStructFieldArray.create()
 		var columns = ImmortalBoxColumnArray.create()
@@ -16840,12 +17293,12 @@ export type ProgramSignatures
 			match self.containerBoxSlot(giid, layout: layout, index: i) 'slot'
 				scalar(field) then scalars.push(field)
 				column(entry) then columns.push(entry)
-				notImageable then panic("ProgramSignatures.declaredContainerBoxImageOf: field {i} of `type {String.from(layout.name)}` lays down as no bytes, in a box `declaredContainerBoxIsImageData` admitted — that predicate is the one thing that decides imaging and it walks these very slots")
+				notImageable then panic("ProgramSignatures.declaredContainerBoxNode: field {i} of `type {String.from(layout.name)}` lays down as no bytes, in a box `declaredContainerBoxIsImageData` admitted — that predicate is the one thing that decides imaging and it walks these very slots")
 			end 'slot'
 		end 'eachField'
 
-		return TopLevelImageRecord.create(ImmortalRecordKind.containerBox(columns), elementSize: NoImmortalBoxStride, elementCount: 0, bytes: structBoxImageBytes(self.genericInstanceBoxSize(giid), fields: scalars), valueType: valueType, brand: brand)
-	end 'declaredContainerBoxImageOf'
+		return pushImageBoxNode(nodes, node: ImmortalBoxNode.create(structBoxImageBytes(self.genericInstanceBoxSize(giid), fields: scalars, columns: columns), columns: columns))
+	end 'declaredContainerBoxNode'
 
 	// The base layout an imaged container's box is described by — read back through the SAME door the
 	// admission read it through, so the fold's proof and the image's field walk cannot be about two layouts.
@@ -17101,21 +17554,20 @@ export type ProgramSignatures
 		return mixed
 	end 'mixConstArrayRecord'
 
-	// ⭐ **WHAT AN IMAGED BOX'S READERS BAKE: its SLOTS** — `mixConstArrayRecord`'s question at the shape
-	// whose record is a struct. `let P = Pair.create(1)` lays its slots down in `.rdata` and every read emits
-	// those bytes inline (`Parser.emitImageBoxRead`), so `create(2)` changes what every reader compiles to
+	// ⭐ **WHAT AN IMAGED BOX'S READERS BAKE: THE WHOLE RECORD TREE** — `mixConstArrayRecord`'s question at
+	// the shape whose record is a struct. `let P = Pair.create(1)` lays its box down in `.rdata` and every read
+	// emits that tree inline (`Parser.emitImageBoxRead`), so `create(2)` changes what every reader compiles to
 	// while no name in the program moves.
 	//
-	// The two refusals are invariant breaks rather than reachable cases: `constStructIsImageData` admits only
-	// a `construct` root, and it is the one thing that decides imaging.
+	// ⛔ **IT MIXES THE ARENA `describeConstStructBox` BUILDS AND NOTHING RE-DERIVED FROM THE FOLD**, which is
+	// what keeps the key and the bytes it stands for from describing two records: a field that lays down as a
+	// COLUMN contributes its stride and its drop callee, which no reading of the folded value alone can say.
 	//
-	// ⛔⛔ **THE GUARD BELOW IS LOAD-BEARING FOR THE WALK'S REFUSALS, NOT ONLY FOR INCREMENTALITY — a
-	// `construct` ROOT DOES NOT IMPLY ALL-SCALAR FIELDS.** `Parser.constFactoryConstruction` mints one only
-	// once `everyConstFieldIsAFoldedScalar` holds, but `evalConstStructConstructionInto` — the W116
-	// `Pair{a: 1}` literal path — mints one with no such test, so a STORED struct global may carry a managed
-	// field. MEASURED: with this guard removed, the compiler's own source panics in `mixConstFoldedScalar` on
-	// one. Reaching the field walk only through the imaged branch is what makes "an imaged box holds a NUMBER
-	// only" true down there.
+	// ⛔⛔ **THE GUARD BELOW IS LOAD-BEARING FOR THE WALK'S REFUSAL, NOT ONLY FOR INCREMENTALITY — a
+	// `construct` ROOT DOES NOT IMPLY AN IMAGEABLE ONE.** `Parser.constFactoryConstruction` mints one only once
+	// the admission holds, but `evalConstStructConstructionInto` — the W116 `Pair{a: 1}` literal path — mints
+	// one with no such test, so a STORED struct global may carry a field this walk refuses. Reaching the tree
+	// only through the imaged branch is what makes the refusal below unreachable.
 	function mixConstStructRecord(state HashDigest, decl TopLevelDecl, calls ConstFactoryCallArray, root InitializerCallId) returns HashDigest
 		let mixed = self.mixRecordStorage(state, decl: decl)
 		// The SAME branch the fork above just took: a stored global is done at its label, and its arguments —
@@ -17124,39 +17576,12 @@ export type ProgramSignatures
 			return mixed
 		end 'theSlotBranchOfMixRecordStorage'
 
-		match factoryCallAt(calls, id: root) 'node'
-			construct(_, fields) then return self.mixConstStructFields(mixed, fields: fields)
-			call then panic("ProgramSignatures.mixConstStructRecord: '{String.from(decl.name)}' is imaged but its arena root is a `call` — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
-			mapLiteral to arrayLiteral then panic("ProgramSignatures.mixConstStructRecord: '{String.from(decl.name)}' is imaged but its arena root is a container literal — `constStructIsImageData` admits only a `construct`, and it is the one thing that decides imaging")
-		end 'node'
+		var nodes = ImmortalBoxNodeArray.create()
+		match self.constStructBoxNode(calls, root: root, declName: decl.name, elementFilePath: decl.declFilePath, nodes: nodes) 'outcome'
+			described(node) then return mixImageBoxTree(mixed, nodes: nodes, root: node, below: nodes.count() as ImmortalBoxNodeId)
+			notImageable then panic("ProgramSignatures.mixConstStructRecord: '{String.from(decl.name)}' is imaged but its arena root describes no box — `constStructIsImageData` runs this very walk, and it is the one thing that decides imaging")
+		end 'outcome'
 	end 'mixConstStructRecord'
-
-	// The box's slots in LAYOUT order, which is the order `ConstFactoryCall.construct` stores them in — so a
-	// field's POSITION is its destination and no label is needed to say which slot moved. Each rides through
-	// `mixConstantValue`, the very door a scalar `let`'s own value takes, so a number in a field and a number
-	// in a constant cannot come to hash two ways.
-	//
-	// A slot the fold did not settle to a scalar is an invariant break: `everyConstFieldIsAFoldedScalar` is
-	// what admitted this box, and it refuses a nested call and every managed value.
-	function mixConstStructFields(state HashDigest, fields ConstFactoryArgumentValueArray) returns HashDigest
-		var mixed = Hasher.combined(state, value: fields.count() as HashDigest)
-		for field in fields 'eachSlot'
-			match field 'slot'
-				folded(value) then mixed = self.mixConstFoldedScalar(mixed, value: value)
-				call then panic("ProgramSignatures.mixConstStructFields: an imaged box holds a slot produced by a nested CALL — `everyConstFieldIsAFoldedScalar` admits only a folded scalar, and it is what decides imaging")
-			end 'slot'
-		end 'eachSlot'
-
-		return mixed
-	end 'mixConstStructFields'
-
-	// The tail of the walk above, split out because a `match` arm may not open one.
-	function mixConstFoldedScalar(state HashDigest, value ConstFoldedValue) returns HashDigest
-		match value 'kind'
-			scalar(constant) then return self.mixConstantValue(state, payload: constant.payload, tag: constant.tag, typeName: constant.typeName)
-			managed to boxedUnionCase then panic("ProgramSignatures.mixConstFoldedScalar: an imaged box holds a managed literal, a record or a boxed case — `constFoldedIsAScalar` admits a NUMBER only, and it is what decides imaging")
-		end 'kind'
-	end 'mixConstFoldedScalar'
 
 	// ⭐ **THE NAME A ROOT NODE CONTRIBUTES TO A DECLARING FILE'S CONTENT HASH** — one derivation, so the
 	// spellings of "what fixes this slot's type" cannot be mixed two ways. It is the whole of what a STORED

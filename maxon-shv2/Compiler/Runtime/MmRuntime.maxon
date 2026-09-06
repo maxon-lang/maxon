@@ -1989,9 +1989,12 @@ end 'buildMmRetain'
 // imaged record with a heap one, which is the reading `LiteralArgPromotion`'s header already records for the
 // String half of the same question.
 //
-// ⚠ **A BYTE BLIT IS THE WHOLE CLONE**, because every field of an imaged struct is a scalar by construction
-// (`ProgramSignatures.constStructIsImageData` admits nothing else) — so the copy owns no slot a second owner
-// could be wrong about, and `destructor@0` is trivial for the same reason.
+// ⛔⛔ **A BYTE BLIT IS THE WHOLE CLONE, AND ONLY BECAUSE THE CALLER GATES THE BOXES THAT REACH IT.** An
+// imaged struct MAY hold a slot addressing another image object — an empty column, a nested box — and a blit
+// leaves the copy's slot addressing the `.rdata` one, so the second owner writes the image through one more
+// indirection. `Parser.valueIsAnImageableDeepBox` sends exactly those boxes to `__mm_own_deep` instead, and
+// what is left here owns no slot a second owner could be wrong about; `destructor@0` is trivial for the same
+// reason.
 function buildMmOwn(module StdModule)
 	var func = IrFunction.createFromStd(MmOwnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2021,9 +2024,10 @@ function buildMmOwn(module StdModule)
 end 'buildMmOwn'
 
 // ⭐⭐⭐ **`__mm_own_deep(box, cloner) -> box` — `__mm_own` FOR A BOX WHOSE SLOTS ADDRESS OTHER RECORDS.**
-// A declared generic's container (`Map`, `Set`, and every base written the way they are) is such a box: an
-// empty one is image data (`ProgramSignatures.declaredContainerBoxIsImageData`), its slots hold the imaged
-// empty column arrays, and a durable sink holding it writes a read-only page at the first `upsert` — a
+// A declared generic's container (`Map`, `Set`, and every base written the way they are) is such a box, and
+// so is a user struct whose fields hold one: an empty one of either is image data
+// (`ProgramSignatures.declaredContainerBoxIsImageData` / `structBoxIsImageableWithSlots`), its slots hold
+// the imaged empty columns, and a durable sink holding it writes a read-only page at the first `upsert` — a
 // fault on x64 and, on wasm32-wasi, which has no read-only section, a silent rewrite of the constant that
 // only the leak gate catches.
 //

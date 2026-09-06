@@ -3467,3 +3467,70 @@ end 'main'
 ```exitcode
 5
 ```
+
+⭐⭐ **A CONSTANT'S TAG IS NOT ITS IDENTITY, AND THE FOLD IS THE ONLY DOOR LEFT TO SAY SO.** `named` covers
+every declared `enum` AND every boxed `union`; `genericInstance` covers every container. A slot check that
+compared only the tag admitted a `Status` case into a `Colour` field and a `Map` box into an `Array` field —
+and a construction that FOLDS has no call site left for the real parse to blame, so nothing downstream ever
+raised the mismatch. Both cases below are `E3005` on the runnable oracle, at the argument the author wrote.
+
+<!-- test: error.const-fold-union-case-into-enum-field -->
+```maxon
+typealias Num = int(0 to 1000)
+
+enum Colour
+	red
+	green
+end 'Colour'
+
+union Status
+	idle
+	busy(n Num)
+end 'Status'
+
+type Mixed
+	export var c as Colour
+	export var n as Num
+
+	export static function create(c Colour, n Num) returns Mixed
+		return Self{c: c, n: n}
+	end 'create'
+end 'Mixed'
+
+let Bad = Mixed.create(Status.idle, n: 4)
+
+function main() returns ExitCode
+	return Bad.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: :23:11: argument type mismatch for 'c': expected 'Colour', got 'Status'
+```
+
+The container half of the same rule. A `Map`'s box and an `Array`'s record are both `genericInstance`, and
+they are not the same record at all: read back through the array surface, `H.xs.count()` loads a `Map` box's
+second word as a `__ManagedMemory` length.
+
+<!-- test: error.const-fold-map-into-array-field -->
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+typealias Counts = Map with (String, Num)
+
+type Holder
+	export var xs as NumArray
+
+	export static function create(xs NumArray) returns Holder
+		return Self{xs: xs}
+	end 'create'
+end 'Holder'
+
+let H = Holder.create(Counts.create())
+
+function main() returns ExitCode
+	return H.xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: :14:9: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
+```

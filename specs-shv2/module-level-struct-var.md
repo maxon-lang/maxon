@@ -182,3 +182,50 @@ end 'main'
 ```stdout
 value=105
 ```
+
+<!-- test: imaged-struct-sunk-into-a-container-is-copied-not-aliased -->
+⭐⭐⭐ **AN IMAGED STRUCT HANDED TO A DURABLE SINK IS COPIED, DEEPLY.** A module-level `let` whose every
+field is image data reserves no storage at all: the record lives in `.rdata` and a read is one address into
+it. Pushing that record into an `Array` makes the array a second owner — and a second owner of an immortal
+box is a COPY, because the first write through it would otherwise land on a read-only page. The copy cannot
+be a byte blit either: the box's slots address the imaged empty columns, so a blit would leave the copy
+writing the image through one more indirection. It is the instance's own deep cloner
+(`__mm_own_deep`), which allocates a fresh box and replaces every managed slot with an independent record.
+
+⛔ **THE ASSERTION IS BOTH HALVES AT ONCE**: the stored copy takes the writes, and `SharedFacts` still reads
+EMPTY. A run that answers `2 2` has aliased the image; one that faults has blitted it. The leak gate covers
+the third failure — a copy whose slots nothing owns.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+
+type Facts
+	export var counts as CountArray = CountArray.create()
+
+	export static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+typealias FactsArray = Array with Facts
+
+let SharedFacts = Facts.create()
+
+function main() returns ExitCode
+	var xs = FactsArray.create()
+	xs.push(SharedFacts)
+	var stored = try xs.get(0) otherwise panic("the push just landed")
+	stored.counts.push(7)
+	stored.counts.push(8)
+
+	print("stored {stored.counts.count()} shared {SharedFacts.counts.count()}\n")
+	return (stored.counts.count() + SharedFacts.counts.count()) as ExitCode
+end 'main'
+```
+```stdout
+stored 2 shared 0
+```
+```exitcode
+2
+```

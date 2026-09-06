@@ -464,3 +464,96 @@ mm_alloc Slot #1 size=16
 mm_decref Slot #1 rc=0
 mm_free Slot #1
 ```
+
+<!-- test: module-let-struct-of-empty-containers-costs-no-allocation -->
+⭐ **A RECORD WHOSE EVERY FIELD IS IMAGE DATA IS ITSELF IMAGE DATA.** Each empty container here already
+images on its own — that is what `module-let-array-globals-cost-no-allocation-at-all` holds — and the struct
+adds nothing but two slots pointing at them. Measured, for the one global below:
+
+    mm_alloc ArrayRecord #1 size=48
+    mm_alloc ArrayRecord #2 size=48
+    mm_alloc Facts #3 size=16
+
+**Three records for a binding that computes nothing**, and the shape is the compiler's own:
+`Parser.sharedEmptyBorrowFacts` is a struct of five empty `Array` fields.
+
+⚠ **THE ADMISSION RULE IS THE THING TO GET RIGHT, AND "SCALAR" IS THE WRONG WORD FOR IT.** A struct is
+admitted today only when every field folds to a SCALAR, which is a sufficient condition mistaken for the
+necessary one: what an image needs is that every field's own bytes are decided at compile time, and an
+imaged field satisfies that exactly as a scalar does. A field that must be BUILT — anything that runs user
+code, or a container with members — keeps the whole record on the runtime path, because a half-imaged
+record is not a thing that can exist.
+<!-- MmTrace -->
+```maxon
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+typealias NameArray = Array with String
+
+type Facts
+	export var counts as CountArray = CountArray.create()
+	export var names as NameArray = NameArray.create()
+	export static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+let SharedFacts = Facts.create()
+
+function main() returns ExitCode
+	return (SharedFacts.counts.count() + SharedFacts.names.count()) as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+```
+
+<!-- test: module-var-struct-of-empty-containers-still-allocates -->
+The negative control for its `let` sibling above, and the guard against over-imaging: the identical program
+with one keyword changed. A `var` is never image data — its slot is written before `main` and may be
+written again after — so all three records are still built, and this golden must keep every line the `let`
+case is required to lose.
+
+**If this trace ever empties, the admission rule has stopped reading mutability** and a program that
+assigns to `MutableFacts` is writing a read-only page.
+
+⚠ **THE BOX COMES FIRST HERE AND LAST IN A BODY, AND THAT IS THE FOLD RATHER THAN THE KEYWORD.**
+`Parser.constFactoryConstruction` folds `Facts.create()` into the construction it stands for whenever that
+construction WOULD image, without ever consulting mutability — so this `var` is built inline by
+`__module_init` (`ModuleInit.builtStructBox`: the box, then one store per slot) and `Facts.create` is
+emitted for nobody. The three records are the same three; only the order in which they are asked for moved.
+<!-- MmTrace -->
+```maxon
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+typealias NameArray = Array with String
+
+type Facts
+	export var counts as CountArray = CountArray.create()
+	export var names as NameArray = NameArray.create()
+	export static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+var MutableFacts = Facts.create()
+
+function main() returns ExitCode
+	return (MutableFacts.counts.count() + MutableFacts.names.count()) as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+mm_alloc Facts #1 size=16
+mm_alloc ArrayRecord #2 size=48
+mm_alloc ArrayRecord #3 size=48
+mm_decref Facts #1 rc=0
+mm_decref ArrayRecord #2 rc=0
+mm_free ArrayRecord #2
+mm_decref ArrayRecord #3 rc=0
+mm_free ArrayRecord #3
+mm_free Facts #1
+```
