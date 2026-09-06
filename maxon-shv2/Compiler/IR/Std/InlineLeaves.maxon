@@ -971,7 +971,7 @@ type LeafInliner
 	// with the guard it is declining.
 	function callerProvesArg(args ValueIdArray, guard RangeCheckParamGuard) returns bool
 		let arg = try args.get(guard.index) otherwise panic("LeafInliner.callerProvesArg: a callee guarding parameter {guard.index} is called from '{String.from(self.func.name)}' with {args.count()} argument(s) — the arity check has already refused a mismatch")
-		return self.callerParamProves(arg, alias: guard.alias) or self.countedLoopProves(arg, alias: guard.alias)
+		return self.callerParamProves(arg, alias: guard.alias) or self.provenRangeProves(arg, alias: guard.alias)
 	end 'callerProvesArg'
 
 	// **PROOF ONE: THE ARGUMENT IS ONE OF THIS FUNCTION'S OWN NARROWED PARAMETERS.** Its cascade stands at
@@ -1006,8 +1006,9 @@ type LeafInliner
 		return false
 	end 'callerParamProves'
 
-	// **PROOF TWO: A COUNTED LOOP PROVED AN INTERVAL FOR IT (EC7 layer 1).** `for r in 0 upto
-	// RegisterFileSize` gives its counter a range nothing NAMES, which the parser records against this
+	// **PROOF TWO: SOMETHING RECORDED AN INTERVAL FOR IT (EC7 layer 1).** `for r in 0 upto RegisterFileSize`
+	// gives its counter a range nothing NAMES — as does a `.count()` result, which is no loop's counter —
+	// which the parser records against this
 	// function's own `ValueId` numbering and `LowerMaxonToStd` carries across verbatim (that pass does not
 	// renumber). It is the proof the four hottest `regMaskContains` sites need and the one no declared type
 	// can supply — the counter's written type is the bare `int` its bounds were written at.
@@ -1016,11 +1017,11 @@ type LeafInliner
 	// the per-caller constructor: a `LeafInliner` is built for every function in the module and nearly none
 	// of them splices anything that guards anything, so a probe up there would be one map lookup per
 	// function for an answer almost nobody spends.
-	function countedLoopProves(arg ValueId, alias RangedTypeAlias) returns bool
+	function provenRangeProves(arg ValueId, alias RangedTypeAlias) returns bool
 		let checks = try self.project.rangeChecks.get(self.func.name) otherwise return false
 		let proven = try provenIntRangeOf(checks.provenValueRanges, value: arg) otherwise return false
 		return rangeCoversIntBounds(alias, low: proven.low, high: proven.high)
-	end 'countedLoopProves'
+	end 'provenRangeProves'
 
 	function calleeEntryBlockId(calleeFunc IrFunction) returns BlockId
 		let entryRef = try calleeFunc.blockRefs.get(0) otherwise panic("LeafInliner.calleeEntryBlockId: '{String.from(calleeFunc.name)}' has no entry block, which `scanLeafBody` refuses")

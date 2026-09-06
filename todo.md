@@ -3,8 +3,31 @@
 - libraries
 - audit the use of "targets" in spec tests
 - no ranges for enum/union
+- A typealias (or any named type) used in a function's SIGNATURE must have visibility >= that
+  function's. `stdlib/Array.maxon:171` is the case that found it: `public function count() returns
+  ElementIndex`, where `ElementIndex` (Array.maxon:17) is a bare `typealias` — file-visible — so a
+  public signature hands back a type no caller can name. MEASURED 2026-09-05 by a textual scan of
+  stdlib/ + maxon-shv2/: ~235 leaked signatures across 66 files (Array 22, Subprocess 19, Builtins 13,
+  Parser 13, Testing 12); `String.from(bytes ByteArray)` is the sharpest, `ByteArray` being file-private
+  to String.maxon:26. Treat the count as an order of magnitude — the scan does not resolve file scope.
+  ⚠ The compiler already polices the OPPOSITE direction and only that one: E3092 (an `export` nothing
+  uses) and E3093 (an `export` that could be `module`). It objects to visibility that is too broad and
+  says nothing about visibility that leaks.
+  Needs deciding before building: whether the rule covers all named types or only typealiases, whether
+  it reaches struct fields and generic arguments, and a new error code in the 3xxx band.
 - auto-update the install
-- E3010 unneeded cast disprecancy between bootstrap and shv2
+- E3010 unneeded cast discrepancy between bootstrap and shv2. DIAGNOSED 2026-09-05, not fixed:
+  E3010 is alias-NAME equality in both compilers and never consults range containment
+  (bootstrap `sourceRanged.Name == rangedTarget.Name`, maxon-sharp/Compiler/2-Parser.cs:18574;
+  shv2 `sourceSpelledAliasName(...).equals(...)`, maxon-shv2/Compiler/Parser.maxon:50628).
+  Two live candidates, neither confirmed by running both compilers:
+    (a) NAME NORMALIZATION — shv2 strips the range-contested mint (`Byte$0_200` -> `Byte`) before
+        comparing; the bootstrap compares the raw name and has no `sourceSpelledAliasName` at all.
+        Pinned only in specs-shv2/type-casting.md:483 (error.unneeded.contested-alias-quoted-as-source-spells-it).
+    (b) UNION PAYLOAD BINDING — the bootstrap reports E3010 for `one(n) gives n as Count`
+        (specs/type-casting.md:735); shv2's corpus has no union-payload E3010 case anywhere.
+  ALREADY CLOSED, do not re-open: the if-continuation and match-carried merge bindings diverged,
+  were measured 2026-08-03 (G14 review), and shv2 was brought to match the bootstrap.
 - safeffi
 - use code generation for generics to remove monomorphization/witness
 - look into making optimizations into compile error (ie hoisting a static value out of a loop)

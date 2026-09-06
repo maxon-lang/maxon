@@ -3188,8 +3188,11 @@ end 'RangeCheckReturnSite'
 export typealias RangeCheckReturnSiteArray = Array with RangeCheckReturnSite
 
 // ⭐⭐ **A CLOSED INTEGER INTERVAL A VALUE IS PROVEN TO LIE IN, THAT NOTHING NAMES (EC7).** The counter of a
-// `for i in a upto b` whose bounds are compile-time constants is in `[a, b-1]` throughout the loop body, and
-// no `typealias` in the program says so — the value's own type is the bare `int` the bounds were written at.
+// `for i in a upto b` is in `[a, b-1]` throughout the loop body, and no `typealias` in the program says so —
+// the value's own type is the bare `int` the bounds were written at. A loop whose TOP does not fold states
+// the interval one-sided as `[a, i64.max]`, which is enough for a non-negative index; and a `count()` result
+// carries `[0, i64.max]` without being any loop's counter at all, because `emitRuntimeCall` mints it unnamed
+// and an interval is the only channel that can say what it is.
 //
 // ⚠ **IT IS DELIBERATELY NOT A `RangedTypeAlias` WITH AN EMPTY NAME.** Half of what a `RangedTypeAlias`
 // carries is a DECLARATION — the name, the declaring file, the position E3061 anchors on, the visibility
@@ -3210,15 +3213,16 @@ export type ProvenIntRange
 	end 'create'
 end 'ProvenIntRange'
 
-// ⭐ Per-function map from a value's function-local `ValueId` to the interval above. SPARSE — one entry per
-// counted-loop counter, and empty (the shared map) for every function that has none, which is most of them.
+// ⭐ Per-function map from a value's function-local `ValueId` to the interval above. SPARSE, but no longer
+// rare: one entry per counted-loop counter AND one per `.count()`/`.length()` call site, so a function that
+// merely reads a collection's size files a record where it once filed none.
 // It rides `FunctionRangeChecks` because that is the ONE per-function side
 // table the parser fills and `mergeArtifact` copies whole, and ValueIds pass through `LowerMaxonToStd`
 // VERBATIM, so the Std tier reads the parser's own numbering with no remap.
 export typealias ProvenIntRangeMap = Map with (ValueId, ProvenIntRange)
 
-// ⭐ **"THIS FUNCTION HAS NO COUNTED LOOP" AS A SPELLED STATE** — `ValueMarkColumn`'s reason, over the
-// interval table. It rides `FunctionRangeChecks` to `InlineLeaves`, so the state crosses the tier boundary
+// ⭐ **"NOTHING PROVED AN INTERVAL IN THIS FUNCTION" AS A SPELLED STATE** — `ValueMarkColumn`'s reason, over
+// the interval table. `unwritten` is the answer for a function with no counted loop AND no `.count()`. It rides `FunctionRangeChecks` to `InlineLeaves`, so the state crosses the tier boundary
 // with the column rather than being unwrapped at the border.
 export union ProvenIntRangeColumn
 	unwritten
@@ -3323,7 +3327,7 @@ export type FunctionRangeChecks
 	// The function's narrowed-range parameters — see `RangeCheckParamSite`. Empty (the shared array) for a
 	// function no parameter of which is a ranged alias, which is most of them.
 	export var paramSites as RangeCheckParamSiteArray
-	// EC7 — see `ProvenIntRangeMap`. Empty for a function with no counted loop over constant bounds.
+	// EC7 — see `ProvenIntRangeColumn`. `unwritten` only for a function with no counted loop and no `.count()`.
 	export var provenValueRanges as ProvenIntRangeColumn
 
 	// ⭐⭐ **WHICH OF THIS FUNCTION'S VALUES THE SOURCE WROTE AS NEGATIVE NUMBERS** — see

@@ -1491,6 +1491,29 @@ export function rangeIsUnsigned(low ParsedInt) returns bool
 	return low >= 0
 end 'rangeIsUnsigned'
 
+// ⭐ **DOES EVERY VALUE OF THIS RANGE SIT IN `0 … i64.max`** — non-negative under BOTH readings of a
+// comparison it takes part in, which is the question `rangeIsUnsigned` alone cannot answer.
+//
+// The HIGH bound is what carries it, and `high >= 0` IS the load-bearing half rather than a
+// belt-and-braces one. `int(0 to u64.max)` is unsigned and its top half are NEGATIVE signed patterns,
+// so `comparisonSignedness` runs a `<` against it UNSIGNED and a counter tested by it climbs through
+// `i64.max` into those patterns. That upper rides as the wrapped `-1`, so refusing a negative high
+// refuses exactly it; and in two's complement `high >= 0` says `high <= i64.max`, which is the whole
+// claim.
+//
+// ⚠ **IT IS STATED HERE RATHER THAN AS `not rangeIsUnsignedMaxUpper`, WHICH IT CURRENTLY AGREES WITH
+// ON EVERY SHAPE THE LANGUAGE CAN SPELL** — a literal above `i64.max` is E2011, so `u64.max` is the
+// only route to a negative high. The two are not the same rule: that one recognises ONE encoding, this
+// one asks a bound question that stays right whatever new spelling a bound acquires. Widen what a
+// bound may be written as and this function needs no edit; that is why it is not derived from it.
+//
+// ⚠ **INTEGER BOUNDS ONLY.** A float alias carries IEEE bit patterns, so `float(1.0 to 5.0)` has two
+// positive ones and would answer `true` about a question it was never asked. Its one caller excludes
+// floats first, as `rangeExcludesZero` and `rangeIsFull` do by taking `isFloat` outright.
+export function rangeIsWithinSignedNonNegative(low ParsedInt, high ParsedInt) returns bool
+	return low >= 0 and high >= 0
+end 'rangeIsWithinSignedNonNegative'
+
 // ⭐⭐ **IS A RANGED INTEGER ALIAS CLOSED UNDER BITWISE `and`?** — the one question that decides
 // whether `a and b` KEEPS the ranged alias its operands were declared with, and `and` is the only
 // operator whose result can. It is what makes `let imm = value and elementMask` still a

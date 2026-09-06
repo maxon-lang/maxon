@@ -13,6 +13,14 @@ A ranged typealias binds every value that meets it. Wherever a value reaches a p
 one — a **call argument**, a `return`, a **struct-literal field**, a **field store**, a field's
 **declared default**, an **array element**, an explicit `as` — the declared bounds are enforced.
 
+**REASSIGNING A LOCAL IS NOT ONE OF THOSE PLACES, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.**
+`completeLocalRebind` records no site: a binding is a name for a value, not a declared slot a value is
+stored into, and the value it names has already met its range wherever it came from. So a narrow local
+may hold a value outside its own range for as long as it stays local — `var s = 0 as Score` then
+`s = s + 200` prints `200` and exits 0 — and the check fires where the value ESCAPES, at whichever
+door above it reaches first. `assignment.md`'s `assign-ranged-typealias` and
+`a-rebind-out-of-range-is-caught-at-the-return-door` are the two halves of that pin.
+
 **How they are enforced depends on what the compiler can know, and the two halves are one rule:**
 
 - **The value is known at compile time** — it traces back to a literal, or to a constants-enum case's
@@ -131,6 +139,7 @@ rule about `ExitCode`, about builtins, or about which alias is "wide":
 
 - **Every door asks it**, because every door holds both ends: a `return`, an explicit `as`, a
   struct-literal field, a field store, a field's declared default, an array element.
+  A local rebind holds only ONE end — a binding declares no slot — so it is not a door and asks nothing.
 - **A source that names no alias proves nothing**, and that is the direction that keeps the check: a bare
   `int` local, a folded literal, a `trunc` result. So the **compile-time E3005 half is untouched** —
   `InsertRangeChecks` reports it only for a value it can fold, and a folded literal denotes no alias.
@@ -1078,6 +1087,259 @@ Stack trace:
   in mrt_start
 ```
 
+
+### A RUNTIME limit still states the counter's FLOOR — and the floor is where the guards are
+
+⭐⭐ **A LIMIT THAT DOES NOT FOLD STILL BOUNDS THE COUNTER FROM BELOW.** `for i in 0 upto xs.count()`
+cannot fold its top, but its START is a literal, so every trip runs on `i >= 0` — which is the whole of
+what a non-negative element index needs. The interval is recorded ONE-SIDED as `[start, i64.max]`.
+MEASURED over this compiler's own self-compile: it retires **635** of its 6,863 range-check sites, all
+but four of every one an interval could reach, and 633 of them are `ElementIndex`.
+
+⚠ **THE CEILING IS WHAT MUST BE PROVED, NOT THE FLOOR — and a limit above `i64.max` is where it fails.**
+The loop test runs at a signedness valid for both operands, so `i < xs` over an `int(0 to u64.max)` limit
+compares PATTERNS: the counter climbs through `i64.max` into the negative ones with the test still holding,
+and a recorded floor of 0 would vouch for a signed-negative value. `limitStatesANonNegativeCeiling` is what
+refuses that, and an INCLUSIVE loop with the same shape besides — it steps PAST its limit, so a runtime top
+has no constant for `inclusiveTopBoundWraps` to test.
+
+<!-- test: range-check-panic.a-runtime-limit-still-proves-the-floor -->
+The floor alone, from a limit whose declared range is non-negative. `i as NonNeg` cannot fail and its
+fragment carries no cascade.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+
+function opaque(n NonNeg) returns NonNeg
+  return n
+end 'opaque'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for i in 0 upto opaque(3) 'each'
+    let g = i as NonNeg
+    total = total + g
+  end 'each'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=3
+```
+
+<!-- test: range-check-panic.a-counted-limit-proves-the-floor -->
+⭐ The corpus's own shape, and the one the 635 are: a `count()` is minted UNNAMED, so nothing DECLARES a
+range for it — the ceiling comes from the interval recorded where the call is emitted. Its fragment carries
+no cascade either.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+typealias Ints = Array with Integer
+
+function main() returns ExitCode
+  var xs = Ints.create()
+  xs.push(10)
+  xs.push(20)
+  xs.push(30)
+  var total = 0 as Integer
+  for i in 0 upto xs.count() 'each'
+    let g = i as NonNeg
+    total = total + g
+  end 'each'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=3
+```
+
+<!-- test: range-check-panic.a-runtime-limit-proves-no-ceiling -->
+⚠ The discriminating negative for the FLOOR: only the low bound is stated, so a target the counter can
+climb past keeps its guard and fires. `Small` admits `0` and `1`; the third trip is `2`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+typealias Small = int(0 to 1)
+
+function opaque(n NonNeg) returns NonNeg
+  return n
+end 'opaque'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for i in 0 upto opaque(3) 'each'
+    let g = i as Small
+    total = total + g
+  end 'each'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-runtime-limit-proves-no-ceiling.test:13: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-runtime-start-proves-no-floor -->
+⚠ The discriminating negative for the START. A start that does not fold states no floor, so the guard
+stands — and here it fires on the first trip, at `-2`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for i in opaque(-2) upto opaque(3) 'each'
+    let g = i as NonNeg
+    total = total + g
+  end 'each'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-runtime-start-proves-no-floor.test:12: Range check failed: value outside typealias 'NonNeg'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.an-unsigned-runtime-limit-proves-no-floor -->
+⚠⚠ **THE SOUNDNESS CASE. `Word` reaches ABOVE `i64.max`, so the test runs UNSIGNED** — the counter would
+climb through `i64.max` into the negative patterns with `i < limit` still holding, and a floor of 0 would
+vouch for a signed-negative value. The interval is withheld and the cast keeps its guard.
+
+⚠ **NO ANSWER CAN SHOW THIS, AND NEITHER CAN THIS CASE'S VERDICT** — the wrap is 2^63 trips away, and a
+committed fragment is REFERENCE rather than a gate (sabotage-proved: removing
+`limitStatesANonNegativeCeiling`'s bound test leaves the suite green at exit 0). What the fragment records
+is which compiler wrote it; what keeps the rule honest is the paragraph on `limitStatesANonNegativeCeiling`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+typealias Word = int(0 to u64.max)
+
+function opaque(n Word) returns Word
+  return n
+end 'opaque'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for i in 0 upto opaque(3) 'each'
+    let g = i as NonNeg
+    total = total + g
+  end 'each'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=3
+```
+
+<!-- test: range-check-panic.a-signed-runtime-limit-proves-no-floor -->
+⚠ **A CONSERVATIVE REFUSAL, AND SAYING SO IS THE POINT.** An `Integer` limit is not the unsound shape above:
+admitting negatives pins the test to the SIGNED reading, under which the counter stops at `limit - 1` and
+the floor would hold. It is refused because `limitStatesANonNegativeCeiling` asks for a limit provably
+inside `0 … i64.max` and answers on the DECLARED range alone — a narrower rule than soundness needs, and a
+much easier one to be sure of. MEASURED: the whole of what it costs is 4 sites of the 639 an interval could
+reach in this compiler's self-compile, against the 635 it takes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for i in 0 upto opaque(3) 'each'
+    let g = i as NonNeg
+    total = total + g
+  end 'each'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=3
+```
+
+<!-- test: range-check-panic.an-inclusive-runtime-limit-proves-no-floor -->
+⚠ The red gate for the half-open restriction. An inclusive loop steps PAST its limit, and a runtime top
+hands `inclusiveTopBoundWraps` no constant to test — so the interval is withheld whatever the limit's type
+says. The fragment carries the cascade that survives.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+
+function opaque(n NonNeg) returns NonNeg
+  return n
+end 'opaque'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for i in 0 to opaque(3) 'each'
+    let g = i as NonNeg
+    total = total + g
+  end 'each'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=6
+```
+
+<!-- test: range-check-panic.a-capacity-is-not-a-count -->
+⛔ **THE RED GATE FOR THE `count` WITHHOLD.** The interval is recorded where `__managed_count` is emitted
+and NOWHERE ELSE on that arm's siblings: a `capacity()` answers a NEGATIVE SENTINEL for a buffer its record
+does not own — `-1` for a slice, which `stdlib/Array.maxon`'s `ReportedCapacity` header states and pins —
+so a value that is not a count must not inherit a count's floor. Hoist the record above the arm dispatch,
+or fold `capacity` onto it, and this case prints `c=-1` and exits 0 instead of panicking.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+typealias Ints = Array with Integer
+
+function main() returns ExitCode
+  var xs = Ints.create()
+  xs.push(10)
+  xs.push(20)
+  xs.push(30)
+  let sl = try xs.slice(0, endIndex: 2) otherwise panic("slice")
+  print("cap={sl.managed.capacity()}\n")
+  let c = sl.managed.capacity() as NonNeg
+  print("c={c}\n")
+  return 0
+end 'main'
+```
+```stdout
+cap=-1
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-capacity-is-not-a-count.test:13: Range check failed: value outside typealias 'NonNeg'
+Stack trace:
+  in main
+  in mrt_start
+```
 
 <!-- test: range-check-panic.an-empty-counted-loop-proves-nothing -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->

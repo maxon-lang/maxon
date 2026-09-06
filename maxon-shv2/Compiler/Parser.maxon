@@ -42689,11 +42689,20 @@ export type Parser
 	// value, and `elimTrivialBlockArgs` folds it back into `indexPhi` — at pass 9, two passes AFTER
 	// `inlineLeaves` has spent the fact and long before any register is chosen.
 	//
-	// ⚠ **BOTH BOUNDS MUST BE IN THE PARSER'S CONST VIEW, WHICH IS NOT THE SAME AS BEING LITERALS.** A
-	// module-level immutable `let` folds (`for r in 0 upto RegisterFileSize`, this rung's own headline shape);
-	// `for i in 0 upto xs.count()` does not, and proves nothing.
+	// ⚠ **THE START MUST BE IN THE PARSER'S CONST VIEW, WHICH IS NOT THE SAME AS BEING A LITERAL** — a
+	// module-level immutable `let` folds too (`for r in 0 upto RegisterFileSize`). A start that does not fold
+	// states no floor, and nothing below can be recovered without one.
 	//
-	// ⚠ **THREE REFUSALS, EACH A DIFFERENT WAY THE INTERVAL WOULD BE A LIE — none of them a rounding:**
+	// ⭐⭐ **A RUNTIME LIMIT STILL STATES THE FLOOR, AND THE FLOOR IS WHERE THE GUARDS ARE.** `for i in 0 upto
+	// xs.count()` cannot fold its top, but `i >= 0` is the whole of what a non-negative element index needs,
+	// so a half-open loop over such a limit records the interval ONE-SIDED as `[start, i64.max]`. It is most
+	// of what this rule retires across a self-compile, against the seventeen the whole `RegNum` population
+	// comes to; `docs/optimization-log.md` holds the counts.
+	// `limitKeepsTheCounterNonNegative` carries what the limit must prove for that floor to be true, and why an
+	// inclusive loop is refused there rather than joined.
+	//
+	// ⚠ **THREE REFUSALS ON THE CONSTANT-BOUND PATH, EACH A DIFFERENT WAY THE INTERVAL WOULD BE A LIE — none
+	// of them a rounding:**
 	//   • an EMPTY range runs no trip, so there is no interval to state. Refusing it is also what keeps the
 	//     arithmetic below in range: an exclusive range is non-empty exactly when `low < limit`, which puts
 	//     `limit` strictly above `i64.min` and so makes `limit - 1` a subtraction that cannot wrap.
@@ -42706,22 +42715,31 @@ export type Parser
 	//     where the two range kinds are already told apart.
 	//
 	// ⚠ **SIGNEDNESS IS NOT A CASE FOR THE ARITHMETIC, WHICH IS SIGNED THROUGHOUT — BUT IT IS ONE FOR THE
-	// TOP BOUND, AND THAT DISTINCTION IS WHAT THIS PARAGRAPH GOT WRONG ONCE.** The loop test runs at a
+	// TOP BOUND, AND THE TWO MUST NOT BE ANSWERED TOGETHER.** The loop test runs at a
 	// signedness valid for both operands, so it may be UNSIGNED. For ENTERING and for the SET OF VALUES the
 	// arithmetic below is safe under either reading: where the two orderings disagree about a bound one of
 	// them makes the loop EMPTY (a vacuous interval over-approximates, the safe direction), and where they
 	// agree the counter steps through the identical pattern sequence and both stop at the identical pattern.
 	// For LEAVING they do not agree, and that is the third refusal's job: each reading has its own top, past
-	// which the step wraps rather than the test failing.
+	// which the step wraps rather than the test failing. A RUNTIME limit has no constant to hand that
+	// refusal, which is why its own gate asks the limit's declared TYPE instead.
 	// ⚠ `tag`/`nameId` are the HEADER PHI's, handed in rather than re-derived from `start`: the body counter
 	// IS the header phi one edge later, so a second derivation of its type would be one fact written twice —
 	// and the one that could drift is the one nothing compares.
 	function mintCountedBodyCounter(body IrBlock, header IrBlock, start ValueId, limit ValueId, inclusive bool, indexPhi ValueId, tag ValueTypeTag, nameId TypeNameId) returns ValueId
-		if not self.constIsKnown(start) or not self.constIsKnown(limit) 'boundsAreNotBothConstant'
+		if not self.constIsKnown(start) 'startIsNotConstant'
 			return indexPhi
-		end 'boundsAreNotBothConstant'
+		end 'startIsNotConstant'
 
 		let low = self.constOf(start)
+		if not self.constIsKnown(limit) 'aRuntimeLimit'
+			if inclusive or not self.limitKeepsTheCounterNonNegative(limit) 'statesNoFloor'
+				return indexPhi
+			end 'statesNoFloor'
+
+			return self.mintCounterOverRange(body, header: header, indexPhi: indexPhi, tag: tag, nameId: nameId, low: low, high: i64.max)
+		end 'aRuntimeLimit'
+
 		let bound = self.constOf(limit)
 		if inclusive 'closedRange'
 			if low > bound or inclusiveTopBoundWraps(bound) 'statesNoInterval'
@@ -42733,11 +42751,43 @@ export type Parser
 			end 'runsNoTrip'
 		end 'halfOpenRange'
 
+		return self.mintCounterOverRange(body, header: header, indexPhi: indexPhi, tag: tag, nameId: nameId, low: low, high: bound if inclusive else bound - 1)
+	end 'mintCountedBodyCounter'
+
+	// The body counter and the edge that feeds it, shared by the two bound shapes above so the interval
+	// is recorded against the body's own value in one place rather than each shape minting its own.
+	function mintCounterOverRange(body IrBlock, header IrBlock, indexPhi ValueId, tag ValueTypeTag, nameId TypeNameId, low ParsedInt, high ParsedInt) returns ValueId
 		let counter = self.mintPhi(body, tag: tag, nameId: nameId)
 		self.recordBranchEdge(header, targetId: body.id, argIds: singletonArgs(indexPhi))
-		self.recordProvenIntRange(counter, low: low, high: bound if inclusive else bound - 1)
+		self.recordProvenIntRange(counter, low: low, high: high)
 		return counter
-	end 'mintCountedBodyCounter'
+	end 'mintCounterOverRange'
+
+	// ⭐ **DOES A RUNTIME LIMIT KEEP THE COUNTER NON-NEGATIVE?** — asked only for a HALF-OPEN loop, where
+	// the counter stops at `limit - 1`, so the floor that gets recorded rests on where `limit` can reach.
+	//
+	// ⚠ **A LIMIT ABOVE `i64.max` MAKES THE TEST UNSIGNED, AND THEN THE FLOOR IS THE LIE.** The loop test
+	// runs at a signedness valid for both operands, so `i < xs` over an `int(0 to u64.max)` limit compares
+	// PATTERNS: the counter climbs through `i64.max` into the negative patterns with the test still
+	// holding, and a recorded `low` of 0 would vouch for a value that is signed-negative. A limit every one
+	// of whose values sits in `0 … i64.max` settles it — both readings of the test agree there, and the
+	// counter cannot pass `i64.max - 1`.
+	//
+	// A limit that names no alias proves nothing and keeps the guard, which is the direction that is safe.
+	function limitKeepsTheCounterNonNegative(limit ValueId) returns bool
+		let declaresIt = match self.valueDenotedAlias(limit) 'limitAlias'
+			undeclared gives false
+			declared(alias) gives not aliasIsFloat(alias) and rangeIsWithinSignedNonNegative(alias.low, high: alias.high)
+		end 'limitAlias'
+		if declaresIt 'aDeclaredCeiling'
+			return true
+		end 'aDeclaredCeiling'
+
+		// A recorded interval answers where no type does, and that is the case that carries the corpus: a
+		// `count()` result is minted UNNAMED, so its ceiling can only ever come from here.
+		let proven = try provenIntRangeOf(self.countedValueRanges, value: limit) otherwise return false
+		return rangeIsWithinSignedNonNegative(proven.low, high: proven.high)
+	end 'limitKeepsTheCounterNonNegative'
 
 	// ⭐ **THE PREHEADER'S "DID THE FACTORY GIVE US A CURSOR?" BRANCH (W3)** — the taken edge is the ordinary
 	// loop entry recorded by the caller, the other lands in a fresh block that carries NOTHING and rejoins past
@@ -69320,7 +69370,31 @@ export type Parser
 		// references never gave it, or the roster's own first entry becomes decorative.
 		if methodTok.value.equals(CountMethod) or (isManagedMemory and methodTok.value.equals(ManagedMemoryLengthMethod)) 'count'
 			try self.consumeEmptyArgList()
-			return self.noteArrayReadMember(self.emitRuntimeCall(ManagedCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
+			let counted = self.emitRuntimeCall(ManagedCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+
+			// ⭐ **A COUNT IS NON-NEGATIVE, AND THIS IS WHERE THAT FACT ENTERS THE COMPILER.** The backing
+			// `__ManagedMemory` holds at most `i64.max` slots (`stdlib/Array.maxon`'s `ElementIndex` header
+			// states the bound and why it is not tighter), so the answer is in `0 … i64.max` — which is what
+			// lets `for i in 0 upto xs.count()` state its counter's floor. Without it that loop, the corpus's
+			// most common indexed shape, proves nothing: `emitRuntimeCall` mints the result UNNAMED, so
+			// nothing declares a range for it to be read from.
+			//
+			// ⚠ **AS AN INTERVAL AND DELIBERATELY NOT AS `ElementIndex` IDENTITY.** A nameless interval has
+			// three readers and they all ask one question — can a guard still fire? (`countedRangeCovers`
+			// into `valueIsProvablyInRange`, `InlineLeaves.provenRangeProves`, and the loop rule's own
+			// `limitKeepsTheCounterNonNegative`). A denoted alias is read by `valueDenotedAlias`'s callers
+			// instead, and two of those answer a DIFFERENT question about the same value:
+			// `domainDeclaringAlias` picks division and comparison SIGNEDNESS from it, and E3010 would
+			// refuse `xs.count() as ElementIndex`. `Array.maxon`'s `ReportedCapacity` header carries the
+			// measured half of that: declaring the neighbouring capacity doors `ElementIndex` panicked
+			// `grownCapacity` at its own entry across 6 spec cases.
+			//
+			// ⚠ COUNT ONLY, never the sibling read members `noteArrayReadMember` also serves — a
+			// `capacity()` answers a NEGATIVE FLAG for a buffer it does not own, which is the whole reason
+			// `ReportedCapacity` is full-range signed.
+			self.recordProvenIntRange(counted, low: 0, high: i64.max)
+
+			return self.noteArrayReadMember(counted, giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
 		end 'count'
 		// ⭐ **`toCString()` — BUFFER-SURFACE ONLY**, like `length`/`byteAt`/`elementSize`: neither reference
 		// gives `Array` the spelling, and the corpus reaches it through `arr.managed.toCString()`. The result is

@@ -577,6 +577,25 @@ var ok = a + (m as Score)
 
 The alias an arithmetic result carries is a name, not a proof that the value is in range: `a + b` over `Score` is `Score`-typed but may exceed 100, so every range check that applies to a computed value still applies.
 
+Those checks are made where a value reaches a place DECLARED with the alias — a call argument, a
+`return`, a struct-literal field, a field store, a field's declared default, an array element, an
+explicit `as`. A violation there is a **panic**, in the same class as an out-of-bounds array access:
+it is a bug, never a recoverable error, so no `try` is required for one anywhere.
+
+**Reassigning a local is not one of those places**, so a narrow local may hold a value outside its own
+range for as long as it stays local. The check fires where the value escapes:
+
+```maxon
+typealias Score = int(0 to 100)
+
+function bump(start Score) returns Score
+	var s = start
+	s = s + 200      // no check here — a rebind is not a door
+	print("{s}")     // prints 200
+	return s         // panics here: value outside typealias 'Score'
+end 'bump'
+```
+
 All arithmetic on ranged integer types uses 64-bit operations regardless of storage type.
 
 **Storage:**

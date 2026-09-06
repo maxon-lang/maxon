@@ -409,6 +409,12 @@ error E3005: specs/fragments/assignment/error.retype-struct-field-errors.test:15
 <!-- test: assign-ranged-typealias -->
 A literal into a ranged typealias — the most common assignment there is. The declared type is the
 alias; a literal in range is the same type, not a retype.
+
+⭐ **AND A REBIND IS NOT A RANGE-CHECK DOOR.** `s = s + 20` stores a computed value into a narrowly
+ranged binding and is guarded by nothing: a binding NAMES a value, where a door is a declared SLOT a
+value is stored INTO, and `completeLocalRebind` records no site. The result stays in range here, so
+this case cannot tell the two apart on its own — `a-rebind-out-of-range-is-caught-at-the-return-door`
+below is the half that can, and the pair is what pins the exemption as a decision.
 ```maxon
 
 typealias Score = int(0 to 100)
@@ -422,6 +428,41 @@ end 'main'
 ```
 ```exitcode
 25
+```
+
+<!-- test: a-rebind-out-of-range-is-caught-at-the-return-door -->
+⭐ The other half. `s` leaves `Score` inside `bump` and NOTHING fires — the print proves the binding is
+holding 200 — and the check lands at the `return`, the first door the value reaches. A rebind that
+guarded would have panicked one line earlier and printed nothing.
+```maxon
+
+typealias Score = int(0 to 100)
+
+function bump(start Score) returns Score
+	var s = start
+	s = s + 200
+	print("s={s}\n")
+	return s
+end 'bump'
+
+function main() returns ExitCode
+	let r = bump(0)
+	print("unreachable r={r}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+s=200
+```
+```exitcode
+1
+```
+```stderr
+panic at a-rebind-out-of-range-is-caught-at-the-return-door.test:9: Range check failed: value outside typealias 'Score'
+Stack trace:
+  in bump
+  in main
+  in mrt_start
 ```
 
 <!-- test: assign-widening-byte-to-int -->
