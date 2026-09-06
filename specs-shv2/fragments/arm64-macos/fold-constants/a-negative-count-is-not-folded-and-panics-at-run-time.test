@@ -1,0 +1,59 @@
+// Test: a-negative-count-is-not-folded-and-panics-at-run-time
+typealias Word = int(i64.min to i64.max)
+
+function shiftLeft(v Word, n Word) returns Word
+	return v shl n
+end 'shiftLeft'
+
+function main() returns ExitCode
+	return shiftLeft(1, n: -1) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+func @shiftLeft {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.b.ge shiftok
+  shiftneg:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-negative-count-is-not-folded-and-panics-at-run-time.test:5: negative shift count\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  shiftok:
+    arm64.and x2, x1, -64
+    arm64.neg x3, x2
+    arm64.orr x2, x2, x3
+    arm64.asr x2, x2, 63
+    arm64.lslv x0, x0, x1
+    arm64.mvn x1, x2
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 18446744073709551615
+  __il_slow:
+    arm64.bl shiftLeft
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-negative-count-is-not-folded-and-panics-at-run-time.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

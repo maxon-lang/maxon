@@ -1,0 +1,53 @@
+// Test: module-let-scalar-struct-costs-no-allocation
+typealias Count = int(0 to 1000)
+
+type Minter
+	export var next as Count
+
+	static function create(next Count) returns Self
+		return Self{next: next}
+	end 'create'
+end 'Minter'
+
+let Seed = Minter.create(7)
+
+function main() returns ExitCode
+	return (Seed.next + 9) as ExitCode
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __ds_base@32 = i64 0
+  __ds_buf_size@40 = i64 0
+  __ds_buf_mask@48 = i64 0
+  __ds_start_ts@56 = i64 0
+  __ds_lock@64 = i64 0
+  __mm_alloc_id@72 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __struct_rec_0
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 9
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at module-let-scalar-struct-costs-no-allocation.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

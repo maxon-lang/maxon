@@ -1,0 +1,37 @@
+// Test: error.a-constrained-generic-service-is-refused
+interface Peekable
+	function tag() returns Whole
+end 'Peekable'
+
+type Box uses T where T is Peekable
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.item.tag()
+	end 'peek'
+end 'Box'
+
+type Coin
+	var n as Whole
+
+	static function create(n Whole) returns Self
+		return Self{n: n}
+	end 'create'
+
+	public function tag() returns Whole
+		return self.n
+	end 'tag'
+end 'Coin'
+
+function main() returns ExitCode
+	let h = spawn Box.create(Coin.create(3))
+	return 0
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+---
+CompilerError:
+error E2015: <fragment>:31:10: Unsupported: `spawn Box.create(…)` — `type Box` constrains its type parameters, and an instance method of a constrained generic takes one hidden witness pointer per constraint, which the synthesized `Box.__loop` has no `self` to source. Spawn an UNCONSTRAINED generic or a plain type, or move the constrained work behind a message that takes concrete arguments

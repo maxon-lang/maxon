@@ -1,0 +1,142 @@
+// Test: witness-forwarding-a-let-argument-to-a-reader-allowed
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Reader
+	function total(src IntArray) returns Integer
+end 'Reader'
+
+type Summer implements Reader
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{ n: n }
+	end 'create'
+	export function total(src IntArray) returns Integer
+		return src.count() as Integer
+	end 'total'
+end 'Summer'
+
+type Box uses T where T is Reader
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function run(src IntArray) returns Integer
+		return self.item.total(src)
+	end 'run'
+end 'Box'
+
+typealias SummerBox = Box with Summer
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let b = SummerBox.create(Summer.create(1))
+	return b.run(a) as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Summer.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Summer.total {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Box.run {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.bl Summer.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
+    arm64.leaRdata x1, __witness_Summer.Reader
+    arm64.bl Box.create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.leaRdata x2, __witness_Summer.Reader
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl Box.run
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at witness-forwarding-a-let-argument-to-a-reader-allowed.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Box_Summer
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

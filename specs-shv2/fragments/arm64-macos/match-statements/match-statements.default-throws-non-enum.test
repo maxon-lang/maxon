@@ -1,0 +1,115 @@
+// Test: match-statements.default-throws-non-enum
+typealias Integer = int(0 to 100)
+
+enum StringError
+	notFound
+end 'StringError'
+
+function classify(s String) returns Integer throws StringError
+	return match s 'check'
+		"a" gives 1
+		"b" gives 2
+		default throws StringError.notFound
+	end 'check'
+end 'classify'
+
+function main() returns ExitCode
+	let a = try classify("a") otherwise 0
+	let c = try classify("c") otherwise 99
+	if a == 1 and c == 99 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @classify {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __str_rec_3  ; "a"
+    arm64.movRegReg x0, x19
+    arm64.bl __str_eq
+    arm64.cbz x0, matchnext#2
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext#2:
+    arm64.leaRdata x1, __str_rec_4  ; "b"
+    arm64.movRegReg x0, x19
+    arm64.bl __str_eq
+    arm64.cbz x0, matchnext#4
+  matcharm#3:
+    arm64.movImm x0, 2
+  matchcont:
+    arm64.movImm x9, 0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at match-statements.default-throws-non-enum.test:9: Range check failed: value outside typealias 'Integer'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchnext#4:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_3  ; "a"
+    arm64.bl classify
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#2:
+    arm64.movImm x19, 0
+    arm64.b trycont#3
+  tryok:
+    arm64.movRegReg x19, x0
+  trycont#3:
+    arm64.leaRdata x0, __str_rec_5  ; "c"
+    arm64.bl classify
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#6
+  tryerr#5:
+    arm64.movImm x0, 99
+  trycont#6:
+    arm64.cmp x19, 1
+    arm64.movImm x1, 0
+    arm64.b.ne critsplit
+  andrhs:
+    arm64.cmp x0, 99
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+  scmerge:
+    arm64.cbz x0, ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

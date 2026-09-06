@@ -1,0 +1,39 @@
+// Test: fromRawValue-float-backed
+enum Weights
+	light = 1.5
+	medium = 2.5
+	heavy = 3.5
+end 'Weights'
+
+function main() returns ExitCode
+	let w = try Weights.fromRawValue(2.5) otherwise Weights.light
+	if w == Weights.medium 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4612811918334230528
+    arm64.bl __enum_from_raw_Weights
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 4609434218613702656
+  trycont:
+    arm64.movImm x1, 4612811918334230528
+    arm64.cmp x0, x1
+    arm64.b.ne ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

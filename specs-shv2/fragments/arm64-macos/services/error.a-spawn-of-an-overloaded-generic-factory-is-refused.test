@@ -1,0 +1,26 @@
+// Test: error.a-spawn-of-an-overloaded-generic-factory-is-refused
+typealias Whole = int(i64.min to i64.max)
+
+type Box uses T
+	export var n as Whole
+
+	static function create(x T) returns Self
+		return Self{n: 1}
+	end 'create'
+
+	static function create(a Whole, x T) returns Self
+		return Self{n: 2}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(7 as Whole, x: 9 as Whole)
+	return try await h.peek() otherwise 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:20: Unsupported: `spawn Box.create(…)` — `Box` is generic and `create` is declared 2 times, so its type arguments cannot be read off the call: which overload the arguments resolve to is settled after this point, and the parameter list they must be matched against is that overload's. Give the factories distinct names, or spawn a type whose factory is declared once
