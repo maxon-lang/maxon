@@ -1,0 +1,36 @@
+// Test: a-cycle-between-static-initializers-is-refused
+typealias Count = int(0 to u64.max)
+
+type Ping
+	static var value = Ping.build()
+	export var n as Count
+
+	static function build() returns Ping
+		return Ping{n: Pong.get() + 1}
+	end 'build'
+
+	export static function get() returns Count
+		return Ping.value.n
+	end 'get'
+end 'Ping'
+
+type Pong
+	static var value = Pong.build()
+	export var n as Count
+
+	static function build() returns Pong
+		return Pong{n: Ping.get() + 1}
+	end 'build'
+
+	export static function get() returns Count
+		return Pong.value.n
+	end 'get'
+end 'Pong'
+
+function main() returns ExitCode
+	print("{Ping.get()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2012: <fragment>:18:13: Circular dependency detected among global initializers: Ping.value, Pong.value

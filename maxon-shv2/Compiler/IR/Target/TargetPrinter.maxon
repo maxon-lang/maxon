@@ -589,10 +589,9 @@ end 'isSuppliedFunction'
 // its kernel calls are shimmed onto the system stack; `__module_init` and `__maxon_global_cleanup` run
 // outside `main`, where there is no green thread to overflow.
 //
-// ⚠ Two synthesized families satisfy `isRuntimeFunction` and NEITHER of those reasons, so they carry the
-// guard: `__lazy_init#<label>`, which runs the user's factory call tree inside `main`, and the per-type
-// CASCADES, which recurse to the depth of the user's data graph. `IrFunction.needsGreenThreadStackGuard`
-// is where each says so, and carries the measurement for both.
+// ⚠ One synthesized family satisfies `isRuntimeFunction` and neither of those reasons, so it carries the
+// guard: the per-type CASCADES, which recurse to the depth of the user's data graph.
+// `IrFunction.needsGreenThreadStackGuard` is where that is said, and carries the measurement.
 export function skipsGreenThreadStackGuard(func IrFunction) returns bool
 	return isRuntimeFunction(func) and not func.needsGreenThreadStackGuard
 end 'skipsGreenThreadStackGuard'

@@ -1,11 +1,14 @@
 // ModuleInit — the two synthesized functions a program with MANAGED top-level `var`s carries, and
-// nothing else does: `__module_init`, which fills every EAGER managed global's `.data` pointer slot BEFORE
+// nothing else does: `__module_init`, which fills EVERY managed global's `.data` pointer slot BEFORE
 // `main`, and `__maxon_global_cleanup`, which releases each managed global AFTER `main` returns.
 //
-// ⚠ **"EAGER" IS DOING WORK IN THAT SENTENCE** (spec-port `lazy-static`): a `static` member's slot is
-// filled on FIRST ACCESS by its own `__lazy_init#<label>`, which this file also builds. `__module_init`
-// skips those; the cleanup does NOT, because a lazy slot still has to be released — it merely has to be
-// null-guarded first (`dropLazyGlobalSlot`).
+// ⭐⭐ **EVERY SLOT IS FILLED BEFORE `main`, WITHOUT EXCEPTION, AND THAT IS WHAT MAKES BOTH FUNCTIONS
+// BRANCH-FREE** (⚖ user ruling: a `static let`/`static var` initializer runs eagerly, before `main`, in
+// DEPENDENCY order). Where the binding was declared decides nothing — a `static` member and a file-scope
+// `var` are one population here. So `__module_init` has no slot to skip and `__maxon_global_cleanup` has no
+// null to test: the only value a slot can hold when the cleanup reads it is the record the init put there.
+// The ORDER the globals arrive in is `GlobalInitOrder`'s answer, and a cycle is refused there (E2012) rather
+// than settled to some value at run time.
 //
 // ⭐ **A MANAGED GLOBAL'S SLOT IS AN 8-BYTE POINTER, AND ITS VALUE IS A REAL OWNED HEAP RECORD.** Both
 // halves are load-bearing and neither is negotiable:
@@ -64,16 +67,6 @@ end 'tagNamesAnIndexInternedType'
 // `__maxon_global_cleanup` (MaxonToStandardConversion.cs:2739), and v1 emits `__module_init_<n>` per file.
 // Keeping the names identical costs nothing and makes a dump of one compiler's output readable against
 // the other's.
-// ⭐ **THE TWO SENTINEL VALUES A LAZY STATIC'S SLOT CAN HOLD BESIDES A RECORD** (spec-port `lazy-static`).
-//
-// `UninitializedSlot` is the zero the `.data` image already puts there — the SAME number
-// `ProgramSignatures.nullPointerSlot` writes, named here from the reader's side so the guard states which
-// value it is testing for rather than spelling a bare `0`. `InitializingSlot` is written for the duration of
-// the initializer and is the whole of the cycle detection. Neither is an address any allocator returns, so
-// the two and every real record are disjoint by construction.
-let UninitializedSlot = 0 as ParsedInt
-let InitializingSlot = 1 as ParsedInt
-
 export let ModuleInitName = b"__module_init"
 export let GlobalCleanupName = b"__maxon_global_cleanup"
 
@@ -96,105 +89,18 @@ export function installManagedGlobalInit(module MaxonModule, project Project, gl
 	end 'noManagedGlobals'
 
 	buildModuleInit(module, project: project, globals: globals)
-	// ⭐⭐ **ONE ROUTINE PER LAZY STATIC** (spec-port `lazy-static`), built whether or not this program's
-	// `__module_init` has anything to do: the two populations are disjoint and either can be empty.
-	for global in globals 'eachGlobal'
-		if global.filledOnFirstAccess 'onFirstAccess'
-			buildLazyStaticInit(module, project: project, global: global)
-		end 'onFirstAccess'
-	end 'eachGlobal'
 	buildGlobalCleanup(module, project: project, globals: globals)
 	return true
 end 'installManagedGlobalInit'
 
-// ⭐⭐ **`__lazy_init$<label>()` — A STATIC FIELD'S INITIALIZER, RUN ON FIRST ACCESS** (spec-port
-// `lazy-static`). `specs/lazy-static.md`: *"The initializer expression is evaluated the first time the static
-// field is accessed"*, and *"After initialization, subsequent accesses return the cached value"*. Every
-// access calls this (`Parser.emitGlobalAddr`); this decides whether anything happens.
+// `__module_init()` — for each managed global, in the order it was handed: build its initial owned record
+// and store the record's address into its `.data` slot.
 //
-// ⭐⭐ **THE GUARD IS THE SLOT ITSELF — AN IN-BAND SENTINEL, NOT A SEPARATE FLAG — AND THE REASON IS THAT A
-// FLAG AND A VALUE CAN DISAGREE.** The `.data` image starts the slot at zero and a built record is a heap
-// address, so `slot == 0` already means "not yet initialized" with no second word to keep in step. That is
-// not merely economical, it is what makes the `static var` REASSIGNMENT case correct for free: `State.set(s)`
-// stores a fresh non-null record through a completely different code path (`Parser.emitCheckedGlobalStore`),
-// and because the guard IS the value, that path cannot leave the guard unset and cannot cause the
-// initializer to re-run. A separate flag would have required that path to write the flag too — a second
-// write, in another file, that nothing would force anyone to remember.
-//
-// ⭐ **AND A SECOND SENTINEL CATCHES THE CYCLE.** `InitializingSlot` is written before the initializer runs
-// and overwritten by the record, so a static whose initializer transitively reads ITSELF meets it and
-// panics by name. That is strictly better than either reference: MEASURED, the bootstrap re-enters, reads
-// the still-null slot and dies in `mm_incref called with NULL pointer` with no mention of the cycle. Address
-// 1 is not a record any allocator returns, so the two sentinels and every real value are disjoint by
-// construction.
-//
-// ⚠ **WHY A CYCLE IS REACHABLE AT ALL, WHERE IT WAS NOT BEFORE.** The rule that a managed initializer may
-// not NAME another global (`ProgramSignatures.evaluateDecl` answers `notFound`) still holds and is unchanged
-// — but it bounds the initializer EXPRESSION, not the body of a function that expression calls. Under eager
-// init that hole gave a silent wrong answer (a body reading a later global read the null the image left,
-// which `buildModuleInit`'s header already recorded); on demand it gives unbounded recursion instead, so it
-// needs an answer rather than a note.
-function buildLazyStaticInit(module MaxonModule, project Project, global ManagedGlobal)
-	// The body is the user's factory call tree, so this frame's depth is the program's: it keeps the
-	// green-thread stack guard the rest of the compiler's scaffolding is exempt from. See
-	// `TargetPrinter.skipsGreenThreadStackGuard`.
-	var fn = SynthesizedFunction.open(module, project: project, name: global.lazyInitCallee(), returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create(), needsGreenThreadStackGuard: true)
-	let range = global.range
-
-	let entry = fn.currentBlock()
-	let guardWord = emitSlotGuardWord(fn, global: global)
-	let isUninitialized = emitSlotIs(fn, word: guardWord.word, sentinel: UninitializedSlot, range: range)
-
-	let build = fn.openBlock(b"build")
-	// The in-progress mark goes down BEFORE the initializer runs — that ordering is the whole of the cycle
-	// detection, and it is why the store is not merged with the one below it.
-	fn.emit(MaxonOp.storeIndirect(guardWord.addr, offset: GlobalSlotOffset, value: fn.emitTypedLiteral(InitializingSlot, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
-	let record = initialRecordOf(fn, global: global)
-	fn.emit(MaxonOp.storeIndirect(guardWord.addr, offset: GlobalSlotOffset, value: record, valueType: declaredAggregateSlotWidth()), range: range)
-	fn.terminate(MaxonOp.retVoid, range: range)
-
-	let settled = fn.openBlock(b"settled")
-	let isInitializing = emitSlotIs(fn, word: guardWord.word, sentinel: InitializingSlot, range: range)
-
-	let cycle = fn.openBlock(b"cycle")
-	fn.emit(MaxonOp.panicAbort(lazyStaticCycleMessage(global)), range: range)
-	// `panicAbort` diverges, and a block still needs a terminator — the dead return `closeFunctionBody`
-	// emits after any diverging op, for its reason.
-	fn.terminate(MaxonOp.retVoid, range: range)
-
-	let ready = fn.openBlock(b"ready")
-	fn.terminate(MaxonOp.retVoid, range: range)
-
-	fn.terminateBlock(entry, op: MaxonOp.condBranch(isUninitialized, thenBlockId: build.id, elseBlockId: settled.id), range: range)
-	fn.terminateBlock(settled, op: MaxonOp.condBranch(isInitializing, thenBlockId: cycle.id, elseBlockId: ready.id), range: range)
-end 'buildLazyStaticInit'
-
-// The panic an in-progress access reports. It names the SLOT rather than a route, because the slot is the
-// one thing every party has in common and the only one this routine can see.
-//
-// ⛔ **IT USED TO SAY "its initializer reads the static it is initializing", FULL STOP, AND THAT
-// MISDIAGNOSED A PROGRAM THAT IS NOT CYCLIC AT ALL** (§6 review finding 9). `InitializingSlot` is equally
-// observable when a green thread PARKS inside an initializer (any IO or `await` in a callee parks it) and a
-// SECOND thread then first-accesses the same static. Both are "accessed while initializing"; only one is a
-// cycle. The sentence now names the condition and offers the cycle as the usual cause rather than the only
-// one. ⚠ shv2 has no per-static initialization LOCK, so the second thread panics rather than waiting — that
-// is a real limit of this design, recorded here because the message is where an author meets it.
-function lazyStaticCycleMessage(global ManagedGlobal) returns ByteArray
-	var message = b"lazy static initializer for `".clone()
-	message.append(global.label)
-	message.append(b"` was accessed while its own initializer was still running, so it has no value to answer with. Usually the initializer reads the static it is initializing, directly or through a function it calls. It is also reachable across GREEN THREADS: if the initializer parks (any IO or `await` in a callee) and a second thread then first-accesses the same static, that access arrives here too")
-	// The line terminator every panic message carries, so the stack trace that follows starts on its own
-	// line — `RuntimeAbort.panicMessageLine` appends the same constant for a message that HAS a source
-	// position to prefix, which a synthesized routine has not.
-	message.append(PanicMessageLineTerminator)
-	return message
-end 'lazyStaticCycleMessage'
-
-// `__module_init()` — for each managed global, in ARENA order: build its initial owned record and store
-// the record's address into its `.data` slot.
-//
-// ⚠ **THE STORE IS BARE — NO LOAD OF THE OLD VALUE AND NO DECREF.** The slot is guaranteed zero here (the
-// `.data` image put it there and nothing has run yet), so a decref would be reading a null pointer. Both
+// ⚠ **THE STORE IS BARE — NO LOAD OF THE OLD VALUE AND NO DECREF.** The slot is guaranteed zero here: the
+// `.data` image put it there, and the only code that could have overwritten it is an EARLIER initializer's
+// — which would be a write to this slot, and a write is a `globalAddr` `GlobalInitOrder` reads as a
+// dependency, so that initializer runs after this store rather than before it. A decref would therefore be
+// reading a null pointer. Both
 // reference compilers reach the same place by a different road: their initializing store is on the SAME
 // path as an ordinary assignment, so they emit the load-and-decref and then suppress it by matching the
 // enclosing FUNCTION'S NAME (`isModuleInit = func.Name == "__module_init"`,
@@ -203,24 +109,15 @@ end 'lazyStaticCycleMessage'
 // so the fact ("this store is the first one") is expressed by WHICH CODE EMITS IT rather than by a string
 // compare in the middle of a lowering.
 //
-// ⚠ **ARENA ORDER IS DETERMINISTIC AND CORRECTNESS DOES NOT DEPEND ON IT.** A managed initializer may not
-// reference another global — `evaluateDecl` answers `notFound` for a managed decl, so `let A = "x"` /
-// `let B = A` is E2004 in BOTH declaration orders (see `ProgramSignatures.evaluateDecl`, and the oracle
-// measured to agree) — so there is no initialization order to get wrong. The order here is fixed only so
-// the emitted code is a function of the program: the arena is source-path order, then in-file order.
-//
-// ⭐⭐ **A LAZY SLOT IS NOT IN IT** (spec-port `lazy-static`) — canonical says a static field's initializer
-// runs on FIRST ACCESS, so it gets `__lazy_init#<label>` instead and this function never touches its slot.
-// That is the entire behavioural difference between the two, and it is one `continue` over the decided bit
-// (`ManagedGlobal.filledOnFirstAccess`, never a second reading of where the binding was declared).
+// ⭐⭐ **THE ORDER IS DEPENDENCY ORDER, AND CORRECTNESS DOES DEPEND ON IT.** An initializer's body may call,
+// and a callee may read another global's slot — so a global must be built after every global it reads.
+// `GlobalInitOrder.dependencyOrderedGlobals` is what settles that, over the merged module's call graph, and
+// it is the caller's to apply: this function emits the array it is handed, in the order it is handed. A
+// cycle has no such order and is refused there rather than reaching this loop.
 function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray)
 	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create())
 
 	for global in globals 'eachGlobal'
-		if global.filledOnFirstAccess 'onFirstAccess'
-			continue
-		end 'onFirstAccess'
-
 		let record = initialRecordOf(fn, global: global)
 		fn.emit(MaxonOp.storeIndirect(fn.emitSlotAddr(global), offset: GlobalSlotOffset, value: record, valueType: declaredAggregateSlotWidth()), range: global.range)
 	end 'eachGlobal'
@@ -236,15 +133,10 @@ end 'buildModuleInit'
 // rather than a runtime entry. That is exactly what `DeadGlobalElimination`'s header filed against the day an
 // initializer may call.
 //
-// ⛔⛔ **THE KEEP-ALIVE THIS HEADER USED TO ASSERT NOW APPLIES TO ONE OF THIS FUNCTION'S TWO CALLERS ONLY**
-// (spec-port `lazy-static`, §6 review finding 6). It said a global whose initializer calls is kept alive by
-// `contributesStorage` "so this run is never spliced out from under its side effects". That is still true for
-// `buildModuleInit`, whose globals run BEFORE `main` whether or not anything reads them. It is deliberately
-// FALSE for `buildLazyStaticInit`, which now shares this producer: `contributesStorage` asks
-// `declScopeInitializerCall`, which SILENCES the keep-alive for a lazy slot — because canonical says a static
-// field nothing accesses must run nothing, so preserving its side effects would preserve the very effects the
-// language forbids. A lazy static's liveness is decided by whether an access exists, which is the same thing
-// as whether its initializer can run at all.
+// ⭐ **THE PROGRAM'S OWN global whose initializer calls is kept alive by `contributesStorage` whatever
+// reads its slot, so this run is never spliced out from under its side effects. A CORPUS global's is** —
+// stdlib is loaded into every compile, so its slots are kept on liveness alone and an unread one is dropped
+// with its call (`TopLevelDecl.declaredByTheCorpus`).
 function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
 	return match global.initializer 'initializer'
 		record(build) gives builtRecord(fn, build: build, valueType: global.valueType, range: global.range)
@@ -271,7 +163,7 @@ end 'initialRecordOf'
 //
 // ⚠ **A FOURTH ARM, A `CharacterSet` PRESET, WENT AT W129** with the `__cs_*` runtime it sealed its member set
 // into. It was the container arm plus one `__cs_make`; `stdlib/CharacterSet.maxon` declares the eleven presets
-// now (W115), so a preset at module scope is an ordinary LAZY STATIC calling ordinary declared code, and there
+// now (W115), so a preset at module scope is an ordinary static calling ordinary declared code, and there
 // is no compiler-owned record left for a global to hold.
 function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, range SourceRange) returns ValueId
 	return match build 'build'
@@ -356,11 +248,9 @@ end 'ownedConstArrayRecord'
 function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, elements ConstArrayElementArray, valueType MaxonType, range SourceRange) returns ValueId
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
 
-	// ⭐ **THE ADD CALLEE IS THE INSTANCE'S OWN** (spec-port `lazy-static`) — `__managed_push` for an `Array`,
-	// `Set.insert` for a declared `Set`. It used to be spelled here, which was true while an `Array` was the only
-	// container a top-level form could hand elements to; `ProgramSignatures.containerCreateCall` is where
-	// "which container is this?" is already decided, so it answers this too rather than a second test living
-	// in the synthesis.
+	// ⭐ **THE ADD CALLEE IS THE INSTANCE'S OWN** — `__managed_push` for an `Array`, `Set.insert` for a
+	// declared `Set`. `ProgramSignatures.containerCreateCall` is where "which container is this?" is already
+	// decided, so it answers this too rather than a second test living in the synthesis.
 	if elements.count() > 0 'hasElements'
 		let add = elementAddCallee(create, count: elements.count())
 		for element in elements 'eachElement'
@@ -650,17 +540,10 @@ end 'elementRecordOf'
 // is what `__mm_leak_check` already does, so the stubs gain one call in an existing shape rather than a
 // new one. The code is not read here — it flows through untouched.
 //
-// ⚠⚠ **A FILE-SCOPE SLOT'S DECREF IS UNCONDITIONAL AND A LAZY ONE'S IS NULL-GUARDED, AND THE HEADER THAT
-// USED TO STAND HERE SAID THE GUARD COULD NEVER BE NEEDED.** It read: *"Both reference compilers guard it
-// (`EmitDecrefValueIfNonnull`; v1's `__mm_decref_maybenull_helper`), because in their designs a global whose
-// initializer is LAZY, or whose file never ran an init, can still be null at exit. shv2 has neither case."*
-// **shv2 now has the first case** (spec-port `lazy-static`): a `static` member nothing ever accessed reaches
-// this function with its slot still zero, and an unguarded `__str_decref(null)` on it is a crash on exit for
-// a program that did nothing wrong. So the two references' guard was not an artefact of their designs — it
-// was a consequence of laziness, and shv2 inherits it exactly where it inherits the laziness.
-//
-// ⭐ The file-scope half is UNCHANGED and stays unguarded, on the argument the old header made and which is
-// still true of it: `__module_init` fills every eager entry before `main`, so a branch there would test a
+// ⭐⭐ **EVERY DECREF IS UNCONDITIONAL, AND NOTHING HERE TESTS A SLOT FOR NULL.** Both reference compilers
+// guard theirs (`EmitDecrefValueIfNonnull`; v1's `__mm_decref_maybenull_helper`) because in their designs a
+// global whose initializer is deferred, or whose file never ran an init, can still be null at exit. shv2 has
+// neither case: `__module_init` fills every slot in this list before `main`, so a branch here would test a
 // condition the program cannot be in.
 function buildGlobalCleanup(module MaxonModule, project Project, globals ManagedGlobalArray)
 	var paramTypes = MaxonTypeArray.create()
@@ -668,95 +551,13 @@ function buildGlobalCleanup(module MaxonModule, project Project, globals Managed
 	var fn = SynthesizedFunction.open(module, project: project, name: GlobalCleanupName, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
 
 	for global in globals 'eachGlobal'
-		if global.filledOnFirstAccess 'mayBeUnfilled'
-			dropLazyGlobalSlot(fn, global: global)
-			continue
-		end 'mayBeUnfilled'
-
-		dropGlobalSlot(fn, global: global)
+		let record = fn.mintOfType(global.valueType)
+		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: global.range)
+		fn.emitPositionalCallDiscarding(global.dropCallee, args: singletonArgs(record), range: global.range)
 	end 'eachGlobal'
 
 	fn.terminate(MaxonOp.ret(ExitCodeParam), range: anchorRange(globals))
 end 'buildGlobalCleanup'
-
-// One eager slot's drop: load and decref, no guard. The shared body of both arms above, so the two cannot
-// come to load the slot differently.
-function dropGlobalSlot(fn SynthesizedFunction, global ManagedGlobal)
-	let record = fn.mintOfType(global.valueType)
-	fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: global.range)
-	fn.emitPositionalCallDiscarding(global.dropCallee, args: singletonArgs(record), range: global.range)
-end 'dropGlobalSlot'
-
-// ⭐ **A LAZY SLOT IS DROPPED ONLY IF IT HOLDS A RECORD — i.e. IF IT IS NEITHER SENTINEL.**
-//
-// ⛔⛔ **IT TESTED ONLY `!= UninitializedSlot`, AND THE §6 REVIEW (finding 2) WAS RIGHT TO REFUSE THE
-// ARGUMENT THAT DEFENDED IT.** That header claimed `InitializingSlot` was unreachable here because cleanup
-// runs after `main` returned, so any initializer that started had finished. Two ways for the word to still
-// be the in-progress mark: a green thread PARKED inside an initializer when `main` returns (any IO or
-// `await` in a callee parks it), and — were a throwing factory ever admitted — an unwind between the two
-// stores. Testing for both sentinels costs one compare and one block, and it DELETES the argument rather
-// than defending it: there is no longer a reachability claim to get wrong.
-//
-// ✅ **A THROWING FACTORY IS NOT ADMISSIBLE TODAY, AND THE REFUSAL IS INCIDENTAL RATHER THAN DESIGNED**
-// (MEASURED, §6 review's open question). `Parser.requireFactoryReturnsARecord` classifies the RETURN TYPE
-// only and says nothing about `throws` — but the body this file synthesizes emits an ordinary
-// `MaxonOp.call`, never a `tryCall`, and `SemanticCheck.validatePlainCall` walks synthesized functions like
-// any other: a callee in `throwsMap` reached by a plain call is **E3057 `throwing function requires try`**.
-// Verified on `static var b = Box.make()` with a throwing `make()`. ⚠ So the second hole above is closed by
-// a rule that is not about global initializers at all and could move without anyone noticing here — which
-// is the second reason this guard tests the mark rather than reasoning about who could have left it.
-//
-// ⚠ **AND IT STAYS A TEST FOR THE SENTINELS RATHER THAN `> InitializingSlot`.** The two happen to be the
-// two smallest words, so an ordered compare would work today — and would silently re-encode the
-// disjointness `UninitializedSlot`'s header argues as an ORDERING fact instead.
-function dropLazyGlobalSlot(fn SynthesizedFunction, global ManagedGlobal)
-	let range = global.range
-	let guardWord = emitSlotGuardWord(fn, global: global)
-	let isUninitialized = emitSlotIs(fn, word: guardWord.word, sentinel: UninitializedSlot, range: range)
-
-	let head = fn.currentBlock()
-	let settled = fn.openBlock(b"settled")
-	let isInitializing = emitSlotIs(fn, word: guardWord.word, sentinel: InitializingSlot, range: range)
-
-	let drop = fn.openBlock(b"drop")
-	dropGlobalSlot(fn, global: global)
-
-	let after = fn.openBlock(b"after")
-	fn.terminateBlock(head, op: MaxonOp.condBranch(isUninitialized, thenBlockId: after.id, elseBlockId: settled.id), range: range)
-	fn.terminateBlock(settled, op: MaxonOp.condBranch(isInitializing, thenBlockId: after.id, elseBlockId: drop.id), range: range)
-	fn.terminateBlock(drop, op: MaxonOp.branch(after.id), range: range)
-	fn.resumeBlock(after)
-end 'dropLazyGlobalSlot'
-
-// ⭐ **THE SLOT'S ADDRESS AND ITS GUARD WORD, READ ONCE** — the pair `buildLazyStaticInit` and
-// `dropLazyGlobalSlot` both open with, and the pair that must CHANGE TOGETHER whenever the sentinel
-// vocabulary does. The §6 review's finding 8: it was written out twice in this file, and finding 2 was
-// exactly a change one copy needed and the other had. The slot's declared type is the record's; this reads
-// it as a WORD, because every test over it is about the eight bytes rather than about what they point at —
-// the same reading `emitSlotAddr` gives an address.
-function emitSlotGuardWord(fn SynthesizedFunction, global ManagedGlobal) returns SlotGuardWord
-	let addr = fn.emitSlotAddr(global)
-	let word = fn.mintOfType(MaxonType.integer)
-	fn.emit(MaxonOp.loadIndirect(word, addr: addr, offset: GlobalSlotOffset, valueType: MaxonType.integer), range: global.range)
-	return SlotGuardWord.create(addr, word: word)
-end 'emitSlotGuardWord'
-
-// Is the guard word exactly `sentinel`? Both readers test both sentinels, so the comparison is stated once
-// rather than four times with the literal and the operator respelled at each.
-function emitSlotIs(fn SynthesizedFunction, word ValueId, sentinel ParsedInt, range SourceRange) returns ValueId
-	return fn.emitCompare(word, rhs: fn.emitTypedLiteral(sentinel, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
-end 'emitSlotIs'
-
-// The slot ADDRESS and the WORD read out of it — returned together because every caller needs both, and
-// re-deriving the address would emit a second `globalAddr` for one slot.
-type SlotGuardWord
-	export let addr as ValueId
-	export let word as ValueId
-
-	static function create(addr ValueId, word ValueId) returns SlotGuardWord
-		return Self{addr: addr, word: word}
-	end 'create'
-end 'SlotGuardWord'
 
 // The span a synthesized function's TERMINATOR carries. No source token spawns a `return` that the user
 // did not write, so it rides the FIRST global's initializer — the declaration that caused the whole
@@ -801,7 +602,7 @@ export type SynthesizedFunction
 	// Create the function, register it and its single `entry` block on `module`, and seed the value
 	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
 	// mints, exactly as `Parser.recordValueType` does for a parsed function's parameters.
-	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray, needsGreenThreadStackGuard bool = false) returns SynthesizedFunction
+	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray) returns SynthesizedFunction
 		var valueTags = ValueTypeTagArray.create()
 		var valueNameIds = TypeNameIdArray.create()
 		var valueBrandIds = TypeNameIdArray.create()
@@ -819,10 +620,8 @@ export type SynthesizedFunction
 		// `__maxon_global_cleanup` read as the compiler's own at `FunctionNameIndex.refuseDuplicateFunctionName`
 		// (so a `Builtins.maxon` declaration of one is E4015 against them, and a doubled install is a panic), at
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
-		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. ⚠ The Maxon-tier population is
-		// `__module_init`, `__maxon_global_cleanup` and one `__lazy_init#<label>` per lazy static — the last of
-		// which is the one that carries `needsGreenThreadStackGuard`.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: needsGreenThreadStackGuard)
+		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`.
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized())
 		let funcIndex = module.funcCount() as FuncIndex
 		module.pushFunc(func)
 
@@ -914,9 +713,7 @@ export type SynthesizedFunction
 		self.recordOpTables(op, opIndex: opIndex as OpIndex, range: range)
 	end 'emit'
 
-	// ⭐ **OPEN A FRESH BLOCK AND CONTINUE EMITTING INTO IT** (spec-port `lazy-static`). Until the lazy-init
-	// routine there was nothing here to branch — `__module_init` and `__maxon_global_cleanup` are each one
-	// straight line — so this carrier had exactly one block and no way to leave it.
+	// ⭐ **OPEN A FRESH BLOCK AND CONTINUE EMITTING INTO IT.**
 	//
 	// ⚠ **IT DOES NOT TERMINATE THE BLOCK IT LEAVES.** A block's terminator is the caller's statement about
 	// control flow and there is no default that is right for both a fall-through and a two-way branch;
@@ -1011,9 +808,9 @@ export type SynthesizedFunction
 	// minted at the `boolean` tag its `condBranch` consumer expects.
 	//
 	// ⭐ **SIGNED, AND THE CALLER HAS NO RANGED TYPE TO SAY OTHERWISE.** Every comparison this carrier
-	// builds is the lazy-static guard's `initialized == 0` — an EQUALITY over a flag the compiler mints
-	// itself, whose two readings are the same instruction. There is no source operand here whose declared
-	// range could ask for anything else, so the answer is stated rather than threaded.
+	// builds is an equality or inequality against a word the compiler mints itself, whose two readings are
+	// the same instruction. There is no source operand here whose declared range could ask for anything
+	// else, so the answer is stated rather than threaded.
 	export function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, range SourceRange) returns ValueId
 		let result = self.mint(ValueTypeTag.boolean, nameId: UnnamedTypeId)
 		self.emit(MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op, signedness: IntegerSignedness.signed), range: range)

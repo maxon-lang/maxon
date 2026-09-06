@@ -283,13 +283,18 @@ end 'main'
 ```
 
 <!-- test: character-set-dropped-unused -->
-### A CharacterSet that is built and never used is still dropped
+### A CharacterSet whose value is never inspected is still dropped
 Both the box and the member set it owns; a leak here exits 101.
+
+⚠ **THE ACCESSORS ARE PURE, SO THEIR RESULTS MUST BE BOUND** (E3064). A preset is built before `main`
+and an accessor only reads the settled slot, so discarding one is code that cannot do anything — the
+compiler is right to refuse it. Binding without inspecting is what this case needs, and it is enough:
+the drop obligation is the binding's, not the reader's.
 ```maxon
 function main() returns ExitCode
-	_ = CharacterSet.punctuation()
-	_ = CharacterSet.whitespacesAndNewlines()
-	print("ok")
+	let punctuation = CharacterSet.punctuation()
+	let blanks = CharacterSet.whitespacesAndNewlines()
+	print("ok" if punctuation.contains('!') and blanks.contains('	') else "no")
 	return 0
 end 'main'
 ```

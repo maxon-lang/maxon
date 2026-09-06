@@ -1,0 +1,23 @@
+// Test: a-static-initializer-that-reads-itself-is-refused
+typealias Count = int(0 to u64.max)
+
+type Loop
+	static var value = Loop.build()
+	export var n as Count
+
+	static function build() returns Loop
+		return Loop{n: Loop.get() + 1}
+	end 'build'
+
+	export static function get() returns Count
+		return Loop.value.n
+	end 'get'
+end 'Loop'
+
+function main() returns ExitCode
+	print("{Loop.get()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2012: <fragment>:5:13: Circular dependency detected among global initializers: Loop.value reads its own slot, directly or through a function its initializer calls

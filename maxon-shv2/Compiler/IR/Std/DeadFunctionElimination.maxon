@@ -184,14 +184,9 @@ end 'requireUnreachableStdlibStayedDead'
 //    enumerating every `targetName:`/`callDirect` in the stub and chunk builders:
 //      * `__module_init` and `__maxon_global_cleanup` — the managed-global initialization and release the
 //        entry stub brackets `main` with (P1.7 slice 2a, see `ModuleInit`). Nothing in the module calls
-//        either, and they are what makes an EAGER managed global's `.data` slot non-null and every managed
-//        global's record freed — so pruning one would turn a leak-gated spec into a null-pointer store or
-//        an exit-101 leak.
-//        ⚠ **THE PER-STATIC `__lazy_init#<label>` ROUTINES ARE NOT IN THIS SET, AND MUST NOT BE**
-//        (spec-port `lazy-static`). They are called from ORDINARY user code — the guard `emitGlobalAddr`
-//        emits at each access — so the reachability walk finds them by its normal edges. Rooting them
-//        would keep the initializer of a static nothing accesses, which is the one thing laziness says
-//        must not happen.
+//        either, and they are what makes every managed global's `.data` slot non-null before `main` and
+//        every managed global's record freed after it — so pruning one would turn a leak-gated spec into a
+//        null-pointer store or an exit-101 leak.
 //      * `__mm_leak_check` — both entry stubs' leak gate (`appendLeakGate`, `Arm64Runtime:103`). Nothing
 //        in the module CALLS it, so it survives only by being rooted here. ⭐ Its absence is LOUD on
 //        every backend, and that is a property worth keeping deliberately: each gate emits its call from

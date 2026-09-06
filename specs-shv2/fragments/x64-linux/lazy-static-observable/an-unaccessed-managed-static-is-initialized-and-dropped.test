@@ -1,4 +1,4 @@
-// Test: an-unaccessed-managed-static-is-not-dropped
+// Test: an-unaccessed-managed-static-is-initialized-and-dropped
 type Untouched
 	static var never = Untouched.build()
 	static var other = Untouched.build()
@@ -20,11 +20,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __data_Untouched.other@0 = i64 0
-  __mm_alloc_count@8 = i64 0
-  __slab_arena_list@16 = i64 0
-  __slab_arena_map_l1@24 = i64 0
-  __slab_state@32 = i64 0
+  __data_Untouched.never@0 = i64 0
+  __data_Untouched.other@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
 }
 
 func @Untouched.build {
@@ -44,7 +45,6 @@ func @Untouched.get {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect __lazy_init#__data_Untouched.other
     x64.leaRegGlobal rax, __data_Untouched.other
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __str_retain

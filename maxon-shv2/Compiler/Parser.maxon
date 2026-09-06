@@ -22642,7 +22642,7 @@ export type Parser
 		// body it is reading (`parseTypeMember` passes the enclosing type, the file-scope dispatcher passes
 		// nothing), so the fact is recorded at the one place that is TOLD it rather than inferred later from
 		// the shape of the name. See `TopLevelDecl.scope` for why the two positions differ at all.
-		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column, scope: TopLevelBindingScope.fileScope if qualifier.isEmpty() else TopLevelBindingScope.typeMember(qualifier))
+		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column, scope: TopLevelBindingScope.fileScope if qualifier.isEmpty() else TopLevelBindingScope.typeMember(qualifier), declaredByTheCorpus: self.isStdlibSource)
 	end 'readTopLevelBinding'
 
 	// ⭐ **THE STORAGE NAME A BINDING DECLARATION CLAIMS — bare at file scope, `Type.member` inside a `type`
@@ -32834,15 +32834,10 @@ export type Parser
 	// ordinary store into a slot that is still zero. shv2's initializing store is not on this path at all —
 	// it is `ModuleInit`'s own emission — so every store reaching HERE finds a slot that is already filled.
 	//
-	// ⛔⛔ **AND WHAT MAKES THAT TRUE IS NO LONGER `__module_init`, WHICH IS WHY THIS PARAGRAPH WAS REWRITTEN**
-	// (spec-port `lazy-static`, §6 review finding 4). It used to read *"every store reaching HERE is a
-	// re-assignment of a slot `__module_init` already filled"*, and for a `static` member that is now FALSE:
-	// its slot is filled on FIRST ACCESS, and this store may BE the first access. The decref below is safe
-	// because **`emitGlobalAddr` forces the initializer first** — it is the single door every global read and
-	// write opens with, and it emits the `__lazy_init#<label>` call ahead of the address
-	// (`emitLazyStaticInitGuard`). ⚠ So that guard call is LOAD-BEARING FOR THIS DECREF, not merely for the
-	// value's freshness: remove it and a first-access assignment decrefs a null slot. A reader trusting the
-	// old sentence would have concluded exactly the opposite.
+	// ⭐ **INCLUDING A STORE ISSUED FROM INSIDE ANOTHER GLOBAL'S INITIALIZER**, which is the one shape that
+	// could reach an empty slot. A write emits the same `globalAddr` a read does, so `GlobalInitOrder` sees
+	// it as a dependency and settles the written global FIRST — and a pair that writes each other's slots
+	// has no such order and is E2012.
 	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType, brand ByteArray) throws ParseError
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
@@ -32857,9 +32852,9 @@ export type Parser
 
 		// ⭐⭐ **E3143's WRITE HALF IS MINTED HERE, AND THIS IS THE ONLY DOOR THAT CAN MINT IT.** The rule refuses
 		// an AUTHOR-WRITTEN assignment to a shared word from a green thread, and by the time the ops exist there
-		// is nothing left to tell one from the compiler's own: a lazy static's first-access fill and
-		// `ModuleInit`'s initializing store emit the same `globalAddr` + `storeIndirect` pair, and the label the
-		// op carries is mangled rather than the name the author wrote. This door has both facts and neither is
+		// is nothing left to tell one from the compiler's own: `ModuleInit`'s initializing store emits the same
+		// `globalAddr` + `storeIndirect` pair, and the label the op carries is mangled rather than the name the
+		// author wrote. This door has both facts and neither is
 		// recoverable downstream — `storeToGlobal` has already refused the immutable case, so every write
 		// reaching here is to a `var`, and `nameTok` is the author's own spelling and position. The READ half is
 		// `emitGlobalLoad`'s. See `Project.moduleVarAccessSites`.
@@ -76612,58 +76607,15 @@ export type Parser
 	// Std tier it lowers into is typeless anyway, and nothing dispatches on this value's tag (it is
 	// read only by the load/store that follows).
 	//
-	// ⭐⭐ **AND IT IS WHERE A LAZY STATIC'S INITIALIZER IS FORCED** (spec-port `lazy-static`).
-	// `specs/lazy-static.md` says a static field's initializer runs *"the first time the static field is
-	// accessed"*, and this function is, exactly, every access: `emitGlobalLoad` and `emitGlobalStore` are its
-	// only two callers and every read and every write of every global goes through one of them. Putting the
-	// guard here rather than at either of them — still less at the six call sites above them — is what makes
-	// "every access forces it" a property of the code instead of a claim about a list.
-	//
-	// ⛔⛔ **A WRITE FORCES IT TOO — AND THAT IS A SEMANTIC CHOICE, NOT A CONSEQUENCE** (§6 review). It has
-	// one mechanical half and one genuinely chosen half, and they should not be confused:
-	//
-	//   * **Mechanically required.** `State.set(s)` assigns a `static var` whose initializer may never have
-	//     run, and the assignment path RELEASES the old value before storing the new one
-	//     (`emitCheckedGlobalStore`, whose unconditional decref is safe BECAUSE of this guard — see its
-	//     header). Without forcing, a first-access assignment decrefs a null slot.
-	//   * **CHOSEN.** That the initializer's SIDE EFFECTS therefore run, for a static that is only ever
-	//     written and never read, is shv2 reading `specs/lazy-static.md`'s *"the first time the static field
-	//     is accessed"* as covering a write — canonical draws no read/write distinction, and a store IS an
-	//     access to the field. A compiler could instead skip the initializer and store into the null slot
-	//     without releasing; that would be a defensible reading too, and it is NOT the one shv2 takes.
-	//
-	// ⚠ **THE ORACLE WAS MEASURED AND CANNOT ARBITRATE IT.** On the write-only-static program the C# bootstrap
-	// does not compile at all: `error E9001: Unresolved global: Box.slot.__initialized`, out of
-	// `X86CodeEmitter.ResolveGlobals` — an internal error, i.e. a defect on its own write-only path. So this
-	// choice rests on the sentence, not on agreement with a reference. `specs-shv2/lazy-static-observable.md`
-	// pins it as a choice.
+	// ⭐ **AN ACCESS IS ONE OP, AND NOTHING GUARDS IT.** Every managed global's slot is filled before `main`
+	// by `__module_init` (⚖ user ruling: a static initializer runs eagerly, in dependency order), so a read
+	// cannot meet an unfilled slot and a write cannot meet one either — which is what makes
+	// `emitCheckedGlobalStore`'s unconditional decref of the old value correct.
 	function emitGlobalAddr(label ByteArray, range SourceRange) returns ValueId
-		self.emitLazyStaticInitGuard(label, range: range)
 		let addr = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.globalAddr(addr, label: label), range: range)
 		return addr
 	end 'emitGlobalAddr'
-
-	// ⭐ **ONE `call __lazy_init$<label>` AHEAD OF THE ACCESS, OR NOTHING AT ALL.**
-	//
-	// ⭐⭐ **THE GUARD IS OUT OF LINE — THE BRANCH LIVES IN THE ROUTINE, NOT AT THE ACCESS — AND THAT IS A
-	// DEPARTURE FROM BOTH REFERENCES, TAKEN ON THE EVIDENCE OF THE SPEC'S OWN PROSE.** v1 and the bootstrap
-	// each emit the test INLINE at every load, and `specs/lazy-static.md`'s `two-loads-in-one-function` exists
-	// because that shape produced an **endless loop** the second time one function read one static: its
-	// already-initialized edge is a fall-through, so an init block laid between two guards branches back into
-	// the first. Out of line, that failure mode does not exist — there is one branch per STATIC instead of one
-	// per ACCESS, so it cannot be got wrong at the Nth site — and an access costs one op rather than a
-	// diamond, which is also why this moves goldens by a single `call`.
-	//
-	// It buys an unconditional call where the references have a predicted-not-taken branch. That is a
-	// constant-factor cost on a correctness-critical path, and it is the optimizer's to reclaim (inlining
-	// `__lazy_init$…` restores the reference shape with the guard still written once).
-	function emitLazyStaticInitGuard(label ByteArray, range SourceRange)
-		match self.signatures.lazyStaticInitCalleeFor(label) 'lazy'
-			none then break 'lazy'
-			callee(name) then _ = self.emitRuntimeCall(name, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'lazy'
-	end 'emitLazyStaticInitGuard'
 
 	// --- The top-level constant evaluator (P1.0d.5a) ---
 	//
@@ -76717,8 +76669,8 @@ export type Parser
 		// ⭐⭐ **A NODE IS THE INITIALIZER THAT IS NOT A FOLD** (spec-port `map-struct-bytearray`; W116) —
 		// `var db = Database.create(EntryMap.create(), sourcePaths: …)`, `static var origin = Pair{a: 1, b: 2}`,
 		// `var hold = Hold.owned(9)`. Nothing about any of them is evaluated here: what the walk produces is
-		// WHAT to build and WHAT to put in it, and the record is built before `main` by `__module_init` (or on
-		// first access by `__lazy_init#<label>`), exactly as a constant array literal's already is. The roster
+		// WHAT to build and WHAT to put in it, and the record is built before `main` by `__module_init`,
+		// exactly as a constant array literal's already is. The roster
 		// is `atConstNodeInitializer`'s, which is where the same list is asked of a nested position.
 		//
 		// They are claimed on a LOOKAHEAD, and for one reason: the scalar walk reads `<identifier> .` as a
@@ -76911,10 +76863,11 @@ export type Parser
 	// location rule.
 	//
 	// ⭐ **BOTH REFERENCES DO EXACTLY THIS.** The runnable oracle re-points `_currentTypeName` at the owning
-	// type while it generates a static's lazy initializer (`2-Parser.cs:2973-2984`, whose own comment names
+	// type while it generates a static's initializer (`2-Parser.cs:2973-2984`, whose own comment names
 	// `CharacterSet`'s statics as the motivating case), and v1 saves and restores `currentTypeName` around its
 	// `parseLazyStaticStructDecl` (`Parser.maxon:3795-3797`). What shv2 does NOT take from either is the block
-	// surgery around it: this seats a scope and emits nothing.
+	// surgery around it: this seats a scope and emits nothing. (Both references DEFER a static's initializer to
+	// first access; shv2 does not, and the seating is the only part of their shape it shares.)
 	//
 	// The KIND rides with the name because `enterTypeScope` takes both and they are one fact — a `static`
 	// inside an `enum` body must reach the enum's own refusal rather than a `structOf` miss (`requireConstructible`).
@@ -77208,9 +77161,9 @@ export type Parser
 	// ARTEFACT OF THE NEW ARM.** MEASURED, all three spellings alike: `Holder{name: NAME}`,
 	// `Holder.make(NAME)` and `Holder{xs: SEEDS}` are each `E2004 Undefined constant '…'` against a
 	// top-level managed `let` the runnable oracle reads happily — because ITS static initializer is
-	// ordinary code in a lazy-init function, where naming a global is a LOAD and not a fold. Admitting
-	// that here means an initializer value that READS another slot, which is the ordering invariant this
-	// paragraph rests on; it is one feature for all three positions and belongs to whichever rung takes it.
+	// ordinary code in a synthesized function, where naming a global is a LOAD and not a fold. Admitting
+	// that here means an initializer VALUE that reads another slot, which `GlobalInitOrder` would then have
+	// to order; it is one feature for all three positions and belongs to whichever rung takes it.
 	//
 	// ⭐⭐ **WALK ONE CALL INTO THE ARENA AND ANSWER WHICH ENTRY IT BECAME** — the recursion, and the whole of
 	// what admitting a nested call costs. Its ARGUMENTS are walked first, so an inner call has already taken

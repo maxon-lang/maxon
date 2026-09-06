@@ -1,19 +1,5 @@
-// Test: one-static-initializer-reads-another
+// Test: a-static-initializer-reads-one-declared-later
 typealias Count = int(0 to u64.max)
-
-type Inner
-	static var value = Inner.build()
-	export var n as Count
-
-	static function build() returns Inner
-		print("inner ")
-		return Inner{n: 3}
-	end 'build'
-
-	export static function get() returns Count
-		return Inner.value.n
-	end 'get'
-end 'Inner'
 
 type Outer
 	static var value = Outer.build()
@@ -29,6 +15,20 @@ type Outer
 	end 'get'
 end 'Outer'
 
+type Inner
+	static var value = Inner.build()
+	export var n as Count
+
+	static function build() returns Inner
+		print("inner ")
+		return Inner{n: 3}
+	end 'build'
+
+	export static function get() returns Count
+		return Inner.value.n
+	end 'get'
+end 'Inner'
+
 function main() returns ExitCode
 	print("start ")
 	print("{Outer.get()}")
@@ -38,23 +38,28 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __data_Inner.value@0 = i64 0
-  __data_Outer.value@8 = i64 0
+  __data_Outer.value@0 = i64 0
+  __data_Inner.value@8 = i64 0
   __mm_alloc_count@16 = i64 0
   __slab_arena_list@24 = i64 0
   __slab_arena_map_l1@32 = i64 0
   __slab_state@40 = i64 0
 }
 
-func @Inner.build {
+func @Outer.build {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "inner "
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "outer "
     x64.callDirect print
-    x64.movRegImm32 rbx, 3
+  __il_body:
+    x64.leaRegGlobal rax, __data_Inner.value
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_cont:
+    x64.leaRegRegImm32 rbx, rax, 1
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -65,20 +70,15 @@ func @Inner.build {
     x64.ret
 }
 
-func @Outer.build {
+func @Inner.build {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "outer "
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "inner "
     x64.callDirect print
-  __il_body:
-    x64.leaRegGlobal rax, __data_Inner.value
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-  __il_cont:
-    x64.leaRegRegImm32 rbx, rax, 1
+    x64.movRegImm32 rbx, 3
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

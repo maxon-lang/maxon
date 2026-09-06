@@ -26,15 +26,10 @@ export typealias FnRefThunkSet = Set with ByteArray
 // `Parser.parseClosureExpression`), which is what tells a closure (already `(userargs, __env)`-shaped) from
 // a plain function (whose value use needs a thunk).
 //
-// ⛔⛔ **IT SEARCHED FOR A BARE `$`, ON THE CLAIM THAT "no other synthesized name contains it" — AND THAT
-// CLAIM HAD ALREADY EXPIRED.** `ProgramSignatures.assignDataLabels` disambiguates a colliding `.data` label
-// as `__data_counter$1`, a second meaning for the byte; spec-port `lazy-static` then built
-// `__lazy_init#<label>`, whose name EMBEDS such a label — so a `$` can now sit inside a function name that
-// is not a closure. The bare search answered TRUE for it: the right answer (that routine needs no env thunk,
-// being callable only directly) reached for entirely the wrong reason.
-//
-// ⭐ **SO THE TEST IS THE MARKER, NOT THE BYTE.** `$closure_` is what `parseClosureExpression` mints, it
-// survives nesting (`f$closure_0$closure_1` still contains it), and no label disambiguator can produce it.
+// ⛔ **THE TEST IS THE MARKER, NOT A BARE `$`.** `ProgramSignatures.assignDataLabels` disambiguates a
+// colliding `.data` label as `__data_counter$1`, so the byte has a second meaning and a name carrying one
+// such label is not a closure. `$closure_` is what `parseClosureExpression` mints, it survives nesting
+// (`f$closure_0$closure_1` still contains it), and no label disambiguator can produce it.
 function isLiftedClosureName(name ByteArray) returns bool
 	return bytesContainSubsequence(name, needle: LiftedClosureMarker)
 end 'isLiftedClosureName'

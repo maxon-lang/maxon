@@ -1,0 +1,521 @@
+// GlobalInitOrder — WHICH ORDER `__module_init` FILLS THE MANAGED GLOBALS IN, and the refusal for a program
+// that admits no order at all.
+//
+// ⚖ **A `static let` / `static var` INITIALIZER RUNS EAGERLY, BEFORE `main`, EXACTLY ONCE** (user ruling),
+// and so does a module-level `var`'s: the two are one population (`ModuleInit`). The initializer expression
+// itself may not name another global — `ProgramSignatures.evaluateDecl` answers `notFound` for a managed
+// decl, so `let A = "x"` / `let B = A` is E2004 — but it may CALL, and what a callee's BODY reads is not
+// bounded by that rule. `type Outer / static var value = Outer.build()` whose `build()` calls `Inner.get()`
+// reads `Inner`'s slot, so `Inner` must be filled first.
+//
+// ⛔⛔ **DECLARATION ORDER IS NOT DEPENDENCY ORDER, AND USING IT WOULD BE A SILENT WRONG ANSWER.** A program
+// may declare `Outer` above `Inner`; run in declaration order, `Outer.build()` loads a slot the image left at
+// zero and answers with a bogus number or dereferences null. Neither is a diagnostic — which is why the order
+// is DERIVED here, from the reads the program actually makes.
+//
+// ⭐⭐ **TWO EDGE SETS, BECAUSE ORDERING AND REFUSING NEED OPPOSITE ERRORS.** An over-approximate edge set is
+// exactly right for choosing an ORDER — a superset of the true edges still yields a valid order whenever it
+// is acyclic — and is exactly wrong for REFUSING, where two invented edges are a compile error on a working
+// program. So the walk runs twice:
+//
+//   • `EdgeConfidence.named` — only what an op itself names. A cycle here is a cycle the program has, and it
+//     is the ONLY thing that raises E2012.
+//   • `EdgeConfidence.possible` — every function the reachability walk can credit. It may only ADD order
+//     constraints; an edge of this kind that would close a cycle is DROPPED, never reported.
+//
+// ⚠ **"NAMED" IS ABOUT WHICH FUNCTION, NOT ABOUT WHETHER THE BRANCH RUNS.** A call under an `if` is an edge
+// like any other — that is what every reachability walk in this compiler means by a call graph, and what the
+// cycle case in `specs-shv2/lazy-static-observable.md` rests on. What `named` excludes is an edge to a
+// function the op does not name at all: a member of an OVERLOAD SET (a call op carries the set's base name
+// until `SemanticCheck.resolveOverloadedCalls`, which runs after this), a minted parameter-default helper,
+// and the witness impls a reached conformer's tables might dispatch through.
+//
+// ⭐ **THE EVIDENCE IS THE EMITTED `globalAddr`, AND IT IS BIDIRECTIONAL** — the same op, read the same way,
+// as `DeadGlobalElimination.liveGlobalLabels`. A WRITE opens with `globalAddr` exactly as a read does, so an
+// initializer that assigns another global's slot depends on it too; that is what keeps
+// `Parser.emitCheckedGlobalStore`'s unconditional decref of the old value correct when the store is issued
+// from inside an initializer.
+//
+// ⭐ **THE EDGE PRIMITIVES ARE `StdlibSource`'s** — `markMaxonCalleeEdge` for a direct call / `functionRef` /
+// `serviceSend`, `markReachable` for the overload-set and parameter-default widening,
+// `markConformerWitnessImpls` for a reached type's witness impls, `markOneReachable` for the unwidened edge.
+// It is deliberately NOT the same WALK, and both divergences are in the safe direction for the set that
+// reads them:
+//
+//   • no skip list reaches `markConformerWitnessImpls` (`StdlibSource` passes the six builtin conformers,
+//     because a SEED credits those there and nothing seeds this walk), so `possible` credits MORE;
+//   • the W17 builtin-conformer seed and the second drain `StdlibSource.reachableMaxonFunctionNames` runs
+//     are absent, so `possible` credits LESS than that walk would. Both are order constraints only, and a
+//     missing one can cost an order this graph never had a reason to fix.
+//
+// ⚠ **COST: TWO CALL-GRAPH WALKS PER GLOBAL WHOSE INITIALIZER CALLS, and none at all for a program with no
+// such global.** A global whose record the compiler MATERIALIZES (a String literal, an array literal, an
+// empty container, a payload-free union case) runs no program code and can depend on nothing, so it is never
+// a walk root. ⚠ That is NOT "no program pays": a live `CharacterSet` preset is a calling-initializer global,
+// so any program that reads one has roots here.
+
+// A global's position in the list `__module_init` fills — ARENA order on the way in
+// (`ProgramSignatures.managedGlobals`) and dependency order on the way out. The cycle report reads
+// "later-declared" off it, exactly as the top-level constant evaluator reads it off an arena index.
+typealias GlobalInitIndex = int(0 to u64.max)
+typealias GlobalInitIndexArray = Array with GlobalInitIndex
+typealias GlobalInitIndexSet = Set with GlobalInitIndex
+typealias GlobalInitIndexByLabel = Map with (ByteArray, GlobalInitIndex)
+
+// One row per global: the globals its initializer reads, as positions in the incoming list.
+typealias GlobalInitDependencies = Array with GlobalInitIndexArray
+
+// A frame's depth on the ordering walk's explicit stack. Its own alias because it indexes the FRAMES and not
+// the globals, and the two spaces coincide only while every global is on the stack at once.
+typealias GlobalInitStackDepth = int(0 to u64.max)
+
+// How far a frame has got through its global's dependency row — a position in that ROW, which is a third
+// space again.
+typealias GlobalInitCursor = int(0 to u64.max)
+typealias GlobalInitCursorArray = Array with GlobalInitCursor
+
+// How much a walk may credit — see the header's two-edge-sets paragraph.
+enum EdgeConfidence
+	named
+	possible
+end 'EdgeConfidence'
+
+// Where the ordering DFS stands on one global.
+enum GlobalInitVisit
+	unvisited
+	onTheStack
+	settled
+end 'GlobalInitVisit'
+
+typealias GlobalInitVisitArray = Array with GlobalInitVisit
+
+// `markConformerWitnessImpls` skips conformers a SEED owns, because in `StdlibSource`'s walk something else
+// credits them. Nothing seeds this walk, so it owns every conformer it meets and the skip list is empty —
+// which over-credits, and over-crediting is the safe direction for the only set that reads it.
+let noSeededConformers = ByteArrayArray.create()
+
+// ⭐ **THE GLOBALS, REORDERED SO THAT EVERY GLOBAL FOLLOWS THE ONES ITS INITIALIZER READS**, or a refusal.
+// Called once per compile, on the merged Maxon module, immediately before `installManagedGlobalInit` — the
+// same position `liveGlobalLabels` occupies and for the same reason: `__module_init` opens every global with
+// a `globalAddr` of its own slot, so a walk run afterwards would find every global depending on itself.
+export function dependencyOrderedGlobals(module MaxonModule, project Project, signatures ProgramSignatures, globals ManagedGlobalArray) returns ManagedGlobalArray throws CompileError
+	if not anyInitializerCalls(globals) 'nothingRunsProgramCode'
+		return globals
+	end 'nothingRunsProgramCode'
+
+	// The index can see no duplicate the pipeline's own does not — it is built BEFORE the two synthesized
+	// functions exist, exactly as `StdlibSource.reachableMaxonFunctionNames`' is — so refusing here reports
+	// the same E4015, at the same declaration, that `PassPipeline.run` would report one screen later.
+	let index = try FunctionNameIndex.create(module.functions, project: project)
+
+	let named = initDependencies(module, project: project, signatures: signatures, index: index, globals: globals, edges: EdgeConfidence.named)
+	let possible = initDependencies(module, project: project, signatures: signatures, index: index, globals: globals, edges: EdgeConfidence.possible)
+
+	return orderedByDependency(globals, deps: try buildEffectiveDeps(globals, named: named, possible: possible, project: project))
+end 'dependencyOrderedGlobals'
+
+// Does any global's initializer run program code at all? The walk's whole apparatus — a function-name index,
+// two per-root reachability scans — is skipped when none does, which is the answer for a program whose
+// globals are all literals.
+function anyInitializerCalls(globals ManagedGlobalArray) returns bool
+	for global in globals 'eachGlobal'
+		if global.initCallees.count() > 0 'runsProgramCode'
+			return true
+		end 'runsProgramCode'
+	end 'eachGlobal'
+
+	return false
+end 'anyInitializerCalls'
+
+// ⭐ **THE GRAPH THE ORDER IS TAKEN FROM, BUILT EDGE BY EDGE SO A NAMED CYCLE IS THE ONLY THING THAT CAN
+// REFUSE.** Every NAMED edge goes in, and one that closes a cycle is E2012 — both halves are edges the
+// program's own ops name, so the cycle is real. Every remaining POSSIBLE edge then goes in unless it closes a
+// cycle, in which case it is dropped: it may name no call the program makes, and refusing a working program
+// is the failure this split exists to prevent.
+//
+// ⚠ **A DROPPED EDGE IS A RESIDUAL, STATED RATHER THAN HIDDEN.** Were such an edge real, the order it would
+// have forced is lost and that global reads a zero. The alternative is refusing every program whose overload
+// members happen to cross-reference — MEASURED, and the defect this split repairs. Removing the residual
+// means resolving overloads, which happens after this point in the pipeline.
+function buildEffectiveDeps(globals ManagedGlobalArray, named GlobalInitDependencies, possible GlobalInitDependencies, project Project) returns GlobalInitDependencies throws CompileError
+	var effective = GlobalInitDependencies.create()
+	for _ in 0 upto globals.count() 'eachGlobal'
+		effective.push(GlobalInitIndexArray.create())
+	end 'eachGlobal'
+
+	for i in 0 upto globals.count() 'eachNamedSource'
+		for dependency in rowOf(named, index: i) 'eachNamedEdge'
+			try addDependencyEdge(effective, from: i, to: dependency, edges: EdgeConfidence.named, globals: globals, project: project)
+		end 'eachNamedEdge'
+	end 'eachNamedSource'
+
+	for j in 0 upto globals.count() 'eachPossibleSource'
+		for dependency in rowOf(possible, index: j) 'eachPossibleEdge'
+			try addDependencyEdge(effective, from: j, to: dependency, edges: EdgeConfidence.possible, globals: globals, project: project)
+		end 'eachPossibleEdge'
+	end 'eachPossibleSource'
+
+	return effective
+end 'buildEffectiveDeps'
+
+// ⭐ **ONE EDGE, AND THE CONFIDENCE DECIDES ONLY WHAT A CYCLE MEANS.** `to` already reaching `from` makes the
+// two mutually dependent: by roads the program's own ops name, that is E2012; by a road the walk merely
+// credited, it is an edge to drop.
+function addDependencyEdge(effective GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex, edges EdgeConfidence, globals ManagedGlobalArray, project Project) throws CompileError
+	if rowContains(effective, index: from, value: to) 'alreadyAnEdge'
+		return
+	end 'alreadyAnEdge'
+
+	if reachesBack(effective, from: from, to: to) 'mightCloseACycle'
+		let arc = pathBetween(effective, from: to, to: from)
+		if arc.count() > 0 'closesACycle'
+			match edges 'edges'
+				named then try refuseInitializationCycle(arc, globals: globals, project: project)
+				possible then return
+			end 'edges'
+		end 'closesACycle'
+	end 'mightCloseACycle'
+
+	var row = rowOf(effective, index: from)
+	row.push(to)
+end 'addDependencyEdge'
+
+// ⚠ **THE CHEAP HALF OF THE CYCLE TEST, AND IT IS A COST BOUND RATHER THAN AN ANSWER.** A node whose row is
+// still empty reaches nothing but itself, so only a SELF edge can close a cycle through it. Without this the
+// exact test below walks everything reachable from `to` once per edge, which is quadratic in a program whose
+// globals form one long chain — the shape a 10,000-deep probe is made of.
+function reachesBack(effective GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex) returns bool
+	return to == from or rowOf(effective, index: to).count() > 0
+end 'reachesBack'
+
+// ⭐ **A PATH FROM `from` TO `to`, OR AN EMPTY ARRAY.** It is asked only when the caller is about to add the
+// closing edge `to -> from`, so the path IS the cycle's arc — and `from == to` answers with the
+// single-element path that a self-reading initializer is.
+//
+// Iterative, with a parent column, for `orderedByDependency`'s reason: nothing here may recurse to the depth
+// of a user's dependency chain.
+function pathBetween(deps GlobalInitDependencies, from GlobalInitIndex, to GlobalInitIndex) returns GlobalInitIndexArray
+	var seen = BoolArray.create()
+	seen.resize(deps.count())
+	var parent = GlobalInitIndexArray.create()
+	for _ in 0 upto deps.count() 'eachGlobal'
+		parent.push(0)
+	end 'eachGlobal'
+
+	var stack = GlobalInitIndexArray.create()
+	stack.push(from)
+	try seen.set(from, value: true) otherwise panic("pathBetween: seen.set OOB at {from}, outside the graph its own rows describe")
+
+	while stack.count() > 0 'walk'
+		let node = try stack.pop() otherwise panic("pathBetween: pop from a non-empty stack")
+		if node == to 'arrived'
+			return pathBackFrom(node, from: from, parent: parent)
+		end 'arrived'
+
+		for next in rowOf(deps, index: node) 'eachEdge'
+			let queued = try seen.get(next) otherwise panic("pathBetween: seen.get OOB at {next}, outside the graph its own rows describe")
+			if queued 'alreadyQueued'
+				continue
+			end 'alreadyQueued'
+
+			try seen.set(next, value: true) otherwise panic("pathBetween: seen.set OOB at {next}, outside the graph its own rows describe")
+			try parent.set(next, value: node) otherwise panic("pathBetween: parent.set OOB at {next}, outside the graph its own rows describe")
+			stack.push(next)
+		end 'eachEdge'
+	end 'walk'
+
+	return GlobalInitIndexArray.create()
+end 'pathBetween'
+
+// The walked path, source first. `from`'s own parent entry is never read, which is what lets the climb
+// terminate on it rather than on a sentinel.
+function pathBackFrom(node GlobalInitIndex, from GlobalInitIndex, parent GlobalInitIndexArray) returns GlobalInitIndexArray
+	var reversed = GlobalInitIndexArray.create()
+	var walker = node
+	reversed.push(walker)
+	while walker != from 'climb'
+		walker = try parent.get(walker) otherwise panic("pathBackFrom: parent.get OOB at {walker}, outside the column the search filled")
+		reversed.push(walker)
+	end 'climb'
+
+	var path = GlobalInitIndexArray.create()
+	for i in 0 upto reversed.count() 'eachStep'
+		path.push(try reversed.get(reversed.count() - 1 - i) otherwise panic("pathBackFrom: reversed.get OOB inside a loop bounded by its own count"))
+	end 'eachStep'
+
+	return path
+end 'pathBackFrom'
+
+// One dependency row. The bound is the caller's own loop or a position this walk minted, so a miss is an
+// invariant break rather than a case.
+function rowOf(deps GlobalInitDependencies, index GlobalInitIndex) returns GlobalInitIndexArray
+	return try deps.get(index) otherwise panic("rowOf: deps.get OOB at {index} — one row is built per global")
+end 'rowOf'
+
+function rowContains(deps GlobalInitDependencies, index GlobalInitIndex, value GlobalInitIndex) returns bool
+	for member in rowOf(deps, index: index) 'eachMember'
+		if member == value 'found'
+			return true
+		end 'found'
+	end 'eachMember'
+
+	return false
+end 'rowContains'
+
+// One dependency row per global, in the incoming order.
+//
+// The `reached` array is allocated ONCE and cleared between roots rather than reallocated: the walks are
+// independent, but the array is a function of the module and not of the root.
+function initDependencies(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, globals ManagedGlobalArray, edges EdgeConfidence) returns GlobalInitDependencies
+	var slotOf = GlobalInitIndexByLabel.create()
+	for i in 0 upto globals.count() 'eachGlobal'
+		slotOf.upsert(globalAt(globals, index: i).label, value: i)
+	end 'eachGlobal'
+
+	var reached = BoolArray.create()
+	reached.resize(module.funcCount())
+	var names = FunctionNameSet.create()
+
+	var deps = GlobalInitDependencies.create()
+	for j in 0 upto globals.count() 'eachRoot'
+		let global = globalAt(globals, index: j)
+		if global.initCallees.count() == 0 'dependsOnNothing'
+			deps.push(GlobalInitIndexArray.create())
+			continue
+		end 'dependsOnNothing'
+
+		clearReached(reached)
+		deps.push(slotsReadFrom(module, project: project, signatures: signatures, index: index, roots: global.initCallees, slotOf: slotOf, reached: reached, names: names, edges: edges))
+	end 'eachRoot'
+
+	return deps
+end 'initDependencies'
+
+function clearReached(reached BoolArray)
+	for i in 0 upto reached.count() 'eachFunction'
+		try reached.set(i, value: false) otherwise panic("clearReached: reached.set OOB at {i}, inside a loop bounded by its own count")
+	end 'eachFunction'
+end 'clearReached'
+
+// Every global slot named by any function reachable from `roots` at this confidence — the initializer's own
+// call tree, walked to a fixpoint.
+function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, roots ByteArrayArray, slotOf GlobalInitIndexByLabel, reached BoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
+	var found = GlobalInitIndexArray.create()
+	var claimed = GlobalInitIndexSet.create()
+	var worklist = FuncIndexArray.create()
+
+	for root in roots 'eachRoot'
+		markCalleeEdge(root, project: project, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
+	end 'eachRoot'
+
+	while worklist.count() > 0 'walk'
+		let idx = try worklist.pop() otherwise panic("slotsReadFrom: pop from a non-empty worklist")
+		let func = module.getFunc(idx)
+		markWitnessEdges(func, project: project, signatures: signatures, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
+
+		// `block.opRefs` directly, for `StdlibSource.markMaxonCallees`' reason: this runs at the Maxon tier,
+		// where a dropped op keeps its `module.ops` index and belongs to no block, so a flat scan of
+		// `module.ops` is not the same walk.
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("slotsReadFrom: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("slotsReadFrom: opRef {opIdx} not in module.ops")
+				markOpCallee(op, project: project, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
+				noteSlotNamed(op, slotOf: slotOf, claimed: claimed, found: found)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'walk'
+
+	return found
+end 'slotsReadFrom'
+
+// The callee an op binds, credited at this confidence. `possible` is `StdlibSource`'s own edge; `named` asks
+// the same dialect classifier and then declines every name that denotes a SET rather than a function.
+function markOpCallee(op MaxonOp, project Project, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	match edges 'edges'
+		possible then markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		named then markNamedOpCallee(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'edges'
+end 'markOpCallee'
+
+function markNamedOpCallee(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	match maxonOpCalleeKind(op) 'kind'
+		direct to functionValue then markCalleeEdge(maxonOpCalleeName(op), project: project, edges: EdgeConfidence.named, byName: byName, reached: reached, worklist: worklist, names: names)
+		noCallee then break 'kind'
+	end 'kind'
+end 'markNamedOpCallee'
+
+// One callee NAME, credited at this confidence.
+//
+// ⛔ **A NAME AN OVERLOAD SET CLAIMS IS NOT AN EDGE AT `named` CONFIDENCE, AND NEITHER IS ITS FIRST MEMBER.**
+// A call op carries the SET's base name until `SemanticCheck.resolveOverloadedCalls` rebinds it, so the
+// function that happens to hold the bare spelling is no more the callee than any other member; crediting it
+// would be an unprovable edge wearing an exact one's clothes. The same holds for a minted parameter-default
+// helper, which the same pass re-points.
+function markCalleeEdge(name ByteArray, project Project, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	match edges 'edges'
+		possible then markReachable(name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		named then markNamedCallee(name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'edges'
+end 'markCalleeEdge'
+
+function markNamedCallee(name ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if project.overloadSets.contains(name) or isParamDefaultHelperName(name) 'namesASetRatherThanAFunction'
+		return
+	end 'namesASetRatherThanAFunction'
+
+	markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
+end 'markNamedCallee'
+
+// A reached type's witness impls. A dispatch names a SLOT rather than a body, so which impl runs is a fact
+// about the receiver — credited at `possible` and never at `named`.
+function markWitnessEdges(func IrFunction, project Project, signatures ProgramSignatures, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	match edges 'edges'
+		named then break 'edges'
+		possible then markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: noSeededConformers, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'edges'
+end 'markWitnessEdges'
+
+// Record the global an op names, once. A slot named twice in one cone is one dependency, and the set is what
+// keeps a row proportional to the globals rather than to the ops that touch them.
+function noteSlotNamed(op MaxonOp, slotOf GlobalInitIndexByLabel, claimed GlobalInitIndexSet, found GlobalInitIndexArray)
+	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
+		return
+	end 'namesNoSlot'
+
+	// A label the map does not hold is a SCALAR global — its value is the `.data` image, written before
+	// anything runs — or one dead-global elimination dropped. Neither is initialized by this function, so
+	// neither can be ordered against.
+	let slot = try slotOf.get(maxonOpGlobalLabelName(op)) otherwise 'notAManagedSlot'
+		return
+	end 'notAManagedSlot'
+
+	if claimed.contains(slot) 'alreadyCredited'
+		return
+	end 'alreadyCredited'
+
+	claimed.insert(slot)
+	found.push(slot)
+end 'noteSlotNamed'
+
+// ⭐ **THE TOPOLOGICAL ORDER — a post-order DFS with an EXPLICIT STACK, driven over the incoming list so the
+// emitted code is a function of the program.** Ties are broken by declaration order for that reason and no
+// other: two globals that depend on nothing may run in either order, and the one that keeps a golden
+// fragment stable is the order the arena already fixed.
+//
+// ⛔ **IT MAY NOT RECURSE, AND THAT IS A MEASURED BOUND RATHER THAN A PREFERENCE.** The depth is the user's
+// dependency CHAIN, which nothing bounds: a program of 3,000 statics each reading the next overflowed the
+// compiler's own stack with no diagnostic and no binary (`STATUS_STACK_OVERFLOW`), while the same program
+// with the chain broken compiled. The frames are heap arrays here, so depth costs memory and nothing else.
+function orderedByDependency(globals ManagedGlobalArray, deps GlobalInitDependencies) returns ManagedGlobalArray
+	var state = GlobalInitVisitArray.create()
+	for _ in 0 upto globals.count() 'eachGlobal'
+		state.push(GlobalInitVisit.unvisited)
+	end 'eachGlobal'
+
+	var ordered = ManagedGlobalArray.create()
+	var frames = GlobalInitIndexArray.create()
+	var cursors = GlobalInitCursorArray.create()
+
+	for root in 0 upto globals.count() 'eachRoot'
+		match visitOf(state, index: root) 'root'
+			settled then break 'root'
+			onTheStack then panic("orderedByDependency: global {root} is on the stack between two roots — every frame this walk pushes it also pops")
+			unvisited then descendTo(root, state: state, frames: frames, cursors: cursors)
+		end 'root'
+
+		while frames.count() > 0 'walk'
+			let depth = frames.count() - 1
+			let node = frameAt(frames, depth: depth)
+			let cursor = cursorAt(cursors, depth: depth)
+			let row = rowOf(deps, index: node)
+
+			if cursor < row.count() 'moreDependencies'
+				try cursors.set(depth, value: cursor + 1) otherwise panic("orderedByDependency: cursors.set OOB at depth {depth}, inside the frame this line just read")
+				let dependency = try row.get(cursor) otherwise panic("orderedByDependency: row.get OOB at {cursor}, below the count this branch tested")
+				match visitOf(state, index: dependency) 'dependency'
+					settled then break 'dependency'
+					onTheStack then panic("orderedByDependency: global {dependency} closes a cycle — `buildEffectiveDeps` adds no edge that does, so the graph handed here is acyclic by construction")
+					unvisited then descendTo(dependency, state: state, frames: frames, cursors: cursors)
+				end 'dependency'
+				continue
+			end 'moreDependencies'
+
+			_ = try frames.pop() otherwise panic("orderedByDependency: pop from the frame stack this loop just read")
+			_ = try cursors.pop() otherwise panic("orderedByDependency: pop from the cursor stack this loop just read")
+			markVisit(state, index: node, visit: GlobalInitVisit.settled)
+			ordered.push(globalAt(globals, index: node))
+		end 'walk'
+	end 'eachRoot'
+
+	return ordered
+end 'orderedByDependency'
+
+// Open a frame on `index` and mark it in progress, in one act — the pair that must not come apart, since the
+// stack is what `settled` is decided against.
+function descendTo(index GlobalInitIndex, state GlobalInitVisitArray, frames GlobalInitIndexArray, cursors GlobalInitCursorArray)
+	markVisit(state, index: index, visit: GlobalInitVisit.onTheStack)
+	frames.push(index)
+	cursors.push(0)
+end 'descendTo'
+
+function visitOf(state GlobalInitVisitArray, index GlobalInitIndex) returns GlobalInitVisit
+	return try state.get(index) otherwise panic("visitOf: state.get OOB at {index}, outside the column built over the global list")
+end 'visitOf'
+
+function markVisit(state GlobalInitVisitArray, index GlobalInitIndex, visit GlobalInitVisit)
+	try state.set(index, value: visit) otherwise panic("markVisit: state.set OOB at {index}, outside the column built over the global list")
+end 'markVisit'
+
+function frameAt(frames GlobalInitIndexArray, depth GlobalInitStackDepth) returns GlobalInitIndex
+	return try frames.get(depth) otherwise panic("frameAt: frames.get OOB at depth {depth}, above the stack this walk pushed")
+end 'frameAt'
+
+function cursorAt(cursors GlobalInitCursorArray, depth GlobalInitStackDepth) returns GlobalInitCursor
+	return try cursors.get(depth) otherwise panic("cursorAt: cursors.get OOB at depth {depth}, above the stack this walk pushed")
+end 'cursorAt'
+
+// **THE CYCLE.** `arc` is a path whose last member's initializer reads its first, so no member can be filled
+// before the others.
+//
+// It names the ARC and anchors on the LAST-DECLARED member's NAME token — the same two choices
+// `ProgramSignatures.recordCycle` makes for a cycle among top-level constants, under the same code, because
+// it is the same fact one scope over: `docs/error-codes.txt` states E2012 as the cycle rather than the
+// construct it was found in. Naming the whole in-progress SET instead would call a global that merely LEADS
+// to a cycle circular, which is what the bootstrap does and what shv2 declined to copy.
+//
+// ⭐ A ONE-MEMBER ARC IS A DIFFERENT SENTENCE, because a list of one is not an arc an author can follow: it
+// says what the single global does rather than leaving them to infer it.
+function refuseInitializationCycle(arc GlobalInitIndexArray, globals ManagedGlobalArray, project Project) throws CompileError
+	var names = ""
+	var owner = try arc.get(0) otherwise panic("refuseInitializationCycle: the arc is empty — its caller adds the closing edge only after proving the path non-empty")
+	for i in 0 upto arc.count() 'eachMember'
+		let member = try arc.get(i) otherwise panic("refuseInitializationCycle: arc.get OOB at {i}, inside a loop bounded by its own count")
+		if i > 0 'separator'
+			names = "{names}, "
+		end 'separator'
+
+		names = "{names}{String.from(globalAt(globals, index: member).declName)}"
+		if member > owner 'laterDeclaration'
+			owner = member
+		end 'laterDeclaration'
+	end 'eachMember'
+
+	let anchor = globalAt(globals, index: owner)
+	reportPositioned(project, code: ErrorCode.parserCircularDependency, message: cycleMessage(names, memberCount: arc.count()), line: anchor.nameLine, column: anchor.nameColumn, filePath: anchor.declFilePath)
+	throw CompileError.compileError
+end 'refuseInitializationCycle'
+
+function cycleMessage(names String, memberCount GlobalInitIndex) returns String
+	if memberCount == 1 'readsItsOwnSlot'
+		return "Circular dependency detected among global initializers: {names} reads its own slot, directly or through a function its initializer calls"
+	end 'readsItsOwnSlot'
+
+	return "Circular dependency detected among global initializers: {names}"
+end 'cycleMessage'
+
+// One global by position. The bound is the caller's own loop or a position this walk minted, so a miss is an
+// invariant break rather than a case.
+function globalAt(globals ManagedGlobalArray, index GlobalInitIndex) returns ManagedGlobal
+	return try globals.get(index) otherwise panic("globalAt: globals.get OOB at {index}, outside the list every position in this walk was minted from")
+end 'globalAt'

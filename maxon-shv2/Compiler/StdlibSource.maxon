@@ -480,16 +480,16 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachInitializerRoot'
 
-	// ⭐⭐ **A LAZY STATIC ACCESSED FROM A USER FUNCTION NOTHING CALLS IS STILL BUILT, SO ITS INITIALIZER'S
+	// ⭐⭐ **A CORPUS SLOT READ FROM A USER FUNCTION NOTHING CALLS IS STILL BUILT, SO ITS INITIALIZER'S
 	// CALLEES ARE SEEDED FROM EVERY USER BODY AND NOT ONLY FROM THE REACHED ONES (W115).** This asymmetry is
 	// not this walk's invention — it is `DeadGlobalElimination.liveGlobalLabels`', stated in its own header:
 	// *"A USER function is still credited whether or not anything calls it … but a stdlib function
 	// `StdlibFacts.unreachable` names is skipped"*. That is the rule that decides whether the slot EXISTS,
-	// so it is the rule that decides whether `installManagedGlobalInit` synthesizes a `__lazy_init$` calling
-	// these bodies — and a root missing under it is `requireUnreachableStdlibStayedDead`, not a lost prune.
-	// Matching it exactly is what keeps the two derivations from disagreeing; the reached-code half is
-	// `markLazyStaticInitCallees`, which covers the stdlib bodies this seed deliberately does not.
-	seedLazyStaticInitCalleesOfUserCode(module, project: project, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
+	// so it is the rule that decides whether `__module_init` builds a record calling these bodies — and a
+	// root missing under it is `requireUnreachableStdlibStayedDead`, not a lost prune. Matching it exactly is
+	// what keeps the two derivations from disagreeing; the reached-code half is `markCorpusSlotInitCallees`,
+	// which covers the stdlib bodies this seed deliberately does not.
+	seedCorpusSlotInitCalleesOfUserCode(module, project: project, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	// ⭐⭐⭐ **A WITNESS IMPL IS CREDITED FOR A PAIR — A CONFORMER THE WALK HAS EVIDENCE OF, AND AN INTERFACE
 	// THE REACHED CODE CAN NAME (W188).** Both halves were already here and each was asked ALONE:
@@ -830,7 +830,7 @@ end 'witnessConstraintsOfReachedFunction'
 // Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
 // or a root whose runtime this program never installs) is not found and not queued — nothing to
 // walk. Mirrors `DeadFunctionElimination.markLiveFunction`.
-function markReachable(name ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markReachable(name ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	// ⭐⭐ **A MINTED PARAMETER-DEFAULT HELPER IS PROVISIONAL FOR THE SAME REASON THE BASE CALLEE BESIDE IT
@@ -972,7 +972,7 @@ end 'nameReachesStdlib'
 // Mark exactly ONE function name, with no overload widening — the body `markReachable` shares between the
 // name it was handed and each member of that name's overload set. Split out so the widening is written
 // once and cannot recurse into itself (a member's own registration name keys no set).
-function markOneReachable(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markOneReachable(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	let idx = try byName.get(name) otherwise 'notAModuleFunction'
 		return
 	end 'notAModuleFunction'
@@ -1008,7 +1008,7 @@ function markMaxonCallees(module MaxonModule, project Project, signatures Progra
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-			markLazyStaticInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+			markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 		end 'eachOp'
 	end 'eachBlock'
 end 'markMaxonCallees'
@@ -1028,7 +1028,7 @@ end 'markMaxonCallees'
 // A `functionValue` target is credited alongside a `direct` callee: a `functionRef`'s target is reachable
 // code even though no `call` op names it. `indirectCall` calls through the code POINTER that `functionRef`
 // already credited, and `maxonOpCalleeKind` answers `noCallee` for it.
-function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match maxonOpCalleeKind(op) 'kind'
 		direct to functionValue then markReachable(maxonOpCalleeName(op), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		noCallee then break 'kind'
@@ -1063,7 +1063,7 @@ end 'markMaxonCalleeEdge'
 //     bytes +20.9 MB, and the emitted code moved **3,388 ⇒ 3,788** — because `project.conformances` holds
 //     every LISTED STDLIB module's conformances too, so `URL.equals`/`FilePath.hash` and their whole files'
 //     bodies were demanded by a program that names neither. That is the blanket-seed trap
-//     `seedLazyStaticInitCalleesOfUserCode`'s header records at 2223 moved fragments, by a second road.
+//     `seedCorpusSlotInitCalleesOfUserCode`'s header records at 2223 moved fragments, by a second road.
 //   ⇒ The conformer key is what makes it exact: a program that never reaches `URL` credits nothing of it.
 //
 // ⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, AND A CUT THAT READ
@@ -1122,7 +1122,7 @@ end 'markMaxonCalleeEdge'
 //     of a program whose only constraint is `Hashable` (the +76% image this pair of rules exists to prevent).
 //     Crediting them HERE as well would undo exactly that: the seed marks `int.hash`, the drain reaches it,
 //     and a total credit on `int` pulls in every other impl the type declares.
-function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match splitQualifiedName(func.name) 'owner'
 		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
 		notQualified then break 'owner'
@@ -1210,48 +1210,47 @@ end 'markWitnessImplsOfConformer'
 // Stdlib's own bodies are skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access
 // inside an unreachable stdlib body decides nothing, because that body reaches no back end and its slot is
 // not kept for it.
-function seedLazyStaticInitCalleesOfUserCode(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for func in module.functions 'eachFunc'
 		if stdlib.contains(func.name) 'skipStdlibBody'
 			continue
 		end 'skipStdlibBody'
 
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("seedLazyStaticInitCalleesOfUserCode: blockRef from func.blockRefs not in module.blocks")
+			let block = try module.blocks.get(blockRef) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("seedLazyStaticInitCalleesOfUserCode: opRef {opIdx} not in module.ops")
-				markLazyStaticInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+				let op = try module.ops.get(opIdx) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: opRef {opIdx} not in module.ops")
+				markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
-end 'seedLazyStaticInitCalleesOfUserCode'
+end 'seedCorpusSlotInitCalleesOfUserCode'
 
-// ⭐⭐⭐ **THE OTHER EDGE THIS WALK CANNOT SEE — A LAZY STATIC'S INITIALIZER — CREDITED AT THE ACCESS THAT
-// FIRES IT (W115).** `installManagedGlobalInit` synthesizes `__lazy_init$<label>` AFTER this walk, so the
-// call from the access site to the initializer exists in no op the walk can read, and the functions the
-// initializer calls are named by nothing in the module. What the walk CAN see is the `globalAddr` on that
-// slot — which is precisely the access, since a lazy slot is read through no other op — so the edge is
-// credited there. Exact in both directions rather than approximated: reaching the access is reaching the
-// init, and not reaching it is not.
+// ⭐⭐⭐ **THE OTHER EDGE THIS WALK CANNOT SEE — A CORPUS SLOT'S INITIALIZER — CREDITED AT THE READ THAT
+// KEEPS THE SLOT (W115).** `installManagedGlobalInit` builds `__module_init` AFTER this walk, so the calls a
+// global's initializer makes exist in no op the walk can read. What the walk CAN see is the `globalAddr` on
+// that slot — which is precisely what decides the slot survives at all (`contributesStorage` keeps a corpus
+// slot on liveness alone) — so the edge is credited there. Exact in both directions rather than
+// approximated: keeping the slot is running the initializer, and dropping it is not.
 //
-// ⛔ **THE ALTERNATIVE WAS TO ROOT THEM BESIDE `main`, WHICH IS WHAT `globalInitCallees` USED TO DO AND WHAT
-// W115 MEASURED.** See that function's header for the two symptoms — an allocator and an orphan `.rdata`
-// blob in every program in the language, the same pair W17 repaired for the witness seed. A root is a claim
-// that the code runs unconditionally, and a lazy static's initializer is the one initializer that does not.
+// ⛔ **THE ALTERNATIVE WAS TO ROOT THEM BESIDE `main`, WHICH IS WHAT `globalInitCallees` DOES FOR THE
+// PROGRAM'S OWN DECLARATIONS AND WHAT W115 MEASURED FOR THE CORPUS'.** See
+// `TopLevelDecl.declaredByTheCorpus` for the two symptoms — an allocator and an orphan `.rdata` blob in
+// every program in the language, the same pair W17 repaired for the witness seed.
 //
-// ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** an access the program never executes
+// ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** a read the program never executes
 // still credits the callees, whose bodies are then lowered and dropped by dead-function elimination. A
 // MISSING root is `requireUnreachableStdlibStayedDead` — the standing warning the retired synthesized-runtime
 // seed carried, kept in this function's own header block one screen up.
-function markLazyStaticInitCallees(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markCorpusSlotInitCallees(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 		return
 	end 'namesNoSlot'
 
-	for callee in signatures.lazyStaticInitCalleesOf(maxonOpGlobalLabelName(op)) 'eachCallee'
+	for callee in signatures.initCalleesOfCorpusSlot(maxonOpGlobalLabelName(op)) 'eachCallee'
 		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachCallee'
-end 'markLazyStaticInitCallees'
+end 'markCorpusSlotInitCallees'
 
 // True iff any live op in USER code names a STDLIB callee, or a TOP-LEVEL INITIALIZER does — the
 // allocation-free pre-scan that lets a program which never touches stdlib skip the reachability walk and
@@ -1319,7 +1318,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 				// and it went at W129 with `markCorpusCalleesOfSynthesizedRuntime`, whose roster it shared. The
 				// PAIRING is the invariant, not the term: this short-circuit must answer TRUE for every edge that
 				// seed roots, or the precise walk it skips would have rooted a name this scan called unreachable.
-				if opNamesStdlibCallee(op, project: project, stdlib: stdlib) or opAccessesALazyStaticRootedInStdlib(op, signatures: signatures, stdlib: stdlib) 'found'
+				if opNamesStdlibCallee(op, project: project, stdlib: stdlib) or opReadsACorpusSlotRootedInStdlib(op, signatures: signatures, stdlib: stdlib) 'found'
 					return true
 				end 'found'
 			end 'eachOp'
@@ -1414,25 +1413,25 @@ function opNamesStdlibCallee(op MaxonOp, project Project, stdlib FunctionNameSet
 	end 'kind'
 end 'opNamesStdlibCallee'
 
-// ⭐⭐ **THE THIRD CROSSING NO BODY CARRIES: A USER ACCESS OF A LAZY STATIC WHOSE INITIALIZER CALLS STDLIB
-// (W115).** `type Cache / static let table = StrMap.create()` reaches `Map.create` through a
-// `__lazy_init$` that `installManagedGlobalInit` has not synthesized yet, so the op scan above sees only the
+// ⭐⭐ **THE THIRD CROSSING NO BODY CARRIES: A USER READ OF A CORPUS SLOT WHOSE INITIALIZER CALLS STDLIB
+// (W115).** `type Cache / static let table = StrMap.create()` in a listed module reaches `Map.create` from
+// `__module_init`, which `installManagedGlobalInit` has not built yet, so the op scan above sees only the
 // `globalAddr` — and answering "all of stdlib is unreachable" there is the direction that skips a body the
 // back end then calls.
 //
 // ⚠ **IT IS ASKED PER USER OP, NEVER OF THE WHOLE ARENA, AND THAT IS WHAT KEEPS THE SHORT-CIRCUIT.** A
-// LISTED module's lazy static is reachable only through an accessor of its own type — a stdlib call
+// LISTED module's static is reachable only through an accessor of its own type — a stdlib call
 // `opNamesStdlibCallee` already finds — so an arena-wide test would answer TRUE for every program in the
 // language the day any listed module declares one. `stdlib/CharacterSet.maxon` declares eleven, so that is
 // not hypothetical: it is the difference between `var flag = true` taking the allocation-free short-circuit
 // and taking the full walk.
-function opAccessesALazyStaticRootedInStdlib(op MaxonOp, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
+function opReadsACorpusSlotRootedInStdlib(op MaxonOp, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 		return false
 	end 'namesNoSlot'
 
-	return anyCalleeIsIn(signatures.lazyStaticInitCalleesOf(maxonOpGlobalLabelName(op)), stdlib: stdlib)
-end 'opAccessesALazyStaticRootedInStdlib'
+	return anyCalleeIsIn(signatures.initCalleesOfCorpusSlot(maxonOpGlobalLabelName(op)), stdlib: stdlib)
+end 'opReadsACorpusSlotRootedInStdlib'
 
 // The loop the caller above keeps out of its one-line answer. It reads the set being BUILT rather than
 // `isStdlibFunction`, for `userCodeReachesStdlib`'s stated reason: this runs inside the derivation that

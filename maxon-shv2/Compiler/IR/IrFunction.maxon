@@ -289,21 +289,19 @@ export type IrFunction
 	// ⭐⭐ **IS THIS SYNTHESIZED FUNCTION'S STACK DEPTH THE PROGRAM'S RATHER THAN THE RUNTIME'S?** — which is
 	// to say, must it carry the green-thread stack guard despite being the compiler's own emitted code. FALSE
 	// for every parsed function — for which it is not asked, `isRuntimeFunction` having already answered — and
-	// false for the runtime's own scaffolding. TRUE for two families:
-	//
-	//   * `__lazy_init#<label>`, whose body is the user's factory call tree, reached from an ordinary access
-	//     inside `main` on whatever green thread first touches the static.
-	//   * the per-type CASCADES — `__destruct_<T>`, `__clone_<T>`, `__sole_<T>`, their dictionary twins and
-	//     the one-argument element thunks — which recurse once per LEVEL of the user's data graph. Their
-	//     frame count is a property of the program's types and nothing in the runtime bounds it.
+	// false for the runtime's own scaffolding, `__module_init` and `__maxon_global_cleanup` among it: both run
+	// outside `main`, where there is no green thread to overflow. TRUE for the per-type CASCADES —
+	// `__destruct_<T>`, `__clone_<T>`, `__sole_<T>`, their dictionary twins and the one-argument element
+	// thunks — which recurse once per LEVEL of the user's data graph. Their frame count is a property of the
+	// program's types and nothing in the runtime bounds it.
 	//
 	// ⛔ **IT EXISTS BECAUSE PROVENANCE AND STACK BEHAVIOUR ARE DIFFERENT QUESTIONS AND ONE FIELD WAS
 	// ANSWERING BOTH.** `TargetPrinter.isRuntimeFunction` (empty `sourceFilePath` + the `mrt_`/`__` band)
 	// withholds the green-thread stack guard, on the stated premise that *"the scheduler core must never
 	// trigger the grower, and their kernel calls are already shimmed onto the system stack"*. That premise
-	// held for `__module_init` / `__maxon_global_cleanup` only because they run OUTSIDE `main`, where no
-	// green thread exists. Neither family here satisfies it: both run INSIDE `main`, on a green thread, with
-	// real frames — which is precisely what the guard is for. MEASURED on x64-windows: a 128-deep nested-struct
+	// holds for `__module_init` / `__maxon_global_cleanup`, which run OUTSIDE `main` where no green thread
+	// exists. The CASCADES do not satisfy it: they run INSIDE `main`, on a green thread, with real frames —
+	// which is precisely what the guard is for. MEASURED on x64-windows: a 128-deep nested-struct
 	// chain deep-moved to a service and released by `ServiceLoop.dropUnconsumedPayloads` SIGSEGVs 8/8 through
 	// 128 unguarded `__destruct_` frames on a 2 KB green-thread stack.
 	//

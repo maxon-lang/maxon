@@ -2284,8 +2284,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// asked of the FUNCTION's provenance, never of its NAME — a `__`-name test handed it to a user function
 	// declared in `stdlib/Builtins.maxon` and SEGFAULTED a green thread; see `isRuntimeFunction`'s header for the
 	// measurement. ⛔ And the question is `skipsGreenThreadStackGuard`, NOT `isRuntimeFunction`: a synthesized
-	// function that runs USER CODE inside `main` (`__lazy_init#<label>`) satisfies the second and NEEDS the
-	// guard — see that predicate for why the two came apart. Emitted here at the
+	// function whose frame depth is the user's data graph (a `__destruct_<T>` cascade) satisfies the second
+	// and NEEDS the guard — see that predicate, which states why provenance and stack behaviour are
+	// different questions. Emitted here at the
 	// byte level (not as a TargetOp), exactly like the syscall shim — so it is invisible to the Target-IR goldens
 	// and verified by the RUN + disassembly instead. `computeGuardFrameBytes` is the SAME frame the prologue
 	// reserves, so the guard projects rsp by exactly what the function consumes.

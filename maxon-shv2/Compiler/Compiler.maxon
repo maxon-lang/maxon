@@ -678,7 +678,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	//
 	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
-	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals(liveGlobals))
+	//
+	// ⭐⭐ **THE ORDER THE INITIALIZERS RUN IN IS SETTLED FIRST, AND A CYCLE IS REFUSED THERE** (see
+	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
+	// `liveGlobalLabels`' own position has: `__module_init` opens every global with a `globalAddr` of its own
+	// slot, so a dependency walk run after it would find every global depending on itself.
+	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals)) otherwise 'initOrderRefused'
+		try refuseCompile(project)
+	end 'initOrderRefused'
+
+	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals)
 
 	// ⭐⭐ **SYNTHESIZE `<T>.__loop` FOR EVERY SERVICE — HERE, AND FOR `installManagedGlobalInit`'s REASON ONE
 	// LINE UP (SV1 wave 3, see `Runtime/ServiceLoop`).** It is a Maxon-tier function appended to the merged

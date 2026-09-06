@@ -1,4 +1,4 @@
-// Test: initializer-runs-at-the-first-access-not-before
+// Test: initializer-runs-before-main
 typealias Count = int(0 to u64.max)
 
 type Late
@@ -51,20 +51,6 @@ func @Late.build {
     x64.ret
 }
 
-func @Late.get {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __lazy_init#__data_Late.value
-    x64.leaRegGlobal rax, __data_Late.value
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 0]
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -77,8 +63,11 @@ func @main {
     x64.prologue 56
     x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "before "
     x64.callDirect print
-    x64.callDirect Late.get
-    x64.movRegReg rbx, r8
+  __il_body:
+    x64.leaRegGlobal rax, __data_Late.value
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+  __il_cont:
     x64.leaRegRdata rax, [rip + __str_rec_5]  ; "after "
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]

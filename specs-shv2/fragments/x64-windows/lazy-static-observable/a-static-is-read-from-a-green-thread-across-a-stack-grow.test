@@ -1,4 +1,4 @@
-// Test: forced-on-a-green-thread-across-a-stack-grow
+// Test: a-static-is-read-from-a-green-thread-across-a-stack-grow
 typealias Count = int(0 to u64.max)
 
 type Cache
@@ -17,7 +17,9 @@ end 'Cache'
 
 function deepThenRead(n Integer) returns Integer
 	if n == 0 'base'
-		return Cache.get()
+		let v = Cache.get()
+		print("read ")
+		return v
 	end 'base'
 	return deepThenRead(n - 1)
 end 'deepThenRead'
@@ -66,13 +68,9 @@ data {
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
   __sched_sysmon_started@240 = i64 0
-  __mrt_envp@248 = i64 0
-  __mrt_tls_next_key@256 = i64 0
-  __mrt_errno@264 = i64 0
-  __mrt_tls_ready@272 = i64 0
-  __slab_arena_list@280 = i64 0
-  __slab_arena_map_l1@288 = i64 0
-  __slab_state@296 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @Cache.build {
@@ -81,7 +79,7 @@ func @Cache.build {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "built "
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "built "
     x64.callDirect print
     x64.movRegImm32 rbx, 21
     x64.movRegImm32 rcx, 8
@@ -94,36 +92,31 @@ func @Cache.build {
     x64.ret
 }
 
-func @Cache.get {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __lazy_init#__data_Cache.value
-    x64.leaRegGlobal rax, __data_Cache.value
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 0]
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @deepThenRead {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, ifcont
-  base:
-    x64.callDirect Cache.get
-    x64.epilogue 32
+  __il_body:
+    x64.leaRegGlobal rax, __data_Cache.value
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+  __il_cont:
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "read "
+    x64.callDirect print
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.callDirect deepThenRead
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -167,7 +160,7 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_3]  ; " "
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; " "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot4, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
