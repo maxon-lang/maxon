@@ -188,8 +188,9 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// rt_sigaction (`appendX64RuntimeChunks` branches on the OS). Both catch the `idiv` #DE and turn it
 	// into a panic diagnostic + symbolized backtrace + exit 1; only the Windows one can say WHICH #DE
 	// (a zero divisor vs `i64.min / -1`), because Linux reports one `si_code` for both — see
-	// `X64Runtime.buildLinuxFaultHandlerChunk`. The arm64 backends instead define `sdiv`-by-0 as 0, and
-	// AArch64 does not trap on an unrepresentable quotient either, so they need no fault handler.
+	// `X64Runtime.buildLinuxFaultHandlerChunk`. arm64-macOS installs the same diagnostic behind a POSIX
+	// `sigaction` (`Arm64FaultRuntime`); what differs there is the CAUSE, not the handler — AArch64's
+	// `sdiv` does not trap at all, so only the nil-dereference arm is ever entered.
 	// macos/wasi never reach here for an x64 module: `augmentWithRuntime` above already rejected them.
 	match target.os 'panicRuntime'
 		windows to linux then appendX64RuntimeChunks(chunks, target: target)

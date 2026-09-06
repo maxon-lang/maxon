@@ -116,13 +116,6 @@ export enum OsImportSlot
 	// point: the portable call takes an ABSOLUTE deadline on the condvar's clock, so using it would mean
 	// reading that clock first and would make the wait's correctness depend on which clock the condvar was
 	// initialised against. The relative form takes the timeout the op already carries.
-	//
-	// ⚠ **THERE IS NO `sigaction`/`sigaltstack` SLOT, AND THAT IS A SCOPE STATEMENT RATHER THAN AN OMISSION.**
-	// An alternate signal stack is only reachable through `SA_ONSTACK`, which is a flag on a HANDLER — and
-	// this backend installs none (`Arm64Runtime`'s header: arm64 defines `sdiv`-by-0 as 0 and has no fault
-	// entry on either OS). Adding the two imports with no handler to flag would be dead weight; a fault on a
-	// green thread's stack dies as an unhandled signal here exactly as a fault on the main stack already does,
-	// and closing that is the arm64 fault-handler rung's, not this one's.
 	malloc
 	pthreadKeyCreate
 	pthreadSetspecific
@@ -296,6 +289,23 @@ export enum OsImportSlot
 	shmOpen
 	shmUnlink
 	ftruncate
+	// ⭐⭐ **`sigaction` AND `sigaltstack` — THE FAULT HANDLER'S TWO PRIMITIVES, AND THE SECOND EXISTS ONLY
+	// BECAUSE OF THE FIRST'S `SA_ONSTACK` FLAG.** `sigaction` publishes `mrt_fault_handler` for SIGSEGV,
+	// SIGBUS and SIGFPE (`Arm64FaultRuntime`); `SA_ONSTACK` then says the kernel must switch to an alternate
+	// stack before entering it, and `sigaltstack` is the per-OS-THREAD call that provides one. Without the
+	// pair a fault on a green thread's small stack meets Darwin/arm64's ~600-byte signal frame and escalates
+	// to a fatal SIGILL instead of a clean panic.
+	//
+	// ⚠ **`sigaltstack` IS PER-THREAD WHERE `sigaction` IS PROCESS-GLOBAL**, which is why the two are
+	// separate calls rather than one install: the handler is registered once, and every OS thread that can
+	// run Maxon code owes itself a stack to be switched to.
+	//
+	// ⚠ **NEITHER HAS A LINUX TWIN THIS ENUM COULD SERVE.** Linux's is `rt_sigaction`, a raw `svc` whose
+	// fourth argument is the kernel's `sigset_t` SIZE and whose struct is laid out differently again — a
+	// different mechanism, not a different spelling of this call (see `X64Runtime.buildLinuxRuntimeInitChunk`
+	// for the x86-64 shape of it).
+	sigaction
+	sigaltstack
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor

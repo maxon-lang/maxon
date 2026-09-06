@@ -113,43 +113,6 @@ let ExcCodeIntOverflow = 0xC0000095  // EXCEPTION_INT_OVERFLOW — an unrepresen
 // converts it on the CODE alone and reads nothing else out of the record.
 let ExcCodeAccessViolation = 0xC0000005
 
-// The hardware faults this handler converts. The vocabulary the CLASSIFICATION and the DIAGNOSTIC share:
-// what the OS hands over differs per platform (an NTSTATUS here, a POSIX `si_code` on Linux), but what gets
-// printed must not, so the mapping to words is asked once, of `faultPanicLinePrefix`.
-//
-// ⚠ **THE FIRST TWO ARE ONE INSTRUCTION'S AND THE THIRD IS EVERY INSTRUCTION'S**, which is why this is not
-// `IntegerFaultKind` any more: `idiv` raises the same `#DE` for a zero divisor and for an unrepresentable
-// quotient and the OS tells them apart by code, while an access violation is what a bad address does
-// wherever it is dereferenced.
-enum HardwareFaultKind
-	divideByZero
-	overflow
-	accessViolation
-end 'HardwareFaultKind'
-
-// The tag that closes a fault panic line and opens its addresses. Written once because the RUNTIME
-// emits it and `SpecTestRunner.stripFaultRipSuffix` recognizes exactly it — a second spelling here
-// would silently stop the harness stripping one of the two lines.
-let FaultRipTag = b" at rip=0x"
-
-// The whole fixed prefix of `kind`'s panic line, up to the ASLR-dependent hex. ONE answer to "which
-// fault prints what", asked by the Windows thunk (which picks between the two AT RUNTIME, by loading
-// the chosen string's address) and by the Linux handler (which cannot classify at all, and says so at
-// its own definition). The words are the bootstrap's — `__gt_panic_msg_div_zero` and
-// `__gt_panic_msg_int_overflow` — so a fault reads the same whichever compiler built the program.
-function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
-	let message = match kind 'kind'
-		divideByZero gives b"panic: integer divide by zero"
-		overflow gives b"panic: integer overflow"
-		accessViolation gives b"panic: nil pointer or invalid memory access"
-	end 'kind'
-
-	var line = ByteArray.create()
-	line.append(message)
-	line.append(FaultRipTag)
-	return line
-end 'faultPanicLinePrefix'
-
 // EXCEPTION_POINTERS field offsets (the struct RCX points at).
 let ExcPtrsOffExceptionRecord = 0x00
 let ExcPtrsOffContextRecord = 0x08
@@ -164,46 +127,29 @@ let ContextOffRsp = 0x098
 let ContextOffRbp = 0x0A0
 let ContextOffRip = 0x0F8
 
-// --- Frame walking (the x64-FAULT half; the shared half is `Targets/Shared/BacktraceFormat`) ---
+// --- Hex formatting: the x64 writer's own two constants ---
+//
+// The FORMAT is `Targets/Shared/BacktraceFormat`'s (16 digits, the ASCII bases, the buffer). These two
+// are how THIS instruction stream reaches a nibble and belong to no other writer.
 
-// The window above the faulting RSP a frame pointer must lie in to be believed:
-// 64 MiB, larger than any thread stack Windows hands out. A fault that corrupted RBP then
-// yields a SHORT trace instead of a wild read that faults again inside the diagnostic.
-let StackWindowBytes = 0x4000000
-
-// --- Hex formatting ---
-// The panic line carries `rip=0x…` paired with `diag_base=0x…` (the runtime address of a
-// known function) so an operator can subtract out the ASLR slide and resolve the faulting
-// instruction against `llvm-objdump -d`. The spec harness strips from " at rip=0x" to
-// end-of-line, so the FORM is free — 16 fixed zero-padded digits, no leading-zero
-// suppression to get wrong.
-let HexDigitsPerWord = 16
-
-// log2 of the 4 bits a hex digit carries: `index * 4` is emitted as `shl index, 2`. Spelled
-// as its own constant because a shift COUNT is not a bit-width — deriving one from the other
-// (`bits / 2`) is right for 4-bit digits and silently wrong for any other width.
+// log2 of the 4 bits a hex digit carries: `index * 4` is emitted as `shl index, 2`. Spelled as its own
+// constant because a shift COUNT is not a bit-width — deriving one from the other (`bits / 2`) is right
+// for 4-bit digits and silently wrong for any other width.
 let HexBitsPerDigitShift = 2
-let HexTopDigitShift = 60  // (HexDigitsPerWord - 1) * 4 — brings the TOP nibble to bit 0
+
+// x64 shifts the chosen nibble down by a VARIABLE count, so the digit has to be masked out of what sits
+// below it.
 let HexNibbleMask = 0xF
-let HexDigitTen = 10  // the nibble at which '0'+n stops working and 'a'+n-10 starts
-let AsciiZero = 0x30
-let AsciiLowerAMinusTen = 0x57  // 'a' - 10, so 'a'..'f' is one `lea` from a 10..15 nibble
-let HexBufferBytes = 17  // 16 digits + the NUL
 
 // --- Runtime function names ---
-// `mrt_` mirrors v1's runtime prefix. These are the names `call rel32` and `lea [rip]`
-// resolve against, and they are ALSO what a backtrace prints, so they are the diagnostic's
-// user-visible vocabulary.
-// `mrt_start` calls this one — the panic runtime's single entry point from module code.
-export let RuntimeInitName = b"mrt_runtime_init"
-let WriteHexName = b"mrt_write_hex64"
-let FaultBacktraceName = b"mrt_fault_backtrace"
-let FaultThunkName = b"mrt_fault_thunk"
+//
+// The names every lane shares are `Targets/Shared/BacktraceFormat`'s. These two are x64-Windows's own:
+// a VEH callback and the trampoline the x86-64 kernel demands.
 
-// The x64-LINUX fault entry — the SIGFPE handler `mrt_runtime_init` registers via rt_sigaction. Its own
-// name (distinct from the Windows `mrt_fault_thunk`) because the two are reached differently; only the
-// Linux `runtime_init` references it, by taking its address.
-let LinuxFaultHandlerName = b"mrt_fault_handler"
+// The vectored exception handler `AddVectoredExceptionHandler` registers. A different name from the
+// POSIX `FaultHandlerName` because the two are reached differently — one is a callback the OS invokes
+// with `EXCEPTION_POINTERS`, the other a signal handler.
+let FaultThunkName = b"mrt_fault_thunk"
 
 // The rt_sigreturn trampoline `sa_restorer` points at. x86-64 has no kernel signal trampoline, so the
 // kernel demands a restorer address to build the return frame — mandatory even though this handler never
@@ -419,15 +365,15 @@ end 'emitLeaSymtable'
 // symbolized backtrace under them.
 //
 // Shared by the Windows thunk and the Linux handler because only the CLASSIFICATION and the exit
-// route differ between the two OSes — this middle is identical, and it used to be written out twice,
-// tags and call sequence and all. Two copies of a format is two chances for one of them to move.
+// route differ between the two OSes — this middle is identical, tags and call sequence and all, and two
+// copies of a format is two chances for one of them to move.
 function emitFaultAddressesAndBacktrace(asm X64RuntimeAsm, ripSlot StackSize, rbpSlot StackSize, rspSlot StackSize)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(ripSlot), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
-	emitPrintString(asm, bytes: b" diag_base=0x")
+	emitPrintString(asm, bytes: FaultDiagBaseTag)
 	emitLeaTextBase(asm, dest: X64Register.rcx)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
-	emitPrintString(asm, bytes: b"\n")
+	emitPrintString(asm, bytes: FaultLineTerminator)
 
 	// mrt_fault_backtrace(rcx = rip, rdx = rbp, r8 = rsp) — prints `Stack trace:`, frame 0 from the
 	// faulting rip, then the saved-rbp chain bounded to the faulted stack.
@@ -587,10 +533,10 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 
 	emitCmpRegImm(asm, reg: X64Register.rdx, imm: HexDigitTen)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: isDigit)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: AsciiLowerAMinusTen)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: HexAsciiLowerAMinusTen)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: store)
 	asm.placeLabel(isDigit)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: AsciiZero)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: HexAsciiZero)
 
 	asm.placeLabel(store)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: bufferDisp)
@@ -714,12 +660,10 @@ end 'buildPrintFrameChunk'
 // rather than a second fault inside the diagnostic. The C# emitter ships two near-copies
 // of this walk; the difference between them is these two guards.
 //
-// ⭐ BOTH ARMS ARE LIVE, on BOTH x64 lanes. This note used to say the `stack_high == 0` arm was
-// unreached "until P1.2's `panic()`"; P1.9's range guard reached it first, through `mrt_panic`, and
-// rung A1j put `mrt_panic` on x64-linux as well. The arm is therefore the one that prints EVERY
-// range-check backtrace the compiler emits, and it does NO bounds validation — measured safe because
-// every frame it walks is a compiled prologue this backend built (including a green thread's, whose
-// chain terminates on the zeroed saved-rbp `__gt_trampoline` inherits from a fresh GT stack).
+// ⭐ BOTH ARMS ARE LIVE, on BOTH x64 lanes. The software arm prints EVERY range-check backtrace the
+// compiler emits, through `mrt_panic`, and it does NO bounds validation — measured safe because every
+// frame it walks is a compiled prologue this backend built (including a green thread's, whose chain
+// terminates on the zeroed saved-rbp `__gt_trampoline` inherits from a fresh GT stack).
 //
 // Slots: 0 = frame, 1 = stack_low, 2 = stack_high, 3 = counter, 4 = text_base,
 //        5 = symtable, 6 = next frame.
@@ -1145,7 +1089,7 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).
 	emitPanicProcessExit(asm, route: X64OsCallKind.syscall)
 
-	return asm.finishFunction(LinuxFaultHandlerName)
+	return asm.finishFunction(FaultHandlerName)
 end 'buildLinuxFaultHandlerChunk'
 
 // mrt_runtime_init (LINUX) — registers the SIGFPE handler via rt_sigaction. `mrt_start` calls this before
@@ -1161,7 +1105,7 @@ function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
 	let SlotMask = 0  // rbp-8 = sa_mask (offset 24)
 	var asm = X64RuntimeAsm.beginFunction(4)
 
-	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: LinuxFaultHandlerName)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: FaultHandlerName)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxSigactionFlags)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.rax)
@@ -1206,13 +1150,10 @@ export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Tar
 	end 'os'
 end 'appendX64RuntimeChunks'
 
-// ⭐ THE CHUNKS BOTH LANES NEED, WRITTEN ONCE — AND THE REASON THIS FUNCTION EXISTS IS THE BUG RUNG A1j
-// FIXED. The two lane appenders each used to carry their own copy of this list, and `mrt_panic` was on
-// one copy and not the other: a range-check violation printed a message and a full backtrace on
-// x64-windows and NOTHING on x64-linux, for months, with a green suite over it. Nothing made the two
-// lists agree, so the omission was not a compile error and read as ordinary at both sites. Written once,
-// a shared chunk cannot be present on one lane and absent from the other — which is the failure mode, not
-// merely an instance of it.
+// ⭐ THE CHUNKS BOTH LANES NEED, WRITTEN ONCE. A per-lane copy of this list is not a compile error when
+// the two drift — a chunk missing from one of them is a diagnostic that simply does not print there,
+// under a green suite. Written once, a shared chunk cannot be present on one lane and absent from the
+// other, which closes the failure mode rather than one instance of it.
 //
 // `exitRoute` is the ONE OS fact any of these five contains (`mrt_panic`'s step (4)); every other byte
 // they assemble is identical on both lanes, either because the chunk is OS-neutral outright or because it

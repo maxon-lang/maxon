@@ -1,0 +1,422 @@
+// Arm64FaultRuntime — the emitted program's HARDWARE-FAULT path on arm64, hand-assembled into `.text`:
+// the signal handler a trap enters, the diagnostic it prints, and the install `mrt_start` runs before
+// any user code.
+//
+//     panic: nil pointer or invalid memory access at rip=0x… diag_base=0x…
+//     Stack trace:
+//       in maxon_force_segfault
+//       in main
+//       in mrt_start
+//
+// ⭐ **IT IS THE arm64 HALF OF ONE DIAGNOSTIC, NOT A SECOND DIAGNOSTIC.** The words, the two address
+// tags, the hex format, the 64 MiB stack window and the `mrt_` names all come from
+// `Targets/Shared/BacktraceFormat`, which x64's fault path reads too; the frames come from
+// `Arm64PanicRuntime`'s walker and frame printer, which the software panic shares. What is written HERE
+// is only what a hardware fault on AArch64 makes different: how the OS delivers it, and where the
+// faulting PC/SP/FP are read from.
+//
+// ⭐ **NO CONTEXT REDIRECT, NO FAULT GLOBALS, NO RE-ENTRANCY GUARD** — `X64Runtime`'s three deliberate
+// absences, for its reasons. The bootstrap's arm64 handler rewrites `mcontext->__ss.{pc,sp,fp}` to
+// resume on a separate diagnostic function, because it must survive a STACK OVERFLOW whose own stack
+// cannot be printed on. This handler prints on the spot and exits, so the context it read is the only
+// context it needs and the faulting frames stay exactly as they are.
+//
+// ⚠ **TWO OF THE FOUR CHUNKS ARE OS-NEUTRAL AND TWO ARE DARWIN'S — THE HANDLER IS DARWIN'S.**
+// `mrt_fault_backtrace` and `mrt_write_hex64` name no OS and an arm64-Linux lane reuses them verbatim,
+// as it does `Arm64PanicRuntime`'s walker arm. `mrt_runtime_init` AND `mrt_fault_handler` are Darwin's
+// three times over: the install is a libSystem call where Linux needs `svc`, the handler's terminal
+// `exit` is the same GOT call, and its `DarwinUcontextOff*` reads are a layout Linux numbers
+// differently. A Linux lane owes its own two, and `appendArm64FaultRuntimeChunks` refuses rather than
+// hand it these.
+
+// ⭐ **DOES `os` INSTALL A FAULT HANDLER?** The ONE door, asked by the entry stub (which emits the `bl
+// mrt_runtime_init`) and by the chunk appender (which lays `mrt_runtime_init` down). A `bl` to a symbol
+// nothing laid out is a link failure rather than a diagnostic, so the two must agree by construction.
+export function arm64OsInstallsFaultHandler(os Os) returns bool
+	return match os 'installs'
+		macos gives true
+		linux gives false
+		windows panic("arm64OsInstallsFaultHandler: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes")
+		wasi panic("arm64OsInstallsFaultHandler: `wasm32-wasi` is not an arm64 lane — a WASI component takes a wasm trap, not a signal")
+	end 'installs'
+end 'arm64OsInstallsFaultHandler'
+
+// mrt_write_hex64(x0 = value) — `HexDigitsPerWord` zero-padded lowercase hex digits, formatted into a
+// frame buffer and handed to `mrt_write_cstr_stderr` so the whole field costs one `write`, not sixteen.
+//
+// ⚠ **CONSTANT SHIFTS ONLY, WHERE x64 SHIFTS BY A VARIABLE COUNT.** The value is consumed from the TOP:
+// `lsr #HexTopDigitShift` leaves the top nibble alone with nothing to mask off, and the value is shifted
+// left by one digit for the next round. AArch64's variable-shift form would need the count in its own
+// register and the result masked.
+//
+// Slots: 0.. = the output buffer. Nothing is live across the one call, which is the last instruction.
+function buildArm64WriteHexChunk() returns FunctionCodeChunk
+	let SlotBuffer = 0 as StackSize
+	let bufferSlots = alignUp(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
+	var asm = Arm64RuntimeAsm.beginFunction(bufferSlots as StackSize)
+
+	let loop = asm.newLabel()
+	let isDigit = asm.newLabel()
+	let store = asm.newLabel()
+	let loopDone = asm.newLabel()
+
+	// x1 = the value being consumed, x2 = the write cursor, x3 = digits remaining, x4 = the nibble.
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotBuffer)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: HexDigitsPerWord)
+
+	asm.placeLabel(loop)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x3, label: loopDone)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: -1)
+
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x4), rn: arm64RuntimeReg(Arm64Register.x1), sh: HexTopDigitShift as ShiftCount)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x1), rn: arm64RuntimeReg(Arm64Register.x1), sh: HexBitsPerDigit as ShiftCount)
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x4, imm: HexDigitTen)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: isDigit)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: HexAsciiLowerAMinusTen)
+	arm64EmitBranchTo(asm, label: store)
+
+	asm.placeLabel(isDigit)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: HexAsciiZero)
+
+	asm.placeLabel(store)
+	arm64EmitStoreByte(asm, src: Arm64Register.x4, base: Arm64Register.x2)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
+	arm64EmitBranchTo(asm, label: loop)
+
+	// The cursor is one past the last digit, which is exactly where the terminator belongs.
+	asm.placeLabel(loopDone)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: NulByte as MachineWord)
+	arm64EmitStoreByte(asm, src: Arm64Register.x4, base: Arm64Register.x2)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotBuffer)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+
+	return asm.finishFunction(WriteHexName)
+end 'buildArm64WriteHexChunk'
+
+// mrt_fault_backtrace(x0 = fault_pc, x1 = fault_fp, x2 = fault_sp) — `Stack trace:` and a symbolized
+// backtrace for a hardware fault. The arm64 twin of `X64Runtime.buildFaultBacktraceChunk`.
+//
+// ⚠ **FRAME 0 IS SYMBOLIZED FROM `fault_pc` WITH NO BIAS.** A fault PC already points AT the trapping
+// instruction, where a RETURN address points past its call and needs `ReturnAddrSymbolBias` — which is
+// why this cannot simply seed the walker one frame lower. Frames 1..N come from the walker's FAULT arm,
+// bounded to `[fault_sp, fault_sp + StackWindowBytes)`.
+//
+// Slots: 0 = fault_pc, 1 = fault_fp, 2 = fault_sp, 3 = text_base, 4 = symtable.
+function buildArm64FaultBacktraceChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotFaultPc = 0 as StackSize
+	let SlotFaultFp = 1 as StackSize
+	let SlotFaultSp = 2 as StackSize
+	let SlotTextBase = 3 as StackSize
+	let SlotSymtable = 4 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(5)
+
+	let walk = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFaultPc)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFaultFp)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotFaultSp)
+
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: BacktraceHeader)
+
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x0, funcName: EntryPointName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTextBase)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x0, funcName: SymbolTableName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSymtable)
+
+	// Frame 0. A fault whose PC is in a system library has no local symbol, so the bounds guard skips it
+	// and the trace starts at the frame chain instead.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFaultPc)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotTextBase)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
+	arm64EmitTextBoundsGuard(asm, offsetReg: Arm64Register.x1, scratchA: Arm64Register.x3, scratchB: Arm64Register.x4, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: walk)
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x1)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSymtable)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
+
+	asm.placeLabel(walk)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFaultFp)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFaultSp)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: StackWindowBytes)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
+
+	return asm.finishFunction(FaultBacktraceName)
+end 'buildArm64FaultBacktraceChunk'
+
+// Everything a fault diagnostic prints AFTER its opening words: the two ADDRESSES that recover the ASLR
+// slide (`at rip=0x` is already open when this is called), and the backtrace under them. Over the same
+// shared tags as `X64Runtime.emitFaultAddressesAndBacktrace`, so the two lanes' lines cannot drift.
+function arm64EmitFaultAddressesAndBacktrace(asm Arm64RuntimeAsm, globalData GlobalDataTable, pcSlot StackSize, fpSlot StackSize, spSlot StackSize)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pcSlot)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: FaultDiagBaseTag)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x0, funcName: EntryPointName)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: FaultLineTerminator)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pcSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: fpSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: spSlot)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
+end 'arm64EmitFaultAddressesAndBacktrace'
+
+// ==========================================================================
+// The Darwin install and signal entry
+// ==========================================================================
+//
+// ⚠ **EVERY DECLARATION BELOW IS A DARWIN STRUCT LAYOUT OR A DARWIN NUMBER**, transcribed from
+// `<sys/_types/_ucontext64.h>`, `<arm/_mcontext.h>` and `<sys/signal.h>` and agreeing with the
+// bootstrap's arm64 emitter. Linux numbers all of them differently, which is why its install is a
+// separate mechanism rather than a second spelling.
+
+// `ucontext_t.uc_mcontext` — a POINTER, after `uc_onstack`, `uc_sigmask`, `uc_stack`, `uc_link` and
+// `uc_mcsize`.
+let DarwinUcontextOffMcontext = 0x30 as MachineWord
+
+// The three registers a backtrace needs, relative to `mcontext64`. `__ss` (the thread state) begins at
+// +0x10, past the 16-byte `__es` exception state; within it `__fp` is at +0xE8, `__sp` at +0xF8 and
+// `__pc` at +0x100.
+let DarwinMcontextOffSsFp = 0xF8 as MachineWord
+let DarwinMcontextOffSsSp = 0x108 as MachineWord
+let DarwinMcontextOffSsPc = 0x110 as MachineWord
+
+// ⛔⛔ **THIS LAYOUT IS DISPUTED IN THIS TREE AND IS UNSETTLED UNTIL SOMEONE RUNS THE TEST BELOW.**
+//
+// What is built here is the 24-byte `struct __sigaction`: `sa_handler@0`, `sa_tramp@8`, `sa_mask@0x10`
+// (a 32-bit `sigset_t`), `sa_flags@0x14`. Darwin ALSO declares a 16-byte `struct sigaction` with NO
+// tramp — `sa_handler@0`, `sa_mask@8`, `sa_flags@0xC` — and `MachOWriter.machoImportSymbol` says in so
+// many words that `_sigaction` is the libc WRAPPER rather than the `__sigaction` system call, "and the
+// difference decides the struct". Both sentences cannot be right.
+//
+// ⚠ **IF THE WRAPPER TAKES THE 16-BYTE FORM, THE FLAG WORD IS WRITTEN EIGHT BYTES PAST WHERE IT IS
+// READ.** `sa_flags` would come back 0: no `SA_SIGINFO`, so the handler gets no ucontext and reads a
+// garbage x2; and no `SA_ONSTACK`, which makes the `mmap`, the `sigaltstack` call and the whole
+// justification for those two import slots inert. The install would still SUCCEED.
+//
+// ⭐ **IT IS LEFT AS IT IS BECAUSE THE ONLY EVIDENCE THAT HAS TOUCHED A MAC SAYS THIS ONE WORKS.** The
+// C# bootstrap (`ARM64CodeEmitter.Runtime.cs`) and v1 both build these exact offsets against this exact
+// import, and the bootstrap's arm64 lane has run green on real hardware WITH its fault tests. A
+// measured end-to-end pass outranks a layout argument made on a host that cannot run either.
+//
+// ⚠ **THE DISCRIMINATING TEST, for whoever next has a Mac** — thirty seconds, and it settles it:
+//     printf("%zu %zu\n", sizeof(struct sigaction), offsetof(struct sigaction, sa_flags));
+// `24 20` confirms these offsets. `16 12` means the flag word never reaches the kernel, and then
+// `sa_mask`/`sa_flags` move to 8/0xC, `DarwinSigactionBytes` to 16, and `sa_tramp` disappears. The same
+// question answered from inside a live handler: `sigaltstack(NULL, &oss)` and test `oss.ss_flags &
+// SS_ONSTACK` — false means `SA_ONSTACK` was never seen.
+let DarwinSigactionOffHandler = 0x00 as MachineWord
+let DarwinSigactionOffTramp = 0x08 as MachineWord
+let DarwinSigactionOffMask = 0x10 as MachineWord
+let DarwinSigactionOffFlags = 0x14 as MachineWord
+let DarwinSigactionBytes = 24 as StackSize
+
+// `stack_t`: `ss_sp` (8), `ss_size` (8), `ss_flags` (a C `int`).
+let DarwinSigstackOffSp = 0x00 as MachineWord
+let DarwinSigstackOffSize = 0x08 as MachineWord
+let DarwinSigstackOffFlags = 0x10 as MachineWord
+let DarwinSigstackBytes = 24 as StackSize
+
+// `SA_SIGINFO` gives the handler its third argument (the ucontext), which is the only thing that carries
+// the faulting PC. `SA_ONSTACK` switches the kernel to the alternate stack registered below.
+// `SA_RESTART` resumes an interrupted slow system call rather than failing it — inert for a handler that
+// never returns, and the flag word the bootstrap installs.
+let DarwinSaSiginfo = 0x40 as MachineWord
+let DarwinSaOnstack = 0x01 as MachineWord
+let DarwinSaRestart = 0x02 as MachineWord
+
+// The three signals a hardware fault arrives as. `SIGSEGV` is an unmapped address and `SIGBUS` a mapped
+// one the access is illegal for (an alignment fault, a mapping shorter than the file behind it); both
+// mean the same thing to a Maxon program, so both classify to `accessViolation`.
+let DarwinSignalBus = 10 as Imm32
+let DarwinSignalSegv = 11 as Imm32
+let DarwinSignalFpe = 8 as Imm32
+
+// The alternate signal stack, 32 KB: room for the ~600-byte signal frame Darwin/arm64 pushes (its NEON
+// state alone is 528 bytes) plus the handful of diagnostic frames below it.
+let DarwinSigaltstackBytes = 0x8000 as MachineWord
+
+// The `oldact`/`oss` out-parameter, declined: this install reads back neither previous disposition.
+let DarwinDeclinePrevious = 0 as MachineWord
+
+// mrt_fault_handler (DARWIN) — `void handler(int sig, siginfo_t *info, void *ucontext)` in x0/x1/x2.
+//
+// ⚠ **THE ucontext IS READ BEFORE ANY CALL.** x2 is caller-saved and the first `bl` below would lose
+// it, so the three registers a backtrace needs are lifted into frame slots first — which is also what
+// lets the classification arms print and then converge on one address/backtrace tail. The signal number
+// is compared W-form: AAPCS64 leaves bits 63:32 of a C `int` argument unspecified.
+//
+// ⚠ **IT CANNOT MAKE THE WINDOWS THUNK'S DIVIDE-BY-ZERO / OVERFLOW DISTINCTION, AND ON THIS LANE THAT
+// COSTS NOTHING.** A correctly compiled Maxon divide never traps at all — `/` and `mod` throw at the
+// language level (`specs-shv2/safety.md`) — so a `SIGFPE` here can only be a stray floating-point trap,
+// and it reads as the divide-by-zero wording exactly as the x64-Linux handler's does.
+//
+// Slots: 0 = sig, 1 = fault_pc, 2 = fault_fp, 3 = fault_sp.
+function buildArm64DarwinFaultHandlerChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotSig = 0 as StackSize
+	let SlotFaultPc = 1 as StackSize
+	let SlotFaultFp = 2 as StackSize
+	let SlotFaultSp = 3 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(4)
+
+	let memoryFault = asm.newLabel()
+	let arithmeticFault = asm.newLabel()
+	let addresses = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSig)
+
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x3, base: Arm64Register.x2, byteOffset: DarwinUcontextOffMcontext)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x3, byteOffset: DarwinMcontextOffSsPc)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotFaultPc)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x3, byteOffset: DarwinMcontextOffSsFp)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotFaultFp)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x3, byteOffset: DarwinMcontextOffSsSp)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotFaultSp)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSig)
+	arm64EmitCmpRuntimeImm32(asm, reg: Arm64Register.x0, imm: DarwinSignalSegv)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: memoryFault)
+	arm64EmitCmpRuntimeImm32(asm, reg: Arm64Register.x0, imm: DarwinSignalBus)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: memoryFault)
+	arm64EmitCmpRuntimeImm32(asm, reg: Arm64Register.x0, imm: DarwinSignalFpe)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: arithmeticFault)
+
+	// `brk #0` — the install below registers this handler for those three signals and nothing else, so
+	// falling out of the arms is unreachable. Trapping is the entry stub's answer to the same shape of
+	// impossibility, and it is strictly better than printing a fourth signal's fault as one of these.
+	arm64EmitBrk(asm.code)
+
+	asm.placeLabel(arithmeticFault)
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: faultPanicLinePrefix(HardwareFaultKind.divideByZero))
+	arm64EmitBranchTo(asm, label: addresses)
+
+	asm.placeLabel(memoryFault)
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: faultPanicLinePrefix(HardwareFaultKind.accessViolation))
+
+	asm.placeLabel(addresses)
+	arm64EmitFaultAddressesAndBacktrace(asm, globalData: globalData, pcSlot: SlotFaultPc, fpSlot: SlotFaultFp, spSlot: SlotFaultSp)
+
+	// A converted fault is terminal — there is no `recover()` and nowhere to resume to — so the handler
+	// exits rather than returning to a faulting instruction the kernel would simply re-execute.
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PanicExitCode)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.exit)
+	arm64EmitBrk(asm.code)
+
+	return asm.finishChunk(FaultHandlerName)
+end 'buildArm64DarwinFaultHandlerChunk'
+
+// mrt_runtime_init (DARWIN) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE. `mrt_start` calls
+// it before `main`, so the very first instruction of user code is already covered.
+//
+// ⚠ **THE ALTERNATE STACK IS REGISTERED FIRST, WHICH IS THE OPPOSITE OF THE BOOTSTRAP'S ORDER AND THE
+// ONLY ORDER WITH NO WINDOW IN IT.** `SA_ONSTACK` is a promise that a stack exists to switch to, so
+// making the handler reachable before providing one leaves an interval in which a fault would enter the
+// kernel's stack switch with nothing registered.
+//
+// ⚠ **A FAILED `mmap` SKIPS THE `sigaltstack` RATHER THAN REGISTERING ITS ANSWER.** `MAP_FAILED` is -1,
+// and `sigaltstack` validates only the SIZE — it would accept that address happily, and the first fault
+// would then be a kernel stack switch onto it.
+//
+// Slots: 0..2 = the `stack_t`, 3..5 = the `struct sigaction`.
+function buildArm64DarwinRuntimeInitChunk() returns FunctionCodeChunk
+	let SlotSigstack = 0 as StackSize
+	let SlotSigaction = (DarwinSigstackBytes / SpillSlotBytes) as StackSize
+	let slots = SlotSigaction + (DarwinSigactionBytes / SpillSlotBytes) as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(slots)
+
+	let installHandler = asm.newLabel()
+
+	// mmap(NULL, DarwinSigaltstackBytes, RW, MAP_ANON|MAP_PRIVATE, -1, 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSigaltstackBytes)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: mmapAnonPrivateFlags(Os.macos))
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.mmap)
+
+	// A mapped page is a positive userspace address, so one signed test rejects both `MAP_FAILED` and a
+	// zero answer.
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: installHandler)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigstack)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigstackOffSp)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSigaltstackBytes)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x9, byteOffset: DarwinSigstackOffSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x9, byteOffset: DarwinSigstackOffFlags)
+
+	// sigaltstack(&ss, NULL)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x9)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinDeclinePrevious)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.sigaltstack)
+
+	asm.placeLabel(installHandler)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigaction)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigactionOffTramp)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigactionOffMask)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x0, funcName: FaultHandlerName)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigactionOffHandler)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinSaSiginfo or DarwinSaOnstack or DarwinSaRestart)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigactionOffFlags)
+
+	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalSegv, actSlot: SlotSigaction)
+	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalBus, actSlot: SlotSigaction)
+	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalFpe, actSlot: SlotSigaction)
+
+	return asm.finishFunction(RuntimeInitName)
+end 'buildArm64DarwinRuntimeInitChunk'
+
+// `sigaction(signal, &act, NULL)`.
+//
+// ⚠ **`&act` IS RE-DERIVED PER CALL RATHER THAN HELD.** AAPCS64 makes x9..x15 caller-saved temporaries,
+// so libSystem is free to clobber whatever register the address was parked in; an `add` off x29 costs
+// one instruction and cannot be wrong.
+function arm64EmitDarwinSigactionCall(asm Arm64RuntimeAsm, signal Imm32, actSlot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: signal as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: actSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinDeclinePrevious)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.sigaction)
+end 'arm64EmitDarwinSigactionCall'
+
+// ==========================================================================
+// Assembly
+// ==========================================================================
+
+// Append the arm64 fault runtime for `os`. Called AFTER the panic runtime, whose walker, frame printer
+// and stderr writer every chunk here calls by name.
+//
+// ⭐ INSTALLED UNCONDITIONALLY on the lane that has one, exactly as x64's is and for x64's reason: "can
+// this program fault" is not a question the encode phase can answer, and the cost is a few hundred bytes
+// of `.text` plus the 32 KB alternate stack the install maps.
+//
+// ⛔ **THE PER-OS HALF IS A `match`, NOT A FALL-THROUGH AFTER THE BOOLEAN GATE.** Flipping
+// `arm64OsInstallsFaultHandler`'s `linux` arm is the obvious first step of an arm64-Linux rung, and with
+// an early return above an unconditional push it would emit DARWIN chunks into an ELF image — a
+// `sigaction` GOT call with no import table, and a `ucontext` read at Darwin's offsets. Here it panics
+// and names what that lane still owes.
+export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, os Os)
+	if not arm64OsInstallsFaultHandler(os) 'noFaultPath'
+		return
+	end 'noFaultPath'
+
+	match os 'faultLane'
+		macos then appendArm64DarwinFaultChunks(chunks, globalData: globalData)
+		windows to linux then panic("appendArm64FaultRuntimeChunks: `arm64OsInstallsFaultHandler` admitted `{os.name}`, but Darwin's install and handler are the only ones this file has — that lane owes its own `runtime_init` (a raw `rt_sigaction`, not a libSystem call) and its own handler (a different `ucontext` layout, and `svc` rather than a GOT `exit`)")
+		wasi then panic("appendArm64FaultRuntimeChunks: `wasm32-wasi` is not an arm64 lane — a WASI component takes a wasm trap, not a signal")
+	end 'faultLane'
+
+	// The OS-NEUTRAL half: the diagnostic body every lane's handler tail-calls into.
+	chunks.push(buildArm64FaultBacktraceChunk(globalData))
+	chunks.push(buildArm64WriteHexChunk())
+end 'appendArm64FaultRuntimeChunks'
+
+// macOS's two: the `sigaction`/`sigaltstack` install and the signal entry that reads Darwin's ucontext.
+function appendArm64DarwinFaultChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable)
+	chunks.push(buildArm64DarwinRuntimeInitChunk())
+	chunks.push(buildArm64DarwinFaultHandlerChunk(globalData))
+end 'appendArm64DarwinFaultChunks'

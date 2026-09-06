@@ -8,15 +8,20 @@ category: runtime
 
 ## Documentation
 
-When a Maxon program triggers a CPU fault — a nil pointer dereference or a stack
-overflow — the runtime catches it via the platform's
-fault-handler mechanism (Windows VEH on x64-Windows, `sigaction` on macOS), prints
-a clean diagnostic to stderr, and exits with status 1.
+When a Maxon program triggers a CPU fault — a nil pointer dereference — the runtime catches it
+through the platform's fault-handler mechanism, prints a clean diagnostic to stderr, and exits with
+status 1. Three lanes install one: a vectored exception handler on **x64-Windows**,
+`rt_sigaction(SIGFPE)` on **x64-Linux**, and `sigaction` for SIGSEGV/SIGBUS/SIGFPE with an alternate
+signal stack on **arm64-macOS**. **arm64-Linux installs none**, and a fault there is still an
+unhandled signal.
 
-This is implemented to eliminate the previous behavior where a fault on a worker
-thread would silently kill the OS thread and leave the scheduler hung. Faults now
-produce a deterministic diagnostic instead of either a silent hang or an OS error
-dialog.
+⚠ **A STACK OVERFLOW IS NOT CONVERTED ON ANY LANE.** It needs a guard page the handler can run on,
+which is a different mechanism from the one that classifies an access violation — the fault path says
+so where it declines to add the arm.
+
+⚠ **AND A FAULT ON A WORKER THREAD IS NOT FULLY COVERED.** An alternate signal stack is registered
+per THREAD and only the main thread gets one, so a fault on a green thread's own stack still depends
+on that stack being intact enough to run the handler on.
 
 The fault-handler infrastructure does not yet support `recover()` — once a fault
 fires, the process always exits.
@@ -93,7 +98,9 @@ SIGFPE handler was instrumented to print the raw `si_code` and read `0x…0001` 
 below. There is nothing in the siginfo to branch on, so x64-linux keeps the one wording it can
 justify — `panic: integer divide by zero` and exit 1 — and the overflow case below is `x64-windows`
 only. **arm64 needs nothing**: AArch64 `SDIV` does not trap, `i64.min / -1` simply evaluates to
-`i64.min`, and neither arm64 backend has a fault handler to add an arm to. **`wasm32-wasi` needs
+`i64.min`, so there is no trap to classify. ⚠ That is a statement about the DIVIDE and no longer
+about the lane — arm64-macOS installs a fault handler for the nil-pointer path, and its SIGFPE arm
+exists only to give a stray floating-point trap a wording it can justify. **`wasm32-wasi` needs
 nothing either, for the opposite reason**: `i64.div_s` DOES trap on an unrepresentable quotient, but
 a wasm trap is not deliverable to guest code, so the module exits **3** under `wasmtime` with that
 runtime's own `wasm trap: integer overflow` and no Maxon fault handler is involved (measured).
@@ -105,8 +112,12 @@ prints a symbolized stack trace after the panic line (frame 0 is the faulting
 instruction, resolved from the faulting RIP; the remaining frames are the callers).
 This mirrors the ordinary `mrt_panic` software-panic trace. The frame addresses
 themselves are non-deterministic (ASLR), so only the resolved function names are
-asserted. arm64-macOS has no frame-walking fault diagnostic yet, so its tests
-assert only the panic line.
+asserted. arm64-macOS walks the same chain: AArch64's `stp x29, x30` frame record holds the caller's frame
+pointer and the return address in the same two words x64's saved-RBP chain does — which is why one
+pair of offsets serves both walkers — and every arm64 function including a leaf gets a real frame
+record. ⚠ Its case still asserts only the panic line, because **nothing in this tree can execute
+it**: a Mach-O runs only on macOS, so on any other host that case is compiled and its golden compared
+while the execution is skipped, and the runner reports it as NOT PASSED rather than counting it.
 
 <!-- test: divide-by-zero -->
 ### Integer divide-by-zero throws DivisionByZero, caught with try/otherwise
@@ -1152,15 +1163,24 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- disabled-test: force-segfault-macos -->
-<!-- MEASURED 2026-09-04. `__Builtins.forceSegfault` EXISTS now and its x64-windows sibling above is enabled;
-     what this one still waits on is a fault HANDLER on its own lane. NEITHER arm64 backend has one — the file
-     header above says why they have needed none (AArch64 `SDIV` does not trap), so there is no thunk here to
-     add an EXCEPTION_ACCESS_VIOLATION arm to and a `SIGSEGV` handler plus a frame walk is the rung. ⚠ The
-     marker below restricts this case to arm64-macOS, so it does NOT run on an x64-windows host: its absence
-     from a FAIL list is not a pass, and this note could not have been measured on this host either way. -->
+<!-- test: force-segfault-macos -->
 <!-- targets: arm64-macos -->
 ### Deliberate access violation produces a clean panic (arm64-macOS)
+⚠⚠ **THIS CASE IS COMPILED HERE AND NOTHING ELSE.** A Mach-O runs only on macOS, so on any other host
+the runner reports it NOT RUN and refuses to count it. **And it has no golden on this lane**: a fragment is
+minted from a RUN, so an exit-code case on a lane this host cannot execute cannot have one minted here —
+`--update-required` writes nothing for it. The arm64-macOS fragments that do exist were minted by a full run
+on a Mac.
+
+⚠ **So enabling this is not evidence the handler works, and not even evidence its emitted code is
+compared.** The program compiled for this lane long before a handler existed. What the flip buys is that the
+compile is exercised and the case stops being invisible; the panic line and the exit code are asserted only
+where someone can run it.
+
+⚠ The handler behind it was written against `llvm-objdump` disassembly and the bootstrap's constants for
+the same OS and ISA, not against a run. Two agreeing transcriptions of Darwin's `ucontext` layout are not a
+measurement, and the commit that added it lists what remains unverified.
+
 ```maxon
 function main() returns ExitCode
 	__Builtins.forceSegfault()

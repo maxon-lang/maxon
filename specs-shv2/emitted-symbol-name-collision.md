@@ -20,8 +20,8 @@ Std pass can build:
 | minted by | examples | on |
 |---|---|---|
 | the entry stub | `mrt_start` | EVERY native target (x64 `augmentWithRuntime`, arm64 `appendArm64RuntimeChunks`) |
-| hand-assembled runtime chunks | `mrt_runtime_init`, `mrt_panic`, `mrt_fault_handler`, `__gt_context_switch` | **x64 ONLY** — the arm64 scalar core allocates nothing and has no fault handler, so it hand-assembles NO chunk but the stub (`Arm64Runtime`'s header) |
-| the symbol table that closes `.text` | `__symtable` | x64 only |
+| hand-assembled runtime chunks | `mrt_runtime_init`, `mrt_panic`, `mrt_fault_handler`, `__gt_context_switch` | **EVERY native target, and WHICH ONES depends on the lane** — arm64 lays the four panic chunks unconditionally, and arm64-macOS adds the four fault chunks (`mrt_runtime_init`, `mrt_fault_handler`, `mrt_fault_backtrace`, `mrt_write_hex64`); arm64-Linux installs no handler and so lays none of those four |
+| the symbol table that closes `.text` | `__symtable` | EVERY native target — the backtrace walkers symbolize against it on both architectures |
 
 None of those wears a `__` prefix except the last two, so the parser's reservation does not cover them, and
 none of them is in `stdModule.functions`, so `FunctionNameIndex` cannot either. The concat pass keys every
@@ -46,7 +46,7 @@ one its own emitted code is bound to.
 A1t's finding was that the collision never needed predicting because it was already detectable, and its
 proposed cure — an up-front roster of every name the compiler might emit — was both impossible and
 unnecessary. The same holds one tier down, and more sharply: **which chunks exist depends on the target and
-on `RuntimeUsage`.** arm64 emits no `__symtable`; the `__gt_*` chunks appear only under `usesGt`; wasm
+on `RuntimeUsage`.** which fault chunks exist depends on the OS within one architecture; the `__gt_*` chunks appear only under `usesGt`; wasm
 synthesizes its `run` entry with no name key at all and has no hand-assembled chunks whatsoever. A roster
 would therefore be one list per (target × usage) combination, maintained by hand, with nothing between it
 and the truth.
@@ -60,14 +60,15 @@ targets that actually lay a chunk down under *its* name, and the two below diffe
 | `mrt_start` | chunk | chunk | chunk | chunk | no chunk (the `run` entry has no name key) |
 | `mrt_runtime_init` | chunk | chunk | **no chunk** | **no chunk** | no chunk |
 
-⛔⛔ **`runtime-chunk-name`'s marker USED TO NAME ALL FOUR NATIVE TARGETS, AND ITS ARM64 HALF WAS FALSE.**
-MEASURED 2026-07-31 by cross-compiling the case below: `maxon-shv2 build … --target=arm64-macos` and
-`--target=arm64-linux` both print `Compiled ->` and exit 0 — there is no `mrt_runtime_init` on arm64 to
-collide with, exactly as `Arm64Runtime`'s own header says ("no fault handler and no `mrt_runtime_init` to
-call before user code. The whole runtime is therefore this one stub"). The two arm64 lanes are REMOTE and
-so were never run, which is precisely why the marker could be widened past where the code stands and stay
-green. `entry-stub-name` is the case that legitimately spans all four, and it is what keeps arm64's
-`recordChunkLabel` covered.
+⛔⛔ **THE COLLISION SET IS PER LANE, NOT PER ARCHITECTURE, AND `runtime-chunk-name`'s MARKER IS WHERE THAT
+IS PINNED.** `mrt_runtime_init` is laid on x64-Windows, x64-Linux **and arm64-macOS** — the last since
+arm64-macOS gained a fault handler — so the case names those three. **arm64-Linux installs no handler**,
+lays no such chunk, and compiles this program clean, which is why it is the one native lane the marker
+leaves out.
+
+⚠ That is a fact about the OS, not the ISA: two lanes of one architecture answer differently, which is
+exactly what a marker per case buys over a roster per architecture. `entry-stub-name` is the case that
+legitimately spans all four, and it is what keeps arm64's `recordChunkLabel` covered.
 
 ⚠ **EVERY CASE BELOW REACHES ITS BODY THROUGH A FUNCTION VALUE, AND THAT IS LOAD-BEARING (EC5, 2026-08-26).** The rule is
 about a body the compiler LAYS DOWN, and a direct call to a one-line function no longer guarantees one: `inlineLeaves`
@@ -81,12 +82,13 @@ in exactly one thing: the NAME.
 ## Tests
 
 <!-- test: runtime-chunk-name -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos -->
 The measured silent miscompile: this exact program returned **127** instead of **7** before A2l, with the
 build exiting 0 — re-measured with the refusal removed from `recordChunkLabel`, 2026-07-31, still **127**.
 
-⚠ **x64 ONLY, and the omission of arm64 is the reading above, not a lane that was skipped**: arm64 lays no
-`mrt_runtime_init` chunk, so on those two targets this program holds no collision and compiles.
+⚠ **THREE LANES, and the one omission is arm64-LINUX rather than arm64**: it installs no fault handler, so
+it lays no `mrt_runtime_init` for this name to collide with and compiles the program clean. arm64-macOS does
+lay one, and refuses here exactly as the x64 lanes do.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

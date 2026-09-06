@@ -16,11 +16,10 @@
 // exactly as `X64Runtime` hand-assembles its panic runtime. The chunk is laid out FIRST in `.text`
 // (`buildArm64Backend`), so the image's entry point is its offset.
 //
-// THE SCALAR CORE NEEDS NO RUNTIME FLOOR. It allocates nothing (no slab/MM init, no leak check), it
-// spawns nothing (no scheduler), and its only trap-shaped case — divide-by-zero — is defined to
-// return 0 on AArch64 (spec ruling; see `StdToArm64Conversion`), so there is no fault handler and no
-// `mrt_runtime_init` to call before user code. The whole runtime is therefore this one stub; the MM
-// and green-thread floors GROW back at their milestones exactly as x64's do.
+// EVERY OTHER RUNTIME FAMILY IS A SEPARATE FILE'S. What this one owns is the boundary question and the
+// stub; the panic runtime, the fault runtime, each OS's host surface and the green-thread floor are
+// appended beside it by `buildArm64Backend`, and each is gated on the `RuntimeUsage` bit or the OS
+// question that decides whether the program can reach it at all.
 
 // How the arm64 backend reaches the OS. ONE door, asked by every OS-primitive lowering
 // (`osExit`/`osWriteStdout`/`osAllocPages`) and by the entry stub below, so those four sites cannot
@@ -77,6 +76,7 @@ end 'arm64ThreadPointerSource'
 // value flows through with no move on either OS:
 //
 //   macOS:                                   Linux:
+//     bl   mrt_runtime_init
 //     [bl __module_init]                       [bl __module_init]
 //     bl   main                                bl   main
 //     [bl __maxon_global_cleanup]              [bl __maxon_global_cleanup]
@@ -146,6 +146,14 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	if captureEnvp 'envp'
 		emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
 	end 'envp'
+
+	// ⭐ **THE FAULT HANDLER IS INSTALLED BEFORE ANY OTHER `bl`, SO THE FIRST INSTRUCTION IT COVERS IS THE
+	// FIRST ONE THAT COULD FAULT.** `mrt_runtime_init` takes no argument and returns nothing, so there is
+	// nothing to move around it; it is gated on `arm64OsInstallsFaultHandler` because a `bl` to a chunk
+	// the lane's appender did not lay down is a link failure rather than a diagnostic.
+	if arm64OsInstallsFaultHandler(os) 'faultHandler'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: RuntimeInitName)
+	end 'faultHandler'
 
 	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
 	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would

@@ -18,16 +18,15 @@
 // a machine register, so there is no Std spelling of "walk the saved-x29 chain". These are
 // `FunctionCodeChunk`s built from `Arm64Backend`'s encoders, exactly as the entry stub is.
 //
-// ⚠ **THERE IS NO arm64 FAULT PATH HERE, AND ITS ABSENCE IS NOT AN OVERSIGHT.** x64 additionally
-// carries a VEH thunk / SIGFPE handler, a hex writer and a ±64 MiB stack window because an `idiv` can
-// TRAP; AArch64's `sdiv` by zero is DEFINED to return 0 (spec ruling — see `StdToArm64Conversion`), so
-// nothing here is ever entered from a signal, every frame this walks was built by a prologue this
-// backend emitted, and the chain needs no validation against a corrupted frame pointer. That is the
-// same argument x64's SOFTWARE arm makes for itself; arm64 simply has only that arm.
+// ⚠ **THE FAULT PATH IS `Arm64FaultRuntime`'s, AND WHAT LIVES HERE IS ONLY WHAT BOTH ENTRIES SHARE.**
+// The signal handler, the hex writer and `mrt_fault_backtrace` are that file's; `mrt_panic`,
+// `mrt_panic_walk_frames`, `mrt_panic_print_frame` and `mrt_write_cstr_stderr` are here and are called
+// by both. The walker carries BOTH of x64's arms for that reason — its `stack_high` parameter is what a
+// hardware fault's corrupted frame pointer is validated against, and a software panic passes zero.
 
-// ⚠ **THE CHUNK ASSEMBLER MOVED TO `Arm64RuntimeAsm.maxon`** when `Arm64DarwinRuntime` became its second
-// consumer — the frame, the locals, the labels and the shared emit fragments are all there. What stayed
-// here is this runtime's own: its chunks, and the one fragment that branches to its own symbol.
+// ⚠ **THE CHUNK ASSEMBLER IS `Arm64RuntimeAsm.maxon`'s** — the frame, the locals, the labels and every
+// fragment more than one runtime shares. What lives here is this runtime's own: its chunks, and the one
+// fragment that branches to its own symbol.
 
 // `x0 = <the address of a NUL-terminated constant>; bl mrt_write_cstr_stderr` — the most repeated
 // three lines in this file. The constant rides the SAME immortal, byte-deduped `.rdata` blob channel a
@@ -35,7 +34,7 @@
 // the panic runtime needs no data channel of its own. It registers during the ENCODE phase, after
 // every user literal, so it APPENDS to `.rdata` — which is why it moves no label id and no pinned
 // prefix (see `specs-shv2/rdata-section.md`).
-function arm64EmitPrintConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
+export function arm64EmitPrintConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
 	arm64EmitCStringArg(asm, globalData: globalData, bytes: bytes)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 end 'arm64EmitPrintConstant'
@@ -159,40 +158,54 @@ function buildArm64PrintFrameChunk(globalData GlobalDataTable) returns FunctionC
 end 'buildArm64PrintFrameChunk'
 
 // ==========================================================================
-// mrt_panic_walk_frames(x0 = start_frame)
+// mrt_panic_walk_frames(x0 = start_frame, x1 = stack_low, x2 = stack_high)
 // ==========================================================================
 
 // Walk the saved-x29 chain from `start_frame`, printing up to `MaxBacktraceFrames` symbolized frames.
 // A frame record is `[x29+0] = the caller's x29`, `[x29+8] = the return address` — the same two words
 // x64's saved-RBP chain holds, which is why one pair of offsets serves both walkers.
 //
-// It takes ONE argument where x64's takes three: x64's extra `stack_low`/`stack_high` pair exists to
-// range-validate a frame pointer a HARDWARE FAULT may have corrupted, and arm64 has no fault path (see
-// this file's header), so every frame here was built by a prologue this backend emitted. What DOES
-// bound the walk is the text guard: a return address outside `[mrt_start, __symtable)` is not code
-// this image can symbolize, so the walk stops there — which is also what terminates it at the top,
+// ⭐ ONE WALKER, TWO CALLERS, DISTINGUISHED BY `stack_high` — x64's design, and the reason it is one
+// function and not two. `stack_high == 0` TRUSTS the chain, which a SOFTWARE panic may because every
+// frame it walks was built by a prologue this backend emitted. A non-zero `stack_high` additionally
+// requires every frame pointer to lie in `[stack_low, stack_high)` and to STRICTLY ASCEND, because a
+// HARDWARE FAULT may have arrived with x29 already corrupt — and following a wild link would be a
+// second fault inside the diagnostic.
+//
+// What bounds BOTH arms is the text guard: a return address outside `[mrt_start, __symtable)` is not
+// code this image can symbolize, so the walk stops there — which is also what terminates it at the top,
 // where `mrt_start`'s caller is the dynamic loader.
 //
-// Slots: 0 = frame, 1 = counter, 2 = text_base, 3 = symtable.
+// The `stack_high` that SELECTS the software arm. Named because a bare 0 at the call site would read as
+// "the top of the stack is address zero" rather than as "do not range-validate this chain at all".
+let SoftwarePanicStackBound = 0
+
+// Slots: 0 = frame, 1 = counter, 2 = text_base, 3 = symtable, 4 = stack_low, 5 = stack_high.
 function buildArm64WalkFramesChunk() returns FunctionCodeChunk
 	let SlotFrame = 0 as StackSize
 	let SlotCounter = 1 as StackSize
 	let SlotTextBase = 2 as StackSize
 	let SlotSymtable = 3 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(4)
+	let SlotStackLow = 4 as StackSize
+	let SlotStackHigh = 5 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(6)
 
 	let loop = asm.newLabel()
+	let readReturnAddr = asm.newLabel()
+	let advance = asm.newLabel()
 	let done = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFrame)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotStackLow)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotStackHigh)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: MaxBacktraceFrames)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCounter)
 
 	// `text_base` is `mrt_start`'s runtime address and `__symtable` closes `.text`, so their difference
 	// IS the size of the code — the guard below is structural, not a guess at where the image ends.
-	arm64EmitLeaFuncAddr(asm.code, funcAdrpRelocs: asm.funcAdrpRelocs, dest: arm64RuntimeReg(Arm64Register.x2), funcName: EntryPointName)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x2, funcName: EntryPointName)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTextBase)
-	arm64EmitLeaFuncAddr(asm.code, funcAdrpRelocs: asm.funcAdrpRelocs, dest: arm64RuntimeReg(Arm64Register.x3), funcName: SymbolTableName)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x3, funcName: SymbolTableName)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotSymtable)
 
 	asm.placeLabel(loop)
@@ -205,29 +218,45 @@ function buildArm64WalkFramesChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFrame)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: done)
 
+	// The FAULT arm's range check: `stack_low <= frame < stack_high`, skipped entirely when the caller
+	// passed `stack_high == 0`. UNSIGNED, because a frame pointer is an ADDRESS — a corrupted one with
+	// bit 63 set must read as far ABOVE the window, not as far below it.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotStackHigh)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x2, label: readReturnAddr)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotStackLow)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x3)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: done)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x2)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: done)
+
+	asm.placeLabel(readReturnAddr)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: FrameOffReturnAddr as MachineWord)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: done)
 
-	// text_offset = (return_addr - 1) - text_base, then `0 <= text_offset < __symtable - mrt_start`.
-	// Signed compares at both ends: a return address BELOW the image reads negative.
+	// text_offset = (return_addr - 1) - text_base, then the shared bounds guard.
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: -ReturnAddrSymbolBias)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotTextBase)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: done)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotSymtable)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x1, rhs: Arm64Register.x4)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: done)
+	arm64EmitTextBoundsGuard(asm, offsetReg: Arm64Register.x1, scratchA: Arm64Register.x3, scratchB: Arm64Register.x4, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: done)
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x1)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x3)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSymtable)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
 
-	// frame = [frame] — the caller's record.
+	// next = [frame] — the caller's record.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFrame)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: FrameOffSavedFramePointer as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFrame)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: FrameOffSavedFramePointer as MachineWord)
+
+	// The FAULT arm's second requirement: the chain must STRICTLY ASCEND. The stack grows down, so a
+	// caller's frame is always at a HIGHER address; a link that does not ascend is corrupt, and
+	// following it would be the wild read this walk exists to avoid.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotStackHigh)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x2, label: advance)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: done)
+
+	asm.placeLabel(advance)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFrame)
 	arm64EmitBranchTo(asm, label: loop)
 
 	asm.placeLabel(done)
@@ -243,9 +272,10 @@ end 'buildArm64WalkFramesChunk'
 //   (1) `mrt_write_cstr_stderr` prints the caller's cstr (the producer bakes the whole `panic at …\n`
 //       line, so the location and the newline are already in it);
 //   (2) the same writer prints the `Stack trace:` header;
-//   (3) `mrt_panic_walk_frames` walks from THIS frame — so `[x29+8]`, the return address into the
-//       function that panicked, is the first symbolized frame and `mrt_panic` never appears in the
-//       trace;
+//   (3) `mrt_panic_walk_frames`'s SOFTWARE arm (`stack_high == 0`, which trusts the chain the compiled
+//       frames build rather than range-validating it) walks from THIS frame — so `[x29+8]`, the return
+//       address into the function that panicked, is the first symbolized frame and `mrt_panic` never
+//       appears in the trace;
 //   (4) `exit(PanicExitCode)` through the OS door.
 //
 // ⚠ x29 MUST SURVIVE STEPS (1) AND (2), because step (3) seeds the walk from it — and a walk over a
@@ -262,8 +292,10 @@ function buildArm64PanicChunk(globalData GlobalDataTable, os Os) returns Functio
 	// (2) The `Stack trace:` header.
 	arm64EmitPrintConstant(asm, globalData: globalData, bytes: BacktraceHeader)
 
-	// (3) Walk from this frame.
+	// (3) Walk from this frame: x0 = this x29, x1 = stack_low (unread when stack_high is 0), x2 = 0.
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x29)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: SoftwarePanicStackBound)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SoftwarePanicStackBound)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	// (4) exit(PanicExitCode) — the one step with an OS in it — then a `brk` for the impossible
@@ -302,7 +334,7 @@ end 'appendArm64PanicRuntimeChunks'
 // after it is reachable.
 //
 // ⭐ EXPORTED: BOTH arm64 host surfaces call it (`Arm64DarwinRuntime`, `Arm64LinuxRuntime`), each for a
-// bring-up failure it cannot continue past. It lived in the Darwin file while that was the only caller.
+// bring-up failure it cannot continue past.
 export function arm64EmitPanicConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
 	arm64EmitCStringArg(asm, globalData: globalData, bytes: bytes)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PanicName)

@@ -302,6 +302,12 @@ export function arm64EmitCmpRuntimeImm(asm Arm64RuntimeAsm, reg Arm64Register, i
 	arm64EmitCmpImm(asm.code, rn: arm64RuntimeReg(reg), imm: imm)
 end 'arm64EmitCmpRuntimeImm'
 
+// The 32-bit twin, for the C `int`s the OS hands a runtime chunk: AAPCS64 leaves bits 63:32 of such an
+// argument UNSPECIFIED, so only a W-form compare asks about the bits the caller actually promised.
+export function arm64EmitCmpRuntimeImm32(asm Arm64RuntimeAsm, reg Arm64Register, imm Imm32)
+	arm64EmitCmpImm32(asm.code, rn: arm64RuntimeReg(reg), imm: imm)
+end 'arm64EmitCmpRuntimeImm32'
+
 export function arm64EmitBranchTo(asm Arm64RuntimeAsm, label BlockId)
 	arm64EmitBranch(asm.code, fixups: asm.branchFixups, targetBlock: label)
 end 'arm64EmitBranchTo'
@@ -319,6 +325,31 @@ end 'arm64EmitCbzTo'
 export function arm64EmitCbnzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
 	arm64EmitCbnz(asm.code, fixups: asm.branchFixups, reg: arm64RuntimeReg(reg), targetBlock: label)
 end 'arm64EmitCbnzTo'
+
+// `adrp`+`add` the runtime address of a `.text` symbol into `dest` — how a runtime chunk names another
+// chunk without calling it. The backtrace's `text_base` (`mrt_start`) and its upper bound (`__symtable`)
+// are both reached this way, and so is the handler address a `sigaction` install stores.
+export function arm64EmitLeaRuntimeFuncAddr(asm Arm64RuntimeAsm, dest Arm64Register, funcName ByteArray)
+	arm64EmitLeaFuncAddr(asm.code, funcAdrpRelocs: asm.funcAdrpRelocs, dest: arm64RuntimeReg(dest), funcName: funcName)
+end 'arm64EmitLeaRuntimeFuncAddr'
+
+// ⭐ **DOES `offsetReg` NAME CODE THIS IMAGE CAN SYMBOLIZE?** `0 <= offset < __symtable - mrt_start`,
+// branching to `rejectLabel` if not. SIGNED at both ends: an address BELOW the image reduces to a
+// negative offset, and both ends must reject.
+//
+// Shared by the frame walker (which applies it to every return address) and the fault backtrace (which
+// applies it to the faulting PC), because "is this offset inside our code" is one question and a second
+// copy of it could answer differently. `scratchA`/`scratchB` are clobbered.
+export function arm64EmitTextBoundsGuard(asm Arm64RuntimeAsm, offsetReg Arm64Register, scratchA Arm64Register, scratchB Arm64Register, textBaseSlot StackSize, symtableSlot StackSize, rejectLabel BlockId)
+	arm64EmitCmpRuntimeImm(asm, reg: offsetReg, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: rejectLabel)
+
+	arm64EmitLoadSlot(asm, reg: scratchA, slot: symtableSlot)
+	arm64EmitLoadSlot(asm, reg: scratchB, slot: textBaseSlot)
+	arm64EmitSubRuntimeReg(asm, dest: scratchA, lhs: scratchA, rhs: scratchB)
+	arm64EmitCmpRuntimeReg(asm, lhs: offsetReg, rhs: scratchA)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: rejectLabel)
+end 'arm64EmitTextBoundsGuard'
 
 // The OS door every terminal step in this file goes through — the same one `StdToArm64Conversion`'s
 // `lowerOsExit` uses, so the panic runtime cannot grow a second opinion about which OSes this backend

@@ -152,10 +152,9 @@ let Arm64OpMrsTpidrro = 0xD53BD060
 
 // ⭐⭐ **`MRS Xt, TPIDR_EL0` / `MSR TPIDR_EL0, Xt` — THE WRITABLE THREAD POINTER, AND arm64-LINUX OWNS IT
 // OUTRIGHT (L4).** The three words differ from the pair above only in `op2` (2 rather than 3) and, for the
-// write, in the L bit (0xD53 ⇒ 0xD51). ⚠ **This block used to say the register "is not set at all on shv2's
-// raw-static Linux lane"; that was true and is the REASON it became this lane's, not an argument against it.**
-// A static image links no libc, so nothing else on Linux reads or writes TPIDR_EL0 — which makes it the one
-// per-OS-thread word the scheduler may define for itself, and `mrt_host_tls_alloc` does
+// write, in the L bit (0xD53 ⇒ 0xD51). ⚠ **NOTHING ELSE ON THAT LANE TOUCHES THE REGISTER, WHICH IS WHY
+// IT IS THE SCHEDULER'S**: a static image links no libc, so this is the one per-OS-thread word the
+// scheduler may define for itself, and `mrt_host_tls_alloc` does
 // (`Arm64LinuxRuntime`). `StdOp.currentThreadToken` still takes `gettid` there rather than this register: an
 // identity must be non-zero on EVERY thread, including one that never asked the scheduler for a slot.
 let Arm64OpMrsTpidr = 0xD53BD040
@@ -289,6 +288,10 @@ let Arm64OpCmpReg = 0xEB00001F
 // complement are live) plus a register compare.
 let Arm64OpSubsImm = 0xF1000000
 let Arm64OpAddsImm = 0xB1000000
+
+// `sf`, bit 31 — set in every ADD/SUB-immediate word here, and the only difference between the 64-bit
+// X form and the 32-bit W form (`arm64EmitCmpImm32`).
+let Arm64AddSubImmWideBit = 0x80000000
 
 // CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond). The condition field is at bit 12; CSET inverts
 // the condition it is given (the true value comes from the +1 of XZR).
@@ -951,6 +954,25 @@ end 'arm64EmitCmpReg'
 // because a materialisation here writes x16 where neither the register allocator nor the liveness model
 // can see it.
 export function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm Imm32)
+	arm64EmitCmpImmOfWidth(code, rn: rn, imm: imm, wide: true)
+end 'arm64EmitCmpImm'
+
+// ⭐ **`CMP Wn, #imm` — THE SAME COMPARE OVER BITS 31:0, IGNORING THE UPPER HALF.** It is what a 32-bit
+// VALUE in a 64-bit register must be compared with: AAPCS64 leaves bits 63:32 of a register carrying a
+// C `int` argument UNSPECIFIED, so an X-form compare against a small constant can miss for a value that
+// is right in every bit the caller promised.
+//
+// ⚠ Two entry points over one body rather than a `wide` parameter on the public one, for
+// `Arm64RuntimeAsm.beginVariadicCallerFunction`'s reason: the width is a property of the OPERAND, and
+// every existing caller compares a machine word.
+export function arm64EmitCmpImm32(code ByteArray, rn MachineWord, imm Imm32)
+	arm64EmitCmpImmOfWidth(code, rn: rn, imm: imm, wide: false)
+end 'arm64EmitCmpImm32'
+
+// `sf` (bit 31) is what widens every ADD/SUB-immediate word above to 64 bits, so clearing it in the
+// opcode is the whole difference between the X and W forms — the field builder and the encodability
+// rule are shared, and cannot come to disagree between the widths.
+function arm64EmitCmpImmOfWidth(code ByteArray, rn MachineWord, imm Imm32, wide bool)
 	let magnitude = arm64AddSubImmMagnitude(imm)
 	if not arm64MagnitudeFitsOneImm12(magnitude) 'noForm'
 		panic("arm64EmitCmpImm: compare immediate {imm} fits neither the plain imm12 field nor the shifted one, and a compare has no hi/lo split to fall back on — the ISEL must materialise it into a register and compare register-to-register (StdToArm64Conversion.lowerCmpImm)")
@@ -958,9 +980,10 @@ export function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm Imm32)
 
 	let shiftHi = magnitude > Arm64ImmMask
 	let field = (magnitude shr Arm64Imm12FieldBits) if shiftHi else magnitude
-	let opcode = Arm64OpAddsImm if imm < 0 else Arm64OpSubsImm
+	let wideOpcode = Arm64OpAddsImm if imm < 0 else Arm64OpSubsImm
+	let opcode = wideOpcode if wide else (wideOpcode xor Arm64AddSubImmWideBit)
 	arm64EmitAddSubImm12(code, opcode: opcode, rd: Arm64XzrField, rn: rn, imm12: field, shiftHi: shiftHi)
-end 'arm64EmitCmpImm'
+end 'arm64EmitCmpImmOfWidth'
 
 // A signed `Imm32` as its 64-bit two's-complement pattern — the value `movz`/`movk` must materialise
 // so a negative compare/immediate operand reads with its sign extended.
@@ -2423,13 +2446,12 @@ function arm64PrologueFrameBytes(module TargetModule, block IrBlock) returns Sta
 	end 'prologue'
 end 'arm64PrologueFrameBytes'
 
-// Append the hand-assembled arm64 runtime chunks. At the scalar core the runtime is JUST the entry
-// stub `mrt_start` (no fault handler — arm64 `sdiv`-by-0 is defined to return 0; no MM/scheduler
-// floor — the scalar core allocates and spawns nothing). It is appended to the STILL-EMPTY chunk list
-// so it LEADS `.text` and `LC_MAIN.entryoff = 0` — the opposite placement from x64's
+// Append the entry stub `mrt_start`, to the STILL-EMPTY chunk list so it LEADS `.text` and
+// `LC_MAIN.entryoff = 0` — the opposite placement from x64's
 // `appendX64RuntimeChunks`, whose appended runtime is the TRAILING panic handler (x64's `mrt_start` is
-// a module function already laid out first). The panic/software runtime GROWS back here at its
-// milestone. `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core),
+// a module function already laid out first). Every other runtime family — the panic runtime, the fault
+// runtime, the host surface, the scheduler — is appended AFTER user code by `buildArm64Backend`.
+// `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core),
 // `initGlobals` its managed-global init/release bracket (P1.7 slice 2a — false for a program with no
 // managed top-level `var`), `debugStream` the DebugStream producer's attach/detach bracket, and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
@@ -2696,7 +2718,8 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// step here — the stub is a chunk, not a module function, so it cannot be prepended to the module
 	// the way x64's is; it is assembled in the encode phase alongside the user chunks.
 	//
-	// ⚠ It is not the WHOLE arm64 runtime: the panic runtime appended three lines below is the rest of it.
+	// ⚠ It is not the WHOLE arm64 runtime: the panic, fault, host-surface and scheduler families appended
+	// below user code are the rest of it.
 	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, os: target.os, entryFunction: project.entryFunctionName)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target))
@@ -2706,10 +2729,14 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// make a violated range guard — or a user `panic("…")` — print its message and a symbolized
 	// backtrace on arm64 instead of exiting bare.
 	appendArm64PanicRuntimeChunks(chunks, globalData: globalData, os: target.os)
-	// The HOST SURFACE — the sequences behind the `os*` ops whose only implementation used to be
-	// x64-windows's. EXACTLY ONE lane's chunks are appended, which is what lets both build under the shared
-	// `mrt_host_*` names (`Arm64PosixRuntime`'s header): macOS's are libSystem calls through a GOT, Linux's
-	// are raw `svc #0` against a table no import is needed for.
+	// The HARDWARE-FAULT path, on the lane that has one. It lays out after the panic runtime because
+	// every chunk in it calls that runtime's walker, frame printer and stderr writer BY NAME — order
+	// among runtime chunks is inert (they all fall inside `[mrt_start, __symtable)`, the only range the
+	// text guard tests), so this is about reading order rather than about layout.
+	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, os: target.os)
+	// The HOST SURFACE — the sequences behind the `os*` ops. EXACTLY ONE lane's chunks are appended, which
+	// is what lets both build under the shared `mrt_host_*` names (`Arm64PosixRuntime`'s header): macOS's
+	// are libSystem calls through a GOT, Linux's are raw `svc #0` against a table no import is needed for.
 	match target.os 'hostSurface'
 		macos then appendArm64DarwinRuntimeChunks(chunks, usage: usage, globalData: globalData)
 		linux then appendArm64LinuxRuntimeChunks(chunks, usage: usage, globalData: globalData)

@@ -10,9 +10,11 @@
 // the layout that agrees today and is free to drift tomorrow. A backtrace format that two backends
 // spell separately is a backtrace that lies on one of them.
 //
-// What stayed behind is what is genuinely one ISA's: x64's fault-path apparatus (the VEH thunk, the
-// `EXCEPTION_POINTERS`/`ucontext` offsets, the hex writer, the ±64 MiB stack window a CORRUPTED frame
-// pointer is validated against). arm64 has no fault handler yet, so it has no use for any of it.
+// What stays behind is what is genuinely one ISA's or one OS's: the VEH thunk and its
+// `EXCEPTION_POINTERS` offsets, each `ucontext` layout, and each hex writer's instructions. What a
+// FAULT DIAGNOSTIC SAYS is not one of those, so the fault vocabulary lives here beside the backtrace
+// vocabulary — both lanes classify a fault, both print the same words, both bound the walk to the same
+// window, and both format an address as the same 16 hex digits.
 
 // --- `__symtable`: the backtrace's function-name table ---
 //
@@ -108,6 +110,72 @@ export let FrameLinePrefix = b"  in "
 export let UnknownFrameName = b"<unknown>"
 export let FrameLineTerminator = b"\n"
 
+// --- The FAULT diagnostic: what a HARDWARE trap prints ---
+//
+// A fault's first line is `<kind's words> at rip=0x… diag_base=0x…`, then the ordinary backtrace above.
+// The two ADDRESSES recover the ASLR slide: `diag_base` is the runtime address of a known function, so
+// an operator subtracts it out and resolves the faulting instruction against `llvm-objdump -d`.
+
+// The hardware faults a handler converts. The vocabulary the CLASSIFICATION and the DIAGNOSTIC share:
+// what the OS hands over differs per platform (an NTSTATUS on Windows, a signal number on POSIX), but
+// what gets printed must not, so the mapping to words is asked once, of `faultPanicLinePrefix`.
+//
+// ⚠ **THE FIRST TWO ARE ONE INSTRUCTION'S AND THE THIRD IS EVERY INSTRUCTION'S.** x64's `idiv` raises the
+// same `#DE` for a zero divisor and for an unrepresentable quotient and the OS tells them apart by code,
+// while an access violation is what a bad address does wherever it is dereferenced.
+export enum HardwareFaultKind
+	divideByZero
+	overflow
+	accessViolation
+end 'HardwareFaultKind'
+
+// The tag that closes a fault panic line and opens its addresses. Written once because the RUNTIME
+// emits it and `SpecTestRunner.stripFaultRipSuffix` recognizes exactly it — a second spelling would
+// silently stop the harness stripping one of the lines.
+let FaultRipTag = b" at rip=0x"
+
+// The second address's tag, and the newline that closes the line. Named for `FaultRipTag`'s reason: two
+// lanes emit them and a drift between the two spellings is a diagnostic that reads differently
+// depending on which backend built the program.
+export let FaultDiagBaseTag = b" diag_base=0x"
+export let FaultLineTerminator = b"\n"
+
+// The whole fixed prefix of `kind`'s panic line, up to the ASLR-dependent hex. ONE answer to "which
+// fault prints what", asked by every handler in the tree. The words are the bootstrap's
+// (`__gt_panic_msg_*`), so a fault reads the same whichever compiler built the program.
+export function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
+	let message = match kind 'kind'
+		divideByZero gives b"panic: integer divide by zero"
+		overflow gives b"panic: integer overflow"
+		accessViolation gives b"panic: nil pointer or invalid memory access"
+	end 'kind'
+
+	var line = ByteArray.create()
+	line.append(message)
+	line.append(FaultRipTag)
+	return line
+end 'faultPanicLinePrefix'
+
+// The window above the faulting stack pointer a frame pointer must lie in to be believed: 64 MiB,
+// larger than any thread stack either OS hands out. A fault that corrupted the frame pointer then
+// yields a SHORT trace instead of a wild read that faults again inside the diagnostic.
+export let StackWindowBytes = 0x4000000
+
+// --- The fault line's hex fields ---
+//
+// 16 fixed zero-padded digits, no leading-zero suppression to get wrong. The spec harness strips from
+// `FaultRipTag` to end-of-line, so the FORM is free; what is not free is the two writers agreeing.
+export let HexDigitsPerWord = 16
+export let HexBitsPerDigit = 4
+
+// Brings the TOP nibble down to bit 0. Derived, because a writer that shifted by a stale 60 against a
+// widened digit count would print the same 16 digits of the WRONG nibbles.
+export let HexTopDigitShift = (HexDigitsPerWord - 1) * HexBitsPerDigit
+export let HexDigitTen = 10  // the nibble at which '0'+n stops working and 'a'+n-10 starts
+export let HexAsciiZero = 0x30
+export let HexAsciiLowerAMinusTen = 0x57  // 'a' - 10, so 'a'..'f' is one add from a 10..15 nibble
+export let HexBufferBytes = HexDigitsPerWord + 1  // the digits and the NUL
+
 // --- Runtime function names ---
 //
 // `mrt_` mirrors v1's runtime prefix. These are the names each backend's intra-`.text` call fixup
@@ -123,12 +191,19 @@ export let WalkFramesName = b"mrt_panic_walk_frames"
 // each backend's `lowerPanic` targets the SAME chunk its own runtime defines — one string, one fixup.
 export let PanicName = b"mrt_panic"
 
-// STDERR_FILENO used to be declared HERE, as this file's only non-vocabulary constant, back when the
-// panic writer was the only thing in the tree that named a standard stream. W35 gave the Std tier a
-// `printError`, which named the SAME descriptor from a second mechanism — so the constant moved to
-// `StdLoweringShared.StderrFd`, beside `PosixStdoutFd`, where the two descriptors of one POSIX family
-// sit together and `posixStreamFd` reads them as neighbours. This file's writers still ask for it by
-// that one name; what went away is the possibility of a second spelling.
+// The fault path's own three. `mrt_runtime_init` is what an entry stub calls before user code to
+// install whatever the OS needs installed; `mrt_fault_handler` is the POSIX signal entry both POSIX
+// lanes register (Windows registers `mrt_fault_thunk`, whose name is a VEH fact and stays with x64);
+// `mrt_fault_backtrace` and `mrt_write_hex64` are the diagnostic body each backend assembles under.
+// Exactly one lane's chunks are laid out in any one image, so one name per role is one symbol.
+export let RuntimeInitName = b"mrt_runtime_init"
+export let FaultHandlerName = b"mrt_fault_handler"
+export let FaultBacktraceName = b"mrt_fault_backtrace"
+export let WriteHexName = b"mrt_write_hex64"
+
+// STDERR_FILENO is NOT here. It is `StdLoweringShared.StderrFd`, beside its stdout twin, because a
+// descriptor is a target-independent fact two mechanisms name — this file's writers and the Std tier's
+// `printError` — and one spelling is what keeps them from drifting. This file holds vocabulary only.
 
 // Serialize the symbol table. `symbols` MUST already be in ascending `codeOffset` order:
 // the runtime's lookup keeps the LAST entry satisfying `text_offset >= codeOffset`, which

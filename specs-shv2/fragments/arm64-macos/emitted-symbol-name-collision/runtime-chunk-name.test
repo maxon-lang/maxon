@@ -1,0 +1,14 @@
+// Test: runtime-chunk-name
+typealias Integer = int(i64.min to i64.max)
+
+function mrt_runtime_init() returns Integer
+	return 7
+end 'mrt_runtime_init'
+
+function main() returns ExitCode
+	let emitted = mrt_runtime_init
+	return emitted() as ExitCode
+end 'main'
+---
+CompilerError:
+error E4015: <fragment>:4:10: declaration of 'mrt_runtime_init' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it
