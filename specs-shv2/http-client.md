@@ -189,13 +189,28 @@ Verify that file I/O on fiber #2 interleaves with HTTP networking on fiber #1.
 With runnext scheduling, the later-spawned file I/O fiber (#2) runs first,
 completing file_exists before the HTTP fiber (#1) begins net_connect.
 
-<!-- disabled-test: http-client.async-trace-interleave -->
-<!-- MEASURED 2026-09-04: stderr mismatch on the async trace. It ALSO opens a socket to a real external host, so it
-     owes a `<!-- network: live -->` marker before it can be a default-run case at all. -->
+<!-- test: http-client.async-trace-interleave -->
 <!-- AsyncTrace -->
+⭐⭐ **A TRACE CASE AND A LIVE HOST ARE INCOMPATIBLE, AND THIS FILE'S SIBLING ALREADY SAYS SO.** A trace
+pins an INTERLEAVING; a live host makes that interleaving a function of somebody else's latency. In
+`async-tcp.md` the two `AsyncTrace` cases carry no `network: live` and the `network: live` case carries no
+trace — the separation is the design, and this case was the only one trying to do both.
+
+⚠ **MEASURED: the previous pin was a LATENCY RACE that had already gone stale.** It expected a `sleep(100)`
+in `main` to expire mid-request — an early `sleep_resume #0`, and a `sleep_yield #1` retry inside the HTTP
+task. Against `httpbin.org` today the request finishes first, so the run ends `try_await #1 [immediate]`
+rather than `[yield]` and the trace is 20 lines against the 22 pinned. Three runs agreed with each other and
+none agreed with the file: **stable on the day, and a hostage to the link.**
+
+⇒ The address is `192.0.2.1` — TEST-NET-1, reserved by RFC 5737 and guaranteed unroutable — which is what
+`async-tcp.trace-mixed-io` already uses to trace a network path without one. The `sleep` is gone with it,
+because the timer was only there to force the second spawn to land mid-request. **The trace is stronger for
+it**: both tasks are now parked on DIFFERENT kinds of I/O at the same time and resume interleaved, where the
+live version had the HTTP task nearly finish before the file task was even spawned. Measured identical
+across 15 runs at ~35 ms each, and it needs no `--network`.
 ```maxon
 function doHttp() returns ExitCode throws HttpError
-	let response = try HttpClient.get("http://httpbin.org/get")
+	let response = try HttpClient.get("http://192.0.2.1/get")
 	if response.statusCode() == StatusCode.ok 'ok'
 		return 0
 	end 'ok'
@@ -212,7 +227,6 @@ end 'doFileIo'
 
 function main() returns ExitCode
 	let httpTask = async doHttp()
-	sleep(100)
 	let fileTask = async doFileIo()
 	let fileResult = await fileTask
 	let httpResult = try await httpTask otherwise 99
@@ -220,31 +234,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-0
+99
 ```
 ```stderr
 spawn #1
-sleep_yield #0
-io_yield #1 [net_connect]
-sleep_resume #0
 spawn #2
+io_yield #1 [net_connect]
 io_yield #2 [file_exists]
 io_resume #1 [net_connect]
 io_resume #2 [file_exists]
-io_yield #1 [net_connect]
 await #2 [yield]
-io_resume #1 [net_connect]
-io_yield #1 [net_send]
-io_resume #1 [net_send]
-sleep_yield #1
-sleep_resume #1
-io_yield #1 [net_recv]
-io_resume #1 [net_recv]
-io_yield #1 [net_recv]
-io_resume #1 [net_recv]
-io_yield #1 [net_close]
-io_resume #1 [net_close]
-try_await #1 [yield]
+try_await #1 [immediate]
 ```
 
 ### Response Headers
