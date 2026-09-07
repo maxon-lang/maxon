@@ -46,6 +46,7 @@ export function requireSpecVerdictMapping()
 	checkNotRunHereIsNotGreen(broken)
 	checkEveryOutcomeIsCounted(broken)
 	checkOnlyAValidatedVerdictMints(broken)
+	checkNotRunHereDriftIsReported(broken)
 
 	if broken.isEmpty() 'everyRowHeld'
 		return
@@ -144,20 +145,33 @@ end 'checkNotRunHereIsNotGreen'
 
 // ⭐ ROW 3 — every verdict lands in exactly one column. The totals come off ONE walk, so an outcome arm
 // nobody counted makes them disagree with the number of results rather than hiding.
+//
+// ⭐ **A DRIFTED RESULT IS IN THE SET ON PURPOSE, and it is the only thing that makes the second axis
+// checkable.** A golden's answer is orthogonal to a verdict, so a drifted case is one PASS and one drift;
+// folded into `total()` it would make the columns disagree with the result count, and with no drifted
+// result synthesized here that fold would be invisible to a green suite.
 function checkEveryOutcomeIsCounted(broken StringArray)
 	var results = SpecTestResultArray.create()
 	results.append(resultsOf(TestOutcome.pass, golden: GoldenDrift.matched))
+	results.append(resultsOf(TestOutcome.pass, golden: GoldenDrift.drifted("a synthesized difference")))
 	results.append(resultsOf(TestOutcome.fail("a synthesized reason"), golden: GoldenDrift.notPinned))
 	results.append(resultsOf(TestOutcome.skipped("a synthesized E3104"), golden: GoldenDrift.notPinned))
 	results.append(resultsOf(TestOutcome.notRunHere, golden: GoldenDrift.unrecorded))
 
 	let tally = tallyResults(results)
-	if tally.total() == results.count() 'allCounted'
-		return
-	end 'allCounted'
+	if tally.total() != results.count() 'notAllCounted'
+		broken.push("{results.count()} results but {tally.total()} counted across passed/failed/skipped/not-run-here. A verdict that falls out of every column has been dropped from the report — and a GOLDEN's answer must not be in that sum at all, because it is a second fact about a result that is already counted.\n")
+	end 'notAllCounted'
 
-	broken.push("{results.count()} results but {tally.total()} counted across passed/failed/skipped/not-run-here. A verdict that falls out of every column has been dropped from the report.\n")
+	if tally.drifted != DriftedResultsSynthesized 'driftNotCounted'
+		broken.push("{DriftedResultsSynthesized} of the {results.count()} synthesized results carries a drifted golden and the tally counted {tally.drifted}. A committed reference that has stopped describing the compiler is reported from this number alone; uncounted, it is reported by nothing.\n")
+	end 'driftNotCounted'
 end 'checkEveryOutcomeIsCounted'
+
+// How many results a row synthesizes with a stale committed golden. Named because three assertions read
+// it: the drift count must equal it, `total()` must be blind to it, and the trailer must render one entry
+// for it.
+let DriftedResultsSynthesized = 1
 
 // ⭐ ROW 4 — a verdict that was never established here may not WRITE a first golden, and one that was
 // must still be able to. This is the half the C# guard states as `TargetRunHost.MintRefusalFor`, and it
@@ -176,6 +190,20 @@ function checkOnlyAValidatedVerdictMints(broken StringArray)
 		broken.push("a PASSING verdict does not pin its emitted code, so no golden would be compared on any lane at all.\n")
 	end 'passLostItsGolden'
 end 'checkOnlyAValidatedVerdictMints'
+
+// ⭐ ROW 5 — a stale golden on a case NOTHING RAN is still NAMED, and this is the only reachable place to
+// ask it. `reportGoldenDrift`'s fixture gate runs on the host lane, where every case executes, so a
+// reporter narrowed to `isPass()` would satisfy it while going silent on the cross lanes — the lanes where
+// the golden comparison is the ONLY verification a case gets, which is the claim `reportUnrunHere` makes to
+// a reader in so many words.
+function checkNotRunHereDriftIsReported(broken StringArray)
+	let entries = goldenDriftEntries(resultsOf(TestOutcome.notRunHere, golden: GoldenDrift.drifted("a synthesized difference")))
+	if entries.count() == DriftedResultsSynthesized 'named'
+		return
+	end 'named'
+
+	broken.push("a NOTRUN case whose committed golden no longer matches produced {entries.count()} trailer entries, not {DriftedResultsSynthesized}. On a lane this host cannot execute, that comparison is the only verification the case gets — a drift report that skips it leaves the cross lanes with nothing at all, while still looking like a working report on the host.\n")
+end 'checkNotRunHereDriftIsReported'
 
 // One synthesized result, as the one-element list every row above works over.
 function resultsOf(outcome TestOutcome, golden GoldenDrift) returns SpecTestResultArray

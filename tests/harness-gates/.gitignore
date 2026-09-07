@@ -1,18 +1,29 @@
 # A gate is driven by a real `spec-test` sub-run, so the runner makes its usual scratch here:
 # `.spec-tmp/` (already ignored repo-wide) and a `fragments/<target>/` tree.
 #
-# ⚠⚠ **THIS LINE IS NOW LOAD-BEARING, AND UNTIL 2026-08-23 IT WAS ONLY INSURANCE.** The orphaned-golden
-# gate (`HarnessSelfTest.requireOrphanedGoldensAreReported`) WRITES `.test` files under
-# `orphan-golden/fragments/x64-windows/` on every suite run — deliberately, because the census it proves
-# can only be shown to fire against a golden nothing declares — and removes them again before it
-# returns. They are planted rather than committed so the gate also gets its NEGATIVE control: the same
-# fixture is run a second time with them gone, and the census must then say nothing. An interrupted run
-# leaves one behind, and this line is what keeps that from becoming a tracked file.
+# ⚠⚠ **THIS LINE IS LOAD-BEARING, and the rule it protects is GENERAL rather than a list of gates.**
 #
-# The other reason it was here still holds. The live-network gate's case is deliberately made to FAIL
-# (its pinned stdout is wrong on purpose — see `requireNetworkGateHolds`, which asserts on the FAIL
-# verdict line), and a case that fails never reaches the golden write, so that fixture mints nothing.
-# The orphan gate's active case is deliberately made to fail for exactly that reason too. Correct either
-# stdout, or add a gate whose case passes, and every `spec-test` in this checkout starts minting `.test`
-# goldens here — which nothing reads back and no gate asserts on.
+# ⛔ **A GATE CASE THAT PASSES MINTS A `.test` HERE** (`SpecTestRunner.checkTestFragment` writes a first
+# golden whenever the verdict allows it). So every gate case in this corpus is one of exactly two kinds,
+# and which kind it is has to be a deliberate choice:
+#
+#   • **It FAILS, and therefore mints nothing.** Its pinned expectation is wrong ON PURPOSE and must stay
+#     wrong; correcting it starts minting a golden that nothing reads back and no gate asserts on. Every
+#     such fixture says so in its own header, and the gate reading it asserts on the FAIL verdict line.
+#   • **It PASSES, and its gate OWNS the goldens it mints** — clearing them before it runs and removing
+#     them after, so the checkout it ran in is the checkout it found.
+#
+# The orphaned-golden gate (`HarnessSelfTest.requireOrphanedGoldensAreReported`) is neither: it PLANTS
+# `.test` files that no case declares, because the census it proves can only be shown to fire against a
+# golden nothing reads, and removes them again.
+#
+# ⭐ **THE ONE FIXTURE OF THE SECOND KIND IS `drifted-golden/`, and it is the exception rather than the
+# rule for a stated reason**: drift is only observable on a case that got far enough to COMPARE a committed
+# reference, which a failing case never does. `requireDriftedGoldensAreReported` mints its three goldens,
+# corrupts two, requires the run to name them, puts them back, requires silence, and removes all three —
+# and it CLEARS this tree before it mints, so a run interrupted anywhere leaves nothing the next run cannot
+# repair by itself.
+#
+# An interrupted run of any of them can leave a file behind, and this line is what keeps that from becoming
+# tracked.
 fragments/

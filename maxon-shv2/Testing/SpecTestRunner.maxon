@@ -607,6 +607,25 @@ export union GoldenDrift
 	// There was no committed golden and this run was NOT ALLOWED to write one, because the verdict
 	// that would have validated it never happened here (`notRunHere`). See `recordFragmentAndCleanup`.
 	unrecorded
+
+	// ⭐ **DID THE COMMITTED REFERENCE STOP DESCRIBING WHAT THE COMPILER EMITS? — the ONE predicate that
+	// decides the drifted SET.** Both readers go through it: `tallyResults` counts what it admits and
+	// `reportGoldenDrift` renders what it admits, so the number on the summary line and the entries in the
+	// trailer cannot come to describe two different sets. A second predicate would not fail to compile; it
+	// would print `35 drifted` over a note listing 30.
+	//
+	// ⚠ **THE FALSE ARMS ARE FOUR DIFFERENT FACTS AND ONLY ONE OF THEM IS VERIFICATION.** `matched` is a
+	// comparison that held; `notPinned`, `minted` and `unrecorded` each mean no comparison happened, for
+	// three different reasons. This question is only about drift, and none of that may be read out of it.
+	export function isDrifted() returns bool
+		return match self 'reference'
+			drifted gives true
+			notPinned gives false
+			matched gives false
+			minted gives false
+			unrecorded gives false
+		end 'reference'
+	end 'isDrifted'
 end 'GoldenDrift'
 
 // One test's verdict and its golden's, tagged with which spec it came from for the report.
@@ -1428,7 +1447,8 @@ function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, c
 	end 'refusal'
 end 'outcomeOrTargetSkip'
 
-// ⭐⭐ **EVERY RESULT IN EXACTLY ONE COLUMN.** The four verdicts a run can produce, counted in one walk.
+// ⭐⭐ **EVERY RESULT IN EXACTLY ONE VERDICT COLUMN**, plus the golden's own count beside them — the two
+// axes a result carries, both read off one walk.
 //
 // ⛔ **A TEST THAT FALLS OUT OF EVERY COLUMN HAS BEEN DROPPED FROM THE REPORT**, and a type is what makes
 // that checkable: `total()` is computed from the four columns and `SpecVerdictSelfTest` asserts it equals
@@ -1442,8 +1462,15 @@ export type ResultTally
 	export let skipped as TestTally
 	export let notRunHere as TestTally
 
-	export static function create(passed TestTally, failed TestTally, skipped TestTally, notRunHere TestTally) returns ResultTally
-		return Self{passed: passed, failed: failed, skipped: skipped, notRunHere: notRunHere}
+	// ⭐ **THE SECOND AXIS, AND IT IS DELIBERATELY OUTSIDE `total()`.** A golden's answer is a different
+	// question about a different artifact (`GoldenDrift`), so a drifted case is ALSO counted in whichever
+	// verdict column it earned — a passing case whose reference is stale is one pass and one drift. Adding
+	// it to the total would make the columns disagree with the result count and turn the check below into a
+	// false red.
+	export let drifted as TestTally
+
+	export static function create(passed TestTally, failed TestTally, skipped TestTally, notRunHere TestTally, drifted TestTally) returns ResultTally
+		return Self{passed: passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: drifted}
 	end 'create'
 
 	export function total() returns TestTally
@@ -1466,6 +1493,7 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 	var failed = 0 as TestTally
 	var skipped = 0 as TestTally
 	var notRunHere = 0 as TestTally
+	var driftedGoldens = 0 as TestTally
 
 	for result in results 'each'
 		match result.outcome 'tally'
@@ -1474,10 +1502,104 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 			skipped then skipped = skipped + 1
 			notRunHere then notRunHere = notRunHere + 1
 		end 'tally'
+
+		if not result.golden.isDrifted() 'referenceStillDescribesIt'
+			continue
+		end 'referenceStillDescribesIt'
+
+		driftedGoldens = driftedGoldens + 1
 	end 'each'
 
-	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere)
+	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: driftedGoldens)
 end 'tallyResults'
+
+// The words the golden-drift report is recognised by — its ONE spelling, carried by both channels the
+// report reaches a reader through (the summary line on stdout and the trailer on stderr) so that the gate
+// asserting a clean run prints NO such report has one thing to look for rather than two.
+export let GoldenDriftHeadline = "DRIFTED from what the compiler emits"
+
+// The summary line's drift clause, beside `N passed, M failed` — the "same breath" `GoldenDrift`'s header
+// asks for, and the one place it is spelled.
+//
+// ⚖ It states the ruling ON THE LINE rather than leaving it to the trailer, because this is the line a
+// reader takes the run's verdict from: a bare `35 drifted` under `0 failed` invites the reading that
+// something is wrong, and nothing is.
+export function goldenDriftSummary(drifted TestTally) returns String
+	return "{drifted} committed golden(s) OF THE CASES THIS RUN COMPARED {GoldenDriftHeadline} — GOLDENS ARE REFERENCE, NOT A GATE: nothing failed on this and the exit code is unaffected (the note on stderr has the differences)"
+end 'goldenDriftSummary'
+
+// ⭐⭐ **THE CENSUS OF REFERENCES THAT HAVE STOPPED DESCRIBING THE COMPILER — the one reader of
+// `GoldenDrift.drifted`, and the only thing in this tree that can see one.**
+//
+// ⛔ **NOTHING ELSE CAN.** The comparison happens on every run and moves no verdict, so a green suite is
+// exactly what a corpus full of stale references looks like; and a `.test` that contradicts the compiler
+// is TRACKED AND UNCHANGED, so `git status` and `git diff` are silent about it too. `GoldenCensus` asks the
+// complementary question — a golden nothing READS — and would report this file as fine, because its case
+// is declared and its lane compares it.
+//
+// ⚠ **THE FAILURE IT CATCHES IS A CASE REPLACED IN PLACE.** Rewrite a case's PROGRAM while its name stays
+// put and the fragment goes on recording the old one; two files in one corpus then make contradictory
+// claims about the same bytes, and every gate in the tree stays green.
+//
+// ⚖ REPORTED, NEVER JUDGED (user, 2026-08-02) — see `FragmentsSubdir`. It touches neither the failed count
+// nor the exit code, and the case it names is still reported as passing.
+//
+// The ENTRY carries the rendered difference `checkTestFragment` already built: the first line at which the
+// two diverge, then the golden's path. A reader who is only told a count learns that something moved and
+// has to go and find it, and a difference nobody reads is how a stale reference gets re-minted unexamined.
+//
+// SILENT at zero — the convention every trailer here follows. STDERR, because stdout is the report and
+// stays byte-identical between worker counts.
+//
+// ⚠ **THE COUNT IS OF WHAT THIS RUN COMPARED, NOT OF THE TREE**, and the headline says so: a `--filter`ed
+// run compares only what it selected, so its number is a lower bound. That is the opposite scoping from
+// `GoldenCensus`, which reads the whole corpus off the spec text and answers identically whatever ran —
+// two notes, same preamble, same indent, and a reader who took them for one scale would be wrong.
+export function reportGoldenDrift(results SpecTestResultArray)
+	let entries = goldenDriftEntries(results)
+
+	// The blank-at-zero guard and the entry loop are `reportResultNote`'s, shared with every other trailer
+	// in this column — see `IndentedReport` for why the several are one shape.
+	let headline = "note: {entries.count()} committed golden(s) OF THE CASES THIS RUN COMPARED {GoldenDriftHeadline}. GOLDENS ARE REFERENCE, NOT A GATE:\n{ResultNoteIndent}nothing failed on this and the exit code is unaffected. A filtered run compares only what it selected, so this is\n{ResultNoteIndent}a lower bound. Each entry is the FIRST line at which the committed reference and this run's emitted code\n{ResultNoteIndent}diverge, then the file. READ the difference: if the change was intended, re-mint with `{UpdateRequiredFlag}`\n{ResultNoteIndent}plus a `--filter`; if it was not, the reference is telling you what moved.\n"
+	reportResultNote(entries, headline: headline)
+end 'reportGoldenDrift'
+
+// ⭐ **THE ENTRIES, SPLIT FROM THE PRINTING SO A SELF-TEST CAN ASSERT ON THEM.** The one thing neither the
+// spec corpus nor a fixture sub-run can reach is a `notRunHere` result, because a sub-run executes on the
+// host lane where every case runs — and that is exactly the case this walk must not narrow away. On a lane
+// this host cannot execute, the golden comparison is the ONLY verification a case gets
+// (`TestOutcome.pinsEmittedCode`), so a reporter keyed on `isPass()` would go silent on the lane that has
+// nothing else. `SpecVerdictSelfTest` synthesizes one and requires it named.
+export function goldenDriftEntries(results SpecTestResultArray) returns StringArray
+	var entries = StringArray.create()
+
+	for result in results 'each'
+		// ⭐ THE SET IS `isDrifted`'s, not a second match of this union's arms — see it for what a second
+		// one costs. `detail` ends at the golden's path with no newline of its own, and `resultNoteEntry`
+		// emits it verbatim: it cannot add one without deciding for `indentedRefusals`, which does.
+		if not result.golden.isDrifted() 'referenceStillDescribesIt'
+			continue
+		end 'referenceStillDescribesIt'
+
+		entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: "{driftDetailOf(result.golden)}\n"))
+	end 'each'
+
+	return entries
+end 'goldenDriftEntries'
+
+// The rendered difference a drifted golden carries. It is reached only through `isDrifted`, which is what
+// makes the four panics honest rather than defensive: any other arm here means the predicate that chose the
+// set and the reader that renders it have come apart, which is the one failure a shared predicate exists to
+// make impossible.
+function driftDetailOf(golden GoldenDrift) returns String
+	return match golden 'reference'
+		drifted(detail) gives detail
+		notPinned panic("driftDetailOf: a golden that pins nothing reached the drift trailer — `isDrifted` admitted it and this cannot render it")
+		matched panic("driftDetailOf: a golden that MATCHED reached the drift trailer — `isDrifted` admitted it and this cannot render it")
+		minted panic("driftDetailOf: a golden this run MINTED reached the drift trailer — `isDrifted` admitted it and this cannot render it")
+		unrecorded panic("driftDetailOf: a golden this run was not allowed to write reached the drift trailer — `isDrifted` admitted it and this cannot render it")
+	end 'reference'
+end 'driftDetailOf'
 
 // ⭐ THE CENSUS OF EVERYTHING THIS RUN DID NOT RUN, and the reason it may never be silent is in
 // `targetRefusalIn`'s header: a skip nobody counts is indistinguishable from a case that quietly
@@ -1501,8 +1623,8 @@ export function reportTargetSkips(results SpecTestResultArray, effectiveTarget T
 		end 'verdict'
 	end 'each'
 
-	// The blank-at-zero guard and the entry loop are `reportResultNote`'s, shared with the golden-drift
-	// trailer this one prints above — see `IndentedReport` for why the two are one shape.
+	// The blank-at-zero guard and the entry loop are `reportResultNote`'s, shared with every other trailer
+	// in this column — see `IndentedReport` for why the several are one shape.
 	let headline = "note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET and not about the case:\n"
 	reportResultNote(entries, headline: headline)
 end 'reportTargetSkips'
@@ -1557,7 +1679,7 @@ export function reportUnrunHere(tally ResultTally, effectiveTarget Target)
 		return
 	end 'everythingRan'
 
-	printError("note: {tally.notRunHere} case(s) COMPILED but NOT RUN on {targetToString(effectiveTarget)} — {unrunnableReasonFor(effectiveTarget)}. Their compiles and their committed goldens were checked in full; only the executions are missing, so they are NOT PASSED.\n")
+	printError("note: {tally.notRunHere} case(s) COMPILED but NOT RUN on {targetToString(effectiveTarget)} — {unrunnableReasonFor(effectiveTarget)}. Their compiles ran in full, and each was compared against its committed golden WHERE THERE WAS ONE TO COMPARE: a case this host cannot run may not mint or rewrite a reference, so one that has never been pinned on this lane was compared against nothing, and under `{UpdateRequiredFlag}` NOTHING here was compared at all. Any difference that WAS found is in the golden-drift note, never in these counts. The executions are missing either way, so they are NOT PASSED.\n")
 end 'reportUnrunHere'
 
 // The one sentence saying why this host cannot execute this target, read off the one runner table.

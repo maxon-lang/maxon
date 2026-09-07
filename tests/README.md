@@ -57,7 +57,7 @@ tests/
     <name>.test.maxon            a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?
   harness-fixtures/<case>/       malformed specs the harness must REFUSE
-  harness-gates/<case>/          well-formed specs it must ACCEPT, then partly skip
+  harness-gates/<case>/          well-formed specs it must ACCEPT, then REPORT something about
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1
     <area>.test.maxon            one LSP method area per file

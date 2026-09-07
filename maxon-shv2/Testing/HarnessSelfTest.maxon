@@ -51,9 +51,9 @@ let FixturesRelativeDir = "tests/harness-fixtures"
 // ⭐ **THE SECOND CORPUS ROOT — the harness's BEHAVIOUR gates, not its refusals**, and it is a second
 // root rather than another case directory under the first for one reason: `requireHarnessRefusalsFire`
 // sweeps EVERY subdirectory of its root and requires each to be a deliberately-malformed spec that the
-// harness REFUSES. This corpus's fixture is the opposite — a well-formed spec that must be ACCEPTED,
-// parsed in full, and then partly left out of the run. Filed under one root, each sweep would read the
-// other's cases as its own kind and report a defect that is not there.
+// harness REFUSES. This corpus's fixtures are the opposite — well-formed specs that must be ACCEPTED and
+// parsed in full, and that the run must then say something specific about. Filed under one root, each
+// sweep would read the other's cases as its own kind and report a defect that is not there.
 //
 // It is a corpus root all the same, which is the part that matters to `isHarnessFixtureSubRun`: its case
 // directories are driven by SPAWNING this harness at them, so a sub-run must recognise itself here
@@ -107,6 +107,42 @@ let OrphanGatePinnableCase = "orphan-gate.selected"
 // What a planted golden holds. Its CONTENT is never read — the census asks only whether anything
 // compares the file — so it says what it is, for whoever finds one left behind by an interrupted run.
 let OrphanGatePlantedContent = "// planted by HarnessSelfTest.requireOrphanedGoldensAreReported and removed by it; never compared\n"
+
+// ⭐ **THE THIRD GATE CASE — the golden-DRIFT report.** `<gates root>/<this>/drift-gate.md`, holding three
+// cases that all PASS and therefore all pin a golden. Named here for `NetworkGateCaseDir`'s reason: the
+// assertions below are about these exact cases, and a gate that silently ran some other directory would
+// prove nothing.
+let DriftGateCaseDir = "drifted-golden"
+let DriftGateSpecName = "drift-gate"
+
+// ⭐⭐ **TWO CASES ARE CORRUPTED, AND THE SECOND IS WHAT MAKES THE COUNT MEAN ANYTHING.** With one drift in
+// the fixture, `entries.count()` and the summary's number are both 1 whatever the reporter does — so a
+// trailer capped at N entries and a summary that prints `1` whenever anything drifted at all would each
+// pass every other check here. Two is the smallest number that can tell "counted" from "noticed".
+let DriftGateDriftedCase = "drift-gate.pinned"
+let DriftGateSecondDriftedCase = "drift-gate.also-pinned"
+
+// ⛔⛔ **THE OVER-REPORTING CONTROL — a golden that is COMPARED and MATCHES in the very run that has
+// something else to report.** The negative control below catches a reporter that prints unconditionally;
+// this catches the different one that prints every RESULT once ANY result has drifted. That reporter names
+// the two drifted cases, satisfying every positive check, and stays silent on a clean run, satisfying the
+// negative control — and on the real corpus it names every pinned case in the run.
+let DriftGateIntactCase = "drift-gate.intact"
+
+// How many goldens the fixture's mint run must leave behind — one per passing case. Checked rather than
+// assumed: a fixture whose cases stopped pinning emitted code would leave the gate with nothing to
+// corrupt, and it would then report that drift goes unreported, which is the wrong finding.
+//
+// ⚠ **IT IS ONLY A CONTROL BECAUSE THE GATE CLEARS FIRST.** Minting writes a golden that is ABSENT and
+// nothing else, so a stray `.test` under the fixture survives every later run and makes this count read as
+// a broken fixture — aborting the whole suite before one spec test runs, over a gitignored file `git
+// status` never mentions.
+let DriftGateGoldenCount = 3
+
+// What the gate writes OVER the drifted case's golden. Its content IS read — that is the whole difference
+// from an orphan's planted bytes — so it is one line the report has to quote back, and it says what it is
+// for whoever finds it left behind by an interrupted run.
+let DriftGateCorruptedLine = "// planted by HarnessSelfTest.requireDriftedGoldensAreReported and put back by it; a deliberate mismatch"
 
 let FixtureSpecExtension = ".md"
 
@@ -248,8 +284,8 @@ end 'harnessCorpusRoots'
 // Rename the corpus and update only the constant that names the PATH (the obvious edit, and the only
 // one anything reads for the listing) and this guard silently stops matching: every sub-run then fails
 // to recognise itself and re-runs the whole self-test, whose own sub-runs each do the same. That is an
-// unbounded fan-out on every `spec-test` invocation — one branch per fixture directory plus the gate's two
-// runs, so it widens every time a fixture is added — and no compile error anywhere.
+// unbounded fan-out on every `spec-test` invocation — one branch per fixture directory plus one per run
+// every gate below makes, so it widens every time a fixture is added — and no compile error anywhere.
 // (Measured before the fix: pointing a run at a case directory whose parent was spelled differently
 // took 0.575s against the guarded 0.061s — the self-test running inside what is structurally a
 // sub-run.)
@@ -492,8 +528,8 @@ function referenceMarkerShapes() returns MarkerShapeGateArray
 	return shapes
 end 'referenceMarkerShapes'
 
-// ⭐ **ONE RUN OF ANY GATE FIXTURE — shared by both gates, because they differ only in a flag and in
-// which gate a failure names.** A second copy is how the two would come to spawn the harness
+// ⭐ **ONE RUN OF ANY GATE FIXTURE — shared by every gate here, because they differ only in a flag and in
+// which gate a failure names.** A second copy is how two of them would come to spawn the harness
 // differently, which is the drift `fixtureArgv` already exists to prevent one level down.
 //
 // A spawn failure PANICS on the spot rather than joining the caller's report, for `checkFixture`'s
@@ -611,18 +647,255 @@ function plantOneGolden(specGoldenDir FilePath, caseName String) returns FilePat
 	end 'noDirectory'
 
 	let path = specGoldenDir.join("{caseName}{FragmentExtension}")
-	try File.writeText(path, content: OrphanGatePlantedContent) otherwise panic("HarnessSelfTest: could not plant the orphaned-golden gate's fixture file. A gate that cannot set up its own subject proves nothing.")
+	writeGateGolden(path, content: OrphanGatePlantedContent)
 	return path
 end 'plantOneGolden'
 
-// Take the planted goldens away again, so the tree this gate ran in is the tree it found. A removal that
-// fails PANICS: a leftover planted file is a permanent, deliberate orphan in a corpus whose whole point
-// is that there are none, and the next run's negative control would read it as a live defect.
+// Put bytes into one golden a gate owns. Shared by the two gates that write into a fixture's `fragments/`
+// tree, because a write that fails is the same failure for both: an instrument that could not be set up,
+// which is not a property being gone and must not read like one.
+function writeGateGolden(path FilePath, content String)
+	try File.writeText(path, content: content) otherwise panic("HarnessSelfTest: could not write a golden a gate owns. A gate that cannot set up its own subject proves nothing.")
+end 'writeGateGolden'
+
+// Take the goldens a gate wrote away again, so the tree it ran in is the tree it found. A removal that
+// fails PANICS: a leftover file is a permanent, deliberate orphan in a corpus whose whole point is that
+// there are none, and the next run's negative control would read the gate's own litter as a live defect.
 function removePlantedGoldens(planted FilePathArray)
 	for path in planted 'eachPlanted'
-		try File.delete(path) otherwise panic("HarnessSelfTest: could not remove a golden the orphaned-golden gate planted. It would stay behind as a real orphan, and the next run's negative control would report the gate's own litter as a defect.")
+		try File.delete(path) otherwise panic("HarnessSelfTest: could not remove a golden a gate wrote into its fixture. It would stay behind as a real orphan, and the next run's negative control would report the gate's own litter as a defect.")
 	end 'eachPlanted'
 end 'removePlantedGoldens'
+
+// ⭐⭐ **PROVE THE SUITE STILL SAYS SO WHEN A COMMITTED GOLDEN NO LONGER MATCHES WHAT THE COMPILER
+// EMITS.** `checkTestFragment` compares every pinned case against its committed `.test` on every run and
+// answers `GoldenDrift.drifted` when the two differ; `reportGoldenDrift` is the only thing that turns that
+// answer into words, and why nothing else in the tree can is stated there.
+//
+// ⚖ **AND THE GATE ASSERTS THAT IT STAYS GREEN.** A golden is REFERENCE, NOT A GATE (user ruling
+// 2026-08-02), so a drifted case must still be reported PASS and the run must still exit 0 — the report is
+// the entire remedy. A gate that only checked the naming would leave the door open to turning drift into a
+// failure, which is the one change this ruling forbids.
+//
+// ⭐ **THE GOLDENS ARE MINTED BY THE FIXTURE ITSELF, then corrupted and put back**, which is what buys the
+// negative control a committed fixture could not: the gate never has to know what this compiler emits, and
+// the same fixture is run a third time with the references correct, where the report must vanish.
+//
+// ⛔⛔ **AND `fragments/` IS CLEARED BEFORE THE MINT, WHICH IS WHAT MAKES THAT RECOVERABLE.** A gate that
+// plants writes unconditionally and so repairs whatever it finds; MINTING does not — `checkTestFragment`
+// writes only a golden that is ABSENT. So a stray `.test`, or a corrupted one left by an interrupted run,
+// would survive every later run: the stray makes the count below read as a broken fixture and aborts the
+// whole suite before one spec test runs, and the corruption is silently read back as "the emitted bytes"
+// and restored as such. Both live on a gitignored path `git status` never mentions. Clearing first is what
+// makes the next run recover on its own.
+//
+// Called ONCE by the suite's parent beside the other tree-level guards, and PANICS naming every property
+// that failed.
+export function requireDriftedGoldensAreReported(harnessExe FilePath, specDir FilePath)
+	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
+		return
+	end 'thisIsAFixtureSubRun'
+
+	let caseDir = gateFixtureDir(DriftGateCaseDir, proves: "that a committed golden contradicting what the compiler emits is NAMED by a suite run")
+
+	// Spelled once for this gate's three runs, beside the other gates' own.
+	let proves = "a committed golden contradicting what the compiler emits is NAMED by a suite run"
+
+	// THE MINT RUN, over a fixture with no goldens at all. Nothing is asserted about it: it exists so that
+	// the goldens on disk are the ones THIS compiler emits, which is what makes the corrupted run's
+	// difference the planted one and the restored run's comparison a real match rather than a coincidence.
+	removePlantedGoldens(gateGoldensIn(caseDir))
+	_ = runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves)
+
+	let minted = mintedGoldensIn(caseDir)
+
+	var corruptedGoldens = GateGoldenBackupArray.create()
+	var driftedCases = 0 as TestTally
+	for caseName in driftedGateCases() 'eachDrifted'
+		let path = goldenOf(minted, caseName: caseName)
+		corruptedGoldens.push(GateGoldenBackup.create(path, caseName: caseName, emitted: readGateGolden(path)))
+		writeGateGolden(path, content: "{DriftGateCorruptedLine}\n")
+		driftedCases = driftedCases + 1
+	end 'eachDrifted'
+
+	let corrupted = runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves)
+
+	for backup in corruptedGoldens 'eachRestore'
+		writeGateGolden(backup.path, content: backup.emitted)
+	end 'eachRestore'
+
+	let restored = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves))
+
+	removePlantedGoldens(minted)
+
+	// ⭐ **THE TWO STREAMS ARE KEPT APART, because WHICH ONE carries a line is half of what is asserted.**
+	// The verdicts and the summary are the REPORT and are on stdout; a multi-line trailer sits beside it on
+	// stderr. Read as one joined string, this gate stays green while the summary migrates to stderr and the
+	// stdout report silently loses it.
+	let onStdout = corrupted.stdout
+	let onStderr = corrupted.stderr
+	let said = everythingSaid(corrupted)
+
+	var broken = StringArray.create()
+
+	for backup in corruptedGoldens 'eachAssertion'
+		// The expectations are BUILT BY THE REPORT'S OWN RENDERERS, never spelled here —
+		// `requireNetworkGateHolds`' argument. An empty `detail` makes the entry a PREFIX of the real one,
+		// which is what `contains` needs.
+		let driftedEntry = resultNoteEntry(DriftGateSpecName, testName: backup.caseName, detail: "")
+		if not onStderr.contains(driftedEntry) 'didNotNameTheCase'
+			broken.push("the trailer did NOT name '{backup.caseName}', whose golden was corrupted. Expected it to contain:\n{driftedEntry}and the run said:\n{said}\n")
+		end 'didNotNameTheCase'
+
+		if not onStderr.contains(backup.path.toString()) 'didNotNameTheFile'
+			broken.push("the trailer named '{backup.caseName}' but not the FILE. A reader is told a reference is stale and not which of several thousand `.test` files to open. Expected '{backup.path.toString()}', and the run said:\n{said}\n")
+		end 'didNotNameTheFile'
+
+		// ⚖ THE RULING, ASSERTED: reported, never judged. A drifted golden may not move a verdict, and this
+		// is the half that would be quietly lost the first time somebody decided drift ought to be red.
+		let passVerdict = verdictLine(TestOutcome.pass, label: testLabel(DriftGateSpecName, testName: backup.caseName))
+		if not onStdout.contains(passVerdict) 'driftMovedTheVerdict'
+			broken.push("'{backup.caseName}' is no longer reported as PASSING. A golden is REFERENCE, NOT A GATE: the program did exactly what its spec says, and only the committed reference disagreed. Expected '{passVerdict}', and the run said:\n{said}\n")
+		end 'driftMovedTheVerdict'
+	end 'eachAssertion'
+
+	// The DIFFERENCE, not merely the fact of one: the gate's corruption is a single known line, so the
+	// golden side of the rendered first difference is exactly that line. Without this a report that said
+	// "something moved" and showed nothing would pass — and reading the difference is the entire remedy.
+	if not onStderr.contains(DriftGateCorruptedLine) 'showedNoDifference'
+		broken.push("the trailer named the drifted goldens but did not show what DIFFERS. The line this gate wrote into them never appears, so the reader is told to go and diff the files by hand — and a difference nobody reads is how a stale reference gets re-minted unexamined. It said:\n{said}\n")
+	end 'showedNoDifference'
+
+	// ⭐ THE COUNT, and it is asserted at TWO because one cannot be told from "noticed" — see
+	// `DriftGateSecondDriftedCase`.
+	let summary = goldenDriftSummary(driftedCases)
+	if not onStdout.contains(summary) 'summaryStayedSilent'
+		broken.push("the run's SUMMARY, on STDOUT, says nothing about the {driftedCases} drifted goldens. The trailer is on stderr and the verdict a reader reads is on stdout, so drift that is only in the trailer is drift a reader looking at `N passed, M failed` never learns about. Expected '{summary}', and the run said:\n{said}\n")
+	end 'summaryStayedSilent'
+
+	if corrupted.exitCode != 0 'driftMovedTheExitCode'
+		broken.push("a run whose only finding was {driftedCases} drifted goldens exited {corrupted.exitCode}. A golden is REFERENCE, NOT A GATE, and a stale `.test` may not redden a suite in which every assertion held.\n")
+	end 'driftMovedTheExitCode'
+
+	// ⛔ THE OVER-REPORTING CONTROL — see `DriftGateIntactCase`.
+	let intactEntry = resultNoteEntry(DriftGateSpecName, testName: DriftGateIntactCase, detail: "")
+	if onStderr.contains(intactEntry) 'namedAGoldenThatMatched'
+		broken.push("the trailer NAMED '{DriftGateIntactCase}', whose golden was compared and MATCHED. Then it reports every RESULT once ANY result has drifted rather than the results that drifted, and on the real corpus it names every pinned case in the run — a report that fires on everything is switched off inside a week. It said:\n{said}\n")
+	end 'namedAGoldenThatMatched'
+
+	// THE NEGATIVE CONTROL. Without it the gate is satisfied by a reporter that prints unconditionally,
+	// which is the same as no report at all — and it is the half that would rot silently, because a report
+	// that fires too often looks exactly like a report that works. Asked of BOTH streams: a report is a
+	// report on whichever one it lands.
+	if restored.contains(GoldenDriftHeadline) 'reportedAMatchingGolden'
+		broken.push("the SAME fixture, with the goldens put back, still printed the drift report. Then the report does not depend on there being anything to report, and every suite run in this tree is telling its reader that references are stale when they are not. It said:\n{restored}\n")
+	end 'reportedAMatchingGolden'
+
+	if broken.isEmpty() 'everyPropertyHeld'
+		return
+	end 'everyPropertyHeld'
+
+	// ⚠ `panic` takes a STRING LITERAL — see `requireHarnessRefusalsFire` for the constraint.
+	let report = indentedList(broken, indent: BrokenHarnessFixtureIndent)
+	panic("HarnessSelfTest: the golden-drift report FAILED {broken.count()} of its checks. It is the only thing in this tree that can see a committed `.test` contradicting what the compiler emits — see `SpecTestRunner.reportGoldenDrift`.{report}")
+end 'requireDriftedGoldensAreReported'
+
+// The cases whose goldens this gate corrupts. A roster rather than two named locals, so the corruption, the
+// restoration and the per-case assertions are one loop each and cannot come to cover different sets.
+function driftedGateCases() returns StringArray
+	var names = StringArray.create()
+	names.push(DriftGateDriftedCase)
+	names.push(DriftGateSecondDriftedCase)
+	return names
+end 'driftedGateCases'
+
+// One golden the gate corrupts: where it is, which case it belongs to, and the bytes to put back.
+type GateGoldenBackup
+	export let path as FilePath
+	export let caseName as String
+	export let emitted as String
+
+	export static function create(path FilePath, caseName String, emitted String) returns GateGoldenBackup
+		return Self{path: path, caseName: caseName, emitted: emitted}
+	end 'create'
+end 'GateGoldenBackup'
+
+typealias GateGoldenBackupArray = Array with GateGoldenBackup
+
+// Every `.test` under the drift gate's fixture, found by WALKING rather than by rebuilding
+// `fragmentsRootDir`'s path: which lane a sub-run writes into is a choice that sub-run makes, and a second
+// derivation of it here is a second thing that has to stay true.
+//
+// A fixture with no `fragments/` at all is not a failure — it is a fresh checkout, and the answer is
+// simply that there is nothing there yet.
+function gateGoldensIn(caseDir FilePath) returns FilePathArray
+	var found = FilePathArray.create()
+	let fragmentsRoot = caseDir.join("{FragmentsSubdir}")
+	if not Directory.exists(fragmentsRoot) 'nothingMintedYet'
+		return found
+	end 'nothingMintedYet'
+
+	for lane in listedForGate(fragmentsRoot) 'eachLane'
+		if not Directory.isDirectory(lane) 'notALane'
+			continue
+		end 'notALane'
+
+		for specGoldens in listedForGate(lane) 'eachSpec'
+			if not Directory.isDirectory(specGoldens) 'notASpecDir'
+				continue
+			end 'notASpecDir'
+
+			for golden in listedForGate(specGoldens) 'eachGolden'
+				if golden.fileExtension() != FragmentExtension 'notAGolden'
+					continue
+				end 'notAGolden'
+
+				found.push(golden)
+			end 'eachGolden'
+		end 'eachSpec'
+	end 'eachLane'
+
+	return found
+end 'gateGoldensIn'
+
+// The same walk, once the mint run has been made, with the COUNT checked — this gate's positive control:
+// the fixture's cases must have passed, pinned emitted code and minted, and a run that quietly stopped
+// doing any of those would leave the gate corrupting nothing while still reporting a defect.
+//
+// It is a control only because the caller CLEARED first: see this gate's header for what a survivor costs.
+function mintedGoldensIn(caseDir FilePath) returns FilePathArray
+	let found = gateGoldensIn(caseDir)
+	if found.count() != DriftGateGoldenCount 'wrongCount'
+		panic("HarnessSelfTest: the drifted-golden gate's fixture minted {found.count()} golden(s), not {DriftGateGoldenCount}. Its cases must PASS and pin emitted code, because a case that fails never reaches the golden step at all — with none to corrupt, this gate would report that drift goes unreported whatever the reporter does.")
+	end 'wrongCount'
+
+	return found
+end 'mintedGoldensIn'
+
+// One directory of the gate's own fixture. A listing failure PANICS rather than returning nothing: an
+// empty answer here reads as "the fixture minted nothing", which is a finding this gate would then report
+// as a defect in the compiler.
+function listedForGate(dir FilePath) returns FilePathArray
+	return try Directory.list(dir) otherwise panic("HarnessSelfTest: could not list a directory of the drifted-golden gate's own fixture. A gate that cannot read its own subject proves nothing.")
+end 'listedForGate'
+
+// The bytes of one golden the gate is about to corrupt, kept so the run after it can compare a CORRECT
+// reference. A read failure is the instrument being broken, so it panics for `checkFixture`'s reason.
+function readGateGolden(path FilePath) returns String
+	return try File.readText(path) otherwise panic("HarnessSelfTest: could not read a golden the drifted-golden gate's own mint run wrote. A gate that cannot set up its own subject proves nothing.")
+end 'readGateGolden'
+
+// The minted golden belonging to one case. Its absence is the fixture having changed under the gate, not a
+// property being gone, so it panics for `checkFixture`'s reason.
+function goldenOf(minted FilePathArray, caseName String) returns FilePath
+	for path in minted 'eachGolden'
+		if path.stem() == caseName 'isTheOne'
+			return path
+		end 'isTheOne'
+	end 'eachGolden'
+
+	panic("HarnessSelfTest: the drifted-golden gate's fixture minted no golden for `{caseName}`. The gate corrupts that file and requires the run to name it; without it there is nothing to make drift out of.")
+end 'goldenOf'
 
 // The substring `caseDir`'s one `.md` says its refusal must print — see `ExpectRefusalMarker`.
 //

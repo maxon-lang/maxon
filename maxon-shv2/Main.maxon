@@ -80,7 +80,10 @@ module let WorkerPersistentFlag = "--worker-persistent"
 // Read by the parser and written by `specSelectionArgv`, both in this file, so neither leaves it.
 let FilterFlagPrefix = "--filter="
 
-let UpdateRequiredFlag = "--update-required"
+// `module` because two of the suite's trailers name this flag as the remedy they are sending a reader to
+// (`SpecTestRunner.reportGoldenDrift`, `reportUnrunHere`), and a flag spelled again in a message is a flag
+// that can be renamed here while the messages go on naming the old one.
+module let UpdateRequiredFlag = "--update-required"
 
 // ⭐ `--network` — RUN THE CASES THAT REACH A REAL EXTERNAL HOST. The cases marked `<!-- network: live -->`
 // across `tcp-client`, `async-tcp` and `http-client` open a socket to `tcpbin.com` / `httpbin.org`; a default
@@ -869,6 +872,12 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// `SuiteCpuTally.reportLine`, which is the only place this line is spelled.
 	printError("{run.cpu.reportLine(run.poolSize)}\n")
 
+	// ⚖ **GOLDENS THAT CONTRADICT THE COMPILER — REPORTED, NEVER JUDGED**, on the same ruling as the census
+	// below and in the same slot, because both are facts about the TREE rather than about any test. It is
+	// that census's missing direction: it finds a reference nothing READS, this finds one that IS read and
+	// disagrees. See `SpecTestRunner.reportGoldenDrift` for why nothing else in this tree can.
+	reportGoldenDrift(run.results)
+
 	// ⚖ **GOLDENS NOTHING COMPARES — REPORTED, NEVER JUDGED** (user, 2026-08-02: *"the goldens are
 	// NOT supposed to be a gate, they are just for reference"*). It comes AFTER the verdicts and the
 	// summary, on stderr, because it is a fact about the TREE rather than about any test and must never
@@ -991,7 +1000,8 @@ end 'withdrawnOptionMessage'
 // ⚖ **THESE TWO NUMBERS ARE THE PRODUCT, AND NOTHING ABOUT A GOLDEN IS IN THEM** (user, 2026-08-02:
 // *"the gate is the spec tests passing"*). A test whose committed golden no longer matches what the
 // compiler emits still PASSED — it is counted as one and printed as one. `0 failed` means the spec
-// tests passed, with no qualifications to read past.
+// tests passed, with no qualifications to read past. Drift gets a LINE OF ITS OWN below, which is what
+// lets the report say `0 failed` and `35 drifted` in one breath without either qualifying the other.
 //
 // ⚠ **A CASE THAT DID NOT RUN IS IN NEITHER NUMBER, AND ITS OWN LINE IS WHY THAT IS SAFE.** Counting
 // it as a pass would be a claim nothing supports, and counting it as a failure would redden every
@@ -1014,8 +1024,16 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	end 'anySkipped'
 
 	if tally.notRunHere > 0 'anyUnrunnable'
-		print("{tally.notRunHere} not run here — COMPILED and compared against their goldens, but this host cannot execute them (see the note on stderr)\n")
+		print("{tally.notRunHere} not run here — COMPILED and compared against a committed golden where one exists, but this host cannot execute them (see the note on stderr)\n")
 	end 'anyUnrunnable'
+
+	// ⚖ THE SECOND AXIS, IN THE SAME BREATH AS THE FIRST (see `GoldenDrift`). It sits under the two
+	// not-run lines because it qualifies neither of them: a drifted case is already counted in whichever
+	// column it earned, and this line says only that its committed reference no longer describes what the
+	// compiler emits. The differences are in the stderr trailer, which is where a multi-line report belongs.
+	if tally.drifted > 0 'anyDrifted'
+		print("{goldenDriftSummary(tally.drifted)}\n")
+	end 'anyDrifted'
 
 	// ⛔ **A RUN IN WHICH NOTHING RAN IS A FAILURE, AND IT IS THE SAME FAILURE `runSpecSuite`'s
 	// empty-selection guard refuses one step earlier.** There the filter selected nothing; here
