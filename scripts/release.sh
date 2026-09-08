@@ -245,6 +245,63 @@ EOF
 	esac
 }
 
+# Release notes: how to install, and what each asset is for.
+#
+# ⚠ IT NAMES ONLY THE ASSETS THAT EXIST. A release built without WiX has no MSI, and a notes template
+# that mentions one regardless sends people to a download that is not there.
+write_default_notes() {
+	local out="$1"
+
+	{
+		echo "## Install"
+		echo
+		if ls "$DIST"/*.msi >/dev/null 2>&1; then
+			echo "**Windows**"
+			echo
+			echo '```'
+			echo "winget install MaxonLang.Maxon"
+			echo '```'
+			echo
+			echo "Or download the \`.msi\` below. It installs to \`C:\\Program Files\\Maxon\` and adds it to PATH."
+			echo "The installer is not code-signed, so SmartScreen warns on first run: **More info** then **Run anyway**."
+			echo
+		fi
+		if ls "$DIST"/*arm64-macos.tar.gz >/dev/null 2>&1; then
+			echo "**macOS**"
+			echo
+			echo '```'
+			echo "brew install maxon-lang/tap/maxon"
+			echo '```'
+			echo
+			echo "Homebrew puts \`maxon\` on your PATH immediately and clears the quarantine attribute."
+			echo "If you download the archive instead, run \`xattr -d com.apple.quarantine ./maxon\` once."
+			echo
+		fi
+		if ls "$DIST"/*-linux.tar.gz >/dev/null 2>&1; then
+			echo "**Linux**"
+			echo
+			echo "Extract the archive for your architecture and put that directory on your PATH."
+			echo "The binary is statically linked and makes raw syscalls, so there is nothing else to install."
+			echo
+		fi
+
+		echo "⚠ **Keep \`maxon\` and \`stdlib/\` together.** The compiler finds its standard library by walking"
+		echo "up from its own executable, so moving the binary out on its own leaves it without one."
+		echo
+		echo "## Verify a download"
+		echo
+		echo "\`SHA256SUMS\` is published beside the archives. These builds are not signed, so the checksum is"
+		echo "what tells you a file is the one that was built."
+		echo
+		echo "## Assets"
+		echo
+		local f
+		for f in $(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) -printf '%f\n' | sort); do
+			echo "- \`$f\`"
+		done
+	} > "$out"
+}
+
 if [ "$mode" = "package" ]; then
 	mkdir -p "$DIST"
 	host="$(maxon_host_target)"
@@ -285,12 +342,24 @@ archives="$(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz
 echo "release.sh: checksums"
 sed 's/^/  /' "$DIST/SHA256SUMS"
 
+# ⭐ WRITTEN BEFORE THE DRY-RUN EXIT, so `--dry-run` exercises the notes too. A preview that skips the
+# one artifact a person actually reads is not a preview.
+# ⭐ THE NOTES ARE WRITTEN HERE IF NOBODY WROTE THEM. A release with no notes is a page of filenames,
+# and the one thing a reader wants — which file is theirs, and what to do with it — is exactly what the
+# filenames do not say. A `dist/NOTES.md` placed by hand wins: this is a floor, not a template to
+# fight.
+if [ ! -f "$DIST/NOTES.md" ]; then
+	echo "release.sh: writing default notes to $DIST/NOTES.md"
+	write_default_notes "$DIST/NOTES.md"
+fi
+
 if [ "$dry_run" -eq 1 ]; then
 	echo "release.sh: --dry-run; would create $version with the assets above"
 	exit 0
 fi
 
 command -v gh >/dev/null 2>&1 || { echo "release.sh: publishing needs the GitHub CLI (gh)" >&2; exit 1; }
+
 gh release create "$version" --title "Maxon $version_from_binary" --notes-file "$DIST/NOTES.md" \
 	$archives "$DIST/SHA256SUMS"
 echo "release.sh: published $version"
