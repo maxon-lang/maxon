@@ -1,0 +1,115 @@
+# Build, test and publish a release — one job per target, each on its own architecture.
+#
+# ⭐⭐ EVERY TARGET IS BUILT AND ITS WHOLE SUITE RUN ON THE ARCHITECTURE IT SHIPS FOR. Cross-compiling
+# from one host and marking three lanes SKIP produces four archives and one tested compiler; this
+# produces four tested compilers. The one thing worse than not testing arm64 is believing you did.
+#
+# ⚠ THE SEED IS THE PREVIOUS RELEASE. Maxon compiles Maxon, so each runner needs a compiler before it
+# can build one, and it takes the last published release for its own target. That makes v0.1.0 the
+# base case this workflow CANNOT serve: there is nothing to seed from, so its four archives are built
+# and tested by hand and published without it. From v0.1.1 the chain is self-sustaining.
+#
+# `gh` is used here and nowhere else. It is preinstalled on every GitHub runner with a token already
+# in the environment — a CI convenience, not a dependency this project asks a contributor to install.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x64-windows
+            runner: windows-latest
+          - target: x64-linux
+            runner: ubuntu-latest
+          - target: arm64-macos
+            runner: macos-15
+          - target: arm64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⛔ THE SEED IS THE BINARY ALONE. A release archive ships its own `stdlib/`, and the compiler
+      # resolves `stdlib/` by walking UP from its own executable — so an archive unpacked whole would
+      # leave a RELEASED stdlib one directory above the seed and this checkout's own would never be
+      # read. The build would succeed and compile the wrong library, silently.
+      - name: Seed from the previous release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prev="$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)"
+          if [ -z "$prev" ]; then
+            echo "::error::no previous release to seed from — v0.1.0 is published by hand (see this file's header)"
+            exit 1
+          fi
+          echo "seeding from $prev"
+          work="$(mktemp -d)"
+          gh release download "$prev" --pattern "*${{ matrix.target }}*" --dir "$work"
+          archive="$(find "$work" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) | head -n1)"
+          [ -n "$archive" ] || { echo "::error::$prev publishes no archive for ${{ matrix.target }}"; exit 1; }
+          case "$archive" in
+            *.zip)    unzip -q "$archive" -d "$work/x" ;;
+            *.tar.gz) mkdir -p "$work/x" && tar -xzf "$archive" -C "$work/x" ;;
+          esac
+          mkdir -p .bootstrap
+          found="$(find "$work/x" -type f -name 'maxon' -o -type f -name 'maxon.exe' | head -n1)"
+          [ -n "$found" ] || { echo "::error::no maxon binary in $prev's ${{ matrix.target }} archive"; exit 1; }
+          cp "$found" ".bootstrap/$(basename "$found")"
+          chmod +x .bootstrap/*
+
+      - name: Build
+        run: ./scripts/build.sh
+
+      # The suite runs inside --package, before the archive exists: a packaged compiler nobody ran is
+      # a claim, and this is the step that makes it a fact.
+      - name: Package (runs the suite first)
+        run: ./scripts/release.sh --package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maxon-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+
+      - name: Collect the archives
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find staged -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          ls -la dist/
+
+      # ⛔ THE TAG AND THE BINARIES MUST NAME ONE VERSION. `release.sh --publish` refuses when the tag
+      # disagrees with what the compiler reports, which is the check that keeps the MSI, the winget
+      # manifest and the install page from naming different releases.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release.sh --publish "${GITHUB_REF_NAME}"
