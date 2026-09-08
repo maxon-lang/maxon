@@ -80,7 +80,8 @@ maxon-bin/.maxon/maxon build examples/basic.maxon
 ./examples/basic.exe
 ```
 
-See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for every command and flag.
+See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for every command and flag, and
+[docs/RELEASING.md](docs/RELEASING.md) for how a release is built and published.
 
 ## Tests
 
