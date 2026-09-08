@@ -100,7 +100,7 @@ package_one() {
 		*)
 			archive="$DIST/maxon-$version_from_binary-$tgt.tar.gz"
 			rm -f "$archive"
-			tar -czf "$archive" -C "$DIST" "$(basename "$stage")" ;;
+			make_tar "$archive" "$stage" ;;
 	esac
 
 	rm -rf "$stage"
@@ -117,6 +117,28 @@ package_one() {
 			echo "release.sh: no WiX on PATH, so no MSI was built (dotnet tool install --global wix --version 5.*)" >&2
 		fi
 	fi
+}
+
+# ⛔ THE EXECUTABLE BIT HAS TO BE PUT INTO THE ARCHIVE, NOT ASSUMED FROM THE FILE. A tar records the
+# mode it reads off disk, and on Windows there is no POSIX mode to read — `chmod +x` in Git Bash
+# changes nothing a native `tar` can see, so every Linux and macOS archive built here shipped `maxon`
+# as 0644. MEASURED by extracting one under WSL: `bash: ./maxon: Permission denied`, on an archive
+# whose own INSTALL.md blamed the extraction tool.
+#
+# So the binary is added in its own pass with an explicit mode, and the rest of the tree follows in a
+# second pass that excludes it. `--mode` applies to everything in one invocation, which is why this is
+# two.
+make_tar() {
+	local archive="$1" stage="$2"
+	local dir base plain
+	dir="$(dirname "$stage")"
+	base="$(basename "$stage")"
+	plain="${archive%.gz}"
+
+	rm -f "$plain"
+	tar -cf "$plain" -C "$dir" --mode=0755 "$base/maxon"
+	tar -rf "$plain" -C "$dir" --exclude="$base/maxon" "$base"
+	gzip -f "$plain"
 }
 
 # ⚠ `zip` IS NOT A WINDOWS TOOL AND GIT BASH DOES NOT SHIP ONE, so this tries three writers in order of
