@@ -134,11 +134,8 @@ extract_into() {
 ext="$(target_exe_ext "$target")"
 fetched=0
 
-# ⛔ NO `trap ... EXIT` HERE, DELIBERATELY. Bash runs an EXIT trap when a COMMAND-SUBSTITUTION subshell
-# exits, so a trap that removes this directory removes it the first time `$(sha256sum …)` or
-# `$(find …)` runs — the download verifies, the archive extracts, and the copy then fails on a path
-# that was deleted between reading it and using it. Cleanup is explicit, and a FAILED run deliberately
-# leaves the directory behind: it holds the archive whose checksum did not match.
+# Cleanup is explicit rather than trapped, so a FAILED run leaves this directory behind: it holds the
+# archive whose checksum did not match, which is the one thing worth looking at afterwards.
 work="$(mktemp -d)"
 
 for tool in $tools; do

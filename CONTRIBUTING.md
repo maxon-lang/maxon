@@ -51,7 +51,7 @@ in this repo to fall back on — the published release is what seeds a build.
 ### Prerequisites
 
 - Git (on Windows, **Git for Windows**, which includes Git Bash)
-- The [GitHub CLI](https://cli.github.com/) (`gh`), to fetch the release that seeds the build
+- `curl`, to fetch the release that seeds the build
 - Node.js 20+, only if you are building the VS Code extension
 
 > The build scripts are bash. Run them in **Git Bash** on Windows, or bash on Linux and macOS — not

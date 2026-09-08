@@ -82,7 +82,7 @@ to fall back on — the published release is what seeds a build.
 **Prerequisites**
 
 - Git
-- The [GitHub CLI](https://cli.github.com/) (`gh`), to fetch the release that seeds the build
+- `curl`, to fetch the release that seeds the build
 - Node.js 20+ (only needed to build the VS Code extension)
 
 **Build and run**
