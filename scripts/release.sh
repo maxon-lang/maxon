@@ -106,22 +106,53 @@ package_one() {
 	rm -rf "$stage"
 	echo "release.sh: wrote $archive"
 	[ "$native" -eq 1 ] || echo "release.sh: ⚠ $tgt was CROSS-BUILT and its suite was not run here" >&2
+
+	# ⚠ THE INSTALLER IS BUILT FROM THE ARCHIVE, and only when WiX is present. A release machine has it;
+	# someone packaging locally may not, and should not be stopped by that — the zip is a release asset
+	# either way and the MSI is an additional one.
+	if [ "$tgt" = "x64-windows" ]; then
+		if command -v wix >/dev/null 2>&1; then
+			installer/windows/build.sh "$archive"
+		else
+			echo "release.sh: no WiX on PATH, so no MSI was built (dotnet tool install --global wix --version 5.*)" >&2
+		fi
+	fi
 }
 
-# ⚠ `zip` IS NOT A WINDOWS TOOL AND GIT BASH DOES NOT SHIP ONE. PowerShell's `Compress-Archive` is on
-# every Windows since 5.1 and needs no install, so it is the fallback — and it takes WINDOWS paths,
-# which is what `cygpath -w` is for. `zip` is still preferred where it exists, because a Linux or macOS
-# host packaging the Windows target has it and PowerShell is the thing it lacks.
+# ⚠ `zip` IS NOT A WINDOWS TOOL AND GIT BASH DOES NOT SHIP ONE, so this tries three writers in order of
+# how well they behave rather than how convenient they are.
+#
+# ⛔ POWERSHELL'S `Compress-Archive` IS LAST, AND ONLY WITH A WARNING, BECAUSE IT WRITES BACKSLASHES AS
+# PATH SEPARATORS. A zip is specified to use `/`; one built with `\` extracts as files with literal
+# backslashes in their names on Linux and macOS, and `unzip` says so —
+# "appears to use backslashes as path separators" — MEASURED on the first Windows archive this script
+# produced. PowerShell reads its own output back happily, which is exactly what makes the defect ship:
+# it looks correct on the machine that built it and is broken everywhere else.
+#
+# Windows has shipped bsdtar as `tar.exe` since Windows 10, and it writes a conforming zip, so the
+# fallback order is `zip`, then bsdtar, then a warning.
 make_zip() {
 	local archive="$1" stage="$2"
+	local dir base
+	dir="$(dirname "$stage")"
+	base="$(basename "$stage")"
+
 	if command -v zip >/dev/null 2>&1; then
-		( cd "$(dirname "$stage")" && zip -qr "$(basename "$archive")" "$(basename "$stage")" )
+		( cd "$dir" && zip -qr "$(basename "$archive")" "$base" )
 		return
 	fi
+
+	if [ -x /c/Windows/System32/tar.exe ]; then
+		( cd "$dir" && /c/Windows/System32/tar.exe -a -c -f "$(basename "$archive")" "$base" )
+		return
+	fi
+
 	if command -v powershell >/dev/null 2>&1; then
-		powershell -NoProfile -Command 			"Compress-Archive -Path '$(cygpath -w "$stage")' -DestinationPath '$(cygpath -w "$archive")' -Force" 			|| { echo "release.sh: Compress-Archive failed for $archive" >&2; return 1; }
+		echo "release.sh: WARNING — falling back to Compress-Archive, which writes backslash separators" >&2
+		powershell -NoProfile -Command "Compress-Archive -Path '$(cygpath -w "$stage")' -DestinationPath '$(cygpath -w "$archive")' -Force" 			|| { echo "release.sh: Compress-Archive failed for $archive" >&2; return 1; }
 		return
 	fi
+
 	echo "release.sh: no way to make a .zip here — install zip, or run this on Windows" >&2
 	return 1
 }
@@ -225,10 +256,10 @@ if [ "$version" != "v$version_from_binary" ]; then
 	exit 1
 fi
 
-archives="$(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) | sort)"
+archives="$(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) | sort)"
 [ -n "$archives" ] || { echo "release.sh: no archives in $DIST — run --package first" >&2; exit 1; }
 
-( cd "$DIST" && sha256sum $(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort) > SHA256SUMS )
+( cd "$DIST" && sha256sum $(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) -printf '%f\n' | sort) > SHA256SUMS )
 echo "release.sh: checksums"
 sed 's/^/  /' "$DIST/SHA256SUMS"
 
